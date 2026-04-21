@@ -1,0 +1,13 @@
+{
+  "provider": "anthropic",
+  "oauth_source": "claude-code",
+  "profile": "tip-proxy",
+  "expected_tokenpak_headers": [
+    "X-TokenPak-TIP-Version",
+    "X-TokenPak-Profile",
+    "X-TokenPak-Cache-Origin",
+    "X-TokenPak-Savings-Tokens",
+    "X-TokenPak-Savings-Cost"
+  ],
+  "description": "Minimal request to Anthropic via Claude Code OAuth. Smallest possible exercise of the full proxy path — useful for catching byte-fidelity regressions on the default codepath."
+}

@@ -1,0 +1,15 @@
+{
+  "path": "/v1/messages",
+  "method": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+  },
+  "body": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 128,
+    "messages": [
+      {"role": "user", "content": "[[TOKENPAK_COMPRESSION_TEST]] Here is a long context with repetitive content for compression testing. The proxy should compress this payload before forwarding.\n\nSection 1: The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.\n\nSection 2: Pack my box with five dozen liquor jugs. Pack my box with five dozen liquor jugs. Pack my box with five dozen liquor jugs. Pack my box with five dozen liquor jugs.\n\nSection 3: Sphinx of black quartz, judge my vow. Sphinx of black quartz, judge my vow. Sphinx of black quartz, judge my vow. Sphinx of black quartz, judge my vow.\n\nQuestion: Return the literal string `ok compression 05` and nothing else."}
+    ]
+  }
+}

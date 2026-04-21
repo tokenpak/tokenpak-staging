@@ -1,0 +1,13 @@
+{
+  "provider": "openai",
+  "oauth_source": "codex",
+  "profile": "tip-proxy",
+  "expected_tokenpak_headers": [
+    "X-TokenPak-TIP-Version",
+    "X-TokenPak-Profile",
+    "X-TokenPak-Cache-Origin",
+    "X-TokenPak-Savings-Tokens",
+    "X-TokenPak-Savings-Cost"
+  ],
+  "description": "Minimal OpenAI request via Codex OAuth. OpenAI counterpart to scenario 01."
+}

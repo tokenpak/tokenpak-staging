@@ -1,0 +1,14 @@
+{
+  "provider": "anthropic",
+  "oauth_source": "claude-code",
+  "profile": "tip-proxy",
+  "streaming": true,
+  "expected_tokenpak_headers": [
+    "X-TokenPak-TIP-Version",
+    "X-TokenPak-Profile",
+    "X-TokenPak-Cache-Origin",
+    "X-TokenPak-Savings-Tokens",
+    "X-TokenPak-Savings-Cost"
+  ],
+  "description": "SSE streaming request. Stage migrations (especially telemetry S-PS-04) must not change chunk-flush ordering — TIP wire headers must land on the response-start frame, not accumulated late."
+}

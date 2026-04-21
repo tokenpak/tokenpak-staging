@@ -1,0 +1,16 @@
+{
+  "provider": "anthropic",
+  "oauth_source": "claude-code",
+  "profile": "tip-proxy",
+  "run_twice": true,
+  "expected_first_cache_origin": "unknown",
+  "expected_second_cache_origin": "proxy",
+  "expected_tokenpak_headers": [
+    "X-TokenPak-TIP-Version",
+    "X-TokenPak-Profile",
+    "X-TokenPak-Cache-Origin",
+    "X-TokenPak-Savings-Tokens",
+    "X-TokenPak-Savings-Cost"
+  ],
+  "description": "Run the same request twice. First call populates proxy cache (cache_origin=unknown). Second call serves from proxy cache (cache_origin=proxy). Critical gate for S-PS-02 cache stage — single-site cache_origin authority (§5.3) must be preserved."
+}

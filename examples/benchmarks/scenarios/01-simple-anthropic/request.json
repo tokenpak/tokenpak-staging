@@ -1,0 +1,15 @@
+{
+  "path": "/v1/messages",
+  "method": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+  },
+  "body": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 128,
+    "messages": [
+      {"role": "user", "content": "Return the literal string: tokenpak benchmark 01 ok"}
+    ]
+  }
+}

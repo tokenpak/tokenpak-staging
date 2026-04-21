@@ -1,0 +1,14 @@
+{
+  "provider": "anthropic",
+  "oauth_source": "claude-code",
+  "profile": "tip-proxy",
+  "compression_eligible": true,
+  "expected_tokenpak_headers": [
+    "X-TokenPak-TIP-Version",
+    "X-TokenPak-Profile",
+    "X-TokenPak-Cache-Origin",
+    "X-TokenPak-Savings-Tokens",
+    "X-TokenPak-Savings-Cost"
+  ],
+  "description": "Large context with repetitive content. Exercises the compression pipeline (redundancy-removal + token savings). Critical gate for S-PS-01 compression stage — compressed body bytes + savings headers must remain identical pre/post migration."
+}

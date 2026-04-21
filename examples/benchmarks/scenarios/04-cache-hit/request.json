@@ -1,0 +1,15 @@
+{
+  "path": "/v1/messages",
+  "method": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01"
+  },
+  "body": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 64,
+    "messages": [
+      {"role": "user", "content": "TOKENPAK_CACHE_SCENARIO_04: this exact prompt produces a cache hit on the second call"}
+    ]
+  }
+}
