@@ -126,7 +126,7 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: TokenPak v${{ steps.version.outputs.VERSION }}
           body_path: RELEASE_NOTES.md
