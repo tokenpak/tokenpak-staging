@@ -344,3 +344,25 @@ forbidden_modules =
     ; done by package layout rather than import-linter. This stanza is
     ; reserved for future finer-grained MCP-internal module restrictions.
     ; Placeholder - activated in P2-11.
+
+; -----------------------------------------------------------------------
+; C5. cache_origin single-site authority (Constitution §5.3).
+;
+; DRAFT — activated in S-PS-02 when cache_service.apply_response becomes
+; the sole site of cache_origin classification. Until then, this contract
+; stays commented out to avoid false-positives during the migration.
+;
+; Rule: the literal `cache_origin = ` must not appear outside
+;       tokenpak/services/cache_service/__init__.py.
+; This is enforced via a grep-style lint rule (import-linter does not
+; support content matching directly; wired into `scripts/check-cache-origin-single-site.sh`
+; which runs as part of `make lint-imports`).
+;
+; [importlinter:contract:cache-origin-single-site]
+; name = cache_origin single-site authority (Constitution §5.3)
+; type = forbidden
+; source_modules =
+;     tokenpak
+; forbidden_modules =
+;     ; handled by grep-based script, not import-linter type system;
+;     ; this contract stanza is a placeholder for organizational clarity
