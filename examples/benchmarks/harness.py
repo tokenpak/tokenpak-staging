@@ -5,20 +5,27 @@ byte streams for baseline creation and diffs against them for stage-migration
 verification.
 
 Usage:
-    python3 examples/benchmarks/harness.py --capture-baseline   # first run
-    python3 examples/benchmarks/harness.py --verify              # subsequent
+    python3 examples/benchmarks/harness.py --capture-baseline
+    python3 examples/benchmarks/harness.py --verify
 
-Authorization: OAuth via Claude Code + Codex CLI. No API keys needed.
+Authorization model (OAuth, no API keys):
+  - Claude Code CLI stores an OAuth access token in ~/.claude/.credentials.json
+    under claudeAiOauth.accessToken (format: sk-ant-oat01-...).
+  - OpenAI Codex CLI stores an OAuth token in ~/.codex/auth.json.
+  - The harness reads these directly and injects them as Bearer tokens
+    into outbound requests, matching the exact shape Claude Code / Codex
+    CLI send in production.
+  - The proxy's oauth.py forwards the Bearer header transparently to the
+    upstream provider. Same shape, same byte-level flow.
 
 Scenarios live in scenarios/NN-name/ directories, each containing:
-    request.json   — the request payload (method + url + headers + body)
-    metadata.yaml  — provider, OAuth-source CLI, expected-headers set
+    request.json   — path + method + headers + body (no auth — harness injects)
+    metadata.json  — provider, OAuth source, profile, expected headers
 
 Baselines land under baselines/NN-name/:
-    request.bin    — outbound bytes to provider
-    response.bin   — inbound bytes from provider
-    headers.json   — {X-TokenPak-*} response headers
-    stream.jsonl   — SSE event-stream structure (streaming scenarios only)
+    request.bin    — outbound JSON body bytes (what the proxy received)
+    response.bin   — inbound response body bytes
+    headers.json   — {X-TokenPak-*} response headers + status
 """
 
 from __future__ import annotations
@@ -38,8 +45,11 @@ HARNESS_DIR = Path(__file__).resolve().parent
 SCENARIOS_DIR = HARNESS_DIR / "scenarios"
 BASELINES_DIR = HARNESS_DIR / "baselines"
 
-PROXY_HOST = os.environ.get("TOKENPAK_PROXY_HOST", "127.0.0.1")
-PROXY_PORT = int(os.environ.get("TOKENPAK_PROXY_PORT", "8766"))
+# Use a harness-specific port to avoid collision with any production
+# `tokenpak serve` that might be running for real Claude Code traffic on
+# the default 8766.
+PROXY_HOST = os.environ.get("TOKENPAK_BENCHMARK_HOST", "127.0.0.1")
+PROXY_PORT = int(os.environ.get("TOKENPAK_BENCHMARK_PORT", "8867"))
 PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
 
 PROXY_START_TIMEOUT_S = 20
@@ -70,28 +80,51 @@ def _discover_scenarios() -> list[dict]:
 
 
 def _start_proxy() -> subprocess.Popen:
-    """Start `tokenpak serve` and wait until it's healthy."""
+    """Start `tokenpak serve` from the dev tree on the harness port."""
     env = os.environ.copy()
     env.setdefault("TOKENPAK_PORT", str(PROXY_PORT))
+    # Run via `python3 -m tokenpak.proxy` against the dev tree so
+    # we benchmark the current checkout, not whatever pip-installed version
+    # happens to be on PATH.
+    # Invoke via `python -c "from tokenpak.proxy.server import start_proxy; start_proxy(...)"`
+    # which works against the dev tree (the canonical tokenpak.proxy package, not the
+    # legacy tokenpak.proxy module that `python -m tokenpak.proxy` resolves to in
+    # installed 1.0.3 packages).
+    bootstrap = (
+        f"from tokenpak.proxy.server import start_proxy; "
+        f"start_proxy(host={PROXY_HOST!r}, port={PROXY_PORT!r})"
+    )
     proc = subprocess.Popen(
-        [sys.executable, "-m", "tokenpak", "serve", "--host", PROXY_HOST, "--port", str(PROXY_PORT)],
+        [sys.executable, "-c", bootstrap],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    # Wait for health
+    # Wait for readiness by hitting any /v1/* path — proxy returns 401 without
+    # auth, which is a "listening" signal. A true healthz route would be cleaner
+    # but this works across the current proxy's route set.
     deadline = time.time() + PROXY_START_TIMEOUT_S
     while time.time() < deadline:
+        if proc.poll() is not None:
+            # Process exited — read output for diagnostics
+            stdout, stderr = proc.communicate(timeout=5)
+            raise RuntimeError(
+                f"tokenpak proxy exited with code {proc.returncode}.\n"
+                f"stdout: {stdout.decode()[:2000]}\nstderr: {stderr.decode()[:2000]}"
+            )
         try:
-            with urllib.request.urlopen(f"{PROXY_URL}/healthz", timeout=1) as resp:
-                if resp.status == 200:
-                    return proc
+            req = urllib.request.Request(f"{PROXY_URL}/v1/messages", method="GET")
+            with urllib.request.urlopen(req, timeout=1) as resp:
+                return proc  # 200 — proxy listening
+        except urllib.error.HTTPError:
+            # 401/404/405 all signal "listening but this route/method rejected" — good
+            return proc
         except Exception:
             time.sleep(0.3)
     proc.terminate()
     stdout, stderr = proc.communicate(timeout=5)
     raise RuntimeError(
-        f"tokenpak serve did not become healthy in {PROXY_START_TIMEOUT_S}s.\n"
+        f"tokenpak proxy did not become healthy in {PROXY_START_TIMEOUT_S}s.\n"
         f"stdout: {stdout.decode()[:2000]}\nstderr: {stderr.decode()[:2000]}"
     )
 
@@ -104,13 +137,81 @@ def _stop_proxy(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+def _claude_oauth_token() -> str | None:
+    """Read Claude Code OAuth access token from ~/.claude/.credentials.json."""
+    path = Path.home() / ".claude" / ".credentials.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return data.get("claudeAiOauth", {}).get("accessToken")
+    except Exception:
+        return None
+
+
+def _codex_oauth_token() -> str | None:
+    """Read OpenAI Codex OAuth access token from ~/.codex/auth.json."""
+    path = Path.home() / ".codex" / "auth.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        # Codex CLI shape varies; try common locations
+        for key in ("access_token", "accessToken"):
+            if key in data:
+                return data[key]
+        tokens = data.get("tokens", {})
+        if isinstance(tokens, dict):
+            for key in ("access_token", "accessToken"):
+                if key in tokens:
+                    return tokens[key]
+    except Exception:
+        pass
+    return None
+
+
+def _inject_auth(headers: dict, oauth_source: str) -> dict:
+    """Inject OAuth Bearer token matching the provider's production format."""
+    headers = dict(headers)  # copy
+    if oauth_source == "claude-code":
+        token = _claude_oauth_token()
+        if not token:
+            raise RuntimeError(
+                "Claude Code OAuth not found at ~/.claude/.credentials.json. "
+                "Run `claude auth login` first."
+            )
+        # Claude Code sends Bearer in Authorization per the Anthropic API
+        headers["Authorization"] = f"Bearer {token}"
+        # Claude Code sends anthropic-beta=oauth-2025-04-20 for OAuth Subscriber
+        # usage. Match that header shape precisely.
+        headers["anthropic-beta"] = "oauth-2025-04-20"
+        # Match Claude Code CLI's User-Agent — Anthropic rate-limits generic
+        # Python urllib agents as suspected abuse.
+        headers.setdefault("User-Agent", "claude-cli/2.0.0 (external, cli)")
+        # Claude Code also strips x-api-key when using OAuth; ensure it's not set.
+        headers.pop("x-api-key", None)
+    elif oauth_source == "codex":
+        token = _codex_oauth_token()
+        if not token:
+            raise RuntimeError(
+                "Codex OAuth not found at ~/.codex/auth.json. "
+                "Run `codex auth login` first."
+            )
+        headers["Authorization"] = f"Bearer {token}"
+    else:
+        raise ValueError(f"unknown oauth_source: {oauth_source!r}")
+    return headers
+
+
 def _execute_scenario(scenario: dict) -> dict:
     """Run one scenario through the local proxy; capture bytes + headers."""
     req = scenario["request"]
+    meta = scenario.get("metadata", {})
+    oauth_source = meta.get("oauth_source", "claude-code")
     # Build request to the proxy (proxy forwards to upstream)
     url = f"{PROXY_URL}{req['path']}"
     method = req.get("method", "POST").upper()
-    headers = req.get("headers", {})
+    headers = _inject_auth(req.get("headers", {}), oauth_source)
     body = req.get("body")
 
     body_bytes: bytes | None

@@ -1,5 +1,5 @@
 {
-  "path": "/v1/messages",
+  "path": "/v1/messages?beta=true",
   "method": "POST",
   "headers": {
     "Content-Type": "application/json",
