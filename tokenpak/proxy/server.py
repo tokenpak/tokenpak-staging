@@ -1057,6 +1057,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             cache_creation_tokens=cache_creation_tokens,
                             would_have_saved=int(saved),
                             cache_origin=_cache_origin,
+                            # SC-03: plumb the wire request id through so
+                            # the telemetry observer row correlates with
+                            # the response headers observer event via the
+                            # same X-Request-Id seen on the wire.
+                            request_id=_req_id,
                         )
                     except Exception:
                         pass

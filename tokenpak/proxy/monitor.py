@@ -232,21 +232,31 @@ class Monitor:
         cache_creation_tokens=0,
         would_have_saved=0,
         cache_origin="unknown",
+        request_id=None,
     ):
         # SC-02: forward a TIP-shaped row to any installed conformance
         # observer before the DB write. No-op when no observer is
-        # installed; ship-safe. See services/diagnostics/conformance.py
+        # installed; ship-safe. See services/diagnostics/conformance/
         # for the observer contract.
+        #
+        # SC-03: ``request_id`` is the wire request id plumbed from
+        # the proxy handler (X-Request-Id header). When absent — e.g.
+        # callers that haven't been updated yet — fall back to a
+        # monitor-local synthetic ID so the schema's required field
+        # is satisfied and the row is still correlatable locally.
         try:
             from tokenpak.services.diagnostics import conformance as _conformance
             from tokenpak.core.contracts import tip_version as _tip_version
             from datetime import datetime as _dt, timezone as _tz
             import time as _time
 
+            _rid = (
+                request_id
+                if isinstance(request_id, str) and request_id
+                else f"monitor-{int(_time.time() * 1_000_000)}"
+            )
             _tip_row = {
-                # TODO(SC+1): plumb the wire request_id through from the
-                # handler instead of synthesizing a monitor-local one.
-                "request_id": f"monitor-{int(_time.time() * 1_000_000)}",
+                "request_id": _rid,
                 "timestamp": _dt.now(_tz.utc).isoformat().replace("+00:00", "Z"),
                 "tip_version": _tip_version.CURRENT,
                 "profile": "tip-proxy",
