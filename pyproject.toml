@@ -201,6 +201,8 @@ markers = [
     "needs_proxy: test requires a running tokenpak proxy (starts ProxyServer or subprocess)",
     "needs_webhook: test requires a live external API or webhook endpoint (e.g. ANTHROPIC_API_KEY)",
     "needs_fast_host: test has timing-sensitive assertions that fail on slow hosts (benchmarks, latency targets)",
+    "conformance: TIP-1.0 self-conformance suite (SC-06). Validates live emissions against registry schemas.",
+    "smoke: Layer-C smoke in the conformance suite — boots ProxyServer and checks disk-artifact round-trips.",
 ]
 timeout = 30
 
