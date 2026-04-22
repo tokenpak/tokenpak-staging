@@ -233,6 +233,40 @@ class Monitor:
         would_have_saved=0,
         cache_origin="unknown",
     ):
+        # SC-02: forward a TIP-shaped row to any installed conformance
+        # observer before the DB write. No-op when no observer is
+        # installed; ship-safe. See services/diagnostics/conformance.py
+        # for the observer contract.
+        try:
+            from tokenpak.services.diagnostics import conformance as _conformance
+            from tokenpak.core.contracts import tip_version as _tip_version
+            from datetime import datetime as _dt, timezone as _tz
+            import time as _time
+
+            _tip_row = {
+                # TODO(SC+1): plumb the wire request_id through from the
+                # handler instead of synthesizing a monitor-local one.
+                "request_id": f"monitor-{int(_time.time() * 1_000_000)}",
+                "timestamp": _dt.now(_tz.utc).isoformat().replace("+00:00", "Z"),
+                "tip_version": _tip_version.CURRENT,
+                "profile": "tip-proxy",
+                "model": model,
+                "status": int(status_code) if status_code is not None else 0,
+                "cache_origin": (
+                    cache_origin
+                    if cache_origin in ("proxy", "client", "unknown")
+                    else "unknown"
+                ),
+                "tokens_in": int(input_tokens or 0),
+                "tokens_out": int(output_tokens or 0),
+                "savings_cache_tokens": int(cache_read_tokens or 0),
+                "provider_ms": float(latency_ms or 0),
+            }
+            _conformance.notify_telemetry_row(_tip_row)
+        except Exception:
+            # Observer notification must never break the monitor write path.
+            pass
+
         # Enqueue write instead of writing directly (async, <0.1ms return)
         insert_params = (
             datetime.now().isoformat(),
