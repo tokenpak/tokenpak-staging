@@ -26,18 +26,44 @@ from typing import Any, Dict, Iterator, Mapping
 import pytest
 
 
-_REGISTRY_ROOT = Path("/home/sue/registry")
+def _discover_registry_root() -> "Path | None":
+    """Locate a usable tokenpak/registry checkout for schema + validator resolution.
+
+    Resolution order:
+    1. ``TOKENPAK_REGISTRY_ROOT`` env var (operator override).
+    2. Sibling ``../registry`` relative to the tokenpak repo root —
+       the layout the SC-08 GitHub Actions workflow checks out.
+    3. ``$HOME/registry`` — common dev-box layout.
+    4. None — pytest proceeds and any test that depends on
+       registry-only schemas degrades per SC-07's schema-unavailable
+       WARN convention.
+
+    The chosen root must contain ``schemas/tip/capabilities.schema.json``
+    to be considered valid.
+    """
+    candidates = []
+    env_root = os.environ.get("TOKENPAK_REGISTRY_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    tokenpak_repo_root = Path(__file__).resolve().parents[2]
+    candidates.append(tokenpak_repo_root.parent / "registry")
+    candidates.append(Path.home() / "registry")
+    for root in candidates:
+        if (root / "schemas" / "tip" / "capabilities.schema.json").is_file():
+            return root
+    return None
 
 
 def pytest_configure(config):
-    # Make the local registry validator importable for round-trip
-    # schema validation. The validator is pinned in pyproject.toml
-    # [dev] extras at 0.1.0 and normally installs via pip; in the
-    # dev tree it's faster to use the in-tree source.
-    if _REGISTRY_ROOT.is_dir():
-        if str(_REGISTRY_ROOT) not in sys.path:
-            sys.path.insert(0, str(_REGISTRY_ROOT))
-        os.environ.setdefault("TOKENPAK_REGISTRY_ROOT", str(_REGISTRY_ROOT))
+    # Make the registry validator importable for round-trip schema
+    # validation. The validator is pinned in pyproject.toml [dev]
+    # extras; installing from the registry source gets the latest
+    # _SCHEMA_PATHS map (including SC-01 companion-journal-row).
+    root = _discover_registry_root()
+    if root is not None:
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        os.environ.setdefault("TOKENPAK_REGISTRY_ROOT", str(root))
 
 
 _CC_ENV_VARS = (
