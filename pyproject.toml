@@ -168,6 +168,10 @@ tokenpak = [
     "dashboard/templates/**/*",
     "telemetry/dashboard/static/**/*",
     "telemetry/dashboard/templates/**/*",
+    # SC-04: TIP-1.0 self-declaration manifests — proxy + companion.
+    # Static JSON on disk; SC-06 asserts sync with the canonical
+    # capability sets in tokenpak.core.contracts.capabilities.
+    "manifests/*.json",
 ]
 
 [tool.setuptools.dynamic]
