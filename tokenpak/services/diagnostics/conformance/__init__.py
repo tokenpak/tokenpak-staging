@@ -100,4 +100,20 @@ __all__ = [
     "notify_response_headers",
     "notify_companion_journal_row",
     "notify_capability_published",
+    # SC-07 — doctor --conformance runner.
+    "run_conformance_checks",
+    "summarize",
+    "exit_code_for",
 ]
+
+
+# Re-export the SC-07 runner so ``tokenpak doctor --conformance`` and
+# any other caller imports from the same diagnostics-layer namespace.
+# Placed at the module bottom to avoid a circular import with
+# runner.py (which imports the observer helpers above at call time,
+# not at import time).
+from tokenpak.services.diagnostics.conformance.runner import (  # noqa: E402
+    exit_code_for,
+    run_conformance_checks,
+    summarize,
+)

@@ -172,6 +172,13 @@ tokenpak = [
     # Static JSON on disk; SC-06 asserts sync with the canonical
     # capability sets in tokenpak.core.contracts.capabilities.
     "manifests/*.json",
+    # SC-07: TIP-1.0 schemas vendored so `tokenpak doctor --conformance`
+    # works from an installed wheel without requiring a registry
+    # checkout. The runner sets TOKENPAK_REGISTRY_ROOT to this tree
+    # when the env var is unset. Keep in sync with the registry's
+    # schemas/ on every TIP MINOR bump (SC-09 closeout checklist).
+    "_tip_schemas/schemas/tip/*.json",
+    "_tip_schemas/schemas/manifests/*.json",
 ]
 
 [tool.setuptools.dynamic]
