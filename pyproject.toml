@@ -101,7 +101,7 @@ dev = [
     "import-linter>=2.0",
     # TIP-1.0 Phase 4: conformance validator. Published to PyPI
     # 2026-04-20 (DECISION-P4-PUBLISH). Pinned exact for CI stability.
-    "tokenpak-tip-validator==0.1.0",
+    "tokenpak-tip-validator==0.1.1",
 ]
 tokens = [
     "tiktoken>=0.5.0",
