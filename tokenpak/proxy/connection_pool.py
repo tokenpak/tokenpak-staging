@@ -99,6 +99,7 @@ class PoolConfig:
     read_timeout: float = 300.0
     http2: bool = True
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     # NCP-3A-streaming-connect Phase 2B (issue #74) — narrow
     # experimental mitigation. Phase 2 M2 (HTTP/1.1 + no keepalive
     # for streams) regressed verification at 22:19Z 2026-04-27.
@@ -111,6 +112,8 @@ class PoolConfig:
     # TOKENPAK_STREAM_KEEPALIVE (default 0).
     streaming_http2: bool = True
 =======
+=======
+>>>>>>> Stashed changes
     # NCP-3A-streaming-connect Phase 2 (issue #74) — streaming-only
     # client defaults. Streaming traffic isolates from the shared
     # pool to avoid HTTP/2 multiplex collapse and stale-keepalive
@@ -119,6 +122,9 @@ class PoolConfig:
     # TOKENPAK_STREAM_KEEPALIVE env vars; default ship-on (HTTP/1.1,
     # no keepalive) per Kevin 2026-04-27.
     streaming_http2: bool = False
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
     streaming_keepalive: bool = False
 
@@ -131,7 +137,11 @@ class PoolConfig:
             keepalive_expiry=float(os.environ.get("TOKENPAK_POOL_KEEPALIVE_EXPIRY", "30")),
             http2=os.environ.get("TOKENPAK_HTTP2", "1") != "0",
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
             streaming_http2=os.environ.get("TOKENPAK_STREAM_HTTP2", "1") != "0",
+=======
+            streaming_http2=os.environ.get("TOKENPAK_STREAM_HTTP2", "0") != "0",
+>>>>>>> Stashed changes
 =======
             streaming_http2=os.environ.get("TOKENPAK_STREAM_HTTP2", "0") != "0",
 >>>>>>> Stashed changes
@@ -207,6 +217,7 @@ class ConnectionPool:
         self._config = config or PoolConfig.from_env()
         self._clients: Dict[str, httpx.Client] = {}
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         # NCP-3A-streaming-connect Phase 2B (issue #74) — streaming
         # traffic uses a parallel client map isolated from the
         # request/non-streaming pool. The streaming client keeps
@@ -217,12 +228,17 @@ class ConnectionPool:
         # regression on 2026-04-27; see
         # docs/internal/specs/issue-74-streaming-connect-phase-2-2026-04-27.md.
 =======
+=======
+>>>>>>> Stashed changes
         # NCP-3A-streaming-connect Phase 2 (issue #74) — streaming
         # traffic uses a parallel client map isolated from the
         # request/non-streaming pool. The streaming client disables
         # HTTP/2 and keepalive by default so each stream gets a
         # fresh TCP connection, eliminating the multiplex-collapse
         # and stale-reuse abort classes.
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
         self._streaming_clients: Dict[str, httpx.Client] = {}
         self._lock = threading.Lock()
@@ -281,6 +297,7 @@ class ConnectionPool:
         """Create a streaming-only ``httpx.Client``.
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         NCP-3A-streaming-connect Phase 2B (issue #74) — keeps HTTP/2
         enabled by default (protective in observed traffic; M2's
         HTTP/1.1-fallback regressed verification at 22:19Z
@@ -288,6 +305,8 @@ class ConnectionPool:
         path. Reversible via ``TOKENPAK_STREAM_HTTP2`` (default 1)
         and ``TOKENPAK_STREAM_KEEPALIVE`` (default 0).
 =======
+=======
+>>>>>>> Stashed changes
         NCP-3A-streaming-connect Phase 2 (issue #74) — isolated from
         the shared pool so concurrent streams cannot share a single
         multiplexed TCP connection. By default HTTP/2 is disabled
@@ -295,6 +314,9 @@ class ConnectionPool:
         is zero (eliminates stale-connection reuse). Reversible via
         ``TOKENPAK_STREAM_HTTP2`` / ``TOKENPAK_STREAM_KEEPALIVE``
         env vars.
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
         """
         cfg = self._config
@@ -431,9 +453,14 @@ class ConnectionPool:
         parsed = httpx.URL(url)
         netloc = parsed.host
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         # NCP-3A-streaming-connect Phase 2B (issue #74) — streaming
         # traffic routes to the isolated streaming client (HTTP/2
         # preserved, keepalive disabled by default).
+=======
+        # NCP-3A-streaming-connect Phase 2 (issue #74) — streaming
+        # traffic routes to the isolated streaming client.
+>>>>>>> Stashed changes
 =======
         # NCP-3A-streaming-connect Phase 2 (issue #74) — streaming
         # traffic routes to the isolated streaming client.
