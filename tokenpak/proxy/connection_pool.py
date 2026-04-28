@@ -98,6 +98,18 @@ class PoolConfig:
     connect_timeout: float = 10.0
     read_timeout: float = 300.0
     http2: bool = True
+    # NCP-3A-streaming-connect Phase 2B (issue #74) — narrow
+    # experimental mitigation. Phase 2 M2 (HTTP/1.1 + no keepalive
+    # for streams) regressed verification at 22:19Z 2026-04-27.
+    # Phase 2B keeps HTTP/2 multiplexing enabled (it appears to be
+    # protective) and only disables keepalive on the streaming
+    # path, so each stream still benefits from H2 connection-pool
+    # reuse for the duration of its handshake but does not draw
+    # from the stale-keepalive cohort. Reversible via
+    # TOKENPAK_STREAM_HTTP2 (default 1) and
+    # TOKENPAK_STREAM_KEEPALIVE (default 0).
+    streaming_http2: bool = True
+    streaming_keepalive: bool = False
 
     @classmethod
     def from_env(cls) -> "PoolConfig":
@@ -107,6 +119,10 @@ class PoolConfig:
             max_keepalive_connections=int(os.environ.get("TOKENPAK_POOL_MAX_KEEPALIVE", "10")),
             keepalive_expiry=float(os.environ.get("TOKENPAK_POOL_KEEPALIVE_EXPIRY", "30")),
             http2=os.environ.get("TOKENPAK_HTTP2", "1") != "0",
+            streaming_http2=os.environ.get("TOKENPAK_STREAM_HTTP2", "1") != "0",
+            streaming_keepalive=(
+                os.environ.get("TOKENPAK_STREAM_KEEPALIVE", "0") != "0"
+            ),
         )
 
 
@@ -175,6 +191,16 @@ class ConnectionPool:
     def __init__(self, config: Optional[PoolConfig] = None) -> None:
         self._config = config or PoolConfig.from_env()
         self._clients: Dict[str, httpx.Client] = {}
+        # NCP-3A-streaming-connect Phase 2B (issue #74) — streaming
+        # traffic uses a parallel client map isolated from the
+        # request/non-streaming pool. The streaming client keeps
+        # HTTP/2 enabled (protective in observed traffic) but
+        # disables keepalive by default so stale connections do
+        # not enter the streaming reuse path. Phase 2 M2 (full
+        # HTTP/1.1 + no keepalive) was rejected after verification
+        # regression on 2026-04-27; see
+        # docs/internal/specs/issue-74-streaming-connect-phase-2-2026-04-27.md.
+        self._streaming_clients: Dict[str, httpx.Client] = {}
         self._lock = threading.Lock()
         self._metrics = PoolMetrics()
         self._metrics_lock = threading.Lock()
@@ -226,6 +252,58 @@ class ConnectionPool:
             if netloc not in self._clients:
                 self._clients[netloc] = self._make_client()
             return self._clients[netloc]
+
+    def _make_streaming_client(self) -> httpx.Client:
+        """Create a streaming-only ``httpx.Client``.
+
+        NCP-3A-streaming-connect Phase 2B (issue #74) — keeps HTTP/2
+        enabled by default (protective in observed traffic; M2's
+        HTTP/1.1-fallback regressed verification at 22:19Z
+        2026-04-27) and only disables keepalive on the streaming
+        path. Reversible via ``TOKENPAK_STREAM_HTTP2`` (default 1)
+        and ``TOKENPAK_STREAM_KEEPALIVE`` (default 0).
+        """
+        cfg = self._config
+        use_http2 = cfg.streaming_http2 and _H2_AVAILABLE
+        max_keepalive = (
+            cfg.max_keepalive_connections if cfg.streaming_keepalive else 0
+        )
+        keepalive_expiry = (
+            cfg.keepalive_expiry if cfg.streaming_keepalive else 0.0
+        )
+
+        limits = httpx.Limits(
+            max_connections=cfg.max_connections,
+            max_keepalive_connections=max_keepalive,
+            keepalive_expiry=keepalive_expiry,
+        )
+        timeout = httpx.Timeout(
+            connect=cfg.connect_timeout,
+            read=cfg.read_timeout,
+            write=cfg.read_timeout,
+            pool=cfg.connect_timeout,
+        )
+
+        return httpx.Client(
+            http2=use_http2,
+            limits=limits,
+            timeout=timeout,
+            follow_redirects=False,
+            verify=True,
+        )
+
+    def _get_streaming_client(self, netloc: str) -> httpx.Client:
+        """Return (or lazily create) the streaming-only client for
+        *netloc*. Parallel structure to :meth:`_get_client` but uses
+        the isolated streaming client map."""
+        client = self._streaming_clients.get(netloc)
+        if client is not None:
+            return client
+
+        with self._lock:
+            if netloc not in self._streaming_clients:
+                self._streaming_clients[netloc] = self._make_streaming_client()
+            return self._streaming_clients[netloc]
 
     # ------------------------------------------------------------------
     # Public request interface
@@ -318,7 +396,10 @@ class ConnectionPool:
         """
         parsed = httpx.URL(url)
         netloc = parsed.host
-        client = self._get_client(netloc)
+        # NCP-3A-streaming-connect Phase 2B (issue #74) — streaming
+        # traffic routes to the isolated streaming client (HTTP/2
+        # preserved, keepalive disabled by default).
+        client = self._get_streaming_client(netloc)
 
         with self._metrics_lock:
             self._metrics.total_requests += 1
@@ -365,6 +446,12 @@ class ConnectionPool:
                 except Exception:
                     pass
             self._clients.clear()
+            for client in self._streaming_clients.values():
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            self._streaming_clients.clear()
 
     def __repr__(self) -> str:
         providers = self.active_providers
