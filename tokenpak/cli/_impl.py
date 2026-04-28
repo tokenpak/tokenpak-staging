@@ -4234,7 +4234,7 @@ def cmd_compliance_report(args):
 
 # ── Version Control Commands ──────────────────────────────────────────────────
 
-_LOCK_FILE = Path.home() / "vault" / "System" / "tokenpak.lock.json"
+_LOCK_FILE = Path.home() / "vault" / "06_RUNTIME" / "SYSTEM" / "tokenpak.lock.json"
 _OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
 _PROXY_URL = "http://localhost:8766"
 

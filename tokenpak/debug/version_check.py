@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import List, Optional
 
 PROXY_URL = "http://localhost:8766"
-LOCK_FILE = Path.home() / "vault" / "System" / "tokenpak.lock.json"
+LOCK_FILE = Path.home() / "vault" / "06_RUNTIME" / "SYSTEM" / "tokenpak.lock.json"
 OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
 MEMORY_DIR = Path.home() / ".openclaw" / "workspace" / "memory"
 

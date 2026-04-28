@@ -1,0 +1,41 @@
+{
+  "claude_code_event_count": 0,
+  "dim1_session_collapse": {
+    "collapse_ratio": null,
+    "distinct_request_ids": 0,
+    "distinct_session_ids": 0,
+    "verdict": "no_data"
+  },
+  "dim2_time_clustering": {
+    "spans": [],
+    "verdict": "insufficient_data"
+  },
+  "dim3_status_distribution": {},
+  "dim4_per_session_durations": {},
+  "dim5_provider_audit": {
+    "distribution": {},
+    "i0_violation": false,
+    "non_oauth_providers": []
+  },
+  "dim6_retry_count": {
+    "note": "Lower bound \u2014 current schema doesn't tag every retry. Real retry behavior may be higher; settle via the H4 'Retrying in 20s' visual evidence + the \u00a74.4 OAuth-fresh test.",
+    "retry_event_lower_bound": 0
+  },
+  "dim7_token_usage": {
+    "available": true,
+    "no_usage_rows": true
+  },
+  "dim8_interleaving": {
+    "interleave_score": null,
+    "verdict": "insufficient_data"
+  },
+  "dim9_parity_trace_coverage": {
+    "available": false,
+    "note": "tp_parity_trace not present \u2014 NCP-3I instrumentation either hasn't been deployed on this host or TOKENPAK_PARITY_TRACE_ENABLED has never been set."
+  },
+  "generated_at": "2026-04-27T14:24:30.930050+00:00",
+  "schema_version": "ncp-3-trace-v1",
+  "window_end": "2026-04-27T14:24:30.930050+00:00",
+  "window_minutes": 30.0,
+  "window_start": "2026-04-27T13:54:30.930050+00:00"
+}
