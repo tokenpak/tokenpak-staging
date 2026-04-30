@@ -1,8 +1,8 @@
 """``ContextEnrichmentStage`` — policy-gated adapter-backed vault injection.
 
 Runs in the ``routing`` slot of the pipeline. Adds retrieved vault context
-through the request's resolved ``FormatAdapter`` so provider-specific wire
-shapes stay isolated in ``tokenpak.proxy.adapters``.
+through an injected ``FormatAdapter`` registry so provider-specific wire
+shapes stay isolated outside the services pipeline.
 
 Gate: only runs when
   - ``ctx.policy.injection_enabled`` is True,
@@ -22,16 +22,36 @@ context for a one-word "hi" wastes tokens and pollutes the cache.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol
 
-from tokenpak.proxy.adapters import AdapterRegistry, build_registry
-from tokenpak.proxy.adapters.base import FormatAdapter
 from tokenpak.services.request import Request
 from tokenpak.services.request_pipeline.stages import PipelineContext
 
 logger = logging.getLogger(__name__)
 
 _CACHE_CAPABILITY = "tip.cache.proxy-managed"
+
+
+class _FormatAdapter(Protocol):
+    """Structural subset of the provider format-adapter contract used here."""
+
+    source_format: str
+    capabilities: frozenset[str]
+
+    def normalize(self, body: bytes) -> Any: ...
+
+    def denormalize(self, canonical: Any) -> bytes: ...
+
+
+class _AdapterRegistry(Protocol):
+    """Structural registry contract injected by the transport layer."""
+
+    def detect(
+        self,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> _FormatAdapter | None: ...
 
 
 def _request_path(request: Request) -> str:
@@ -70,13 +90,14 @@ class ContextEnrichmentStage:
     def __init__(
         self,
         retriever: Any | None = None,
-        adapter_registry: AdapterRegistry | None = None,
+        adapter_registry: _AdapterRegistry | None = None,
     ) -> None:
         """Create the enrichment stage.
 
         ``retriever`` accepts ``(query: str, top_k: int)`` and returns an
-        iterable of strings. ``adapter_registry`` is injectable for tests;
-        production uses the default registry including discovered adapters.
+        iterable of strings. ``adapter_registry`` is injected by callers that
+        own wire-format concerns (for example the proxy transport); leaving it
+        unset makes the stage a no-op until composition wires the registry in.
         """
         self._retriever = retriever
         self._adapter_registry = adapter_registry
@@ -114,11 +135,10 @@ class ContextEnrichmentStage:
         self._retriever = _search
         return self._retriever
 
-    def _resolve_adapter(self, ctx: PipelineContext) -> FormatAdapter | None:
+    def _resolve_adapter(self, ctx: PipelineContext) -> _FormatAdapter | None:
         registry = self._adapter_registry
         if registry is None:
-            registry = build_registry()
-            self._adapter_registry = registry
+            return None
         try:
             return registry.detect(
                 _request_path(ctx.request),
