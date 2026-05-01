@@ -9,4 +9,6 @@ This directory is the small offline corpus used to exercise session capsule gene
 | `malformed.jsonl` | Mixed valid and invalid JSONL lines | Proves malformed lines are counted/skipped while valid messages still feed capsule generation | TCM-06/TCM-09: keeps status and attribution paths from depending on perfect transcript hygiene |
 | `multiblock_assistant.jsonl` | Assistant/user content with thinking, text, tool_use, and tool_result blocks | Proves richer transcript block shapes flatten into useful capsule text and artifact/action hints | TCM-06: validates local transcript normalization before cache-context injection |
 
+`smoke_matrix.md` records the local-only capsule-generation output for these fixtures, including message counts, parse-error counts, capsule/no-capsule behavior, and TCM runtime-proof mapping.
+
 Provider/model/platform stance: these fixtures describe transcript shapes, not provider routing. They use only local parser and capsule-builder code, so they are safe for offline proof and do not mutate OpenClaw or provider configuration.
