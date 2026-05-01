@@ -1,491 +1,604 @@
-"""Capsule builder: heuristic extraction from Claude Code transcripts.
+"""
+tokenpak.companion.capsules.builder
+===================================
 
-A SessionCapsule compresses a long conversation (100k+ tokens) down to a
-dense markdown summary (< 2k tokens) by extracting:
+Capsule Builder — deterministic companion memory-capsule generation and
+context-block compression helpers.
 
-- **Artifacts**: file paths mentioned or modified during the session
-- **Decisions**: language indicating a choice was made ("decided", "chose", etc.)
-- **Action items**: forward-looking tasks ("TODO", "need to", "should", etc.)
-- **Insights**: discoveries and findings ("found", "turns out", etc.)
-- **Context summary**: first 2 and last 2 assistant turns (bookend the work)
+A **capsule** is a compact, structured representation of verbose prior-session
+context. The session builder consumes normalized messages from a
+``TranscriptSource`` so platform-specific transcript discovery and parsing stay
+outside this module. The request-body ``process`` API is preserved for existing
+proxy integration callers.
 
-This is v1 (heuristic). LLM-assisted extraction is a v2 feature.
-
-Usage::
-
-    from tokenpak.companion.capsules.builder import CapsuleBuilder
-
-    builder = CapsuleBuilder()
-    capsule = builder.build_from_messages(messages)
-    print(capsule.to_markdown())
+Design Principles
+-----------------
+* **Deterministic** — SHA-256 of normalized content drives stable IDs.
+* **Fast** — pure string operations only; no model calls.
+* **Transparent** — capsule output is readable plain text.
+* **Safe** — missing transcript sources return ``None`` so callers can fall
+  back to vault retrieval only.
+* **Feature-flag-compatible** — request-body compression remains disabled by
+  default unless enabled by the caller.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+
+from tokenpak.companion.capsules.transcript_sources.base import Message, TranscriptSource
 
 # ---------------------------------------------------------------------------
-# Default capsule directory
+# Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_CAPSULE_DIR = Path.home() / ".tokenpak" / "companion" / "capsules"
+# Minimum character length of a text block before the builder considers
+# compressing it.  Below this threshold the overhead of a capsule envelope
+# would exceed the savings.
+DEFAULT_MIN_BLOCK_CHARS: int = 400
+
+# Number of most-recent messages to leave untouched (the "hot window").
+# Capsule compression is only applied to messages *outside* this window.
+DEFAULT_HOT_WINDOW: int = 2
+
+# Minimum normalized message count before a memory capsule is useful.
+DEFAULT_MIN_MESSAGE_COUNT: int = 5
+
+# Maximum chars to keep per paragraph in compressed form.
+_MAX_PARA_CHARS: int = 200
+
+# Pre-compiled patterns (module-level for reuse across calls)
+_RE_MULTI_BLANK = re.compile(r"\n{3,}")
+_RE_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+_RE_MULTI_SPACE = re.compile(r"[ \t]{2,}")
+_RE_ARTIFACT = re.compile(r"(?P<path>[\w./-]+\.(?:py|md|json|yaml|yml|toml|txt|sh))")
+_RE_ACTION = re.compile(r"\b(todo|follow[- ]?up|next|fix|review|verify|run|add)\b", re.I)
+_RE_DECISION = re.compile(r"\b(decid(?:e|ed|es|ing)|choose|chose|use|prefer|ship|keep)\b", re.I)
+_RE_INSIGHT = re.compile(r"\b(because|root cause|lesson|gotcha|insight|found|discovered)\b", re.I)
 
 
-# ---------------------------------------------------------------------------
-# Regex patterns
-# ---------------------------------------------------------------------------
-
-# File paths: absolute (/foo/bar.py) or relative with extension (src/foo.py)
-_RE_FILE_PATH = re.compile(
-    r"""
-    (?:
-        /(?:[a-zA-Z0-9_\-\.]+/)*[a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]{1,10}  # absolute
-        |
-        (?:[a-zA-Z0-9_\-\.]+/)+[a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]{1,10}    # relative with dir
-    )
-    """,
-    re.VERBOSE,
-)
-
-# Decision language — look for these at word boundaries
-_RE_DECISION = re.compile(
-    r"(?:^|[.!?\n]\s*)([^.!?\n]*\b(?:decided|chose|choosing|going\s+with|going\s+to\s+use|"
-    r"will\s+use|opted\s+for|selected|picked|settled\s+on|let(?:'s|\s+us)\s+(?:use|go\s+with|"
-    r"keep|stick))[^.!?\n]{0,200})",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-# Action items
-_RE_ACTION = re.compile(
-    r"(?:^|[.!?\n]\s*)([^.!?\n]*\b(?:TODO|FIXME|need\s+to|should|must|have\s+to|"
-    r"next\s+step|follow[-\s]?up|will\s+need\s+to|don't\s+forget)[^.!?\n]{0,200})",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-# Insights / discoveries
-_RE_INSIGHT = re.compile(
-    r"(?:^|[.!?\n]\s*)([^.!?\n]*\b(?:found\s+that|discovered|turns\s+out|actually|"
-    r"it\s+turns\s+out|realized|noticed|the\s+reason\s+(?:is|was)|root\s+cause|"
-    r"the\s+issue\s+(?:is|was))[^.!?\n]{0,200})",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
-
-@dataclass
+@dataclass(frozen=True)
 class SessionCapsule:
-    """Compressed representation of a Claude Code session."""
+    """Deterministic companion memory capsule for one session."""
 
-    session_id: str = ""
-    artifacts: List[str] = field(default_factory=list)
-    decisions: List[str] = field(default_factory=list)
-    action_items: List[str] = field(default_factory=list)
-    insights: List[str] = field(default_factory=list)
-    context_summary: List[Tuple[str, str]] = field(default_factory=list)
-    """List of (role, snippet) pairs from the first/last turns."""
-
-    message_count: int = 0
-    tokens_est: int = 0
-
-    def to_markdown(self) -> str:
-        """Render the capsule as compact markdown (target: < 2 k tokens).
-
-        Deduplicates all lists and truncates each item to keep the output
-        within budget.
-        """
-        lines: List[str] = []
-
-        header = "## Session Capsule"
-        if self.session_id:
-            header += f" — `{self.session_id[:16]}`"
-        lines.append(header)
-        lines.append(
-            f"*{self.message_count} messages · ~{self.tokens_est:,} tokens compressed*"
-        )
-        lines.append("")
-
-        if self.context_summary:
-            lines.append("### Context")
-            for role, snippet in self.context_summary:
-                prefix = "U:" if role == "user" else "A:"
-                lines.append(f"> **{prefix}** {_truncate(snippet, 120)}")
-            lines.append("")
-
-        if self.artifacts:
-            lines.append("### Artifacts")
-            for a in _dedup(self.artifacts)[:20]:
-                lines.append(f"- `{_truncate(a, 80)}`")
-            lines.append("")
-
-        if self.decisions:
-            lines.append("### Decisions")
-            for d in _dedup(self.decisions)[:10]:
-                lines.append(f"- {_truncate(d, 120)}")
-            lines.append("")
-
-        if self.action_items:
-            lines.append("### Action Items")
-            for ai in _dedup(self.action_items)[:10]:
-                lines.append(f"- {_truncate(ai, 120)}")
-            lines.append("")
-
-        if self.insights:
-            lines.append("### Insights")
-            for ins in _dedup(self.insights)[:10]:
-                lines.append(f"- {_truncate(ins, 120)}")
-            lines.append("")
-
-        return "\n".join(lines)
-
-    def token_count(self) -> int:
-        """Rough token estimate of `to_markdown()` output (chars / 4)."""
-        return len(self.to_markdown()) // 4
-
-
-# ---------------------------------------------------------------------------
-# Builder
-# ---------------------------------------------------------------------------
-
-class CapsuleBuilder:
-    """Heuristic capsule builder for Claude Code transcripts.
-
-    Accepts raw messages (dicts as they appear in a JSONL transcript) or
-    plain text snippets, and returns a :class:`SessionCapsule`.
-
-    Args:
-        context_turns: How many assistant turns to capture from the start
-            and end of the session for the ``context_summary``.
-    """
-
-    def __init__(self, context_turns: int = 2) -> None:
-        self.context_turns = context_turns
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def build_from_messages(
-        self,
-        messages: Sequence[Dict[str, Any]],
-        session_id: str = "",
-    ) -> SessionCapsule:
-        """Build a capsule from a list of transcript message dicts.
-
-        Each dict should have at least a ``type`` field (``user``,
-        ``assistant``, etc.) and a ``message`` or ``content`` field.
-        """
-        capsule = SessionCapsule(session_id=session_id)
-        capsule.message_count = len(messages)
-
-        assistant_texts: List[str] = []
-        all_texts: List[str] = []
-
-        for msg in messages:
-            text = _extract_text(msg)
-            if not text:
-                continue
-            all_texts.append(text)
-            role = _get_role(msg)
-            if role == "assistant":
-                assistant_texts.append(text)
-
-        # Token estimate (heuristic; use tiktoken if available)
-        capsule.tokens_est = _count_tokens_total(all_texts)
-
-        # Context summary: first N + last N assistant turns
-        capsule.context_summary = _build_context_summary(
-            messages, n=self.context_turns
-        )
-
-        # Heuristic extraction from all assistant text
-        combined = "\n".join(assistant_texts)
-        self._extract_heuristic(combined, capsule)
-
-        return capsule
-
-    def build_from_jsonl(
-        self,
-        path: Path,
-        session_id: str = "",
-    ) -> SessionCapsule:
-        """Build a capsule directly from a JSONL transcript file."""
-        messages: List[Dict[str, Any]] = []
-        if path.exists():
-            with open(path, encoding="utf-8") as fh:
-                for raw in fh:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        messages.append(json.loads(raw))
-                    except json.JSONDecodeError:
-                        pass
-        if not session_id and messages:
-            session_id = messages[0].get("sessionId", "")
-        return self.build_from_messages(messages, session_id=session_id)
-
-    # ------------------------------------------------------------------
-    # Heuristic extraction (core)
-    # ------------------------------------------------------------------
-
-    def _extract_heuristic(
-        self,
-        text: str,
-        capsule: SessionCapsule,
-    ) -> None:
-        """Extract artifacts, decisions, action items, and insights from *text*.
-
-        Populates the corresponding lists on *capsule* in-place.
-        Results are deduplicated and normalised (stripped, title-normalised
-        for file paths).
-
-        Args:
-            text: Combined assistant message text for the session.
-            capsule: The capsule to populate.
-        """
-        # ── Artifacts (file paths) ──────────────────────────────────────
-        paths: List[str] = []
-        for m in _RE_FILE_PATH.finditer(text):
-            p = m.group(0).strip()
-            # Filter noise: skip very short paths and obvious non-paths
-            if len(p) >= 4 and not p.startswith(".."):
-                paths.append(p)
-        capsule.artifacts = _dedup(paths)
-
-        # ── Decisions ──────────────────────────────────────────────────
-        decisions: List[str] = []
-        for m in _RE_DECISION.finditer(text):
-            snippet = _clean(m.group(1))
-            if len(snippet) > 8:
-                decisions.append(snippet)
-        capsule.decisions = _dedup(decisions)
-
-        # ── Action items ───────────────────────────────────────────────
-        actions: List[str] = []
-        for m in _RE_ACTION.finditer(text):
-            snippet = _clean(m.group(1))
-            if len(snippet) > 8:
-                actions.append(snippet)
-        capsule.action_items = _dedup(actions)
-
-        # ── Insights ───────────────────────────────────────────────────
-        insights: List[str] = []
-        for m in _RE_INSIGHT.finditer(text):
-            snippet = _clean(m.group(1))
-            if len(snippet) > 8:
-                insights.append(snippet)
-        capsule.insights = _dedup(insights)
-
-
-# ---------------------------------------------------------------------------
-# Persistence helpers
-# ---------------------------------------------------------------------------
-
-def _safe_filename(session_id: str) -> str:
-    """Convert a session_id to a safe filename stem (no path separators)."""
-    return re.sub(r"[^\w\-]", "_", session_id)[:64]
-
-
-def save_capsule(
-    capsule: "SessionCapsule",
-    capsule_dir: Optional[Path] = None,
-) -> Path:
-    """Save *capsule* as a markdown file to *capsule_dir*.
-
-    The filename is derived from ``capsule.session_id`` when set, otherwise a
-    timestamp-based name is used (``capsule_<unix_ts>.md``).
-
-    Args:
-        capsule: The :class:`SessionCapsule` to persist.
-        capsule_dir: Directory to write the file.  Defaults to
-            ``~/.tokenpak/companion/capsules/``.  Created if absent.
-
-    Returns:
-        The :class:`Path` of the written file.
-    """
-    if capsule_dir is None:
-        capsule_dir = _DEFAULT_CAPSULE_DIR
-    capsule_dir = Path(capsule_dir)
-    capsule_dir.mkdir(parents=True, exist_ok=True)
-
-    if capsule.session_id:
-        stem = _safe_filename(capsule.session_id)
-    else:
-        stem = f"capsule_{int(time.time())}"
-
-    path = capsule_dir / f"{stem}.md"
-    path.write_text(capsule.to_markdown(), encoding="utf-8")
-    return path
-
-
-def load_capsule(
-    session_id: Optional[str] = None,
-    capsule_dir: Optional[Path] = None,
-) -> str:
-    """List available capsules or load one by *session_id*.
-
-    * **No session_id** — returns a newline-joined list of available session IDs
-      (file stems).  Returns an empty string when the directory is missing or empty.
-    * **With session_id** — returns the full markdown content of that capsule.
-      Raises :class:`FileNotFoundError` when the capsule does not exist.
-
-    Args:
-        session_id: The session to load, or ``None``/``""`` to list all.
-        capsule_dir: Directory to read from.  Defaults to
-            ``~/.tokenpak/companion/capsules/``.
-
-    Returns:
-        Listing string or capsule markdown content.
-    """
-    if capsule_dir is None:
-        capsule_dir = _DEFAULT_CAPSULE_DIR
-    capsule_dir = Path(capsule_dir)
-
-    if not session_id:
-        if not capsule_dir.exists():
-            return ""
-        files = sorted(capsule_dir.glob("*.md"))
-        return "\n".join(f.stem for f in files)
-
-    stem = _safe_filename(session_id)
-    path = capsule_dir / f"{stem}.md"
-    if not path.exists():
-        raise FileNotFoundError(f"Capsule not found for session_id={session_id!r} (looked at {path})")
-    return path.read_text(encoding="utf-8")
+    session_id: str
+    source_name: str
+    message_count: int
+    content: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _extract_text(msg: Dict[str, Any]) -> str:
-    """Pull a plain-text string out of a transcript message dict."""
-    msg_type = msg.get("type", "")
 
-    # assistant / user: message.content is a list of blocks or a string
-    if msg_type in ("assistant", "user"):
-        inner = msg.get("message", msg)
-        content = inner.get("content", "")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: List[str] = []
-            for block in content:
-                if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        parts.append(block.get("text", ""))
-                    elif block.get("type") == "tool_use":
-                        inp = block.get("input", {})
-                        parts.append(json.dumps(inp) if isinstance(inp, dict) else str(inp))
-                    elif block.get("type") == "tool_result":
-                        rc = block.get("content", "")
-                        parts.append(rc if isinstance(rc, str) else json.dumps(rc))
-            return " ".join(parts)
+def _capsule_id(content: str) -> str:
+    """Return a short deterministic ID for *content* (8 hex chars)."""
+    digest = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+    return digest[:8]
+
+
+def _compress_paragraph(para: str) -> str:
+    """
+    Compress a single prose paragraph deterministically.
+
+    Strategy (in order):
+    1. Collapse internal whitespace.
+    2. If the paragraph ends with a sentence boundary within ``_MAX_PARA_CHARS``,
+       truncate there.
+    3. Hard-truncate at ``_MAX_PARA_CHARS`` on a word boundary.
+    """
+    # Collapse runs of spaces / tabs (not newlines — those separate paragraphs)
+    text = _RE_MULTI_SPACE.sub(" ", para).strip()
+
+    if len(text) <= _MAX_PARA_CHARS:
+        return text
+
+    # Try to find a sentence end within budget
+    m = None
+    for m in _RE_SENTENCE_END.finditer(text):
+        if m.end() > _MAX_PARA_CHARS:
+            break
+    if m and m.end() <= _MAX_PARA_CHARS:
+        return text[: m.end()].strip()
+
+    # Fall back to word-boundary truncation
+    truncated = text[:_MAX_PARA_CHARS]
+    last_space = truncated.rfind(" ")
+    if last_space > _MAX_PARA_CHARS // 2:
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "…"
+
+
+def _compress_text(text: str) -> str:
+    """
+    Compress *text* by applying paragraph-level compression.
+
+    Structure-bearing lines (headers ``#``, bullets ``- / * / +``, numbered
+    lists ``1.``, code fences ```` ``` ````) are preserved verbatim.
+    Prose paragraphs are compressed.
+
+    Returns the compressed text.  Always deterministic.
+    """
+    # Normalise excessive blank lines first
+    text = _RE_MULTI_BLANK.sub("\n\n", text).strip()
+
+    # Split into logical blocks separated by blank lines
+    blocks = re.split(r"\n{2,}", text)
+    compressed_blocks: list[str] = []
+
+    in_code_fence = False
+
+    for block in blocks:
+        lines = block.split("\n")
+        out_lines: list[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Track code fences — never compress inside them
+            if stripped.startswith("```"):
+                in_code_fence = not in_code_fence
+                out_lines.append(line)
+                continue
+
+            if in_code_fence:
+                out_lines.append(line)
+                continue
+
+            # Structure lines — keep verbatim
+            if (
+                stripped.startswith("#")  # heading
+                or re.match(r"^[-*+]\s", stripped)  # unordered bullet
+                or re.match(r"^\d+\.\s", stripped)  # ordered list
+                or stripped.startswith(">")  # blockquote
+                or stripped == "---"
+                or stripped == "==="  # hr / setext heading
+                or stripped == ""  # blank line within block
+            ):
+                out_lines.append(line)
+                continue
+
+            # Prose line — compress
+            out_lines.append(_compress_paragraph(stripped))
+
+        compressed_blocks.append("\n".join(out_lines))
+
+    return "\n\n".join(compressed_blocks)
+
+
+def load_capsule(path: str) -> str:
+    """Read and return the contents of a capsule file at *path*.
+
+    Returns an empty string if the file cannot be read.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
         return ""
 
-    # queue-operation has a top-level content field
-    if msg_type == "queue-operation":
-        return str(msg.get("content", ""))
 
-    # Fallback: content / text / data
-    for key in ("content", "text", "data"):
-        val = msg.get(key)
-        if val and isinstance(val, str):
-            return val
-    return ""
-
-
-def _get_role(msg: Dict[str, Any]) -> str:
-    """Return 'user', 'assistant', or the message type."""
-    msg_type = msg.get("type", "")
-    if msg_type in ("user", "assistant"):
-        return msg_type
-    inner = msg.get("message", {})
-    if isinstance(inner, dict):
-        role = inner.get("role", "")
-        if role:
-            return role
-    return msg_type
+def save_capsule(capsule: SessionCapsule, *, capsule_dir: Path | str) -> Path:
+    """Persist ``capsule`` as ``<session_id>.md`` and return its path."""
+    output_dir = Path(capsule_dir).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_session_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", capsule.session_id).strip("-._")
+    if not safe_session_id:
+        safe_session_id = _capsule_id(capsule.session_id or capsule.content)
+    output_path = output_dir / f"{safe_session_id}.md"
+    output_path.write_text(capsule.content, encoding="utf-8")
+    return output_path
 
 
-def _build_context_summary(
-    messages: Sequence[Dict[str, Any]],
-    n: int = 2,
-) -> List[Tuple[str, str]]:
-    """Return the first *n* and last *n* non-empty turns as (role, snippet) pairs."""
-    turns: List[Tuple[str, str]] = []
-    for msg in messages:
-        text = _extract_text(msg)
-        if not text:
-            continue
-        role = _get_role(msg)
-        if role in ("user", "assistant"):
-            turns.append((role, text))
-
-    if not turns:
-        return []
-
-    result: List[Tuple[str, str]] = []
-    seen: set = set()
-
-    # First n turns
-    for t in turns[:n]:
-        key = t[1][:40]
-        if key not in seen:
-            seen.add(key)
-            result.append(t)
-
-    # Last n turns (skip if already included)
-    for t in turns[-n:]:
-        key = t[1][:40]
-        if key not in seen:
-            seen.add(key)
-            result.append(t)
-
-    return result
-
-
-def _count_tokens_total(texts: List[str]) -> int:
-    """Estimate total token count for a list of texts.
-
-    Uses tiktoken if available, falls back to chars/4.
+def _wrap_capsule(original: str, compressed: str) -> str:
     """
-    combined = " ".join(texts)
+    Wrap *compressed* content in a capsule envelope.
+
+    The capsule ID is derived from *original* (pre-compression) content so
+    that the ID is stable even if the compressor changes.
+    """
+    cid = _capsule_id(original)
+    chars_in = len(original)
+    chars_out = len(compressed)
+    ratio = round(chars_out / chars_in, 3) if chars_in else 1.0
+    header = f"[CAPSULE id={cid} ratio={ratio} chars_in={chars_in} chars_out={chars_out}]"
+    return f"{header}\n{compressed}\n[/CAPSULE]"
+
+
+def _first_nonempty(messages: list[Message]) -> str:
+    for message in messages:
+        text = _one_line(message.content)
+        if text:
+            return text
+    return "No context extracted."
+
+
+def _one_line(text: str, *, limit: int = 220) -> str:
+    value = re.sub(r"\s+", " ", text).strip()
+    if len(value) <= limit:
+        return value
+    truncated = value[:limit]
+    last_space = truncated.rfind(" ")
+    if last_space > limit // 2:
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "…"
+
+
+def _unique_append(items: list[str], value: str, *, limit: int) -> None:
+    cleaned = _one_line(value)
+    if cleaned and cleaned not in items and len(items) < limit:
+        items.append(cleaned)
+
+
+def _message_content_to_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, Mapping):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, Mapping):
+        text = value.get("text") or value.get("content")
+        if isinstance(text, str):
+            return text
     try:
-        from tokenpak.telemetry.tokens import count_tokens  # type: ignore
-        return count_tokens(combined)
-    except Exception:
-        return len(combined) // 4
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
 
 
-def _dedup(items: List[str]) -> List[str]:
-    """Deduplicate while preserving order."""
-    seen: set = set()
-    result: List[str] = []
-    for item in items:
-        key = item.lower().strip()
-        if key not in seen:
-            seen.add(key)
-            result.append(item)
-    return result
+# ---------------------------------------------------------------------------
+# CapsuleBuilder
+# ---------------------------------------------------------------------------
 
 
-def _clean(s: str) -> str:
-    """Strip leading punctuation/whitespace from an extracted snippet."""
-    return re.sub(r"^[\s.!?,;:]+", "", s).strip()
+class CapsuleBuilder:
+    """
+    Build memory capsules and compress verbose request context blocks.
+
+    Parameters
+    ----------
+    transcript_source : TranscriptSource | None
+        Optional source for prior-session messages. If omitted, :meth:`build`
+        returns ``None`` and callers can fall back to retrieval-only behavior.
+    min_message_count : int
+        Minimum source message count required for memory-capsule generation.
+    enabled : bool
+        Master switch for the request-body :meth:`process` API. When *False*
+        (the default), :meth:`process` is a no-op.
+    min_block_chars : int
+        Minimum character length of a text block to qualify for request-body
+        compression.
+    hot_window : int
+        Number of trailing messages to leave untouched by request-body
+        compression.
+    """
+
+    def __init__(
+        self,
+        transcript_source: TranscriptSource | None = None,
+        *,
+        min_message_count: int = DEFAULT_MIN_MESSAGE_COUNT,
+        enabled: bool = False,
+        min_block_chars: int = DEFAULT_MIN_BLOCK_CHARS,
+        hot_window: int = DEFAULT_HOT_WINDOW,
+    ) -> None:
+        self._source = transcript_source
+        self._min_message_count = min_message_count
+        self._enabled = enabled
+        self._min_block_chars = min_block_chars
+        self._hot_window = hot_window
+
+    # ------------------------------------------------------------------
+    # Public API — memory capsules
+    # ------------------------------------------------------------------
+
+    def build(self, session_id: str) -> Optional[SessionCapsule]:
+        """Build a memory capsule for ``session_id`` or return ``None``.
+
+        ``None`` is the graceful-degrade signal for surfaces that cannot expose
+        prior-session transcripts. Cache injection callers should treat it as
+        "vault retrieval only" rather than as an error.
+        """
+        if self._source is None:
+            return None
+
+        messages = list(self._source.load_messages(session_id))
+        return self.build_from_messages(
+            messages,
+            session_id=session_id,
+            source_name=self._source.source_name,
+        )
+
+    def build_from_messages(
+        self,
+        messages: Iterable[Message | Mapping[str, Any]],
+        *,
+        session_id: str = "session",
+        source_name: str = "manual",
+    ) -> Optional[SessionCapsule]:
+        """Build a memory capsule from already-loaded normalized messages.
+
+        This is the scheduler-friendly API used by daily companion capsule
+        generation. Platform-specific transcript discovery stays outside the
+        builder; callers may pass ``Message`` objects or dict-like records with
+        ``role``/``type``, ``content``, ``timestamp``, and optional ``metadata``.
+        """
+        normalized = [self._coerce_message(message) for message in messages]
+        normalized = [message for message in normalized if message.content.strip()]
+        if len(normalized) < self._min_message_count:
+            return None
+        return self._summarize(session_id, normalized, source_name=source_name)
+
+    @staticmethod
+    def _coerce_message(message: Message | Mapping[str, Any]) -> Message:
+        if isinstance(message, Message):
+            return message
+
+        content = _message_content_to_text(message.get("content", ""))
+        role = str(message.get("role") or message.get("type") or "")
+        timestamp = str(message.get("timestamp") or "")
+        raw_metadata = message.get("metadata")
+        metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
+        return Message(role=role, content=content, timestamp=timestamp, metadata=metadata)
+
+    # ------------------------------------------------------------------
+    # Public API — request-body compression (existing behavior)
+    # ------------------------------------------------------------------
+
+    def process(
+        self,
+        body_bytes: bytes,
+    ) -> Tuple[bytes, Dict[str, Any]]:
+        """
+        Process the request body, capsulising eligible context blocks.
+
+        Parameters
+        ----------
+        body_bytes : bytes
+            Raw JSON request body (OpenAI / Anthropic chat format).
+
+        Returns
+        -------
+        (new_body_bytes, stats)
+            *new_body_bytes* — modified body (or original if nothing changed).
+            *stats* — dict with keys:
+                ``blocks_capsulized`` int,
+                ``chars_in``         int,
+                ``chars_out``        int,
+                ``ratio``            float,
+                ``duration_ms``      float.
+        """
+        _empty_stats: Dict[str, Any] = {
+            "blocks_capsulized": 0,
+            "chars_in": 0,
+            "chars_out": 0,
+            "ratio": 1.0,
+            "duration_ms": 0.0,
+            "skipped": True,
+            "skip_reason": "disabled",
+        }
+
+        if not self._enabled:
+            return body_bytes, _empty_stats
+
+        t0 = time.monotonic()
+        try:
+            data = json.loads(body_bytes)
+        except (json.JSONDecodeError, ValueError):
+            return body_bytes, {**_empty_stats, "skip_reason": "invalid_json"}
+
+        messages: list[dict[str, Any]] = data.get("messages") or []
+        if not messages:
+            stats = {**_empty_stats, "skip_reason": "no_messages", "duration_ms": 0.0}
+            return body_bytes, stats
+
+        # Determine the hot window: last `hot_window` messages are untouched
+        hot_start = max(0, len(messages) - self._hot_window)
+
+        total_chars_in = 0
+        total_chars_out = 0
+        blocks_capsulized = 0
+        modified = False
+
+        for idx, msg in enumerate(messages):
+            if idx >= hot_start:
+                # Inside hot window — never touch
+                continue
+            if not isinstance(msg, dict):
+                continue
+
+            content = msg.get("content")
+
+            if isinstance(content, str):
+                new_content, delta_in, delta_out, capsulized = self._maybe_capsulise(content)
+                if capsulized:
+                    msg["content"] = new_content
+                    modified = True
+                total_chars_in += delta_in
+                total_chars_out += delta_out
+                blocks_capsulized += capsulized
+
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        new_text, delta_in, delta_out, capsulized = self._maybe_capsulise(
+                            part["text"]
+                        )
+                        if capsulized:
+                            part["text"] = new_text
+                            modified = True
+                        total_chars_in += delta_in
+                        total_chars_out += delta_out
+                        blocks_capsulized += capsulized
+
+        duration_ms = (time.monotonic() - t0) * 1000
+
+        if not modified:
+            ratio = 1.0
+            stats: Dict[str, Any] = {  # type: ignore[no-redef]
+                "blocks_capsulized": 0,
+                "chars_in": total_chars_in,
+                "chars_out": total_chars_in,
+                "ratio": ratio,
+                "duration_ms": round(duration_ms, 3),
+                "skipped": False,
+                "skip_reason": "no_eligible_blocks",
+            }
+            return body_bytes, stats
+
+        new_body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        ratio = round(total_chars_out / total_chars_in, 3) if total_chars_in else 1.0
+
+        stats = {
+            "blocks_capsulized": blocks_capsulized,
+            "chars_in": total_chars_in,
+            "chars_out": total_chars_out,
+            "ratio": ratio,
+            "duration_ms": round(duration_ms, 3),
+            "skipped": False,
+            "skip_reason": None,
+        }
+        return new_body, stats
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _summarize(
+        self,
+        session_id: str,
+        messages: list[Message],
+        *,
+        source_name: str,
+    ) -> SessionCapsule:
+        context = _first_nonempty(messages)
+        decisions: list[str] = []
+        artifacts: list[str] = []
+        actions: list[str] = []
+        insights: list[str] = []
+
+        for message in messages:
+            for line in message.content.splitlines():
+                stripped = line.strip(" -\t")
+                if not stripped:
+                    continue
+                if _RE_DECISION.search(stripped):
+                    _unique_append(decisions, stripped, limit=8)
+                if _RE_ACTION.search(stripped):
+                    _unique_append(actions, stripped, limit=8)
+                if _RE_INSIGHT.search(stripped):
+                    _unique_append(insights, stripped, limit=8)
+                for match in _RE_ARTIFACT.finditer(stripped):
+                    _unique_append(artifacts, match.group("path"), limit=12)
+
+        if not insights:
+            _unique_append(insights, f"Built from {len(messages)} normalized messages.", limit=8)
+
+        raw_text = "\n".join(message.content for message in messages)
+        metadata = {
+            "sha256": hashlib.sha256(raw_text.encode("utf-8", errors="replace")).hexdigest(),
+            "source_name": source_name,
+        }
+        content = self._render_capsule(
+            session_id=session_id,
+            source_name=source_name,
+            message_count=len(messages),
+            metadata=metadata,
+            context=context,
+            decisions=decisions,
+            artifacts=artifacts,
+            actions=actions,
+            insights=insights,
+        )
+        return SessionCapsule(
+            session_id=session_id,
+            source_name=source_name,
+            message_count=len(messages),
+            content=content,
+            metadata=metadata,
+        )
+
+    def _render_capsule(
+        self,
+        *,
+        session_id: str,
+        source_name: str,
+        message_count: int,
+        metadata: Mapping[str, Any],
+        context: str,
+        decisions: list[str],
+        artifacts: list[str],
+        actions: list[str],
+        insights: list[str],
+    ) -> str:
+        sections = [
+            "---",
+            f"session_id: {session_id}",
+            f"source_name: {source_name}",
+            f"message_count: {message_count}",
+            f"sha256: {metadata.get('sha256', '')}",
+            "---",
+            "",
+            "# Context",
+            context,
+            "",
+            "# Decisions",
+            *_bullet_lines(decisions),
+            "",
+            "# Artifacts",
+            *_bullet_lines(artifacts),
+            "",
+            "# Action items",
+            *_bullet_lines(actions),
+            "",
+            "# Insights",
+            *_bullet_lines(insights),
+            "",
+            "# Raw transcript reference",
+            f"- source_name: {source_name}",
+            f"- message_count: {message_count}",
+            f"- sha256: {metadata.get('sha256', '')}",
+            "",
+        ]
+        return "\n".join(sections)
+
+    def _maybe_capsulise(self, text: str) -> Tuple[str, int, int, int]:
+        """
+        Conditionally capsulise a single text block.
+
+        Returns
+        -------
+        (new_text, chars_in, chars_out, capsulized)
+            *capsulized* is 1 if the block was wrapped, 0 otherwise.
+        """
+        chars_in = len(text)
+
+        if chars_in < self._min_block_chars:
+            return text, chars_in, chars_in, 0
+
+        compressed = _compress_text(text)
+        wrapped = _wrap_capsule(text, compressed)
+        return wrapped, chars_in, len(wrapped), 1
 
 
-def _truncate(s: str, max_len: int) -> str:
-    """Truncate a string with an ellipsis if it exceeds *max_len*."""
-    s = s.strip()
-    if len(s) <= max_len:
-        return s
-    return s[:max_len - 1] + "…"
+def _bullet_lines(values: list[str]) -> list[str]:
+    if not values:
+        return ["- None captured"]
+    return [f"- {value}" for value in values]
