@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tokenpak.companion.transcript.parser import parse_transcript
+
 from tokenpak.companion.capsules.builder import CapsuleBuilder
 from tokenpak.companion.capsules.transcript_sources.base import Message
-from tokenpak.companion.transcript.parser import parse_transcript
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
