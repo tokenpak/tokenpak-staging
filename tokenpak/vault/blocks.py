@@ -1,12 +1,28 @@
-"""TokenPak Agent Vault Block Storage — JSON-format block persistence."""
+"""TokenPak Agent Vault Block Storage — JSON-format block persistence.
+
+TCM-04 (2026-04-29): adds ``BlockStore.default()`` classmethod that
+returns a vault-backed store reading the canonical index at
+``~/vault/.tokenpak/`` (override via ``TOKENPAK_VAULT_INDEX_PATH``).
+Also adds an env-var-gated BM25 search path (``TOKENPAK_TIP_BM25_ENABLED``)
+that delegates to :class:`tokenpak.retrieval.vault_index.VaultIndex`.
+The legacy substring-counter ``search()`` remains as the in-memory
+fallback for unit tests with explicit fixtures.
+
+See standard 26-tip-cache.md §2 for the canonicality contract.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
+import os
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,9 +81,110 @@ class BlockStore:
     def __init__(self, store_path: str = ":memory:"):
         self._path = store_path
         self._blocks: dict[str, BlockRecord] = {}
+        # TCM-04: optional BM25-backed reader for vault retrieval. Set by
+        # default() when the canonical vault index is loaded; None for
+        # in-memory test stores.
+        self._vault_index = None  # type: Optional[Any]
 
         if store_path != ":memory:":
             self._load()
+
+    # ------------------------------------------------------------------
+    # Canonical entry point (TCM-04, see standard 26-tip-cache.md §2)
+    # ------------------------------------------------------------------
+
+    _default_lock = threading.Lock()
+    _default_instance: Optional["BlockStore"] = None
+
+    @classmethod
+    def default(cls) -> "BlockStore":
+        """Return a vault-backed BlockStore reading ``~/vault/.tokenpak/``.
+
+        Behavior contract (per standard 26 §2):
+
+        - Reads ``TOKENPAK_VAULT_INDEX_PATH`` env (default ``~/vault/.tokenpak``).
+        - Cached at module level — first call loads, subsequent calls
+          return the cached instance.
+        - Returns an empty store (with single warning log) if
+          ``TOKENPAK_TIP_BM25_ENABLED != "1"``. Default is OFF.
+        - Returns an empty store (with warning) if vault index files
+          are missing or corrupted. **Never raises.**
+
+        Callers: ``companion/hooks/pre_send.py`` and
+        ``services/routing_service/context_enrichment.py``.
+        """
+        # Fast path
+        if cls._default_instance is not None:
+            return cls._default_instance
+
+        with cls._default_lock:
+            # Double-check inside lock
+            if cls._default_instance is not None:
+                return cls._default_instance
+
+            store = cls(":memory:")  # in-memory legacy store as base
+
+            enabled = os.environ.get("TOKENPAK_TIP_BM25_ENABLED", "").lower() in ("1", "true", "yes")
+            if not enabled:
+                logger.info(
+                    "BlockStore.default(): TOKENPAK_TIP_BM25_ENABLED is off; "
+                    "returning empty store (no vault retrieval)"
+                )
+                cls._default_instance = store
+                return store
+
+            index_path = os.environ.get(
+                "TOKENPAK_VAULT_INDEX_PATH",
+                str(Path.home() / "vault" / ".tokenpak"),
+            )
+            if not Path(index_path).exists():
+                logger.warning(
+                    "BlockStore.default(): vault index path %s does not exist; "
+                    "returning empty store",
+                    index_path,
+                )
+                cls._default_instance = store
+                return store
+
+            try:
+                from tokenpak.retrieval.vault_index import VaultIndex
+
+                vi = VaultIndex(index_path)
+                vi.maybe_reload()
+                # Wait briefly for the background load to settle.
+                # VaultIndex loads inline if no cache; ~30s tops.
+                deadline = time.monotonic() + 30.0
+                while not vi.is_ready and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if not vi.is_ready:
+                    logger.warning(
+                        "BlockStore.default(): vault index not ready after 30s; "
+                        "returning empty store"
+                    )
+                    cls._default_instance = store
+                    return store
+                store._vault_index = vi
+                logger.info(
+                    "BlockStore.default(): vault index loaded from %s", index_path
+                )
+            except Exception as exc:
+                logger.warning(
+                    "BlockStore.default(): failed to load vault index from %s: %s; "
+                    "returning empty store",
+                    index_path,
+                    exc,
+                )
+
+            cls._default_instance = store
+            return store
+
+    @classmethod
+    def reset_default_for_tests(cls) -> None:
+        """Test-only: drop the cached default instance so tests can
+        override TOKENPAK_TIP_BM25_ENABLED / TOKENPAK_VAULT_INDEX_PATH
+        and re-trigger a fresh load on the next ``default()`` call."""
+        with cls._default_lock:
+            cls._default_instance = None
 
     # ------------------------------------------------------------------
     # CRUD
@@ -97,7 +214,55 @@ class BlockStore:
         return list(self._blocks.values())
 
     def search(self, query: str, top_k: int = 10) -> list[BlockRecord]:
-        """Naive keyword search over compressed content. Phase 1 adds embeddings."""
+        """BM25 search via vault_index when available; substring fallback otherwise.
+
+        - If this store was built via :meth:`default` AND the vault
+          index loaded successfully, delegate to
+          :class:`tokenpak.retrieval.vault_index.VaultIndex.search`.
+          Returns BlockRecord-shaped results constructed from the
+          vault index hits.
+        - Otherwise, fall back to substring counting over in-memory
+          ``_blocks`` (legacy behavior; intended for unit tests with
+          explicit fixtures).
+        """
+        if self._vault_index is not None:
+            try:
+                # VaultIndex.search returns list of (block_dict, score) tuples
+                hits = self._vault_index.search(query, top_k=top_k)
+                results: list[BlockRecord] = []
+                for hit in hits:
+                    if isinstance(hit, tuple) and len(hit) == 2:
+                        block_dict, score = hit
+                    elif isinstance(hit, dict):
+                        block_dict, score = hit, 0.0
+                    else:
+                        continue
+                    # Read content from the corresponding blocks/<id>.txt
+                    block_id = block_dict.get("block_id", "")
+                    content = self._read_block_content(block_id)
+                    rec = BlockRecord(
+                        block_id=block_id,
+                        path=block_dict.get("source_path", ""),
+                        content_hash=block_dict.get("content_hash", ""),
+                        file_type=block_dict.get("source_type", "text"),
+                        raw_tokens=int(block_dict.get("raw_tokens", 0)),
+                        compressed_tokens=int(block_dict.get("raw_tokens", 0)),
+                        compressed_content=content,
+                        quality_score=float(score),
+                        metadata={"score": float(score)},
+                    )
+                    # Backward-compat alias used by some callers
+                    setattr(rec, "text", content)
+                    results.append(rec)
+                return results
+            except Exception as exc:
+                logger.warning(
+                    "BlockStore.search(): vault_index delegation failed: %s; "
+                    "falling back to substring search",
+                    exc,
+                )
+
+        # Substring fallback
         q = query.lower()
         scored = []
         for block in self._blocks.values():
@@ -106,6 +271,23 @@ class BlockStore:
                 scored.append((score, block))
         scored.sort(key=lambda x: -x[0])
         return [b for _, b in scored[:top_k]]
+
+    def _read_block_content(self, block_id: str) -> str:
+        """Read the content file for a vault block.
+
+        Vault index stores metadata in ``index.json`` and content in
+        ``blocks/<block_id>.txt``. Returns empty string on any error.
+        """
+        if self._vault_index is None or not block_id:
+            return ""
+        try:
+            blocks_dir = Path(self._vault_index.tokenpak_dir) / "blocks"
+            content_file = blocks_dir / f"{block_id}.txt"
+            if not content_file.exists():
+                return ""
+            return content_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
 
     def stats(self) -> dict[str, Any]:
         blocks = list(self._blocks.values())
