@@ -1,15 +1,14 @@
-"""``ContextEnrichmentStage`` — policy-gated vault injection.
+"""``ContextEnrichmentStage`` — policy-gated adapter-backed vault injection.
 
-Runs in the ``routing`` slot of the pipeline. Adds retrieved vault
-context to the request's ``system`` array as a separate, non-cached
-block BEFORE the cache boundary, so the stable prefix upstream of it
-stays hot across requests.
+Runs in the ``routing`` slot of the pipeline. Adds retrieved vault context
+through an injected ``FormatAdapter`` registry so provider-specific wire
+shapes stay isolated outside the services pipeline.
 
 Gate: only runs when
-  - ``ctx.policy.injection_enabled`` is True, AND
-  - ``ctx.policy.body_handling == "mutate"`` (byte_preserve routes are
-    forbidden from body mutation — their enrichment happens client-side
-    via MCP tools the model calls explicitly, not here).
+  - ``ctx.policy.injection_enabled`` is True,
+  - ``ctx.policy.body_handling == "mutate"`` (byte-preserve routes are
+    forbidden from body mutation), and
+  - the resolved format adapter declares ``tip.cache.proxy-managed``.
 
 Budget: injected content is truncated to
 ``ctx.policy.injection_budget_chars`` to stop runaway context on prompts
@@ -18,21 +17,69 @@ that would otherwise blow past the request token ceiling.
 Relevance gate: trivial prompts (below
 ``ctx.policy.injection_min_query_tokens``) are skipped — injecting
 context for a one-word "hi" wastes tokens and pollutes the cache.
-
-This Stage is the single vault-injection path. The old
-``proxy/vault_bridge.py`` byte-splice helper is referenced for behavior
-only; it is not restored.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any
+from typing import Any, Protocol
 
+from tokenpak.services.request import Request
 from tokenpak.services.request_pipeline.stages import PipelineContext
 
 logger = logging.getLogger(__name__)
+
+_CACHE_CAPABILITY = "tip.cache.proxy-managed"
+
+
+class _FormatAdapter(Protocol):
+    """Structural subset of the provider format-adapter contract used here."""
+
+    source_format: str
+    capabilities: frozenset[str]
+
+    def normalize(self, body: bytes) -> Any: ...
+
+    def denormalize(self, canonical: Any) -> bytes: ...
+
+
+class _AdapterRegistry(Protocol):
+    """Structural registry contract injected by the transport layer."""
+
+    def detect(
+        self,
+        path: str,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> _FormatAdapter | None: ...
+
+
+def _request_path(request: Request) -> str:
+    """Best-effort path/URL lookup for adapter detection."""
+    metadata = request.metadata or {}
+    for key in ("path", "target_path", "request_path", "url", "target_url"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _format_vault_context(hits: list[str], budget: int) -> tuple[str, int]:
+    """Format retrieved vault hits, respecting a character budget."""
+    pieces: list[str] = []
+    used = 0
+    for hit in hits:
+        if not hit:
+            continue
+        remaining = budget - used - 20
+        if remaining <= 0:
+            break
+        snippet = hit if len(hit) <= remaining else hit[:remaining]
+        pieces.append(snippet)
+        used += len(snippet) + 20
+    if not pieces:
+        return "", 0
+    return "[tokenpak vault context]\n" + "\n---\n".join(pieces), len(pieces)
 
 
 class ContextEnrichmentStage:
@@ -40,13 +87,20 @@ class ContextEnrichmentStage:
 
     name = "routing"
 
-    def __init__(self, retriever: Any | None = None) -> None:
-        """``retriever`` is a callable that accepts ``(query: str, top_k: int)``
-        and returns an iterable of strings. Kept as a dependency so the
-        Stage can be tested without a live vault index and so alternate
-        retrievers (e.g. in-memory for integration tests) plug in.
+    def __init__(
+        self,
+        retriever: Any | None = None,
+        adapter_registry: _AdapterRegistry | None = None,
+    ) -> None:
+        """Create the enrichment stage.
+
+        ``retriever`` accepts ``(query: str, top_k: int)`` and returns an
+        iterable of strings. ``adapter_registry`` is injected by callers that
+        own wire-format concerns (for example the proxy transport); leaving it
+        unset makes the stage a no-op until composition wires the registry in.
         """
         self._retriever = retriever
+        self._adapter_registry = adapter_registry
 
     def _build_retriever(self) -> Any | None:
         """Lazily construct the default vault retriever.
@@ -72,8 +126,8 @@ class ContextEnrichmentStage:
             except Exception:  # noqa: BLE001
                 return []
             out: list[str] = []
-            for r in results:
-                text = getattr(r, "text", None) or getattr(r, "content", None)
+            for result in results:
+                text = getattr(result, "text", None) or getattr(result, "content", None)
                 if text:
                     out.append(str(text))
             return out
@@ -81,89 +135,56 @@ class ContextEnrichmentStage:
         self._retriever = _search
         return self._retriever
 
-    def _extract_query_text(self, body_bytes: bytes) -> str | None:
-        """Pull the last user message from an Anthropic Messages body.
-
-        Returns None if the body can't be parsed or there's no user
-        message. This is the only place we JSON-decode the body for
-        enrichment — keeping the decode localized to one function.
-        """
-        if not body_bytes:
+    def _resolve_adapter(self, ctx: PipelineContext) -> _FormatAdapter | None:
+        registry = self._adapter_registry
+        if registry is None:
             return None
         try:
-            data = json.loads(body_bytes)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            return registry.detect(
+                _request_path(ctx.request),
+                ctx.request.headers or {},
+                ctx.request.body or b"",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("context_enrichment: adapter resolution failed: %s", exc)
             return None
-        messages = data.get("messages")
-        if not isinstance(messages, list):
-            return None
-        for msg in reversed(messages):
-            if not isinstance(msg, dict):
-                continue
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                return content
-            if isinstance(content, list):
-                # Concatenate text blocks.
-                parts: list[str] = []
-                for blk in content:
-                    if isinstance(blk, dict) and blk.get("type") == "text":
-                        t = blk.get("text")
-                        if isinstance(t, str):
-                            parts.append(t)
-                if parts:
-                    return "\n".join(parts)
-        return None
-
-    def _inject_into_system(
-        self,
-        body_bytes: bytes,
-        injected_text: str,
-    ) -> bytes:
-        """Splice a new volatile text block into the ``system`` array.
-
-        Keeps ``system`` as a list (upgrading the string form if
-        necessary). Inserts the injected block WITHOUT a cache_control
-        marker — by contract the cache boundary sits on a stable
-        sibling, not on volatile content.
-
-        Re-serializes the JSON compactly. Loses whitespace-level byte
-        identity — callers that need byte preservation must NOT hit
-        this function (the Stage's Policy gate guarantees that).
-        """
-        try:
-            data = json.loads(body_bytes)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return body_bytes
-        system = data.get("system")
-        new_block = {"type": "text", "text": injected_text}
-        if isinstance(system, str):
-            data["system"] = [{"type": "text", "text": system}, new_block]
-        elif isinstance(system, list):
-            data["system"] = list(system) + [new_block]
-        else:
-            data["system"] = [new_block]
-        try:
-            return json.dumps(data, separators=(",", ":")).encode("utf-8")
-        except (TypeError, ValueError):
-            return body_bytes
 
     def apply_request(self, ctx: PipelineContext) -> None:
         policy = ctx.policy
         if policy is None or not policy.injection_enabled:
             return
         if policy.body_handling != "mutate":
-            # Byte-preserve routes: MCP-tool path is the only enrichment
-            # surface. Record the skip so telemetry sees it wasn't a bug.
+            # Byte-preserve routes: client-side hook/MCP path is the only
+            # enrichment surface. Record the skip so telemetry sees it
+            # wasn't a bug.
             ctx.stage_telemetry.setdefault("routing", {})[
                 "enrichment_skipped"
             ] = "byte_preserve"
             return
 
         body = ctx.request.body or b""
-        query = self._extract_query_text(body)
+        adapter = self._resolve_adapter(ctx)
+        if adapter is None:
+            ctx.stage_telemetry.setdefault("routing", {})[
+                "enrichment_skipped"
+            ] = "adapter_unresolved"
+            return
+        if _CACHE_CAPABILITY not in adapter.capabilities:
+            ctx.stage_telemetry.setdefault("routing", {})[
+                "enrichment_skipped"
+            ] = "capability_missing"
+            return
+
+        try:
+            canonical = adapter.normalize(body)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("context_enrichment: normalize failed: %s", exc)
+            ctx.stage_telemetry.setdefault("routing", {})[
+                "enrichment_skipped"
+            ] = "normalize_failed"
+            return
+
+        query = canonical.last_user_message_text()
         if not query:
             return
 
@@ -183,7 +204,7 @@ class ContextEnrichmentStage:
             return
 
         try:
-            hits = retriever(query, 5)
+            hits = [str(hit) for hit in retriever(query, 5) if hit]
         except Exception as exc:  # noqa: BLE001
             logger.warning("context_enrichment: retriever failed: %s", exc)
             return
@@ -191,32 +212,25 @@ class ContextEnrichmentStage:
         if not hits:
             return
 
-        # Concatenate hits up to the budget in characters.
-        budget = policy.injection_budget_chars
-        pieces: list[str] = []
-        used = 0
-        for h in hits:
-            if not h:
-                continue
-            # Reserve ~20 chars for the separator/header.
-            remaining = budget - used - 20
-            if remaining <= 0:
-                break
-            snippet = h if len(h) <= remaining else h[:remaining]
-            pieces.append(snippet)
-            used += len(snippet) + 20
-        if not pieces:
+        injected, hit_count = _format_vault_context(hits, policy.injection_budget_chars)
+        if not injected:
             return
-        injected = "[tokenpak vault context]\n" + "\n---\n".join(pieces)
 
-        new_body = self._inject_into_system(body, injected)
-        if new_body is body:
+        canonical_with_context = canonical.with_injected_system_prefix(injected)
+        try:
+            new_body = adapter.denormalize(canonical_with_context)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("context_enrichment: denormalize failed: %s", exc)
             return
+        if not new_body:
+            return
+
         ctx.request.body = new_body
         ctx.stage_telemetry.setdefault("routing", {}).update({
             "enrichment_applied": True,
+            "format": adapter.source_format,
             "injected_chars": len(injected),
-            "injected_hits": len(pieces),
+            "injected_hits": hit_count,
         })
 
     def apply_response(self, ctx: PipelineContext) -> None:
