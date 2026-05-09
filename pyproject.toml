@@ -203,12 +203,11 @@ python_files = [
 ]
 norecursedirs = [
     "tests/archive",
-    # TSR-07 / WS-F (2026-05-08) — closed-source / `_internal`-dependent
-    # tests live in tests/_internal/. Excluded from the default OSS gate
-    # per Std 25 §1.1 (closed-source boundary). To run, invoke
-    # `pytest tests/_internal/` explicitly on a Pro daemon-equipped
-    # install (or override-ini norecursedirs= in a Pro-side CI config).
-    # See `tests/_internal/README.md`.
+    # Closed-source / `_internal`-dependent tests live in tests/_internal/
+    # and are excluded from the default OSS gate. To run, invoke
+    # `pytest tests/_internal/` explicitly on a daemon-equipped install
+    # (or override-ini `norecursedirs=` in a Pro-side CI config). See
+    # `tests/_internal/README.md`.
     "tests/_internal",
     ".git",
     "__pycache__",
@@ -227,6 +226,11 @@ markers = [
     "needs_internal_alerts: test requires tokenpak._internal.alerts (internal-only module)",
     "needs_cali_env: test requires a specific dev-host filesystem layout (/home/<user>/tokenpak)",
     "needs_fast_host: test has timing-sensitive assertions that fail on slow hosts (benchmarks, latency targets)",
+    # Std 02 §13 taxonomy markers (added 2026-05-13)
+    "oss: public OSS surface; works on slim install",
+    "optional: requires a named optional extra",
+    "internal: internal / Pro / closed-source surface",
+    "legacy: historical-compat tests; no new tests added here",
 ]
 timeout = 30
 
@@ -267,7 +271,7 @@ ignore = [
 
 # Test files use widespread `try: import dep except ImportError: pytest.skip`
 # availability-check patterns where the import binding is never referenced
-# but its presence is the test signal. Suppressing F401 fleet-wide for tests
+# but its presence is the test signal. Suppressing F401 globally for tests
 # is safer than per-line noqa proliferation; tests are not production code.
 "tests/**" = ["F401"]
 "tokenpak/tests/**" = ["F401"]
