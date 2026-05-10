@@ -390,7 +390,7 @@ spend_guard:
   enabled: true                       # global on/off
   warn_tokens: 100000                 # advisory band — no UX surface yet
   warn_cost_usd: 2.0
-  block_tokens: 500000                # holds request, prompts user
+  block_tokens: 800000                # holds request, prompts user
   block_cost_usd: 10.0
   hard_block_tokens: 1000000          # immutable ceiling
   hard_block_cost_usd: 50.0

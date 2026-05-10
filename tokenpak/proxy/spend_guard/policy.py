@@ -12,9 +12,10 @@ projected tokens and projected cost against four configurable bands:
 - ``hard_block`` — cannot be released; even ``[TIP: bypass=on]`` does not
   override (proposal §4 second example).
 
-Defaults match Kevin's 2026-05-07 overrides on the published proposal:
+Defaults match Kevin's overrides on the published proposal:
     warn:        100,000 tokens / $2.00
-    block:       500,000 tokens / $10.00     (proposal had 250,000 / $5)
+    block:       800,000 tokens / $10.00     (proposal had 250,000 / $5;
+                                              raised 500K → 800K 2026-05-08)
     hard_block: 1,000,000 tokens / $50.00
 """
 
@@ -37,7 +38,7 @@ class SpendGuardConfig:
     enabled: bool = True
     warn_tokens: int = 100_000
     warn_cost_usd: float = 2.0
-    block_tokens: int = 500_000          # Kevin override, was 250_000
+    block_tokens: int = 800_000          # Kevin override (250K → 500K → 800K 2026-05-08)
     block_cost_usd: float = 10.0         # Kevin override, was 5.0
     hard_block_tokens: int = 1_000_000
     hard_block_cost_usd: float = 50.0

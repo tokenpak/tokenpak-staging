@@ -28,7 +28,7 @@ def _est(**kw) -> RiskEstimate:
 class TestKevinDefaults:
     def test_block_thresholds_match_overrides(self):
         cfg = SpendGuardConfig()
-        assert cfg.block_tokens == 500_000      # Kevin override (was 250_000)
+        assert cfg.block_tokens == 800_000      # Kevin override (250K → 500K → 800K 2026-05-08)
         assert cfg.block_cost_usd == 10.0       # Kevin override (was 5.0)
         assert cfg.hard_block_tokens == 1_000_000
         assert cfg.hard_block_cost_usd == 50.0
@@ -59,9 +59,10 @@ class TestDecide:
 
     def test_block_on_token_threshold(self):
         # Acceptance from TSG-01 packet: 230K context + 18K request = projected
-        # 248K. With Kevin's 500K threshold, that should NOT block. But with
-        # 600K it should block. We test the latter to verify the engine works.
-        d = decide(_est(projected_input_tokens=600_000, projected_output_tokens=4000,
+        # 248K. With Kevin's 800K threshold, that should NOT block. We push
+        # past 800K here to verify the engine fires on the token band.
+        # cost stays under block_cost_usd=10 so this isolates the token band.
+        d = decide(_est(projected_input_tokens=900_000, projected_output_tokens=4000,
                         projected_cost_usd=8.0), self.cfg)
         assert d.decision == "block"
         assert d.reason == "projected_tokens_exceeded"

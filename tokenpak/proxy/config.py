@@ -152,7 +152,7 @@ SPEND_GUARD_WARN_COST_USD: float = _cfg(
     "spend_guard.warn_cost_usd", 2.0, "TOKENPAK_SPEND_GUARD_WARN_COST_USD", float
 )
 SPEND_GUARD_BLOCK_TOKENS: int = _cfg(
-    "spend_guard.block_tokens", 500_000, "TOKENPAK_SPEND_GUARD_BLOCK_TOKENS", int
+    "spend_guard.block_tokens", 800_000, "TOKENPAK_SPEND_GUARD_BLOCK_TOKENS", int
 )
 SPEND_GUARD_BLOCK_COST_USD: float = _cfg(
     "spend_guard.block_cost_usd", 10.0, "TOKENPAK_SPEND_GUARD_BLOCK_COST_USD", float
