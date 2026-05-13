@@ -2,7 +2,8 @@
 
 TokenPak can act as a drop-in HTTP proxy for Claude Code, intercepting all
 traffic on `ANTHROPIC_BASE_URL` and applying cost-reduction features
-(compression, vault injection, semantic caching) transparently.
+(**Prompt Packing** — i.e. its compression stage + vault injection + semantic
+caching) transparently.
 
 ## Quick Start
 
@@ -149,7 +150,7 @@ api.anthropic.com ← sees identical request to direct Claude Code
 
 | Feature | Why |
 |---------|-----|
-| **Compaction** | Requires JSON re-serialization (breaks billing) |
+| **Compression** (Prompt-Packing stage) | Requires JSON re-serialization (breaks billing) |
 | **Stable cache control** | Client manages its own cache_control TTL ordering |
 | **Cache cap / TTL hotfix** | Would modify client's cache_control blocks |
 | **Semantic cache** | Claude Code bypassed (stale message_id issue, CCG-14) |
@@ -164,7 +165,7 @@ Instead of `json.loads → modify → json.dumps`, the proxy:
 3. Splices `{"type": "text", "text": <escaped>}` at the bracket offset
 4. All other bytes remain untouched
 
-**Relevance gate:** Injection is skipped when:
+**Relevance Gate (Available Now):** Injection is skipped when:
 - User prompt is too short (< `TOKENPAK_CC_INJECT_MIN_QUERY` chars, default 50)
 - No vault blocks score above threshold (`INJECT_MIN_SCORE`, default 2.0)
 - Budget is zero (`TOKENPAK_CC_INJECT_MAX_CHARS=0`)

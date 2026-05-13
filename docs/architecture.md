@@ -10,6 +10,8 @@ tags:
 
 # TokenPak Architecture v2 — Universal Content Compiler
 
+> **Terminology note.** "Compression" in this document refers to the deterministic token-reduction *stage* in TokenPak's pipeline (Layer 4 below). The high-level user-facing process — selecting, reducing, and structuring context before a model request — is called **Prompt Packing**; compression is one stage inside it. The on-disk module path (`tokenpak/compression/`), schema names, and the YAML `recipe` term are stable. **TIP** in this document is the **TokenPak Integration Protocol**.
+
 ## Vision
 
 **One command turns any directory into LLM-ready context.**

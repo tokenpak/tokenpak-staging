@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 <!-- CI badge: pending repo transfer to tokenpak/tokenpak — add after transfer is confirmed -->
 
-TokenPak is a local proxy that compresses your LLM context before it hits the API — fewer tokens, lower cost, same results. No code changes, no cloud, no credentials stored.
+TokenPak is a local **Prompt-Packing** proxy: it selects, reduces, and structures your LLM context before it hits the API — fewer tokens, lower cost, same results. No code changes, no cloud, no credentials stored.
 
 ---
 
@@ -29,7 +29,7 @@ tokenpak demo
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  TokenPak — Live Compression Demo                    │
+│  TokenPak — Live Prompt-Packing Demo                 │
 ├──────────────────────────────────────────────────────┤
 │  Scenario              DevOps agent (config + logs)  │
 │  Savings drivers                      dedup + alias  │
@@ -71,17 +71,17 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 ## What's included (Free)
 
-- **Context compression** — 30–50% token reduction on real agent workloads, <50ms latency
+- **Prompt Packing** — 30–50% token reduction on real agent workloads, <50ms compression-stage latency. (Compression is one of the deterministic stages inside Prompt Packing; see [docs/compression.md](docs/compression.md).)
   Reproduce: `make benchmark-headline`
 - **Client integration** — one command wires Claude Code, Cursor, Aider, and 6 other clients
 - **Model routing** — send requests to the right model automatically, with fallback rules
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
-- **TIP Spend Guard** — pre-send circuit breaker; blocks runaway requests before provider call. Yes/No release or `[TIP: allow=once max=$X]` directive. Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative tracking. See [docs/spend-guard.md](docs/spend-guard.md).
+- **TIP Spend Guard** (TIP = **TokenPak Integration Protocol**) — pre-send circuit breaker; blocks runaway requests before provider call. Yes/No release or `[TIP: allow=once max=$X]` directive. Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative tracking. See [docs/spend-guard.md](docs/spend-guard.md).
 - **Vault indexing + semantic search** — index your codebase; search without an LLM call
 - **MultiPak Pro Phase 1 OSS surface** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. Full MultiPak (capture pipeline, recall ranking, Handoff Paks, anchor hydration) requires `tokenpak-paid` (Pro). See [docs/multipak.md](docs/multipak.md).
 - **CLI + proxy server** — `tokenpak serve`, `tokenpak cost`, `tokenpak savings`
-- **A/B testing and replay/debug** — compare compression configs, replay past requests
-- **50 built-in compression recipes** — YAML, customizable
+- **A/B testing and replay/debug** — compare Prompt-Packing configs, replay past requests
+- **50 built-in compression recipes** — YAML, customizable (a `recipe` here is a YAML compression-stage strategy, preserved as-is)
 
 80%+ of operations cost zero tokens. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
 
@@ -91,7 +91,7 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 | | Free | Pro | Team |
 |--|:--:|:--:|:--:|
-| Context compression | ✅ | ✅ | ✅ |
+| Prompt Packing (compression engine) | ✅ | ✅ | ✅ |
 | Client integration (all 9) | ✅ | ✅ | ✅ |
 | Model routing | ✅ | ✅ | ✅ |
 | Cost tracking | ✅ | ✅ | ✅ |

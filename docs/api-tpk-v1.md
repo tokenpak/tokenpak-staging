@@ -5,6 +5,8 @@ from the `/v1/*` LLM passthrough that Anthropic/OpenAI clients hit. These are
 the endpoints the companion MCP server calls — and that external tooling
 (dashboards, language-agnostic clients, CI scripts) can call directly.
 
+> **Terminology note.** Routes that historically used the word `capsule` (e.g. `GET /tpk/v1/capsules`) keep that path verbatim — the API surface is wire-frozen. In product prose, "**Memory Pak**" (or just "**Pak**") is the canonical term going forward; "memory capsule" survives as a deprecation alias for class names and route paths only, with target removal at v2.0.0. The on-disk path `~/.tokenpak/companion/capsules/*.md` is also preserved during the transition.
+
 ## Auth
 
 - **Localhost-only by default.** Requests from anything other than
@@ -123,10 +125,12 @@ Returns: `{"status":"ok", "session_id":"...", "entry_type":"user"}`.
 
 ### `GET /tpk/v1/capsules?limit=<N>` / `GET /tpk/v1/capsules/{session_id}`
 
-List available memory capsules / fetch a specific capsule's content. When
-fetching a specific capsule, passing `?caller_session_id=<sid>` (or the
-`X-TPK-Session` header) attributes a `load_capsule` savings event to the
-caller's journal.
+List available **Memory Paks** (legacy: "memory capsules") / fetch a specific
+Pak's content. The route name `capsules` is wire-frozen for compatibility; the
+returned objects are Memory Paks. Passing `?caller_session_id=<sid>` (or the
+`X-TPK-Session` header) when fetching a specific Pak attributes a
+`load_capsule` savings event to the caller's journal (the savings-event name
+remains `load_capsule` so existing telemetry stays intact).
 
 ### `POST /tpk/v1/compress`
 

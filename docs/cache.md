@@ -131,10 +131,10 @@ systemctl --user start tokenpak-watcher@$(systemd-escape ~/vault)
 
 TokenPak is compatible with Anthropic's native prompt caching (`cache_control` headers). If your client sends requests with `cache_control`, TokenPak passes them through unchanged.
 
-TokenPak's compression and Anthropic prompt caching are complementary:
+TokenPak's **Prompt Packing** (which includes the compression stage) and Anthropic prompt caching are complementary:
 
-1. TokenPak compresses the prompt on your machine (fewer tokens sent)
-2. Anthropic caches the compressed prompt at the API level (faster repeat calls)
+1. TokenPak packs the prompt on your machine — selecting, reducing, and structuring it (fewer tokens sent)
+2. Anthropic caches the packed prompt at the API level (faster repeat calls)
 
 Combined, these can reduce effective cost by 80%+ on workloads with large, repeated system prompts.
 

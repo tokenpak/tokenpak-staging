@@ -4,7 +4,7 @@
 
 Buyers in this space are often evaluating several tools at once. This page gives an honest comparison so you can decide whether TokenPak is the right fit — or whether one of the alternatives serves you better.
 
-> TokenPak is positioned as a **local-first compression proxy**. It runs on your machine, reduces the tokens you send upstream, and includes budget enforcement, audit logs, and multi-provider routing. It is not a multi-tenant SaaS observability platform. If that's what you need, read the honest weak spots section below.
+> TokenPak is positioned as a **local-first Prompt-Packing proxy** (compression is one stage inside Prompt Packing). It runs on your machine, reduces the tokens you send upstream, and includes budget enforcement, audit logs, and multi-provider routing. It is not a multi-tenant SaaS observability platform. If that's what you need, read the honest weak spots section below.
 
 ---
 
@@ -16,7 +16,7 @@ Competitors compared: [Helicone](https://helicone.ai), [LangSmith](https://smith
 |---|---|---|---|---|---|---|---|
 | **Local-first** (proxy on your machine) | ✅ Yes | ✅ Yes (Docker) | ❌ No (enterprise BYOC only) | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No (cloud-only) |
 | **Open source** | ✅ MIT | ✅ MIT core | ❌ No | ✅ MIT | ✅ Gateway OSS | ✅ MIT | ❌ No |
-| **Compression / token reduction** | ✅ Yes — deterministic, client-side | ✅ Yes (claimed up to 5×) | ❌ No | ❌ No | ❌ No (caching pass-through only) | ❌ No | ❌ No |
+| **Prompt Packing / token reduction** (deterministic compression engine) | ✅ Yes — deterministic, client-side | ✅ Yes (claimed up to 5×) | ❌ No | ❌ No | ❌ No (caching pass-through only) | ❌ No | ❌ No |
 | **Multi-provider routing** | ✅ Yes (smart routing) | ✅ Yes (100+ providers) | ❌ No (observability only) | ✅ Yes (100+ providers) | ✅ Yes (200+ providers) | ❌ No | ✅ Yes (290+ models) |
 | **Cost tracking** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | **Budget enforcement** (hard 429 on overage) | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes |
@@ -40,11 +40,11 @@ This matters for three reasons:
 - **Latency.** No round-trip to a managed gateway. The proxy is on localhost; overhead is sub-millisecond.
 - **Cost.** There is no per-token charge on the proxy tier. You pay the upstream provider only.
 
-### 2. Deterministic compression with reproducible benchmarks
+### 2. Deterministic Prompt Packing with reproducible benchmarks
 
-TokenPak's compression is deterministic: the same input produces the same compressed output every time. This means you can benchmark it in CI and trust the numbers. The [headline benchmark](BENCHMARKS.md) ships in the CI pipeline and runs on every commit — no black-box "up to 5×" marketing claims.
+TokenPak's Prompt-Packing pipeline (and its compression stage) is deterministic: the same input produces the same packed output every time. This means you can benchmark it in CI and trust the numbers. The [headline benchmark](BENCHMARKS.md) ships in the CI pipeline and runs on every commit — no black-box "up to 5×" marketing claims.
 
-The compaction algorithm operates on the raw token stream before the request leaves your machine. It does not depend on semantic similarity lookups, embeddings, or an external service. It works offline.
+The compression algorithm operates on the raw token stream before the request leaves your machine. It does not depend on semantic similarity lookups, embeddings, or an external service. It works offline. (Note: "compression" here is the Prompt-Packing stage that reduces the wire payload; it is distinct from LLM-client-side **compaction**, which is conversation-history summarization performed by the client when its own context window fills.)
 
 ### 3. Cost tracking wired to budget enforcement
 
@@ -77,7 +77,7 @@ TokenPak supports multi-provider routing, but if you need instant access to 200+
 
 ---
 
-*See also: [FAQ](faq.md) · [Getting Started](getting-started.md) · [Compression deep-dive](compression.md) · [Claude Code Integration Guide](claude-code-integration.md)*
+*See also: [FAQ](faq.md) · [Getting Started](getting-started.md) · [Prompt Packing / compression deep-dive](compression.md) · [Claude Code Integration Guide](claude-code-integration.md)*
 
 ---
 

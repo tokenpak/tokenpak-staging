@@ -1,6 +1,8 @@
 # Compression: How It Works
 
-TokenPak intercepts LLM requests on your machine and applies a multi-stage compression pipeline before forwarding them to the provider. The result is semantically equivalent content in fewer tokens.
+> Compression is the deterministic token-reduction **stage inside TokenPak's Prompt-Packing pipeline**. "Prompt Packing" is the high-level user-facing process (select / reduce / structure context before a model request); "compression" is the specific stage documented on this page. The wire-side module path (`tokenpak/compression/`), schema names (`tip-compression-policy.v1.json`), CLI verb (`tokenpak compress`), and the YAML `recipe` term are stable and unchanged.
+
+TokenPak intercepts LLM requests on your machine and runs them through a multi-stage compression pipeline before forwarding them to the provider. The result is semantically equivalent content in fewer tokens.
 
 ---
 
