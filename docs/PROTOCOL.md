@@ -95,7 +95,7 @@ The primary content of the pack. Each block has a `type`, `id`, and `content`.
 | instructions | System prompts, rules | critical | Never compress |
 | code | Source code, configs | high | Treesitter-aware |
 | knowledge | Documentation, facts | high | Semantic OK |
-| memory | Agent state, preferences | medium | Capsule compress |
+| memory | Agent state, preferences | medium | Pak compress |
 | conversation | Chat history, turns | medium | Older turns OK |
 | evidence | Retrieved documents, citations | low | Aggressive OK |
 | system | Internal routing (not sent to LLM)| internal | Not sent to model |

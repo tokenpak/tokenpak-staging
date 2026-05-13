@@ -187,7 +187,7 @@ Note: Latency includes upstream API time. TokenPak overhead is <50ms.
 **Features active at snapshot time:**
 - Compilation mode: hybrid
 - Vault index: available (1,583 blocks indexed)
-- Phase 7: capsule + recipes (8 loaded) + pruning — all enabled
+- Phase 7: Pak + recipes (8 loaded) + pruning — all enabled
 - Canon dedup: enabled (session hits: 0)
 - Prompt cache: enabled
 - Vault injection: enabled (BM25, top-k=5, budget=2000)

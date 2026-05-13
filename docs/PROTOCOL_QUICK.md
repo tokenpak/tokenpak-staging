@@ -33,7 +33,7 @@
 | `instructions` | System prompts, rules | Never |
 | `code` | Source code, configs | Smart |
 | `knowledge` | Docs, facts | OK |
-| `memory` | Agent state | Capsule |
+| `memory` | Agent state | Pak |
 | `conversation` | Chat history | Old turns |
 | `evidence` | RAG results | Aggressive|
 | `system` | Routing (hidden from LLM) | N/A |

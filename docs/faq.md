@@ -26,7 +26,7 @@ tokenpak savings --lifetime
 
 ### Does TokenPak change my responses?
 
-No. TokenPak compresses the *input* (your prompts and context), not the output. The response from the LLM is forwarded to your client unchanged.
+No. TokenPak's Prompt Packing operates on the *input* (your prompts and context), not the output. The response from the LLM is forwarded to your client unchanged.
 
 Optionally, TokenPak can append a one-line stats footer to responses:
 

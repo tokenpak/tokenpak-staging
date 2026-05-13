@@ -4,7 +4,7 @@
 
 **Make every token count.**
 
-TokenPak is the deterministic compression layer for multi-agent AI systems. We reduce LLM costs by 40-60% while maintaining semantic fidelity through transparent, auditable compression.
+TokenPak is the deterministic Prompt Packing layer for multi-agent AI systems. We reduce LLM costs by 40-60% while maintaining semantic fidelity through transparent, auditable Prompt Packing (compression is the wire-side technical stage inside it).
 
 ---
 
@@ -17,10 +17,10 @@ TokenPak is the deterministic compression layer for multi-agent AI systems. We r
 4. "The compression layer your agents deserve"
 
 ### One-Liner
-TokenPak is an open-source compression proxy that reduces LLM API costs by 40-60% through deterministic prompt optimization, caching, and context management.
+TokenPak is an open-source LLM proxy that performs Prompt Packing to reduce API costs by 40-60% through deterministic prompt optimization, caching, and context management.
 
 ### Elevator Pitch
-> Every LLM API call costs money. Most prompts are 50-70% repetitive content—system prompts, tool schemas, conversation history. TokenPak compresses this overhead deterministically, cutting your API bill in half while keeping responses identical. It's a drop-in proxy that works with any LLM provider.
+> Every LLM API call costs money. Most prompts are 50-70% repetitive content—system prompts, tool schemas, conversation history. TokenPak performs Prompt Packing on this overhead deterministically, cutting your API bill in half while keeping responses identical. It's a drop-in proxy that works with any LLM provider.
 
 ---
 

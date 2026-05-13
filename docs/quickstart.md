@@ -11,7 +11,7 @@ Get from zero to savings in 5 minutes. Pick your path:
 
 ## Proxy Path: Zero-Config Optimization
 
-**You already write prompts. TokenPak compresses them before they hit the API.**
+**You already write prompts. TokenPak performs Prompt Packing on them before they hit the API.**
 
 ### Minute 1: Install
 
@@ -205,7 +205,7 @@ When you launch Claude Code with `tokenpak claude`, the agent gets 9 MCP tools i
 | `vault_search` | BM25 search over your indexed vault |
 | `vault_retrieve` | Full content of a specific vault block |
 | `prune_context` | Head/tail truncate verbose text to a token budget |
-| `load_capsule` | Load a saved session memory capsule |
+| `load_capsule` | Load a saved session Memory Pak (event/tool name `load_capsule` is wire-frozen for compatibility) |
 | `journal_read` / `journal_write` | Per-session notes |
 | `session_info` | Current process + proxy state |
 

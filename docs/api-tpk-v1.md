@@ -197,7 +197,7 @@ MCP tool to merge with local companion state.
  infinite `remaining_usd` when no budget is set) serialize as `null`.
 - State locations: vault index from `proxy/vault_bridge.py` singleton,
  budget + journal at `~/.tokenpak/companion/{budget,journal}.db`,
- capsules at `~/.tokenpak/companion/capsules/*.md`.
+ Pak files at `~/.tokenpak/companion/capsules/*.md` (on-disk path wire-frozen during the `capsule → Pak` transition).
 
 ## Using from a non-Python client
 
