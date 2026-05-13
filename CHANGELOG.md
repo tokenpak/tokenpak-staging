@@ -4,6 +4,46 @@ All notable changes to TokenPak are documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [v1.5.7] — 2026-05-13
+
+### Spend Guard
+
+- **Default basis recalibrated to context-window utilisation percent.** Universal across every agent profile: soft block at **90%** of the selected model's max context window (operator-bypassable with `Yes` or `[TIP: allow=once max=$X]`), absolute hard stop at **100%** (no directive crosses). Replaces the v1.5.1 dollar-band defaults that could not distinguish legitimate large-context cycles from runaway spikes. Per-request token bands (`warn_tokens`, `block_tokens`, `hard_block_tokens`) remain as advisory fallbacks when the model's max context window is unknown to the registry. The legacy `spend_guard:` config key is accepted as a transparent alias for the canonical `tip_spend_guard:` (canonical wins on conflict); engaging any legacy dollar field via YAML or env emits a `DeprecationWarning`. New env-var overrides: `TOKENPAK_SPEND_GUARD_DEFAULT_BASIS`, `TOKENPAK_SPEND_GUARD_CONTEXT_WINDOW_PERCENT`, `TOKENPAK_SPEND_GUARD_HARD_STOP_CONTEXT_WINDOW_PERCENT`, `TOKENPAK_SPEND_GUARD_DOLLAR_CAP_ENABLED`. `tokenpak doctor` surface leads with the % basis; the dollar plane only appears when explicitly engaged.
+
+### Pak (Recall Storage Foundation)
+
+- **Recall storage schema (Phase 1, OSS).** New `tokenpak/companion/recall/` module — `schema.py` (DDL for `paks`, `pak_anchors`, `pak_relations`, `schema_version`, and the `paks_fts` FTS5 virtual table), `migrations.py` (forward-only, idempotent, transactional migration runner), and `store.py` (`RecallStore` with WAL + foreign_keys + busy_timeout PRAGMAs; default DB at `~/.tokenpak/companion/recall.db`, overridable via `TOKENPAK_RECALL_DB`). Storage shape only — no capture, no recall behaviour, no ranking, no CLI surface in this release.
+- **Recall write API + FTS triggers (migration v2).** `RecallStore.upsert_pak(...)` metadata-only write keyed on `pak_id`; new rows inserted, metadata replaced on `content_hash` change, no-op on equality (preserves `created_at`, bumps `updated_at`), `WARNING` log when the body changes under a stable identity. Three `AFTER` triggers (`paks_ai_fts` / `paks_au_fts` / `paks_ad_fts`) keep `paks_fts` in lockstep with metadata. Scope boundary held: no recall / query / search API, no ranking, no capture pipeline, no `/pak/*` routes, no `pak inspect|export|import|recall|status|prune` CLI verbs.
+- **Recall reason / risk join tables (migration v3).** `pak_reason_codes` (28-code observability registry) and `pak_risk_flags` (13-flag registry, severity ∈ `{info, warn, block}`) with three supporting indexes; no new column on `paks` (recall-foundation invariant preserved). `RecallStore.{set,get}_pak_reason_codes` and `{set,get}_pak_risk_flags` — idempotent, validated, reject empty IDs / blank values / duplicates / out-of-range weights / unknown severities. OSS is a transparent data plane: `severity='block'` rows persist, expose, inspect, export, and validate; package-assembly refusal is intentionally out of scope.
+
+### Pak (Read Surface)
+
+- **`/pak/v1/list` endpoint with cursor pagination.** Stable response envelope `{items, next_cursor, limit, truncated}` (object, not bare array, so future fields can grow without breaking clients). Keyset-ordered `updated_at DESC, pak_id DESC` via opaque base64(`updated_at|pak_id`) cursor — no offset scans, survives concurrent writes. `?pak_type=` is a byte-literal filter (alias / casefold expansion deferred). Default limit and hard cap are both 100; surplus rows surface `truncated=true` with a non-null `next_cursor`. `invalid_request` 400 on non-integer / non-positive limits and malformed cursors; 401 / localhost gate matches every other `/pak/v1/*` surface.
+- **OSS-safe inspect fallback.** `/pak/v1/inspect/<pak-id>` non-vault path now returns a plain `404 pak_not_found` instead of the prior `501 pro_daemon_required`. No Pro / daemon / license wording leaks from the OSS surface.
+
+### TIP (Context Package)
+
+- **`OrderingHints` dataclass + closed `AnchorBlockPosition` enum** added to `tokenpak/tip/context_package.py` (additive within TIP-1.x). Omitted from `to_dict()` when `None` to preserve pre-addendum byte shape for receivers that don't recognise the field. Algorithmic re-ordering remains out of scope.
+
+### Repository
+
+- **Advisory forbidden-impl-vocab workflow.** New `.github/workflows/forbidden-impl-vocab-check.yml` runs delta-only with `continue-on-error: true` (advisory phase). Standalone `basis` intentionally not flagged (English false-positive rate); skip-paths cover script + workflow + naming-glossary entries.
+
+### Acceptance
+
+- `pytest tests/ -q --tb=short` is green on Python 3.10 / 3.11 / 3.12 / 3.13.
+- `pip install tokenpak==1.5.7` from a fresh virtualenv succeeds.
+- All public-surface guardrails (`Public layout check`, `Repo Hygiene Check`, `Identity & language check`, `CLI Docs Up-to-date`) pass on `main`.
+- Spend Guard suite: 215 passed, 5 skipped (env-dependent `monitor.db` absent), 0 failures.
+- Recall suite (post addendum): 201 / 201 green across recall + tip test modules.
+
+### Compatibility
+
+- **Backward-compatible PATCH.** No public-API removals. The `spend_guard:` config key still works (transparent alias for canonical `tip_spend_guard:`); the per-request token-band fallback is retained for unknown-context-window cases. The legacy `spend_guard_legacy_dollar_plane` engagement surfaces a `DeprecationWarning` but continues to function.
+- All five contributing commits carry the canonical `TokenPak <hello@tokenpak.ai>` author + committer identity.
+
+---
+
 ## [v1.5.6] — 2026-05-11
 
 ### Repository
