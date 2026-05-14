@@ -81,8 +81,8 @@ def _db_writer_worker():
                            (timestamp,model,request_type,input_tokens,output_tokens,estimated_cost,
                             latency_ms,status_code,endpoint,compilation_mode,protected_tokens,
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
-                            would_have_saved,cache_origin,user_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            would_have_saved,cache_origin,user_id,session_id)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -243,11 +243,19 @@ class Monitor:
         would_have_saved=0,
         cache_origin="unknown",
         user_id="",
+        session_id="",
     ):
         # P0-06 (A6): ``user_id`` is the SHA-256 hex of the proxy auth bearer
         # token populated by ``_ProxyHandler._enforce_proxy_auth``. Defaults to
         # "" for localhost / pre-A6 callers. The raw token MUST never be passed
         # in — callers always use ``proxy_auth.hash_token(...)`` first.
+        #
+        # 2026-05-14 (incident 2026-05-13 spend spike Patch A): ``session_id`` is
+        # the value resolved by ``_resolve_session_id`` at request-entry. Stored
+        # so ``session_state.session_cumulative_cost`` can aggregate cost per
+        # session across the sliding window — without this, the spend guard's
+        # ``session_block_cost_usd`` defense can never trigger because every
+        # request appears as a new session.
         # Enqueue write instead of writing directly (async, <0.1ms return)
         insert_params = (
             datetime.now().isoformat(),
@@ -269,6 +277,7 @@ class Monitor:
             would_have_saved,
             cache_origin,
             user_id or "",
+            session_id or "",
         )
         _queued = False
         try:
@@ -280,8 +289,8 @@ class Monitor:
                 "INSERT INTO requests (timestamp, model, request_type, input_tokens, output_tokens, "
                 "estimated_cost, latency_ms, status_code, endpoint, compilation_mode, protected_tokens, "
                 "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
-                "would_have_saved, cache_origin, user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "would_have_saved, cache_origin, user_id, session_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insert_params,
             )
             _conn.commit()

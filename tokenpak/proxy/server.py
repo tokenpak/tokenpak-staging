@@ -931,6 +931,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 _sg_session = _resolve_session_id(self.headers, _sg_model or "unknown")
+                # 2026-05-14 Patch A — stash session_id on self so the post-response
+                # Monitor.log call below can record it. Without this, monitor.db
+                # gets session_id = NULL on every row → session_state.session_cumulative_cost
+                # always returns 0.0 → session_block_cost_usd defense never fires.
+                # Mirrors the existing _tokenpak_user_id pattern at line ~1705.
+                self._tokenpak_session_id = _sg_session
                 _sg_outcome = _sg_evaluate(
                     body,
                     _sg_model or "claude-sonnet-4-6",  # safe default rate
@@ -1704,6 +1710,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             would_have_saved=int(saved),
                             cache_origin=_cache_origin,
                             user_id=getattr(self, "_tokenpak_user_id", "") or "",
+                            session_id=getattr(self, "_tokenpak_session_id", "") or "",
                         )
                     except Exception:
                         pass  # DB errors must never break the request
