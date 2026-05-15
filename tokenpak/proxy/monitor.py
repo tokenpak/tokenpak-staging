@@ -81,8 +81,13 @@ def _db_writer_worker():
                            (timestamp,model,request_type,input_tokens,output_tokens,estimated_cost,
                             latency_ms,status_code,endpoint,compilation_mode,protected_tokens,
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
-                            would_have_saved,cache_origin,user_id,session_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            would_have_saved,cache_origin,user_id,session_id,
+                            ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
+                            ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
+                            ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
+                            ssrm_progress_signal,ssrm_signals_json)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                                   ?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -185,6 +190,24 @@ class Monitor:
             conn.execute("ALTER TABLE requests ADD COLUMN user_id TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+        # SSRM Phase 1 — 9 new advisory-only columns. All nullable /
+        # defaulted so old client INSERT statements still work. No
+        # behavior change; columns are populated only when ssrm.enabled=true.
+        for _col_sql in (
+            "ALTER TABLE requests ADD COLUMN ssrm_decision TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN ssrm_effective_context_tokens INTEGER",
+            "ALTER TABLE requests ADD COLUMN ssrm_effective_context_pct REAL",
+            "ALTER TABLE requests ADD COLUMN ssrm_cache_read_ratio REAL",
+            "ALTER TABLE requests ADD COLUMN ssrm_projected_next_context_pct REAL",
+            "ALTER TABLE requests ADD COLUMN ssrm_fingerprint_repeat_count INTEGER DEFAULT 0",
+            "ALTER TABLE requests ADD COLUMN ssrm_session_age_turns INTEGER DEFAULT 0",
+            "ALTER TABLE requests ADD COLUMN ssrm_progress_signal TEXT",
+            "ALTER TABLE requests ADD COLUMN ssrm_signals_json TEXT",
+        ):
+            try:
+                conn.execute(_col_sql)
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS budget_alerts (
@@ -244,6 +267,15 @@ class Monitor:
         cache_origin="unknown",
         user_id="",
         session_id="",
+        ssrm_decision="",
+        ssrm_effective_context_tokens=None,
+        ssrm_effective_context_pct=None,
+        ssrm_cache_read_ratio=None,
+        ssrm_projected_next_context_pct=None,
+        ssrm_fingerprint_repeat_count=0,
+        ssrm_session_age_turns=0,
+        ssrm_progress_signal=None,
+        ssrm_signals_json=None,
     ):
         # P0-06 (A6): ``user_id`` is the SHA-256 hex of the proxy auth bearer
         # token populated by ``_ProxyHandler._enforce_proxy_auth``. Defaults to
@@ -257,6 +289,9 @@ class Monitor:
         # ``session_block_cost_usd`` defense can never trigger because every
         # request appears as a new session.
         # Enqueue write instead of writing directly (async, <0.1ms return)
+        # SSRM Phase 1: 9 trailing ssrm_* params are advisory-only telemetry.
+        # Populated only when ssrm.enabled=true; otherwise the column values
+        # are empty/NULL and reading them is a no-op.
         insert_params = (
             datetime.now().isoformat(),
             model,
@@ -278,6 +313,15 @@ class Monitor:
             cache_origin,
             user_id or "",
             session_id or "",
+            ssrm_decision or "",
+            ssrm_effective_context_tokens,
+            ssrm_effective_context_pct,
+            ssrm_cache_read_ratio,
+            ssrm_projected_next_context_pct,
+            int(ssrm_fingerprint_repeat_count or 0),
+            int(ssrm_session_age_turns or 0),
+            ssrm_progress_signal,
+            ssrm_signals_json,
         )
         _queued = False
         try:
@@ -289,8 +333,13 @@ class Monitor:
                 "INSERT INTO requests (timestamp, model, request_type, input_tokens, output_tokens, "
                 "estimated_cost, latency_ms, status_code, endpoint, compilation_mode, protected_tokens, "
                 "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
-                "would_have_saved, cache_origin, user_id, session_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "would_have_saved, cache_origin, user_id, session_id, "
+                "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
+                "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
+                "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
+                "ssrm_progress_signal, ssrm_signals_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insert_params,
             )
             _conn.commit()

@@ -979,6 +979,43 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     type(_sg_exc).__name__, _sg_exc,
                 )
 
+        # ── SSRM Phase 1 — Session Swap Relevance Management ───────────────────
+        # Instrumentation-only.  Computes 11 signals + an advisory action per
+        # request; logs them to monitor.db's ssrm_* columns and to
+        # ssrm_audit.db.ssrm_decisions.  Phase 1 does NOT branch on the
+        # decision — every request that passed spend_guard is forwarded
+        # exactly as it would have been without SSRM.
+        # Disabled by default (ssrm.enabled=false in config.yaml).
+        # Enable with: ssrm.enabled=true or TOKENPAK_SSRM_ENABLED=1.
+        if should_log and is_messages and body:
+            try:
+                from tokenpak.proxy.ssrm import decide as _ssrm_decide
+                _ssrm_model = ""
+                try:
+                    import json as _json_for_ssrm
+                    _ssrm_body_json = _json_for_ssrm.loads(body.decode("utf-8", errors="replace"))
+                    _ssrm_model = str(_ssrm_body_json.get("model") or "")
+                except Exception:
+                    pass
+                _ssrm_session = getattr(self, "_tokenpak_session_id", "") or ""
+                _ssrm_decision = _ssrm_decide(
+                    body,
+                    _ssrm_model or "claude-sonnet-4-6",
+                    _ssrm_session,
+                    dict(self.headers),
+                )
+                # Stash on self so Monitor.log() (later in this request flow)
+                # can attach the decision to the request row.
+                self._tokenpak_ssrm_decision = _ssrm_decision
+            except ImportError:
+                pass  # SSRM module not installed
+            except Exception as _ssrm_exc:
+                import logging as _ssrm_log
+                _ssrm_log.getLogger(__name__).debug(
+                    "tokenpak.ssrm: error (passthrough): %s: %s",
+                    type(_ssrm_exc).__name__, _ssrm_exc,
+                )
+
         # ── DLP outbound secret scan ──────────────────────────────────────────
         # Scans the raw request body for secrets before compression/forwarding.
         # Default: TOKENPAK_DLP_ENABLED=1, TOKENPAK_DLP_MODE=warn (log only).
@@ -1691,6 +1728,26 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # cross-session reporting see this request. Async write queue
                 # keeps this call <0.1ms. Fail-open.
                 if ps.monitor is not None:
+                    # SSRM Phase 1: pull the advisory decision computed earlier
+                    # in the request flow (see the SSRM hook above the DLP scan)
+                    # and pass it as monitor.requests.ssrm_* columns.
+                    _ssrm_d = getattr(self, "_tokenpak_ssrm_decision", None)
+                    _ssrm_kwargs: dict = {}
+                    if _ssrm_d is not None:
+                        try:
+                            _ssrm_kwargs = {
+                                "ssrm_decision": _ssrm_d.action,
+                                "ssrm_effective_context_tokens": _ssrm_d.signals.effective_context_tokens,
+                                "ssrm_effective_context_pct": _ssrm_d.signals.effective_context_pct,
+                                "ssrm_cache_read_ratio": _ssrm_d.signals.cache_read_ratio,
+                                "ssrm_projected_next_context_pct": _ssrm_d.signals.context_pct_projected_next,
+                                "ssrm_fingerprint_repeat_count": _ssrm_d.signals.prompt_fingerprint_repeat_count,
+                                "ssrm_session_age_turns": _ssrm_d.signals.session_age_turns,
+                                "ssrm_progress_signal": _ssrm_d.signals.progress_signal,
+                                "ssrm_signals_json": _ssrm_d.signals.to_json(),
+                            }
+                        except Exception:
+                            _ssrm_kwargs = {}
                     try:
                         ps.monitor.log(
                             model=model,
@@ -1711,6 +1768,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             cache_origin=_cache_origin,
                             user_id=getattr(self, "_tokenpak_user_id", "") or "",
                             session_id=getattr(self, "_tokenpak_session_id", "") or "",
+                            **_ssrm_kwargs,
                         )
                     except Exception:
                         pass  # DB errors must never break the request
@@ -2018,7 +2076,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(resp)
 
     def _handle_cost_forecast(self) -> None:
-        """CCI-11: Handle POST /v1/messages/forecast — local cost forecast, no upstream call.
+        """Handle POST /v1/messages/forecast — local cost forecast, no upstream call.
 
         Accepts the same body shape as /v1/messages, runs count_tokens locally,
         applies the model pricing config, and returns an estimated cost breakdown.
