@@ -1005,8 +1005,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     dict(self.headers),
                 )
                 # Stash on self so Monitor.log() (later in this request flow)
-                # can attach the decision to the request row.
-                self._tokenpak_ssrm_decision = _ssrm_decision
+                # can attach the decision to the request row. When SSRM is
+                # disabled, _ssrm_decide() returns None — don't stash, so
+                # Monitor.log writes empty/NULL ssrm_* columns (matches the
+                # pre-SSRM-Phase-1 baseline behavior).
+                if _ssrm_decision is not None:
+                    self._tokenpak_ssrm_decision = _ssrm_decision
             except ImportError:
                 pass  # SSRM module not installed
             except Exception as _ssrm_exc:
@@ -2615,6 +2619,16 @@ class ProxyServer:
             self.monitor: Optional[_DbMonitor] = _DbMonitor(_db_path)
         except Exception:
             self.monitor = None
+
+        # SSRM Phase 1 prewarm — eagerly resolve config + create sqlite
+        # handles so the first live request doesn't slip through with
+        # empty ssrm_* columns from a lazy-init race. No-op when SSRM
+        # is disabled; never raises.
+        try:
+            from tokenpak.proxy.ssrm import prewarm as _ssrm_prewarm
+            _ssrm_prewarm()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Lifecycle

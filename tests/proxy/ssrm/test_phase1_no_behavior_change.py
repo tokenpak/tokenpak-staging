@@ -107,13 +107,16 @@ def test_monitor_log_path_accepts_block_decision(tmp_ssrm_dbs, tmp_path, monkeyp
 
 
 def test_disabled_path_writes_no_audit_rows(tmp_ssrm_dbs, monkeypatch):
-    """ssrm.enabled=false → no rows in ssrm_audit.db, no behavior change."""
+    """ssrm.enabled=false → decide() returns None, no rows in ssrm_audit.db,
+    no behavior change. Phase 1 prewarm-packet fix: disabled state must
+    leave monitor.db ssrm_* columns empty too.
+    """
     monkeypatch.delenv("TOKENPAK_SSRM_ENABLED", raising=False)
     from tokenpak.proxy.ssrm.policy import reset_config_cache
     reset_config_cache()
     body = b'{"messages":[{"role":"user","content":"x"}],"model":"claude-opus-4-7"}'
     d = decide(body, "claude-opus-4-7", "sess-disabled", {})
-    assert d.reason == "ssrm.enabled=false"
+    assert d is None, "disabled decide() must return None (prewarm-packet contract)"
     # Audit DB should be empty (or absent) — verify
     con = sqlite3.connect(tmp_ssrm_dbs["audit_db"])
     try:
