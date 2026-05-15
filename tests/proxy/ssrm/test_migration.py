@@ -29,17 +29,28 @@ def test_migration_on_fresh_db_adds_all_ssrm_columns(tmp_path):
     assert ssrm_cols == expected
 
 
-def test_migration_is_idempotent(tmp_path):
-    """Running Monitor._init_db twice does not raise or corrupt state."""
+def test_migration_is_idempotent(tmp_path, monkeypatch):
+    """Running Monitor._init_db twice does not raise or corrupt state.
+
+    Note: monitor.py uses a process-global `_DB_CONNECTION` and async
+    write queue. When the live proxy on the same host is concurrently
+    writing to the real monitor.db, the queue worker hijacks the
+    cached connection and writes go to the WRONG path. Force the
+    synchronous-fallback INSERT path by neutering `_DB_WRITE_QUEUE`
+    after Monitor construction, the same pattern used in
+    test_phase1_no_behavior_change::test_monitor_log_path_accepts_block_decision.
+    """
+    import tokenpak.proxy.monitor as _mon
     db = tmp_path / "idem-monitor.db"
     Monitor(str(db))
     Monitor(str(db))
     Monitor(str(db))
-    # Still works — log a row
     m = Monitor(str(db))
+    # Force sync fallback so the row lands in OUR tmp DB regardless of
+    # what other Monitor instances in this process have done.
+    monkeypatch.setattr(_mon, "_DB_WRITE_QUEUE", None)
     m.log(model="claude-opus-4-7", input_tokens=10, output_tokens=5, cost=0.001,
           latency_ms=5, status_code=200, endpoint="/v1/messages")
-    import time; time.sleep(0.3)
     con = sqlite3.connect(str(db))
     cnt = con.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
     assert cnt == 1

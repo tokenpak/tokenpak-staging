@@ -31,4 +31,35 @@ from __future__ import annotations
 from .contracts import Decision, Signals
 from .policy import decide
 
-__all__ = ["decide", "Signals", "Decision"]
+__all__ = ["decide", "Signals", "Decision", "prewarm"]
+
+
+def prewarm() -> None:
+    """Idempotent best-effort startup prewarm for the SSRM subsystem.
+
+    Eagerly resolves the config + creates the audit/state sqlite handles
+    so the FIRST live request doesn't pay the lazy-init cost (which
+    previously caused 1-of-N monitor rows to slip through with empty
+    ssrm_* columns when SSRM is enabled).
+
+    Strictly read/init only:
+      - reads ~/.tokenpak/config.yaml (or its env-var overrides)
+      - creates ssrm_audit.db + ssrm_state.db files if absent (no rows
+        written; just CREATE TABLE IF NOT EXISTS)
+
+    No-op when SSRM is disabled or when called multiple times. Never
+    raises — any error is silently swallowed because the proxy must
+    not fail to start because of an SSRM init hiccup.
+    """
+    try:
+        from .policy import _get_ssrm_config
+        cfg = _get_ssrm_config()
+        if not cfg.get("enabled"):
+            return
+        # Touch both sqlite handles so first-request doesn't race.
+        from .state import open_audit_db, open_state_db
+        open_audit_db(cfg.get("audit_db_path", "~/.tokenpak/ssrm_audit.db"))
+        open_state_db(cfg.get("state_db_path", "~/.tokenpak/ssrm_state.db"))
+    except Exception:
+        # Strict no-raise contract.
+        pass

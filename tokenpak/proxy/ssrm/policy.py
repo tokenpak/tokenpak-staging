@@ -17,6 +17,7 @@ import threading
 from typing import Optional
 
 from .audit import record_decision
+from .state import open_audit_db, open_state_db
 from .contracts import (
     ACTION_BLOCK,
     ACTION_COMPRESS,
@@ -187,12 +188,18 @@ def decide(
     headers: dict | None = None,
     *,
     persist: bool = True,
-) -> Decision:
+) -> Optional[Decision]:
     """Top-level SSRM decision call.
 
     Computes signals, applies the rule engine, optionally writes the
     decision to ssrm_audit.db, and returns the Decision object. The
     proxy MUST NOT branch on `decision.action` in Phase 1.
+
+    Returns:
+        A Decision when SSRM is enabled, or None when SSRM is disabled.
+        Callers must handle the None case (do not stash a default
+        Decision on the request flow — that pollutes monitor.db's
+        ssrm_* columns when the operator hasn't opted in).
 
     Args:
         body: request body (bytes / str / dict)
@@ -203,15 +210,11 @@ def decide(
     """
     config = _get_ssrm_config()
 
-    # When SSRM is disabled, return a no-op continue decision and skip
-    # persistence so production behavior remains unchanged.
+    # When SSRM is disabled, return None so the caller can skip the
+    # decision-stash + monitor.log ssrm_* path entirely. This keeps the
+    # disabled state truly invisible at the monitor.db level.
     if not config.get("enabled"):
-        return Decision(
-            action=ACTION_CONTINUE,
-            signals=Signals(model=model, session_id=session_id or ""),
-            reason="ssrm.enabled=false",
-            advisory_only=True,
-        )
+        return None
 
     signals = compute_signals(
         body,

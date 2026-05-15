@@ -107,9 +107,15 @@ def test_classify_severity_tie_break():
     assert action == ACTION_QUARANTINE
 
 
-def test_decide_when_disabled_is_noop(monkeypatch):
-    """ssrm.enabled=false → decide returns continue with no signals computed
-    and no audit row written."""
+def test_decide_when_disabled_returns_none(monkeypatch):
+    """ssrm.enabled=false → decide() returns None (Phase 1 prewarm fix).
+
+    Returning None lets the proxy hook skip stashing entirely so monitor.db
+    rows keep empty/NULL ssrm_* columns when SSRM is disabled. The previous
+    behavior (returning a default `continue_current_session` Decision)
+    polluted every row with the disabled-state default value, which was
+    misleading downstream (made it look like SSRM was partly enabled).
+    """
     monkeypatch.delenv("TOKENPAK_SSRM_ENABLED", raising=False)
     from tokenpak.proxy.ssrm.policy import reset_config_cache
     reset_config_cache()
@@ -119,8 +125,7 @@ def test_decide_when_disabled_is_noop(monkeypatch):
         "sess-noop",
         {},
     )
-    assert d.action == ACTION_CONTINUE
-    assert d.reason == "ssrm.enabled=false"
+    assert d is None, "disabled path must return None so proxy hook can skip stashing"
 
 
 def test_decide_writes_audit_row(tmp_ssrm_dbs):
