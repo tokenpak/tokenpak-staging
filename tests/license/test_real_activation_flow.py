@@ -25,7 +25,6 @@ import pytest
 
 from tokenpak import licensing
 
-
 DEV_KEY = "TPAK-DEV-TEST00001"
 
 
