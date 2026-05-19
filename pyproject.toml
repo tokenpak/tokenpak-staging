@@ -226,6 +226,7 @@ markers = [
     "needs_internal_alerts: test requires tokenpak._internal.alerts (internal-only module)",
     "needs_cali_env: test requires a specific dev-host filesystem layout (/home/<user>/tokenpak)",
     "needs_fast_host: test has timing-sensitive assertions that fail on slow hosts (benchmarks, latency targets)",
+    "requires_l3: test requires the tokenpak-license-server (L3) systemd user unit to be active",
     # Std 02 §13 taxonomy markers (added 2026-05-13)
     "oss: public OSS surface; works on slim install",
     "optional: requires a named optional extra",

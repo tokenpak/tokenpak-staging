@@ -11,15 +11,38 @@ Design invariants:
     - Stored license.json with no "tier" field → Free tier
     - is_feature_enabled(name) is the single choke point for Pro gating
     - License store is JSON at ~/.tokenpak/license.json (human-inspectable)
+
+Dev-only activation shim
+------------------------
+For local development and end-to-end test plumbing, an opt-in shim is
+guarded by the ``TOKENPAK_LICENSE_DEV_SHIM`` environment variable. When
+the variable is set to ``"1"`` and the supplied key matches the dev-key
+shape ``^TPAK-DEV-[A-Z0-9]{8,}$``, :func:`activate` will write a license
+with ``tier="pro"`` and ``status="active"`` through the normal
+:func:`save_license` path. The shim emits a loud ``DEV SHIM — not a real
+activation`` warning on every invocation; it is impossible to mistake
+for production validation. With the env var unset the shim is inert and
+:func:`activate` retains its stub behavior (``status="pending_validation"``
+on every key, regardless of shape). This shim exists so the activation
+pipeline can be exercised end-to-end before the real W3-A validator
+(L3 HTTP client + pubkey pinning + signature verification) lands.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+_log = logging.getLogger(__name__)
+
+# Opt-in dev shim — see module docstring.
+_DEV_SHIM_ENV = "TOKENPAK_LICENSE_DEV_SHIM"
+_DEV_KEY_PATTERN = re.compile(r"^TPAK-DEV-[A-Z0-9]{8,}$")
 
 # ---------------------------------------------------------------------------
 # Tiers
@@ -219,10 +242,41 @@ def activate(key: str, *, email: str = "") -> ActivationResult:
             error="empty_key",
         )
     import datetime
+    now_iso = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    if os.environ.get(_DEV_SHIM_ENV) == "1" and _DEV_KEY_PATTERN.match(key):
+        _log.warning(
+            "DEV SHIM — not a real activation: key=%s activated locally as Pro "
+            "via TOKENPAK_LICENSE_DEV_SHIM. This is a dev/test shortcut and "
+            "does not represent a validated production license.",
+            key,
+        )
+        lic = License(
+            tier=TIER_PRO,
+            key=key,
+            activated_at=now_iso,
+            email=email,
+            status="active",
+        )
+        try:
+            save_license(lic)
+        except Exception as exc:
+            return ActivationResult(
+                ok=False, summary="Could not write license file.", error=str(exc),
+            )
+        return ActivationResult(
+            ok=True,
+            summary=(
+                "DEV SHIM — not a real activation. Local Pro tier written "
+                "via TOKENPAK_LICENSE_DEV_SHIM; do not use in production."
+            ),
+            license=lic,
+        )
+
     lic = License(
         tier=TIER_FREE,                    # validator upgrades this once wired
         key=key,
-        activated_at=datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        activated_at=now_iso,
         email=email,
         status="pending_validation",
     )
