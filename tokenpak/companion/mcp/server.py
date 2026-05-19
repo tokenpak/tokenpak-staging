@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 
+from ... import __version__ as _tokenpak_version
 from .tools import TOOLS, CompanionState
 
 
@@ -24,6 +25,12 @@ def _send(obj: dict) -> None:
     """Write a JSON-RPC response to stdout."""
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
+
+
+def _log_stderr(msg: str) -> None:
+    """Emit a single line to stderr; flush so logs are line-aligned."""
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
 
 
 def _handle_initialize(req_id: int | str, state: CompanionState) -> None:
@@ -93,8 +100,14 @@ def _handle_tools_call(req_id: int | str, params: dict, state: CompanionState) -
 
 
 def main() -> None:
-    """MCP server main loop — read JSON-RPC from stdin, dispatch, respond."""
+    """MCP server main loop — read JSON-RPC from stdin, dispatch, respond.
+
+    Emits a startup banner and JSON parse errors to stderr so integration
+    failures surface in Codex's MCP child-process logs without polluting
+    the stdout JSON-RPC stream.
+    """
     state = CompanionState()
+    _log_stderr(f"tokenpak-companion-mcp v{_tokenpak_version} ready")
 
     for line in sys.stdin:
         line = line.strip()
@@ -102,7 +115,8 @@ def main() -> None:
             continue
         try:
             req = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            _log_stderr(f"tokenpak-companion-mcp: JSON parse error: {exc}")
             continue
 
         req_id = req.get("id")
