@@ -1,0 +1,26 @@
+{
+  "budgets_ms": {
+    "ceiling": 25.0,
+    "p50": 2.0,
+    "p99": 10.0
+  },
+  "fsync_per_record": true,
+  "harness": "tests/bench/test_append_log_latency.py",
+  "host": "TrixBot",
+  "iterations": 10000,
+  "metrics_ms": {
+    "max": 409.382342,
+    "mean": 7.6587572194,
+    "min": 5.066319,
+    "p50": 7.535906499999999,
+    "p95": 8.896912649999999,
+    "p99": 16.159371690000018
+  },
+  "pass": false,
+  "platform": "Linux-6.17.0-14-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "ran_at": "20260520T174626Z",
+  "record_event_type": "proxy_output",
+  "record_target_bytes": 3500,
+  "schema_version": 1
+}
