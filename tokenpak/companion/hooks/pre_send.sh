@@ -5,6 +5,12 @@
 #
 # No python3 in the hot path. JSON fields extracted with grep.
 # Budget check uses sqlite3 CLI (only if budget is set).
+#
+# Also drives the dynamic terminal-tab title: derives a short
+# title from the first user prompt of a session, persists it to
+# a per-session state file, then re-asserts it via OSC 0 on every
+# subsequent prompt (so Claude Code's own rewrites don't reclaim
+# the tab). Disable with TOKENPAK_COMPANION_DYNAMIC_TITLE=0.
 # ──────────────────────────────────────────────────────────────
 
 # Read stdin
@@ -17,10 +23,39 @@ INPUT=$(cat)
 if command -v jq >/dev/null 2>&1; then
     TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
     SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)
 else
     # Portable sed extraction (no -P flag needed)
     TRANSCRIPT=$(echo "$INPUT" | sed -n 's/.*"transcript_path"\s*:\s*"\([^"]*\)".*/\1/p')
     SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p')
+    PROMPT=$(echo "$INPUT" | sed -n 's/.*"prompt"\s*:\s*"\([^"]*\)".*/\1/p')
+fi
+
+JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
+
+# ──────────────────────────────────────────────────────────────
+# Dynamic terminal-tab title
+# ──────────────────────────────────────────────────────────────
+# First prompt of a session → derive title from prompt, persist.
+# Every subsequent prompt → re-emit so Claude Code's tab rewrites
+# don't reclaim the tab back to its own default.
+if [ -n "$SESSION_ID" ] && [ "${TOKENPAK_COMPANION_DYNAMIC_TITLE:-1}" != "0" ]; then
+    TITLE_FILE="$JOURNAL_DIR/title-${SESSION_ID}.txt"
+    if [ ! -s "$TITLE_FILE" ] && [ -n "$PROMPT" ]; then
+        mkdir -p "$JOURNAL_DIR" 2>/dev/null
+        # First non-empty line, trim, truncate to 40 chars, strip trailing space
+        DERIVED=$(printf '%s' "$PROMPT" \
+            | head -1 \
+            | tr -d '\r\n\t' \
+            | cut -c1-40 \
+            | sed 's/[[:space:]]*$//')
+        [ -n "$DERIVED" ] && printf '%s' "$DERIVED" > "$TITLE_FILE"
+    fi
+    if [ -s "$TITLE_FILE" ]; then
+        TITLE=$(cat "$TITLE_FILE")
+        # OSC 0: set both icon-name and window-title. \xf0\x9f\x93\xa6 = 📦
+        printf '\033]0;\xf0\x9f\x93\xa6 %s\007' "$TITLE" >&2
+    fi
 fi
 
 # Token estimation from file size (instant via stat)
@@ -45,7 +80,6 @@ BUDGET="${TOKENPAK_COMPANION_BUDGET:-0}"
 BUDGET_TAG=""
 
 if [ "$BUDGET" != "0" ] && [ -n "$BUDGET" ]; then
-    JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
     BUDGET_DB="$JOURNAL_DIR/budget.db"
     TODAY=$(date +%Y-%m-%d)
     DAILY_TOTAL="0.0"

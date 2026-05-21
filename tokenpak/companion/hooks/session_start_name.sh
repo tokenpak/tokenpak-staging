@@ -12,22 +12,28 @@
 # JSON strings, so the ANSI escapes are emitted as ``\u001b`` literals —
 # the consumer's JSON parser decodes them back to ESC.
 #
-# Matcher: registered for ``"clear"`` (and reasonable to extend to
-# ``"resume"`` / ``"compact"``) by the launcher.
+# Matcher: registered for ``"startup|clear|resume|compact"`` by the
+# launcher so every session re-creation event re-asserts the label.
 
 # Branded session label — must stay in sync with
 # ``tokenpak/companion/launcher.py::_DEFAULT_SESSION_LABEL``.
 #
-#   teal brackets + "Pak"   = \u001b[38;2;0;180;170m
-#   white "📦 Token"         = \u001b[38;2;255;255;255m
-#   gray "Claude Companion" = \u001b[38;2;90;94;105m
-#   reset                   = \u001b[0m
+# Two-tone: tiffany brackets on chrome BG (default), inner span on black
+# BG pill so the tiffany "Pak" glyph stops vanishing into the tiffany
+# chat-header chrome.
+#
+#   tiffany FG / default BG (brackets) = \u001b[38;2;0;180;170m
+#   tiffany FG / black BG   ("Pak")    = \u001b[38;2;0;180;170;48;2;0;0;0m
+#   white   FG / black BG ("📦 Token") = \u001b[38;2;255;255;255;48;2;0;0;0m
+#   gray    FG / black BG (Companion)  = \u001b[38;2;90;94;105;48;2;0;0;0m
+#   black BG only (spacer)             = \u001b[48;2;0;0;0m
+#   reset                              = \u001b[0m
 
 cat <<'JSON'
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "sessionTitle": "\u001b[38;2;0;180;170m[ \u001b[38;2;255;255;255m📦 Token\u001b[38;2;0;180;170mPak\u001b[38;2;90;94;105m Claude Companion\u001b[38;2;0;180;170m ]\u001b[0m"
+    "sessionTitle": "\u001b[38;2;0;180;170m[\u001b[48;2;0;0;0m \u001b[38;2;255;255;255;48;2;0;0;0m📦 Token\u001b[38;2;0;180;170;48;2;0;0;0mPak\u001b[38;2;90;94;105;48;2;0;0;0m Claude Companion\u001b[48;2;0;0;0m \u001b[0m\u001b[38;2;0;180;170m]\u001b[0m"
   }
 }
 JSON

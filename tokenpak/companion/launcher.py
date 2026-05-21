@@ -149,23 +149,27 @@ def main(args: list[str] | None = None) -> int:
 
 
 _SESSION_PREFIX = "\U0001f4e6"  # 📦
-# ANSI foreground colors for the branded session label. Foreground-only
-# (no background fill) so the chat-header background falls through to
-# the user's terminal default.
-_LBL_TEAL = "\033[38;2;0;180;170m"   # brackets + "Pak" — TokenPak teal
-_LBL_WHITE = "\033[38;2;255;255;255m"  # "📦 Token"        — white
-_LBL_GRAY = "\033[38;2;90;94;105m"   # "Claude Companion" — muted gray
+# Two-tone badge: brackets render with tiffany FG on the chrome's own
+# background (default BG), the inside renders as a black-BG pill so the
+# tiffany ``Pak`` glyph stops vanishing into the tiffany chat-header
+# chrome. SGR sequences combine FG (38;2;R;G;B) and BG (48;2;R;G;B) in
+# one escape so spans don't accidentally reset.
+_LBL_BRACKET = "\033[38;2;0;180;170m"                       # tiffany FG, default BG (sits on chrome)
+_LBL_TEAL = "\033[38;2;0;180;170;48;2;0;0;0m"               # tiffany FG, black BG — "Pak"
+_LBL_WHITE = "\033[38;2;255;255;255;48;2;0;0;0m"            # white FG, black BG — "📦 Token"
+_LBL_GRAY = "\033[38;2;90;94;105;48;2;0;0;0m"               # gray FG, black BG  — "Claude Companion"
+_LBL_PILL = "\033[48;2;0;0;0m"                              # black BG only — spacer cells
 _LBL_RESET = "\033[0m"
 # Default session label shown in the top-HR chat-header. Kept in sync
 # with ``hooks/session_start_name.sh`` so the post-/clear restore
 # matches the launcher's startup label exactly. Real ESC bytes here —
 # they pass through ``os.execvpe`` to ``--name`` as raw argv bytes.
 _DEFAULT_SESSION_LABEL = (
-    f"{_LBL_TEAL}[ "
+    f"{_LBL_BRACKET}[{_LBL_PILL} "
     f"{_LBL_WHITE}{_SESSION_PREFIX} Token"
     f"{_LBL_TEAL}Pak"
     f"{_LBL_GRAY} Claude Companion"
-    f"{_LBL_TEAL} ]"
+    f"{_LBL_PILL} {_LBL_RESET}{_LBL_BRACKET}]"
     f"{_LBL_RESET}"
 )
 
@@ -343,7 +347,7 @@ def _write_settings(config: CompanionConfig) -> str:
         if "SessionStart" not in hooks:
             hooks["SessionStart"] = [
                 {
-                    "matcher": "clear",
+                    "matcher": "startup|clear|resume|compact",
                     "hooks": [
                         {
                             "type": "command",
