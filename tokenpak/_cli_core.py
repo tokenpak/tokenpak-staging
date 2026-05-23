@@ -21,6 +21,18 @@ from typing import Optional, Tuple
 from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
 from tokenpak._formatting import symbols as FS
 
+# ── --no-tui global escape (Lane 1: UX onboarding) ────────────────────────
+# Set true when --no-tui is present anywhere on the command line. Stripped
+# from sys.argv early in main() so per-subcommand parsers don't need to
+# know about it. Honored at every TTY entry point: bare `tokenpak`, `tokenpak
+# setup`, and `tokenpak integrate <X>` without `--apply`.
+_NO_TUI_FLAG = False
+
+
+def _no_tui() -> bool:
+    return _NO_TUI_FLAG
+
+
 # ── Monitor DB Access ────────────────────────────────────────────────────────
 
 
@@ -507,6 +519,38 @@ def cmd_init(args):
     click.echo("   tokenpak start\n")
 
 
+def _print_no_keys_instructions():
+    """Deterministic, shell-aware setup instructions for the no-env-keys case.
+
+    Lane 1 UX onboarding: replaces the dead-ending "set ANTHROPIC_API_KEY=..."
+    message with two explicit paths (DECISION-UX-01 + UX-02 + UX-03):
+
+      A — Claude Code: no API key required; proxy forwards OAuth bytewise.
+      B — Direct provider key: set the env var in this shell, re-run setup.
+
+    Output is single-shell-aware so the printed `export` / `set` / `$env:`
+    examples actually work on the user's host.
+    """
+    from ._formatting.shell_detect import detect_shell, render_env_var
+
+    shell = detect_shell()
+    proxy_url = os.environ.get("TOKENPAK_PROXY_URL") or "http://localhost:8766"
+    print("⚠️  No API keys detected in environment variables.")
+    print()
+    print("There are two paths from here:")
+    print()
+    print("  Path A — Claude Code (no API key required — proxy forwards OAuth")
+    print("           credentials byte-preserved):")
+    print(f"    {render_env_var('ANTHROPIC_BASE_URL', proxy_url, shell)}")
+    print("    tokenpak start    # then launch Claude Code as usual")
+    print()
+    print("  Path B — Direct provider key (Anthropic / OpenAI / Google). Set")
+    print("           the relevant key in this shell, then re-run `tokenpak setup`:")
+    print(f"    {render_env_var('ANTHROPIC_API_KEY', 'sk-...', shell)}")
+    print(f"    {render_env_var('OPENAI_API_KEY', 'sk-...', shell)}")
+    print(f"    {render_env_var('GOOGLE_API_KEY', '...', shell)}")
+
+
 def cmd_setup(args):
     """Interactive wizard for first-time TokenPak configuration."""
     import os
@@ -520,11 +564,12 @@ def cmd_setup(args):
 
     config_dir = Path.home() / ".tokenpak"
     config_file = config_dir / "config.yaml"
+    is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
     if config_file.exists():
         print(f"Configuration already exists at {config_file}")
-        if not sys.stdin.isatty():
+        if not is_tty:
             print("Non-interactive mode: skipping reconfigure.")
             return
         try:
@@ -553,9 +598,20 @@ def cmd_setup(args):
         api_keys["google"] = os.environ["GOOGLE_API_KEY"]
 
     if not api_keys:
-        print("⚠️  No API keys detected in environment variables.")
-        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
-        print("   Example: export ANTHROPIC_API_KEY='sk-...'")
+        # Lane 1 (DECISION-UX-01 + UX-03): no more dead-ending. Route:
+        #   - TTY + not --no-tui → guided menu (interactive choice)
+        #   - non-TTY OR --no-tui → deterministic print-only instructions
+        if is_tty and not _no_tui():
+            try:
+                from tokenpak.cli.commands.menu import run_menu
+
+                print("→ No API keys in env. Launching guided setup...\n")
+                run_menu()
+                return
+            except Exception as exc:  # pragma: no cover — menu import/runtime err
+                print(f"   (Guided menu unavailable: {exc})\n")
+                # fall through to print-only instructions
+        _print_no_keys_instructions()
         return
 
     # Auto-detect primary provider
@@ -4434,6 +4490,13 @@ def _bare_help(name, description, subs, exit_nonzero=False):
 
 
 def main():
+    global _NO_TUI_FLAG
+    # Strip --no-tui from argv before any other parsing so per-subcommand
+    # parsers don't need to know about it. (Lane 1 UX onboarding: AC #4.)
+    if "--no-tui" in sys.argv:
+        _NO_TUI_FLAG = True
+        sys.argv = [a for a in sys.argv if a != "--no-tui"]
+
     parser = build_parser()
 
     # ── Intercept --version / -V ──────────────────────────────────────────────
@@ -4444,8 +4507,9 @@ def main():
         sys.exit(0)
 
     # ── Intercept bare invocation: launch interactive menu on TTY ──────────────
+    # --no-tui short-circuits the TUI launch even on a real TTY (Lane 1 AC #4).
     if len(sys.argv) == 1:
-        if sys.stdin.isatty() and sys.stdout.isatty():
+        if sys.stdin.isatty() and sys.stdout.isatty() and not _no_tui():
             try:
                 from tokenpak.cli.commands.menu import run_menu
                 run_menu()
