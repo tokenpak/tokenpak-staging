@@ -16,6 +16,37 @@ import sys
 
 from ..config import CompanionConfig
 
+_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
+_BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
+_TRUTHY = {"1", "true", "yes"}
+
+
+def _bypass_env_enabled(env: dict[str, str] | None = None) -> bool:
+    """Return True if the bypass env var is set to a truthy value (case-insensitive)."""
+    src = env if env is not None else os.environ
+    raw = src.get(_BYPASS_ENV_VAR, "")
+    return raw.strip().lower() in _TRUTHY
+
+
+def _maybe_inject_bypass_flag(
+    args: list[str], env: dict[str, str] | None = None
+) -> list[str]:
+    """Return a new arg list with the Codex bypass flag injected when opted in.
+
+    Opt-in is via the env var ``TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX``
+    (accepts ``1`` / ``true`` / ``yes``). The flag is a no-op if the user
+    already passed it on the command line (no duplication).
+
+    Future UX should route this through TokenPak Codex permission tiers
+    (``standard`` / ``auto`` / ``fleet``) rather than exposing raw Codex
+    bypass flags; this env var is the bootstrap path for automation.
+    """
+    if not _bypass_env_enabled(env):
+        return list(args)
+    if _BYPASS_FLAG in args:
+        return list(args)
+    return [_BYPASS_FLAG, *args]
+
 
 def main(args: list[str] | None = None) -> int:
     """Entry point for ``tokenpak codex``."""
@@ -101,7 +132,8 @@ def main(args: list[str] | None = None) -> int:
     if str(config.journal_dir) != default_journal_dir:
         env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
 
-    codex_args = ["codex", *args]
+    forwarded = _maybe_inject_bypass_flag(args, env)
+    codex_args = ["codex", *forwarded]
     os.execvpe("codex", codex_args, env)
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
