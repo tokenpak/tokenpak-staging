@@ -24,6 +24,7 @@ from .mcp_config import SERVER_NAME
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .rates_snapshot import count as rates_count
 from .skills_installer import bundled_skill_names
+from .state_lock import _codex_state_db_path, _format_lock_report, _state_lock_holders
 
 CheckFn = Callable[[], "tuple[bool, str]"]
 
@@ -66,6 +67,14 @@ def check_deprecated_hooks_feature_absent() -> "tuple[bool, str]":
             "(run `tokenpak codex --install-only`)"
         )
     return True, "no deprecated codex_hooks flag"
+
+
+def check_state_db_lock() -> "tuple[bool, str]":
+    path = _codex_state_db_path()
+    holders = _state_lock_holders(path)
+    if holders:
+        return False, _format_lock_report(path, holders)
+    return True, f"no lock holders for {path}"
 
 
 def check_mcp_registered() -> "tuple[bool, str]":
@@ -223,6 +232,7 @@ CHECKS: list["tuple[str, CheckFn]"] = [
     ("codex binary", check_codex_binary),
     ("hooks feature", check_hooks_feature),
     ("deprecated hook flag", check_deprecated_hooks_feature_absent),
+    ("state db lock", check_state_db_lock),
     ("MCP registration", check_mcp_registered),
     ("hooks.json schema", check_hooks_json),
     ("AGENTS.md", check_agents_md),

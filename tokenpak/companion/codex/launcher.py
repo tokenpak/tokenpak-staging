@@ -15,6 +15,7 @@ import os
 import sys
 
 from ..config import CompanionConfig
+from .state_lock import _codex_state_db_path, _format_lock_report, _state_lock_holders
 
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
@@ -46,6 +47,22 @@ def _maybe_inject_bypass_flag(
     if _BYPASS_FLAG in args:
         return list(args)
     return [_BYPASS_FLAG, *args]
+
+
+def _preflight_state_db_lock() -> bool:
+    """Return False with guidance when another Codex process owns the state DB."""
+    path = _codex_state_db_path()
+    holders = _state_lock_holders(path)
+    if not holders:
+        return True
+
+    print(
+        "tokenpak: Codex cannot start because another Codex process is using "
+        "its local state.",
+        file=sys.stderr,
+    )
+    print(_format_lock_report(path, holders), file=sys.stderr)
+    return False
 
 
 def main(args: list[str] | None = None) -> int:
@@ -131,6 +148,9 @@ def main(args: list[str] | None = None) -> int:
     default_journal_dir = str(config.journal_dir.__class__.home() / ".tokenpak" / "companion")
     if str(config.journal_dir) != default_journal_dir:
         env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
+
+    if not _preflight_state_db_lock():
+        return 1
 
     forwarded = _maybe_inject_bypass_flag(args, env)
     codex_args = ["codex", *forwarded]

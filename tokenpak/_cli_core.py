@@ -2050,7 +2050,7 @@ def cmd_codex(args):
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     from .companion.codex import launch
-    launch(args=forwarded)
+    sys.exit(launch(args=forwarded))
 
 
 def cmd_test(args):
