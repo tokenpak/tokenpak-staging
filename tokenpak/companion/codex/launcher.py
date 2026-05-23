@@ -76,7 +76,7 @@ def _preflight_state_db_lock() -> bool:
     )
     print(_format_lock_report(path, holders), file=sys.stderr)
     print(
-        f"Set {_SKIP_LOCK_ENV_VAR}=1 to skip this preflight.",
+        f"Expert bypass: {_SKIP_LOCK_ENV_VAR}=1 (accepts contention risk).",
         file=sys.stderr,
     )
     return False
