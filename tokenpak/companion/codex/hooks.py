@@ -8,7 +8,7 @@ two hooks:
 - **UserPromptSubmit** → token estimation, budget gating, journal seed
 - **Stop** → session closeout, journal summary, cost recording
 
-Hooks must be enabled via the ``codex_hooks`` feature flag.
+Hooks must be enabled via the stable ``hooks`` feature flag.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ _STOP_HOOK = _HOOKS_DIR / "hooks_stop.sh"
 
 # Substring used to identify tokenpak-owned hook commands across merges.
 TOKENPAK_HOOK_MARKER = "tokenpak"
+HOOKS_FEATURE = "hooks"
+DEPRECATED_HOOKS_FEATURE = "codex_hooks"
 
 # Events the companion owns. Add more here and they'll flow through
 # install / merge / uninstall without further code changes.
@@ -149,18 +151,14 @@ def _merge_hooks(existing: dict, new: dict) -> dict:
 
 
 def ensure_hooks_feature_enabled() -> bool:
-    """Enable the ``codex_hooks`` feature via ``codex features enable``.
+    """Enable the stable ``hooks`` feature via ``codex features enable``.
 
     Uses the Codex-native command rather than hand-writing config.toml,
     so we inherit any future config-schema changes for free. Idempotent.
-
-    Also suppresses the "Under-development features enabled" warning,
-    since Codex re-prints it on every session otherwise — the user has
-    explicitly opted in by installing the companion.
     """
     try:
         result = subprocess.run(
-            ["codex", "features", "enable", "codex_hooks"],
+            ["codex", "features", "enable", HOOKS_FEATURE],
             capture_output=True,
             text=True,
             timeout=10,
@@ -170,13 +168,88 @@ def ensure_hooks_feature_enabled() -> bool:
         return False
     if result.returncode != 0:
         print(
-            f"tokenpak: failed to enable codex_hooks feature: {result.stderr.strip()}",
+            f"tokenpak: failed to enable {HOOKS_FEATURE} feature: {result.stderr.strip()}",
             file=sys.stderr,
         )
         return False
 
+    remove_deprecated_hooks_feature()
     _suppress_unstable_warning()
     return True
+
+
+def has_deprecated_hooks_feature(config_path: Path | None = None) -> bool:
+    """Return True when ``[features].codex_hooks`` exists in config.toml."""
+    config_path = config_path or (Path.home() / ".codex" / "config.toml")
+    try:
+        content = config_path.read_text()
+    except OSError:
+        return False
+    return _features_table_has_key(content, DEPRECATED_HOOKS_FEATURE)
+
+
+def remove_deprecated_hooks_feature(config_path: Path | None = None) -> bool:
+    """Remove obsolete ``[features].codex_hooks`` from config.toml.
+
+    Codex now uses ``[features].hooks``. Leaving the old key in place makes
+    every Codex launch print a deprecation warning, even when the stable
+    feature is already enabled.
+    """
+    config_path = config_path or (Path.home() / ".codex" / "config.toml")
+    try:
+        content = config_path.read_text() if config_path.exists() else ""
+    except OSError:
+        return False
+
+    updated, changed = _remove_features_table_key(content, DEPRECATED_HOOKS_FEATURE)
+    if not changed:
+        return False
+
+    try:
+        config_path.write_text(updated)
+    except OSError:
+        return False
+    return True
+
+
+def _features_table_has_key(content: str, key: str) -> bool:
+    """Return True if ``key`` is set directly under the ``[features]`` table."""
+    in_features = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_features = stripped == "[features]"
+            continue
+        if in_features and _is_toml_key_assignment(stripped, key):
+            return True
+    return False
+
+
+def _remove_features_table_key(content: str, key: str) -> "tuple[str, bool]":
+    """Remove a simple key assignment from the ``[features]`` table."""
+    in_features = False
+    changed = False
+    kept: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_features = stripped == "[features]"
+            kept.append(line)
+            continue
+        if in_features and _is_toml_key_assignment(stripped, key):
+            changed = True
+            continue
+        kept.append(line)
+    if not changed:
+        return content, False
+    return "\n".join(kept).rstrip() + "\n", True
+
+
+def _is_toml_key_assignment(stripped_line: str, key: str) -> bool:
+    if not stripped_line or stripped_line.startswith("#"):
+        return False
+    lhs, sep, _rhs = stripped_line.partition("=")
+    return bool(sep) and lhs.strip() == key
 
 
 def _suppress_unstable_warning() -> None:
