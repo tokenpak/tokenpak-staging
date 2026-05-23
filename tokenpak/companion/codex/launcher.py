@@ -19,6 +19,7 @@ from .state_lock import _codex_state_db_path, _format_lock_report, _state_lock_h
 
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
+_SKIP_LOCK_ENV_VAR = "TOKENPAK_CODEX_SKIP_STATE_LOCK_PREFLIGHT"
 _TRUTHY = {"1", "true", "yes"}
 
 
@@ -49,19 +50,35 @@ def _maybe_inject_bypass_flag(
     return [_BYPASS_FLAG, *args]
 
 
+def _skip_lock_preflight_enabled(env: dict[str, str] | None = None) -> bool:
+    """Return True when the user opts out of the state-lock preflight."""
+    src = env if env is not None else os.environ
+    return src.get(_SKIP_LOCK_ENV_VAR, "").strip().lower() in _TRUTHY
+
+
 def _preflight_state_db_lock() -> bool:
-    """Return False with guidance when another Codex process owns the state DB."""
+    """Return False with guidance when another Codex process owns the state DB.
+
+    Skipped when ``TOKENPAK_CODEX_SKIP_STATE_LOCK_PREFLIGHT=1`` — the user
+    accepts contention risk (e.g. fleet automation with its own isolation).
+    """
+    if _skip_lock_preflight_enabled():
+        return True
+
     path = _codex_state_db_path()
     holders = _state_lock_holders(path)
     if not holders:
         return True
 
     print(
-        "tokenpak: Codex cannot start because another Codex process is using "
-        "its local state.",
+        "tokenpak: This Codex state home is locked by another process.",
         file=sys.stderr,
     )
     print(_format_lock_report(path, holders), file=sys.stderr)
+    print(
+        f"Set {_SKIP_LOCK_ENV_VAR}=1 to skip this preflight.",
+        file=sys.stderr,
+    )
     return False
 
 

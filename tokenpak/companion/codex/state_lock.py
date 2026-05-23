@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Detect Codex SQLite state database lock holders.
 
-Codex allows only one interactive process to own its state database at a time.
-This module keeps launcher and doctor diagnostics consistent without modifying
-or deleting any Codex-owned state files.
+Multiple Codex processes sharing the same CODEX_HOME will contend over
+``state_5.sqlite``. This module detects holders, classifies them as
+stale (stopped/suspended) vs likely-active (foreground), and formats
+guidance — without modifying or deleting any Codex-owned state files.
 """
 
 from __future__ import annotations
@@ -57,27 +58,61 @@ def _state_lock_holders(path: Path | None = None) -> list[_StateLockHolder]:
     return [details.get(pid, _StateLockHolder(pid=pid)) for pid in pids]
 
 
+def _classify_holders(
+    holders: list[_StateLockHolder],
+) -> tuple[list[_StateLockHolder], list[_StateLockHolder]]:
+    """Split holders into (stale, active).
+
+    Stale = process stat contains ``T`` (stopped/suspended by job control).
+    Active = everything else (running, sleeping, foreground group ``+``).
+    """
+    stale: list[_StateLockHolder] = []
+    active: list[_StateLockHolder] = []
+    for h in holders:
+        if "T" in h.stat:
+            stale.append(h)
+        else:
+            active.append(h)
+    return stale, active
+
+
 def _format_lock_report(path: Path, holders: list[_StateLockHolder]) -> str:
     """Format a user-facing state-lock diagnostic."""
+    stale, active = _classify_holders(holders)
+
     lines = [
         f"Codex state database is locked: {path}",
         "Lock holders:",
     ]
     for holder in holders:
         command = _shorten(holder.command)
+        tag = "(stopped)" if "T" in holder.stat else "(active)"
         lines.append(
             f"  pid={holder.pid} ppid={holder.ppid or '?'} "
-            f"stat={holder.stat} tty={holder.tty} cmd={command}"
+            f"stat={holder.stat} tty={holder.tty} {tag} cmd={command}"
         )
-    lines.extend(
-        [
-            "Next steps:",
-            f"  fuser -v {path}",
-            f"  lsof {path}",
-            "  Quit the active Codex TUI, or kill only stale stopped Codex sessions.",
-            f"  Do not delete {path.name}.",
-        ]
+
+    lines.append("Next steps:")
+    if stale:
+        pids = " ".join(str(h.pid) for h in stale)
+        lines.append(
+            f"  {len(stale)} stopped/suspended holder(s) detected — "
+            f"release with: kill {pids}"
+        )
+    if active:
+        lines.append(
+            "  Active Codex session detected — quit its TUI or use a "
+            "separate CODEX_HOME for parallel sessions."
+        )
+    if not stale and not active:
+        lines.append(f"  fuser -v {path}")
+        lines.append(f"  lsof {path}")
+
+    lines.append(
+        "Parallel Codex sessions require an isolated CODEX_HOME or "
+        "releasing the existing holder."
     )
+    lines.append(f"Do not delete {path.name}.")
     return "\n".join(lines)
 
 
