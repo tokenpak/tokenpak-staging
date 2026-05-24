@@ -1,308 +1,239 @@
 """Tests for telemetry collection and reporting.
 
-Covers: telemetry/collector.py, telemetry/storage.py — event collection, storage, retrieval.
+Covers: telemetry/collector.py — TelemetryCollector initialization, file processing, batching.
 """
 
+import json
 import tempfile
+import time
+from pathlib import Path
 
 import pytest
 
+from tokenpak.telemetry.collector import CollectorConfig, TelemetryCollector
+
 
 class TestTelemetryCollectorBasics:
-    """Test: TelemetryCollector initialization and basic event tracking."""
+    """Test: TelemetryCollector initialization and basic configuration."""
 
     def test_collector_initialization(self):
-        """TelemetryCollector initializes successfully."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
+        """TelemetryCollector initializes with a CollectorConfig."""
+        config = CollectorConfig()
+        collector = TelemetryCollector(config)
+        assert collector is not None
+        assert collector.config is config
 
-            # Try different initialization approaches
-            try:
-                collector = TelemetryCollector()
-            except TypeError:
-                # Constructor may have different signature
-                pytest.skip("TelemetryCollector constructor signature unclear")
-            assert collector is not None
-        except ImportError:
-            pytest.skip("TelemetryCollector not available")
+    def test_collector_default_config(self):
+        """CollectorConfig has sensible defaults."""
+        config = CollectorConfig()
+        assert config.batch_size == 10
+        assert config.batch_timeout_seconds == 5.0
+        assert config.backfill_on_start is False
+        assert "*.jsonl" in config.file_patterns
 
-    def test_collector_accepts_event(self):
-        """Collector accepts and records events."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            try:
-                collector = TelemetryCollector()
-            except TypeError:
-                pytest.skip("TelemetryCollector constructor signature unclear")
-
-            event = {
-                "event_type": "completion",
-                "model": "claude-sonnet-4-6",
-                "tokens": 100,
-            }
-            # Should accept event without error
-            try:
-                collector.record_event(event)
-            except AttributeError:
-                pytest.skip("TelemetryCollector.record_event not available")
-        except ImportError:
-            pytest.skip("TelemetryCollector not available")
+    def test_collector_custom_config(self):
+        """TelemetryCollector accepts custom config values."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = CollectorConfig(
+                watch_paths=[Path(tmpdir)],
+                batch_size=5,
+                batch_timeout_seconds=2.0,
+            )
+            collector = TelemetryCollector(config)
+            assert collector.config.batch_size == 5
+            assert collector.config.batch_timeout_seconds == 2.0
 
 
-class TestEventTracking:
-    """Test: Event tracking for model completions."""
+class TestFileProcessing:
+    """Test: File reading and event extraction from JSONL files."""
 
-    def test_track_completion_event(self):
-        """Track a completion event with model and token usage."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            try:
-                collector = TelemetryCollector()
-            except TypeError:
-                pytest.skip("TelemetryCollector constructor signature unclear")
-
-            try:
-                collector.record_event(
-                    {
-                        "type": "completion",
-                        "model": "claude-sonnet-4-6",
-                        "input_tokens": 100,
-                        "output_tokens": 50,
-                        "cost_cents": 15,
-                    }
-                )
-            except AttributeError:
-                pytest.skip("Event tracking not yet available")
-        except ImportError:
-            pytest.skip("TelemetryCollector not available")
-
-    def test_track_error_event(self):
-        """Track an error event."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            try:
-                collector = TelemetryCollector()
-            except TypeError:
-                pytest.skip("TelemetryCollector constructor signature unclear")
-
-            try:
-                collector.record_event(
-                    {
-                        "type": "error",
-                        "error_type": "rate_limit",
-                        "model": "claude-sonnet-4-6",
-                    }
-                )
-            except AttributeError:
-                pytest.skip("Event tracking not yet available")
-        except ImportError:
-            pytest.skip("TelemetryCollector not available")
-
-
-class TestTelemetryStorage:
-    """Test: Telemetry data persistence and retrieval."""
-
-    def test_events_are_persisted(self):
-        """Events recorded to collector are persisted."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                # Record event in first collector instance
-                collector1 = TelemetryCollector(db_path=tmpdir)
-                collector1.record_event(
-                    {
-                        "type": "completion",
-                        "model": "claude-sonnet-4-6",
-                        "tokens": 100,
-                    }
-                )
-
-                # Create second instance and verify data persists
-                collector2 = TelemetryCollector(db_path=tmpdir)
-                # Should have access to persisted data
-                assert collector2 is not None
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Event storage not yet available")
-
-    def test_events_can_be_queried(self):
-        """Events can be retrieved and queried."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                # Record some events
-                for i in range(5):
-                    collector.record_event(
-                        {
-                            "type": "completion",
-                            "model": "claude-sonnet-4-6",
-                            "tokens": 100 + i,
-                        }
-                    )
-
-                # Should be able to query events
-                events = collector.get_events()
-                assert events is not None
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Event querying not yet available")
-
-
-class TestTelemetryAggregation:
-    """Test: Aggregation and rollup of telemetry data."""
-
-    def test_calculate_total_tokens(self):
-        """Aggregate token usage across events."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                events = [
-                    {"type": "completion", "tokens": 100},
-                    {"type": "completion", "tokens": 200},
-                    {"type": "completion", "tokens": 150},
-                ]
+    def test_process_jsonl_file(self):
+        """Collector reads events from a JSONL file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Write a JSONL file with events
+            jsonl_path = Path(tmpdir) / "events.jsonl"
+            events = [
+                {"type": "completion", "model": "claude-sonnet-4-6", "tokens": 100},
+                {"type": "completion", "model": "gpt-4-turbo", "tokens": 200},
+            ]
+            with open(jsonl_path, "w") as f:
                 for evt in events:
-                    collector.record_event(evt)
+                    f.write(json.dumps(evt) + "\n")
 
-                # Should be able to get total tokens
-                total = collector.get_total_tokens()
-                if total is not None:
-                    assert total > 0
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Token aggregation not yet available")
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            collector._process_file(jsonl_path)
 
-    def test_calculate_total_cost(self):
-        """Aggregate cost across events."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
+            assert len(collector.pending_events) == 2
+            assert collector.pending_events[0]["type"] == "completion"
+            assert collector.pending_events[1]["tokens"] == 200
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                events = [
-                    {"type": "completion", "cost_cents": 10},
-                    {"type": "completion", "cost_cents": 20},
-                    {"type": "completion", "cost_cents": 15},
-                ]
-                for evt in events:
-                    collector.record_event(evt)
+    def test_process_file_tracks_position(self):
+        """Collector tracks file position to avoid re-reading."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jsonl_path = Path(tmpdir) / "events.jsonl"
+            with open(jsonl_path, "w") as f:
+                f.write(json.dumps({"type": "completion", "tokens": 100}) + "\n")
 
-                # Should calculate total cost
-                total_cost = collector.get_total_cost()
-                if total_cost is not None:
-                    assert total_cost >= 0
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Cost aggregation not yet available")
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            collector._process_file(jsonl_path)
+            assert len(collector.pending_events) == 1
+
+            # Append more data and process again
+            with open(jsonl_path, "a") as f:
+                f.write(json.dumps({"type": "completion", "tokens": 200}) + "\n")
+            collector._process_file(jsonl_path)
+
+            # Should only have added the new event
+            assert len(collector.pending_events) == 2
+
+    def test_process_file_skips_invalid_json(self):
+        """Collector skips lines that are not valid JSON."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jsonl_path = Path(tmpdir) / "events.jsonl"
+            with open(jsonl_path, "w") as f:
+                f.write(json.dumps({"type": "completion", "tokens": 100}) + "\n")
+                f.write("this is not json\n")
+                f.write(json.dumps({"type": "error", "code": 429}) + "\n")
+
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            collector._process_file(jsonl_path)
+
+            # Should have 2 valid events, skipping the bad line
+            assert len(collector.pending_events) == 2
+
+    def test_process_file_skips_blank_lines(self):
+        """Collector skips blank lines in JSONL files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jsonl_path = Path(tmpdir) / "events.jsonl"
+            with open(jsonl_path, "w") as f:
+                f.write(json.dumps({"type": "completion"}) + "\n")
+                f.write("\n")
+                f.write("   \n")
+                f.write(json.dumps({"type": "error"}) + "\n")
+
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            collector._process_file(jsonl_path)
+
+            assert len(collector.pending_events) == 2
 
 
-class TestTelemetryMetrics:
-    """Test: Metric calculations (averages, rates, etc.)."""
+class TestBackfill:
+    """Test: Backfill reads all existing files on startup."""
 
-    def test_average_tokens_per_event(self):
-        """Calculate average tokens per event."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
+    def test_backfill_reads_existing_files(self):
+        """Backfill processes all matching files in watch paths."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create two JSONL files
+            for name in ["a.jsonl", "b.jsonl"]:
+                path = Path(tmpdir) / name
+                with open(path, "w") as f:
+                    f.write(json.dumps({"type": "completion", "source": name}) + "\n")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                tokens_list = [100, 200, 150, 250]
-                for tokens in tokens_list:
-                    collector.record_event(
-                        {
-                            "type": "completion",
-                            "tokens": tokens,
-                        }
-                    )
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            # Monkeypatch _flush_batch to avoid HTTP calls
+            collector._flush_batch = lambda force=False: None
+            collector.backfill()
 
-                avg = collector.get_average_tokens_per_event()
-                if avg is not None:
-                    expected_avg = sum(tokens_list) / len(tokens_list)
-                    assert abs(avg - expected_avg) < 1
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Metric calculation not yet available")
+            assert len(collector.pending_events) == 2
 
-    def test_model_distribution(self):
-        """Get breakdown of events by model."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
+    def test_backfill_ignores_non_matching_files(self):
+        """Backfill skips files that don't match file_patterns."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a matching and a non-matching file
+            matching = Path(tmpdir) / "events.jsonl"
+            with open(matching, "w") as f:
+                f.write(json.dumps({"type": "completion"}) + "\n")
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                models = ["claude-sonnet-4-6", "gpt-4-turbo", "claude-sonnet-4-6"]
-                for model in models:
-                    collector.record_event(
-                        {
-                            "type": "completion",
-                            "model": model,
-                            "tokens": 100,
-                        }
-                    )
+            non_matching = Path(tmpdir) / "readme.txt"
+            with open(non_matching, "w") as f:
+                f.write("not a jsonl file\n")
 
-                distribution = collector.get_model_distribution()
-                if distribution is not None:
-                    assert isinstance(distribution, dict)
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Model distribution not yet available")
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            collector._flush_batch = lambda force=False: None
+            collector.backfill()
+
+            assert len(collector.pending_events) == 1
+
+
+class TestStateManagement:
+    """Test: State file persistence for crash recovery."""
+
+    def test_state_file_save_and_load(self):
+        """Collector saves and loads file state across restarts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_file = Path(tmpdir) / "state.json"
+            jsonl_path = Path(tmpdir) / "events.jsonl"
+            with open(jsonl_path, "w") as f:
+                f.write(json.dumps({"type": "completion"}) + "\n")
+
+            # First collector processes the file
+            config1 = CollectorConfig(
+                watch_paths=[Path(tmpdir)],
+                state_file=state_file,
+            )
+            collector1 = TelemetryCollector(config1)
+            collector1._process_file(jsonl_path)
+            collector1._save_state()
+
+            assert state_file.exists()
+
+            # Second collector loads the state
+            config2 = CollectorConfig(
+                watch_paths=[Path(tmpdir)],
+                state_file=state_file,
+            )
+            collector2 = TelemetryCollector(config2)
+
+            # Should have loaded file states from the state file
+            assert len(collector2.file_states) > 0
 
 
 class TestEdgeCases:
     """Test: Edge cases in telemetry handling."""
 
-    def test_zero_token_event(self):
-        """Events with zero tokens are handled gracefully."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
+    def test_empty_file(self):
+        """Collector handles empty files gracefully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jsonl_path = Path(tmpdir) / "empty.jsonl"
+            jsonl_path.touch()
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                collector.record_event(
-                    {
-                        "type": "completion",
-                        "tokens": 0,
-                    }
-                )
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Event recording not available")
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+            collector._process_file(jsonl_path)
 
-    def test_missing_optional_fields(self):
-        """Events with missing optional fields are accepted."""
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
+            assert len(collector.pending_events) == 0
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-                # Minimal event with only required type
-                collector.record_event({"type": "completion"})
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Event recording not available")
+    def test_nonexistent_watch_path(self):
+        """Collector handles nonexistent watch paths without crashing."""
+        config = CollectorConfig(
+            watch_paths=[Path("/nonexistent/path/that/does/not/exist")],
+        )
+        collector = TelemetryCollector(config)
+        collector._flush_batch = lambda force=False: None
+        # Backfill should not crash on missing paths
+        collector.backfill()
+        assert len(collector.pending_events) == 0
 
     def test_many_events_performance(self):
-        """Recording many events doesn't degrade performance."""
-        import time
-
-        try:
-            from tokenpak.telemetry.collector import TelemetryCollector
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                collector = TelemetryCollector(db_path=tmpdir)
-
-                start = time.time()
+        """Processing many events from a file doesn't degrade performance."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jsonl_path = Path(tmpdir) / "large.jsonl"
+            with open(jsonl_path, "w") as f:
                 for i in range(100):
-                    collector.record_event(
-                        {
-                            "type": "completion",
-                            "model": f"model_{i % 3}",
-                            "tokens": 100 + i,
-                        }
-                    )
-                elapsed = time.time() - start
+                    f.write(json.dumps({"type": "completion", "tokens": i}) + "\n")
 
-                # Should handle 100 events in < 1s
-                assert elapsed < 1.0
-        except (ImportError, AttributeError, TypeError):
-            pytest.skip("Event recording not available")
+            config = CollectorConfig(watch_paths=[Path(tmpdir)])
+            collector = TelemetryCollector(config)
+
+            start = time.time()
+            collector._process_file(jsonl_path)
+            elapsed = time.time() - start
+
+            assert elapsed < 1.0
+            assert len(collector.pending_events) == 100
