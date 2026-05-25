@@ -4,6 +4,14 @@ All notable changes to TokenPak are documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Prompt Packing wrapper (Available Now).** New `PromptPacker` / `PromptPackingService` / `PromptPackingResult` surface in `tokenpak.compression`. Orchestrates the existing compression pipeline and context-pack compiler, producing a TIP-conformant `Pak` with full compression metadata. Import path: `from tokenpak.compression import PromptPacker, PromptPackingService, PromptPackingResult`.
+
+---
+
 ## [v1.5.6] — 2026-05-11
 
 ### Repository
