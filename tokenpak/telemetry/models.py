@@ -298,12 +298,12 @@ class Cost:
 
 
 # ---------------------------------------------------------------------------
-# Phase 7C: Context Capsule
+# Phase 7C: Context Pak (renamed from ContextCapsule in v1.6.0 — TPT-07)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class ContextCapsule:
+class ContextPak:
     """Structured wrapper for a compressed context payload.
 
     Produced by the Context Composer before prompt injection. Contains the
@@ -344,3 +344,21 @@ class ContextCapsule:
         if self.budget_tokens == 0:
             return 0.0
         return min(1.0, self.actual_tokens / self.budget_tokens)
+
+
+# ---------------------------------------------------------------------------
+# PEP 562 module-level __getattr__ — backward-compat aliases (TPT-07)
+# ---------------------------------------------------------------------------
+
+
+def __getattr__(name: str):
+    if name == "ContextCapsule":
+        import warnings
+
+        warnings.warn(
+            "ContextCapsule is deprecated; use ContextPak. Removal target: v2.0.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return ContextPak
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -204,8 +204,8 @@ class RollupsComputeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class CapsuleResponse(BaseModel):
-    """Capsule (snapshot) response."""
+class PakResponse(BaseModel):
+    """Pak (snapshot) response."""
 
     status: str = "ok"
     capsule: Dict[str, Any] = Field(default_factory=dict)
@@ -257,3 +257,21 @@ class TelemetryRefreshResponse(BaseModel):
 
     status: str = "ok"
     refresh: TelemetryRefreshDetail = Field(default_factory=TelemetryRefreshDetail)
+
+
+# ---------------------------------------------------------------------------
+# PEP 562 module-level __getattr__ — backward-compat aliases (TPT-07)
+# ---------------------------------------------------------------------------
+
+
+def __getattr__(name: str):
+    if name == "CapsuleResponse":
+        import warnings
+
+        warnings.warn(
+            "CapsuleResponse is deprecated; use PakResponse. Removal target: v2.0.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return PakResponse
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

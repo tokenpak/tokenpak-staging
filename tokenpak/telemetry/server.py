@@ -19,7 +19,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Res
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class CapsuleBody(BaseModel):
+class PakBody(BaseModel):
     """Request body for POST /v1/capsule."""
 
     budget_tokens: int = Field(..., ge=1)
@@ -42,7 +42,7 @@ from .pipeline import PipelineResult, TelemetryPipeline
 from .pricing import PricingCatalog
 from .response_models import (
     AgentsResponse,
-    CapsuleResponse,
+    PakResponse,
     ModelsResponse,
     PricingResponse,
     ProvidersResponse,
@@ -637,15 +637,15 @@ def create_app(
     # Phase 7C: Capsule endpoint
     # -----------------------------------------------------------------------
 
-    @app.post("/v1/capsule", response_model=CapsuleResponse)
-    async def build_capsule(body: CapsuleBody):
+    @app.post("/v1/capsule", response_model=PakResponse)
+    async def build_capsule(body: PakBody):
         """Build a ContextCapsule from segments within a token budget."""
         try:
             import dataclasses
 
-            from tokenpak.companion.capsules import CapsuleBuilder
+            from tokenpak.companion.capsules import PakBuilder
 
-            builder = CapsuleBuilder()
+            builder = PakBuilder()
             capsule = builder.build(  # type: ignore[attr-defined]
                 segments=body.segments,
                 budget_tokens=body.budget_tokens,
@@ -1069,3 +1069,20 @@ def create_app(
 
 # NOTE: Auto-app creation disabled during testing
 # app = create_app()
+
+
+# ---------------------------------------------------------------------------
+# PEP 562 module-level __getattr__ — backward-compat aliases (TPT-07)
+# ---------------------------------------------------------------------------
+
+def __getattr__(name: str):
+    if name == "CapsuleBody":
+        import warnings
+
+        warnings.warn(
+            "CapsuleBody is deprecated; use PakBody. Removal target: v2.0.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return PakBody
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

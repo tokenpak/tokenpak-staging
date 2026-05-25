@@ -4,6 +4,25 @@ All notable changes to TokenPak are documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Capsule -> Pak terminology rename (TPT-07).** Core classes renamed to Pak-family names:
+  - `CapsuleBuilder` -> `PakBuilder` (in `tokenpak.companion.capsules.builder`)
+  - `CapsuleResponse` -> `PakResponse` (in `tokenpak.telemetry.response_models`)
+  - `CapsuleBody` -> `PakBody` (in `tokenpak.telemetry.server`)
+  - `ContextCapsule` -> `ContextPak` (in `tokenpak.telemetry.models`)
+  - New convenience namespace: `tokenpak.companion.paks` re-exports `Pak`, `PakBuilder`, `PakStore`, `MemoryPak`, `HandoffPak`
+  - New canonical proxy module: `tokenpak.proxy.pak_builder` (replaces `tokenpak.proxy.capsule_builder`)
+
+### Deprecated
+
+- `CapsuleBuilder`, `CapsuleResponse`, `CapsuleBody`, `ContextCapsule` — old names emit `DeprecationWarning` when accessed. Removal target: v2.0.0.
+- `tokenpak.proxy.capsule_builder` module — importing it emits `DeprecationWarning`. Use `tokenpak.proxy.pak_builder` instead. Removal target: v2.0.0.
+
+---
+
 ## [v1.5.6] — 2026-05-11
 
 ### Repository

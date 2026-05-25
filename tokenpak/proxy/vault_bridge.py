@@ -468,10 +468,10 @@ def _init_singletons() -> None:
         # --- Capsule Builder ---
         try:
             from tokenpak.companion.capsules.builder import (
-                CapsuleBuilder as _CapsuleBuilder,  # type: ignore[assignment]
+                PakBuilder as _PakBuilder,  # type: ignore[assignment]
             )
 
-            _CAPSULE_BUILDER = _CapsuleBuilder(
+            _CAPSULE_BUILDER = _PakBuilder(
                 enabled=ENABLE_CAPSULE_BUILDER,
                 min_block_chars=CAPSULE_MIN_CHARS,
                 hot_window=CAPSULE_HOT_WINDOW,

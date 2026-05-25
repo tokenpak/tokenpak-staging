@@ -2,9 +2,9 @@
 tokenpak.companion.capsules.builder
 ========================
 
-Capsule Builder — context-block compression for the TokenPak proxy pipeline.
+Pak Builder — context-block compression for the TokenPak proxy pipeline.
 
-A **capsule** is a compact, structured representation of a verbose context
+A **pak** is a compact, structured representation of a verbose context
 block. The builder identifies large historical message blocks, compresses them
 deterministically, and wraps them in a capsule envelope so the model still
 receives the semantic content at reduced token cost.
@@ -21,8 +21,8 @@ Design Principles
 * **Feature-flagged** — disabled by default; opt-in via
   ``TOKENPAK_CAPSULE_BUILDER=1`` (or the ``enabled`` constructor arg).
 
-Capsule Envelope Format
------------------------
+Capsule Envelope Format (wire-frozen)
+-------------------------------------
 ::
 
     [CAPSULE id=a1b2c3d4 ratio=0.42 chars_in=1200 chars_out=504]
@@ -35,9 +35,9 @@ Usage
 -----
 ::
 
-    from tokenpak.companion.capsules.builder import CapsuleBuilder
+    from tokenpak.companion.capsules.builder import PakBuilder
 
-    builder = CapsuleBuilder()
+    builder = PakBuilder()
     new_body, stats = builder.process(body_bytes)
     # stats: {"blocks_capsulized": 3, "chars_in": 4800, "chars_out": 2016,
     #          "ratio": 0.42, "duration_ms": 2.1}
@@ -201,13 +201,13 @@ def _wrap_capsule(original: str, compressed: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CapsuleBuilder
+# PakBuilder (canonical name since v1.6.0; CapsuleBuilder alias at module bottom)
 # ---------------------------------------------------------------------------
 
 
-class CapsuleBuilder:
+class PakBuilder:
     """
-    Compress verbose historical context blocks in an LLM request payload.
+    Compress verbose historical context blocks into paks within an LLM request payload.
 
     Parameters
     ----------
@@ -218,7 +218,7 @@ class CapsuleBuilder:
         Minimum character length of a text block to qualify for compression.
     hot_window : int
         Number of trailing messages to leave untouched (the "hot window").
-        Capsule compression applies only to messages *before* this window.
+        Pak compression applies only to messages *before* this window.
     """
 
     def __init__(
@@ -372,3 +372,21 @@ class CapsuleBuilder:
         compressed = _compress_text(text)
         wrapped = _wrap_capsule(text, compressed)
         return wrapped, chars_in, len(wrapped), 1
+
+
+# ---------------------------------------------------------------------------
+# PEP 562 module-level __getattr__ — backward-compat alias (TPT-07)
+# ---------------------------------------------------------------------------
+
+
+def __getattr__(name: str):
+    if name == "CapsuleBuilder":
+        import warnings
+
+        warnings.warn(
+            "CapsuleBuilder is deprecated; use PakBuilder. Removal target: v2.0.0",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return PakBuilder
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

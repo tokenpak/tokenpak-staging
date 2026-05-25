@@ -133,9 +133,9 @@ def capsule_request_hook(
     # Run capsule builder
     t0 = time.monotonic()
     try:
-        from tokenpak.companion.capsules.builder import CapsuleBuilder
+        from tokenpak.companion.capsules.builder import PakBuilder
 
-        builder = CapsuleBuilder(enabled=True)
+        builder = PakBuilder(enabled=True)
         new_body, stats = builder.process(body)
 
         duration_ms = (time.monotonic() - t0) * 1000
