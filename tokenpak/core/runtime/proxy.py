@@ -288,11 +288,13 @@ def _resolve_session_id(headers, model: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-route header allowlist — real implementation (re-exported from
-# tokenpak.proxy.passthrough where the HTTP path wiring also lives).
+# Per-route header allowlist — real implementation.
+# CLAUDE_CODE_HEADER_ALLOWLIST is canonical in tokenpak.proxy.headers (single
+# frozenset). LEGACY_HEADER_ALLOWLIST + _classify_route live in
+# tokenpak.proxy.passthrough alongside the HTTP-path wiring.
 # ---------------------------------------------------------------------------
+from tokenpak.proxy.headers import CLAUDE_CODE_HEADER_ALLOWLIST  # noqa: F401
 from tokenpak.proxy.passthrough import (  # noqa: F401
-    CLAUDE_CODE_HEADER_ALLOWLIST,
     LEGACY_HEADER_ALLOWLIST,
     _classify_route,
 )

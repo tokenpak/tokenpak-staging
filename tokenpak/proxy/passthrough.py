@@ -39,23 +39,14 @@ from typing import Dict, Optional, Set, Tuple
 # These mirror the WS-path allowlist tuple onto the HTTP path as a per-route
 # allowlist. LEGACY_HEADER_ALLOWLIST must never gain new entries — legacy
 # traffic must produce exactly the same forwarded headers as today (bit-for-bit).
-# CLAUDE_CODE_HEADER_ALLOWLIST extends it with Claude Code-specific headers.
+# CLAUDE_CODE_HEADER_ALLOWLIST lives in tokenpak.proxy.headers (canonical
+# frozenset); do not redeclare it here.
 
 LEGACY_HEADER_ALLOWLIST: tuple = (
     "x-api-key",
     "authorization",
     "anthropic-version",
     "anthropic-beta",
-)
-
-CLAUDE_CODE_HEADER_ALLOWLIST: tuple = (
-    "x-api-key",
-    "authorization",
-    "anthropic-version",
-    "anthropic-beta",
-    "anthropic-dangerous-direct-browser-access",
-    "x-claude-code-session-id",
-    "user-agent",
 )
 
 
