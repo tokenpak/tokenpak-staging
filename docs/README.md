@@ -25,6 +25,7 @@ Welcome to the TokenPak docs. Start here, then dive into specifics.
 | [Architecture](architecture.md) | System design and compression pipeline |
 | [Compression](compression.md) | How compression works, modes, recipes |
 | [Cache System](cache.md) | LRU cache, vault registry, change detection |
+| [Vault Scheduling](vault-scheduling.md) | Register directories, reindex on demand, deprecate agent-side cron |
 | [Telemetry](telemetry.md) | Cost tracking, privacy model, data retention |
 
 ## Full Index
