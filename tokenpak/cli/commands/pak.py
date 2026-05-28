@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``tokenpak pak`` CLI subcommand (Std 32 §1.3 row 5, Beta 1).
+"""``tokenpak pak`` CLI subcommand (the MultiPak Pro design row 5, Beta 1).
 
 Subcommands:
     create  <dir> --output       Package a directory into a Pak file (OSS)
@@ -52,7 +52,7 @@ def build_pak_parser(sub: Any) -> None:
         "pak",
         help="Inspect, export, import Pak files (MultiPak Pro Phase 1)",
         description=(
-            "MultiPak Pro Phase 1 OSS surface (Std 32). Read-only Vault Pak "
+            "MultiPak Pro Phase 1 OSS surface (the MultiPak Pro design). Read-only Vault Pak "
             "operations work without Pro; other Pak subtypes require the "
             "tokenpak-paid daemon."
         ),

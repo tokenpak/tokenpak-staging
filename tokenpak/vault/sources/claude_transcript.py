@@ -1,6 +1,6 @@
 """Claude Code transcript source adapter — Phase 0 / OSS.
 
-Walks ``~/.claude/projects/<project-slug>/<session>.jsonl`` and emits one
+Walks this host's Claude Code session-transcript files (``*.jsonl`` under the per-project Claude Code directory) and emits one
 block per session into the vault BM25 index.  Blocks are tagged
 ``source_type='claude_transcript'`` so the proxy search response can label
 transcript hits separately from filesystem vault docs.
@@ -20,7 +20,7 @@ Phase 1 / Pro note
 ------------------
 A downstream miner that extracts decisions, incidents, standards-touches,
 and handoff-worthy facts into PAKPlan-shaped records belongs in
-``tokenpak-paid`` per Std 25 §9.3 + Std 32 §5.2, after the scorer ships.
+``tokenpak-paid`` per the Pro tier architecture + the Pro scoring layer, after the scorer ships.
 **This module emits no PAKPlan records.**
 """
 

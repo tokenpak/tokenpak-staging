@@ -4503,7 +4503,7 @@ def main():
         "deactivate",
         "init",
         "monitor",
-        # Beta 1 verb families (TIP, features, PAKPlan preview, Std 33 home)
+        # Beta 1 verb families (TIP, features, PAKPlan preview, the TokenPak home-directory standard home)
         "tip",
         "features",
         "pakplan",
@@ -4642,7 +4642,7 @@ def main():
         if not getattr(args, "week", False) and not getattr(args, "month", False):
             pass  # cmd_cost already defaults to "daily" when neither flag set
 
-    # Honor explicit non-zero return codes from handlers. Beta-1 Aya-found
+    # Honor explicit non-zero return codes from handlers. Beta-1 QA-found
     # regression: handlers like cmd_pak_create and cmd_pak_import returned
     # 1 on error but the dispatcher dropped the value, so callers in
     # `set -e` scripts saw exit 0 even after a printed error. Handlers
@@ -5898,7 +5898,7 @@ def cmd_lock_renew(args):
 
 
 def _build_pak_parser(sub):
-    """Register the ``tokenpak pak`` subcommand (MultiPak Pro Phase 1, Std 32 §1.3).
+    """Register the ``tokenpak pak`` subcommand (MultiPak Pro Phase 1, the MultiPak Pro design).
 
     Implementation lives in :mod:`tokenpak.cli.commands.pak` to keep the
     handler module isolated and grow naturally as Phase 2+ adds
@@ -5934,7 +5934,7 @@ def _build_pakplan_parser(sub):
     The PAKPlan foundation (recall schema + reason/risk registries +
     ordering hints) shipped at PR #184 / ``43bfb58e2c``. Beta 1 OSS
     surface is preview/explain/report only — scoring + capture pipeline
-    remain Pro per Std 32 §5.2.
+    remain Pro per the Pro scoring layer.
     """
     from tokenpak.cli.commands.pakplan import build_pakplan_parser
 
@@ -5942,13 +5942,13 @@ def _build_pakplan_parser(sub):
 
 
 def _build_home_parser(sub):
-    """Register the ``tokenpak home`` subcommand (Beta 1, Std 33 + Packet C).
+    """Register the ``tokenpak home`` subcommand (Beta 1, the TokenPak home-directory standard + Packet C).
 
     Subcommands: ``path | init | validate | explain | migrate``.
     Implementation lives in :mod:`tokenpak.cli.commands.home_cmd`. The
     verb is ``home`` rather than ``config`` because the existing
     ``config`` parser owns proxy config.yaml lifecycle commands; this
-    family owns the Std 33 TokenPak home directory.
+    family owns the the TokenPak home-directory standard TokenPak home directory.
     """
     from tokenpak.cli.commands.home_cmd import build_home_parser
 

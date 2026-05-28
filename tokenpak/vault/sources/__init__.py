@@ -8,6 +8,6 @@ separately from filesystem-vault docs.
 Phase 0 / OSS adapters:
 
 * ``claude_transcript`` — index this host's Claude Code session transcripts
-  under ``~/.claude/projects/*/*.jsonl``.  Off by default; enable with
+  under the user's Claude Code projects directory (``*/*.jsonl`` session files).  Off by default; enable with
   ``TOKENPAK_INDEX_CLAUDE_TRANSCRIPTS=1``.
 """

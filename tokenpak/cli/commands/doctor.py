@@ -67,7 +67,7 @@ def run_doctor(
     counts = {"pass": 0, "warn": 0, "fail": 0}
     fixes: list[tuple[str, Path]] = []
     checks: list[dict] = []
-    # Std 33: resolve through _paths so doctor reports the canonical
+    # the TokenPak home-directory standard: resolve through _paths so doctor reports the canonical
     # home (~/.tpk/) when present, and surfaces the legacy fallback
     # when the user hasn't run `tokenpak home migrate` yet.
     from tokenpak import _paths
@@ -96,7 +96,7 @@ def run_doctor(
                 for line in detail.splitlines():
                     print(f"         {line}")
 
-    # === Check 0: Std 33 home boundary ==========================================
+    # === Check 0: the TokenPak home-directory standard home boundary ==========================================
     # Reports the resolved TokenPak home + flags legacy paths that should
     # be migrated. Cheap, side-effect-free, runs before everything else
     # so the operator sees the boundary state up front.
@@ -1053,10 +1053,10 @@ def run_doctor(
                 detail="TMUX env var not set; no concurrent-access advisory needed.",
             )
 
-        # === CCI-12: 8-point Claude Code operational health checks ================
+        # === 8-point Claude Code operational health checks ================
         if not output_json:
             print()
-            print("── Claude Code operational checks (CCI-12) ─────")
+            print("── Claude Code operational checks ─────")
         from .doctor_claude_code import run_claude_code_checks
         cc_fail_count, cc_results = run_claude_code_checks(output_json=output_json, verbose=verbose)
         for result in cc_results:

@@ -26,7 +26,7 @@ beta is gated by:
    pre-authorization per `feedback_initiative_completion_versioning`).
 3. Production ed25519 public-key rotation in the Pro daemon
    (currently a placeholder).
-4. Final Packet J polish + Aya smoke pass on the release artifact.
+4. Final Packet J polish + a smoke pass on the release artifact.
 
 If you received a link to this codebase from outside the internal
 tester pool, the public announcement hasn't happened and you should
@@ -45,7 +45,7 @@ embedding is tracked as a follow-up packet.
 
 Beta 1 OSS Spend Guard surfaces warnings and reports. Hard-stop
 enforcement (the "actually block the request" path) is Pro Local
-only per Std 29 + Std 25.
+only per the spend-guard contract + the Pro tier architecture.
 
 ## Setup command is two implementations
 
@@ -53,12 +53,12 @@ only per Std 29 + Std 25.
 (`cmd_setup` vs `run_setup_cmd`). Convergence is deferred to
 post-staging polish to avoid parser-rename collisions during Beta 1.
 For Beta 1 use `tokenpak home init` instead — it's the cleaner path
-for the Std 33 home boundary.
+for the the TokenPak home-directory standard home boundary.
 
 ## Doctor still references legacy paths in some checks
 
 Several diagnostic messages still print `~/.tokenpak/` even when the
-canonical `~/.tpk/` is in use. The actual *resolution* honors Std 33
+canonical `~/.tpk/` is in use. The actual *resolution* honors the TokenPak home-directory standard
 (via `tokenpak._paths`); the cosmetic strings will migrate in a
 follow-on polish pass.
 
