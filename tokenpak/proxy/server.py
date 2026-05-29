@@ -569,6 +569,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._send_json(ps.status())
             return
 
+        # Additive Codex model-list probe. Codex CLI issues
+        # `GET /v1/models?client_version=...` on startup; without this it 404s
+        # and prints an error. Return a minimal OpenAI-shaped list. Does not
+        # affect any other GET path (Anthropic/OpenAI passthrough is via `http`
+        # absolute-URL GETs, never bare `/v1/models`).
+        if path.split("?")[0] == "/v1/models":
+            self._send_json({
+                "object": "list",
+                "data": [
+                    {"id": "gpt-5.5", "object": "model", "owned_by": "openai"},
+                ],
+            })
+            return
+
         # Reject new proxied requests while shutting down
         if ps.shutdown.is_shutting_down and path.startswith("http"):
             self._send_503_shutdown()
@@ -723,9 +737,32 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def _is_codex_v1_responses_request(self) -> bool:
+        """True iff this is `/v1/responses` carrying a ChatGPT OAuth JWT.
+
+        Additive Codex detection: only the exact `/v1/responses` path (query
+        string stripped) with an `Authorization: Bearer eyJ...` JWT matches.
+        API-key (`sk-...`) callers return False and fall through to the standard
+        `/v1/` routing, so existing OpenAI-API behaviour is unchanged.
+        """
+        if self.path.split("?")[0] != "/v1/responses":
+            return False
+        try:
+            from .adapters.openai_codex_responses_adapter import (
+                _is_chatgpt_oauth_token,
+            )
+        except Exception:
+            return False
+        auth = self.headers.get("Authorization") or self.headers.get("authorization") or ""
+        return _is_chatgpt_oauth_token(auth)
+
     def do_POST(self):
         if not self._enforce_proxy_auth():
             return
+        # Reset the per-request Codex /v1/responses routing flag so it is never
+        # stale across keep-alive-reused handler instances. Set True only by the
+        # additive ChatGPT-OAuth /v1/responses branch below.
+        self._codex_v1_responses = False
         ps = self.server.proxy_server
 
         # App-level /tpk/v1/* POST endpoints — reserved for future compress,
@@ -788,6 +825,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             ps = self.server.proxy_server
             route = ps.router.route(self.path, dict(self.headers))
             self._proxy_to(route.full_url, "POST")
+        elif self._is_codex_v1_responses_request():
+            # Additive ChatGPT-OAuth route for `GET/POST /v1/responses`.
+            # Codex CLI configured against the proxy posts to /v1/responses with
+            # a ChatGPT OAuth JWT (eyJ...) bearer. Detected here and forwarded to
+            # the ChatGPT backend (same upstream as the existing /codex/ route);
+            # _proxy_to_inner injects the real JWT from ~/.codex/auth.json.
+            #
+            # API-key (sk-...) /v1/responses traffic returns False from
+            # _is_chatgpt_oauth_token and falls through UNCHANGED to the generic
+            # /v1/ branch below — so Claude and API-key OpenAI are unaffected.
+            self._codex_v1_responses = True
+            self._proxy_to("https://chatgpt.com/backend-api/codex/responses", "POST")
         elif self.path.startswith("/v1/"):
             ps = self.server.proxy_server
             route = ps.router.route(self.path, dict(self.headers))
@@ -862,9 +911,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         should_log = any(h in target_url for h in INTERCEPT_HOSTS)
         is_messages = "/messages" in target_url or "/chat/completions" in target_url
+        # Additive Codex /v1/responses → ChatGPT-backend route (gated by the
+        # do_POST flag). Used only to emit ONE monitor.db row after the upstream
+        # response completes; it never alters the is_messages logging path.
+        is_codex_responses = getattr(self, "_codex_v1_responses", False)
 
         content_length = int(self.headers.get("Content-Length", 0))
         body: Optional[bytes] = self.rfile.read(content_length) if content_length > 0 else None
+
+        # Codex /v1/responses → ChatGPT backend payload fixup. GATED on the
+        # per-request flag set ONLY by the additive ChatGPT-OAuth /v1/responses
+        # branch in do_POST, so the pre-existing /codex/ (OpenClaw) route and all
+        # other traffic are untouched. See codex_responses_payload_fixup for the
+        # exact (and only) transformations applied.
+        if body and getattr(self, "_codex_v1_responses", False):
+            try:
+                from .adapters.openai_codex_responses_adapter import (
+                    codex_responses_payload_fixup,
+                )
+                body = codex_responses_payload_fixup(body)
+            except Exception:
+                pass  # fail-open: fixup must never break the request
 
         model = "unknown"
         input_tokens = 0
@@ -1482,6 +1549,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # CLI it's no longer safe to retry (would cause `Unterminated
                 # string` JSON parse errors in the client's SSE reader).
                 sse_buffer = b""
+                # Bounded tail buffer for the Codex /v1/responses route so we can
+                # extract integer token counts from the final
+                # `response.completed` SSE event WITHOUT persisting any content.
+                _codex_sse_tail = b""
                 _stream_wrote_to_client = False
                 for _ustream_attempt in range(MAX_UPSTREAM_RETRIES):
                     _stream_retry = False
@@ -1546,6 +1617,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         break
                                     if should_log and is_messages:
                                         sse_buffer += chunk
+                                    elif is_codex_responses:
+                                        # Keep only a bounded tail — the usage is
+                                        # in the final response.completed event.
+                                        _codex_sse_tail = (_codex_sse_tail + chunk)[-65536:]
                     except _RETRYABLE_UPSTREAM_EXCEPTIONS:
                         # Once we've committed to writing to the client, can't retry —
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
@@ -1931,6 +2006,68 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         cost_saved=round(cost_saved, 6),
                     )
                     print(render_footer_oneline(req_stats), file=sys.stderr)
+
+            # ── Codex /v1/responses monitor row ───────────────────────────
+            # Emit ONE monitor.db row for the additive Codex route so
+            # `tokenpak status`/queries see ChatGPT-backend traffic. Kept fully
+            # separate from the is_messages logging path above. Persists integer
+            # token counts + metadata only — never any prompt/response content.
+            if is_codex_responses and ps.monitor is not None:
+                try:
+                    _cx_status = resp.status_code if "resp" in dir() else 0  # type: ignore
+                    # Model from the request body JSON (best-effort), fallback gpt-5.5.
+                    _cx_model = "gpt-5.5"
+                    try:
+                        if body:
+                            _cx_bd = json.loads(body)
+                            if isinstance(_cx_bd, dict) and _cx_bd.get("model"):
+                                _cx_model = str(_cx_bd["model"])
+                    except Exception:
+                        pass
+                    # Best-effort integer token counts from the final
+                    # `response.completed` SSE event's `response.usage`. Never
+                    # persists raw content; on any failure logs zeros.
+                    _cx_in = 0
+                    _cx_out = 0
+                    try:
+                        _tail = _codex_sse_tail if "_codex_sse_tail" in dir() else b""
+                        if _tail:
+                            for _line in _tail.split(b"\n"):
+                                _line = _line.strip()
+                                if not _line.startswith(b"data:"):
+                                    continue
+                                _payload = _line[5:].strip()
+                                if not _payload or _payload == b"[DONE]":
+                                    continue
+                                try:
+                                    _ev = json.loads(_payload)
+                                except Exception:
+                                    continue
+                                _usage = None
+                                if isinstance(_ev, dict):
+                                    _resp_obj = _ev.get("response")
+                                    if isinstance(_resp_obj, dict):
+                                        _usage = _resp_obj.get("usage")
+                                    if _usage is None:
+                                        _usage = _ev.get("usage")
+                                if isinstance(_usage, dict):
+                                    _cx_in = int(_usage.get("input_tokens") or 0)
+                                    _cx_out = int(_usage.get("output_tokens") or 0)
+                    except Exception:
+                        _cx_in = 0
+                        _cx_out = 0
+                    ps.monitor.log(
+                        model=_cx_model,
+                        input_tokens=_cx_in,
+                        output_tokens=_cx_out,
+                        cost=0.0,
+                        latency_ms=latency_ms,
+                        status_code=_cx_status,
+                        endpoint=target_url or "/v1/responses",
+                        user_id=getattr(self, "_tokenpak_user_id", "") or "",
+                    )
+                except Exception:
+                    pass  # DB errors must never break the request
 
             # ── Circuit breaker: record outcome ───────────────────────────
             if _cb_registry is not None and _cb_provider is not None:
