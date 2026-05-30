@@ -220,3 +220,25 @@ jobs:
       - name: Run headline benchmark
         run: |
           python -m pytest tests/benchmarks/test_headline_claim.py -v -s
+
+  release-gate-snapshots:
+    name: Release-gate snapshot ratchets (PR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (all extras for canonical snapshot reproduction)
+        # MUST mirror release.yml's release-gate install EXACTLY or
+        # api-snapshot-check fires phantom-removal noise (Std 30 §3 R3
+        # install-shape parity — the local/CI symbol-set skew that bit
+        # the v1.7.0 release).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,full,serve,telemetry,tokens,otel]"
+          pip install python-multipart
+      - name: release-gate-check (api + workflow-steps + telemetry + taxonomy)
+        run: make release-gate-check
+      - name: migration-multihop (Std 30 §14.1 / Std 10 §E9)
+        run: make migration-multihop
