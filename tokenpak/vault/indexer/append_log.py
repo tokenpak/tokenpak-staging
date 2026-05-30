@@ -224,9 +224,89 @@ _writer_segment: str | None = None
 _writer_dir: Path | None = None
 
 
+# --- Group-commit fsync (design OQ-1 remediation) --------------------------
+#
+# Per-record fsync(2) is correct but slow: on spinning-rust/EBS-class storage
+# it dominates write latency (measured p50 ≈ 7.5 ms vs the §1.4 2 ms budget).
+# OQ-1 sanctions group commit: writers append under the lock and return
+# immediately; a background daemon thread fsync()s the live segment on a fixed
+# cadence. This bounds the crash-loss window to one interval (default 100 ms)
+# and keeps per-write latency at os.write() cost. The fsync runs OUTSIDE the
+# writer lock (fsync is safe to call concurrently with O_APPEND os.write on the
+# same fd), so the flush never blocks the hot path.
+#
+# Durability modes (per write_record fsync param):
+#   fsync=True   -> force a synchronous fsync on this record (strict durability)
+#   fsync=False  -> never fsync (caller owns durability)
+#   fsync=None   -> group commit (the default; OQ-1 remediated default)
+
+DEFAULT_GROUP_COMMIT_INTERVAL_MS: Final[int] = 100
+
+_group_interval_s: float = DEFAULT_GROUP_COMMIT_INTERVAL_MS / 1000.0
+_group_thread: threading.Thread | None = None
+_group_dirty: bool = False
+_group_stop = threading.Event()
+_group_cv = threading.Condition()
+
+
+def configure_group_commit(*, interval_ms: int) -> None:
+    """Set the group-commit fsync cadence (bounds the crash-loss window)."""
+    global _group_interval_s
+    if interval_ms <= 0:
+        raise ValueError("interval_ms must be positive")
+    _group_interval_s = interval_ms / 1000.0
+
+
+def _group_flush_loop() -> None:
+    while not _group_stop.is_set():
+        with _group_cv:
+            # Wake on the cadence; the dirty flag is consulted after waking.
+            _group_cv.wait(timeout=_group_interval_s)
+        flush_now()
+
+
+def _ensure_group_thread() -> None:
+    global _group_thread
+    if _group_thread is not None and _group_thread.is_alive():
+        return
+    _group_stop.clear()
+    _group_thread = threading.Thread(
+        target=_group_flush_loop,
+        name="append-log-group-commit",
+        daemon=True,
+    )
+    _group_thread.start()
+
+
+def flush_now() -> bool:
+    """Force an fsync of the live segment if there are pending writes.
+
+    Returns True if an fsync was issued. Safe to call from any thread and
+    from shutdown hooks. The fd is captured under the writer lock but the
+    fsync itself runs outside it so writers are never blocked by the sync.
+    """
+    global _group_dirty
+    with _writer_lock:
+        if not _group_dirty or _writer_fd is None:
+            return False
+        fd = _writer_fd
+        _group_dirty = False
+    try:
+        os.fsync(fd)
+        return True
+    except OSError:
+        # fd may have been closed by a concurrent segment roll / reset; the
+        # next write reopens and re-marks dirty, so dropping this sync is safe.
+        return False
+
+
 def _close_cached_fd() -> None:
     global _writer_fd, _writer_segment, _writer_dir
     if _writer_fd is not None:
+        try:
+            os.fsync(_writer_fd)  # durability barrier before dropping the fd
+        except OSError:
+            pass
         try:
             os.close(_writer_fd)
         except OSError:
@@ -261,9 +341,22 @@ def _open_segment(segment_dir: Path, now: datetime) -> tuple[int, str]:
 
 
 def reset_writer_state() -> None:
-    """Drop the cached segment fd. Used by tests + benchmark setup."""
+    """Stop group commit, flush, and drop the cached segment fd.
+
+    Used by tests + benchmark setup and the atexit hook. A final fsync runs
+    inside ``_close_cached_fd`` so no acknowledged write is lost on shutdown.
+    """
+    global _group_thread, _group_dirty
+    _group_stop.set()
+    with _group_cv:
+        _group_cv.notify_all()
+    thread = _group_thread
+    if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+        thread.join(timeout=2.0)
+    _group_thread = None
     with _writer_lock:
         _close_cached_fd()
+        _group_dirty = False
 
 
 def write_record(
@@ -273,7 +366,7 @@ def write_record(
     payload: dict[str, Any],
     *,
     segment_dir: Path | None = None,
-    fsync: bool = True,
+    fsync: bool | None = None,
     now: datetime | None = None,
 ) -> WriteResult:
     """Append one record. Atomic per Linux ``O_APPEND`` ≤ ``PIPE_BUF``.
@@ -282,8 +375,14 @@ def write_record(
     (design §1.2 fail-closed). Caller in the proxy hot path is required by
     AC-impl-2 to trap and not propagate.
 
-    Setting ``fsync=False`` is for benchmarking only — production callers
-    take the default per OQ-1.
+    Durability (design OQ-1):
+      - ``fsync=None`` (default) — group commit: the record is appended and a
+        background thread fsync()s on a fixed cadence (``configure_group_commit``,
+        default 100 ms). Per-write latency is os.write() cost; the crash-loss
+        window is bounded by one interval.
+      - ``fsync=True`` — force a synchronous fsync on this record (strict
+        durability; the slow per-record path).
+      - ``fsync=False`` — never fsync (caller owns durability; benchmarking).
     """
     record = build_record(
         event_type,
@@ -301,20 +400,28 @@ def write_record(
     if now is None:
         now = datetime.now(timezone.utc)
 
+    global _group_dirty
+    fsynced = False
     with _writer_lock:
         fd, filename = _open_segment(actual_dir, now)
         # A single os.write up to PIPE_BUF is atomic vs concurrent O_APPEND
         # writers on Linux (design §1.2).
         os.write(fd, blob)
-        if fsync:
+        if fsync is True:
             os.fsync(fd)
+            fsynced = True
+        elif fsync is None:
+            # Group commit: mark dirty; the background thread will fsync.
+            _group_dirty = True
+    if fsync is None:
+        _ensure_group_thread()
 
     return WriteResult(
         event_id=record["event_id"],
         payload_sha256=record["payload_sha256"],
         record_bytes=size,
         segment_path=actual_dir / filename,
-        fsynced=fsync,
+        fsynced=fsynced,
     )
 
 
