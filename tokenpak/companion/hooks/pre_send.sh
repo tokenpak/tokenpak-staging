@@ -164,6 +164,7 @@ derive_title() {
 # marker is written only when the title is actually emitted, so a first
 # prompt that gets blocked still earns its title on the next allow.
 TITLE_JSON=""
+TITLE_TEXT=""
 TITLE_STATE_DIR=""
 TITLE_STATE=""
 if [ "${TOKENPAK_COMPANION_DYNAMIC_TITLE:-1}" != "0" ] \
@@ -191,6 +192,7 @@ if [ "${TOKENPAK_COMPANION_DYNAMIC_TITLE:-1}" != "0" ] \
                 # double-quote, in that order) yields a well-formed string.
                 SHORT_ESC=$(printf '%s' "$SHORT" | sed -e 's/[[:cntrl:]]//g' -e 's/\\/\\\\/g' -e 's/"/\\"/g')
                 TITLE_JSON=$(printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","sessionTitle":"📦 %s"}}' "$SHORT_ESC")
+                TITLE_TEXT="$SHORT"
             fi
         fi
     fi
@@ -201,7 +203,9 @@ fi
 emit_title() {
     [ -n "$TITLE_JSON" ] || return 0
     mkdir -p "$TITLE_STATE_DIR" 2>/dev/null
-    : > "$TITLE_STATE" 2>/dev/null
+    # Store the title TEXT (not an empty marker): it doubles as the fire-once
+    # flag AND PakLine's O(1) task source ($JOURNAL_DIR/titles/<session_id>).
+    printf '%s\n' "$TITLE_TEXT" > "$TITLE_STATE" 2>/dev/null
     printf '%s\n' "$TITLE_JSON"
 }
 
