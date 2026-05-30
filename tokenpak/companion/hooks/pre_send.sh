@@ -13,15 +13,197 @@ INPUT=$(cat)
 # Quick exit if companion disabled
 [ "${TOKENPAK_COMPANION_ENABLED:-1}" = "0" ] && exit 0
 
-# Parse JSON fields — try jq first (fastest), fall back to sed (portable)
+# Parse JSON fields — try jq first (fastest), fall back to sed (portable).
+# A single jq pass extracts every field we need (transcript, session, prompt)
+# so the 200k-byte payload is parsed once, not once per field. ``@sh``
+# shell-quotes the values for safe ``eval`` (handles quotes/newlines/spaces).
+PROMPT=""
 if command -v jq >/dev/null 2>&1; then
-    TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
-    SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    eval "$(echo "$INPUT" | jq -r '@sh "TRANSCRIPT=\(.transcript_path // "") SESSION_ID=\(.session_id // "") PROMPT=\(.prompt // "")"' 2>/dev/null)"
 else
-    # Portable sed extraction (no -P flag needed)
+    # Portable sed extraction (no -P flag needed). PROMPT is jq-only (the
+    # dynamic title is skipped without jq).
     TRANSCRIPT=$(echo "$INPUT" | sed -n 's/.*"transcript_path"\s*:\s*"\([^"]*\)".*/\1/p')
     SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p')
 fi
+
+# derive_title — turn a raw prompt into a short SEMANTIC task title (not a
+# prefix truncation). Strips boilerplate openers, detects a leading task verb
+# → task noun, keeps the first significant topic words, recases known tokens,
+# caps at ~40 chars on a word boundary. Pure-bash word processing + 2 external
+# calls (tr, one sed) to stay within the hook budget. Returns non-zero (no
+# output) when nothing meaningful survives, so the caller can fall back.
+derive_title() {
+    local raw="$1" core verb="" out="" outlen=0 w n=0 lim=4 pretty add changed
+    # Cleanup is PURE BASH (zero subshells, ~3ms): lowercase, newlines/tabs →
+    # space, drop apostrophes, keep first sentence, collapse/trim, then
+    # loop-strip boilerplate openers + leading articles. (Exotic control chars
+    # are stripped JSON-side by the caller's escape pass.)
+    core="${raw,,}"
+    core="${core//$'\n'/ }"; core="${core//$'\t'/ }"; core="${core//$'\r'/ }"
+    core="${core//\'/}"
+    core="${core%%[.?!]*}"
+    while [[ "$core" == *"  "* ]]; do core="${core//  / }"; done
+    core="${core# }"; core="${core% }"
+    core="${core//the following /}"
+    changed=1
+    while [ "$changed" = 1 ]; do
+        changed=0
+        case "$core" in
+            "please "*) core="${core#please }"; changed=1 ;;
+            "kindly "*) core="${core#kindly }"; changed=1 ;;
+            "just "*) core="${core#just }"; changed=1 ;;
+            "simply "*) core="${core#simply }"; changed=1 ;;
+            "so "*) core="${core#so }"; changed=1 ;;
+            "ok "*) core="${core#ok }"; changed=1 ;;
+            "okay "*) core="${core#okay }"; changed=1 ;;
+            "hey "*|"hi "*|"well "*|"now "*) core="${core#* }"; changed=1 ;;
+            "can you "*) core="${core#can you }"; changed=1 ;;
+            "could you "*) core="${core#could you }"; changed=1 ;;
+            "would you "*) core="${core#would you }"; changed=1 ;;
+            "will you "*) core="${core#will you }"; changed=1 ;;
+            "id like you to "*) core="${core#id like you to }"; changed=1 ;;
+            "id would like you to "*) core="${core#id would like you to }"; changed=1 ;;
+            "i would like to "*) core="${core#i would like to }"; changed=1 ;;
+            "i want you to "*) core="${core#i want you to }"; changed=1 ;;
+            "i need you to "*) core="${core#i need you to }"; changed=1 ;;
+            "help me to "*) core="${core#help me to }"; changed=1 ;;
+            "help me "*) core="${core#help me }"; changed=1 ;;
+            "lets "*) core="${core#lets }"; changed=1 ;;
+            "here is "*) core="${core#here is }"; changed=1 ;;
+            "here are "*) core="${core#here are }"; changed=1 ;;
+            "heres "*) core="${core#heres }"; changed=1 ;;
+            "give me "*) core="${core#give me }"; changed=1 ;;
+            "get me "*) core="${core#get me }"; changed=1 ;;
+            "i need "*) core="${core#i need }"; changed=1 ;;
+            "i want "*) core="${core#i want }"; changed=1 ;;
+            "take a look at "*) core="${core#take a look at }"; changed=1 ;;
+            "look at "*) core="${core#look at }"; changed=1 ;;
+            "consider "*) core="${core#consider }"; changed=1 ;;
+            "what do you think about "*) core="${core#what do you think about }"; changed=1 ;;
+            "what do you think of "*) core="${core#what do you think of }"; changed=1 ;;
+            "what do you think "*) core="${core#what do you think }"; changed=1 ;;
+            "i believe "*) core="${core#i believe }"; changed=1 ;;
+            "i think "*) core="${core#i think }"; changed=1 ;;
+            "i feel like "*) core="${core#i feel like }"; changed=1 ;;
+            "i feel "*) core="${core#i feel }"; changed=1 ;;
+            "i guess "*) core="${core#i guess }"; changed=1 ;;
+            "we cant "*) core="${core#we cant }"; changed=1 ;;
+            "we cannot "*) core="${core#we cannot }"; changed=1 ;;
+            "we could not "*) core="${core#we could not }"; changed=1 ;;
+            "we need to "*) core="${core#we need to }"; changed=1 ;;
+            "why cant "*) core="${core#why cant }"; changed=1 ;;
+            "why not "*) core="${core#why not }"; changed=1 ;;
+            "the "*) core="${core#the }"; changed=1 ;;
+            "an "*) core="${core#an }"; changed=1 ;;
+            "a "*) core="${core#a }"; changed=1 ;;
+            "this "*|"that "*|"these "*|"those "*) core="${core#* }"; changed=1 ;;
+            "our "*|"your "*|"my "*|"its "*) core="${core#* }"; changed=1 ;;
+        esac
+    done
+    case "$core" in
+        analyze\ *)     verb="analysis";       core="${core#analyze }" ;;
+        analyse\ *)     verb="analysis";       core="${core#analyse }" ;;
+        review\ *)      verb="review";         core="${core#review }" ;;
+        fix\ *)         verb="fix";            core="${core#fix }" ;;
+        debug\ *)       verb="fix";            core="${core#debug }" ;;
+        implement\ *)   verb="implementation"; core="${core#implement }" ;;
+        draft\ *)       verb="draft";          core="${core#draft }" ;;
+        write\ *)       verb="draft";          core="${core#write }" ;;
+        compare\ *)     verb="comparison";     core="${core#compare }" ;;
+        investigate\ *) verb="investigation";  core="${core#investigate }" ;;
+        refactor\ *)    verb="refactor";       core="${core#refactor }" ;;
+        design\ *)      verb="design";         core="${core#design }" ;;
+        update\ *)      verb="update";         core="${core#update }" ;;
+        revise\ *)      verb="revision";       core="${core#revise }" ;;
+        explain\ *)     verb="explanation";    core="${core#explain }" ;;
+        create\ *)      verb="setup";          core="${core#create }" ;;
+        add\ *)         verb="setup";          core="${core#add }" ;;
+    esac
+    [ -n "$verb" ] && lim=3
+    for w in $core; do
+        case "$w" in
+            the|a|an|this|that|these|those|for|to|of|on|in|at|by|with|and|or|but|is|are|was|were|be|been|being|do|not|it|i|we|you|they|them|our|your|my|set|just|response|from|about|into|make|made|get|as|so|if|then|following|some|any|more|updated|new) continue ;;
+        esac
+        case "$w" in
+            pakline) pretty="PakLine" ;; tokenpak) pretty="TokenPak" ;;
+            ci) pretty="CI" ;; pr) pretty="PR" ;; api) pretty="API" ;;
+            json) pretty="JSON" ;; tui) pretty="TUI" ;; mcp) pretty="MCP" ;;
+            ttl) pretty="TTL" ;; osc) pretty="OSC" ;; tip) pretty="TIP" ;;
+            pak) pretty="PAK" ;; oauth) pretty="OAuth" ;;
+            *) pretty="$w" ;;
+        esac
+        add=$(( ${#pretty} + 1 ))
+        [ $(( outlen + add )) -gt 40 ] && break
+        out="$out $pretty"; outlen=$(( outlen + add )); n=$(( n + 1 ))
+        [ "$n" -ge "$lim" ] && break
+    done
+    out="${out# }"
+    if [ -n "$verb" ] && [ -n "$out" ] && [ $(( outlen + ${#verb} + 1 )) -le 40 ]; then
+        out="$out $verb"
+    fi
+    [ -n "$out" ] || return 1
+    printf '%s' "${out^}"
+}
+
+# ── Native dynamic session title (compute only; emitted on allow paths) ─
+# On the first prompt of a session, rename the Claude Code session to a
+# short, prompt-derived title using Claude Code's NATIVE mechanism: the
+# UserPromptSubmit ``hookSpecificOutput.sessionTitle`` field (documented as
+# "same effect as /rename"). No OSC-0, no terminal escapes — Claude Code owns
+# the title bar, session picker, and terminal title, and repaints on its own
+# render loop (which is why manual OSC-0 never survived). Fires exactly once
+# per session via a state marker; Claude Code's own aiTitle auto-naming may
+# take over afterward. Requires jq so the emitted JSON is always well-formed
+# — a malformed hook payload could disrupt prompt submission. Disable with
+# TOKENPAK_COMPANION_DYNAMIC_TITLE=0.
+#
+# A UserPromptSubmit hook may emit at most one JSON object, so the title is
+# computed here but only emitted (via emit_title) on the allow exits — never
+# on the budget-block path, whose decision JSON takes precedence. The state
+# marker is written only when the title is actually emitted, so a first
+# prompt that gets blocked still earns its title on the next allow.
+TITLE_JSON=""
+TITLE_STATE_DIR=""
+TITLE_STATE=""
+if [ "${TOKENPAK_COMPANION_DYNAMIC_TITLE:-1}" != "0" ] \
+   && [ -n "$SESSION_ID" ] \
+   && [ -n "$PROMPT" ]; then
+    TITLE_STATE_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}/titles"
+    TITLE_STATE="$TITLE_STATE_DIR/$SESSION_ID"
+    if [ ! -f "$TITLE_STATE" ]; then
+        if [ -n "$PROMPT" ]; then
+            # Semantic title (verb/topic phrase). Fall back to a cleaned
+            # leading phrase only if the heuristic yields nothing usable.
+            SHORT=$(derive_title "$PROMPT") || SHORT=""
+            if [ -z "$SHORT" ]; then
+                SHORT=$(printf '%s' "$PROMPT" \
+                    | tr '\n\r\t' '   ' \
+                    | tr -d '\000-\037' \
+                    | sed -e 's/  */ /g' -e 's/^ //' -e 's/ *$//' \
+                    | cut -c1-40 \
+                    | sed -E 's/ +[^ ]*$//')
+            fi
+            if [ -n "$SHORT" ]; then
+                # Build the payload with printf to avoid a second jq in the
+                # hot path. SHORT is already control-char-free, so escaping
+                # the only remaining JSON-significant bytes (backslash then
+                # double-quote, in that order) yields a well-formed string.
+                SHORT_ESC=$(printf '%s' "$SHORT" | sed -e 's/[[:cntrl:]]//g' -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+                TITLE_JSON=$(printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","sessionTitle":"📦 %s"}}' "$SHORT_ESC")
+            fi
+        fi
+    fi
+fi
+
+# emit_title — print the one-time native rename payload on an allow exit and
+# mark the session so it fires exactly once. No-op when no title is pending.
+emit_title() {
+    [ -n "$TITLE_JSON" ] || return 0
+    mkdir -p "$TITLE_STATE_DIR" 2>/dev/null
+    : > "$TITLE_STATE" 2>/dev/null
+    printf '%s\n' "$TITLE_JSON"
+}
 
 # Token estimation from file size (instant via stat)
 TOKENS=0
@@ -30,7 +212,7 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     TOKENS=$((FILE_SIZE / 4))
 fi
 
-[ "$TOKENS" -eq 0 ] && exit 0
+[ "$TOKENS" -eq 0 ] && { emit_title; exit 0; }
 
 # Format token count with thousands separators (pure bash)
 TOKENS_FMT=$(printf '%d' "$TOKENS" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,//')
@@ -78,4 +260,6 @@ if [ "${TOKENPAK_COMPANION_SHOW_COST:-1}" != "0" ]; then
     printf 'tokenpak: ~%s tokens  est $%s%s\n' "$TOKENS_FMT" "$COST_DOLLARS" "$BUDGET_TAG" >&2
 fi
 
+# Allow path: emit the one-time native session rename (no-op if none pending).
+emit_title
 exit 0
