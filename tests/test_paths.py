@@ -137,11 +137,16 @@ def test_under_does_not_create_directory(fake_home):
 
 
 # ---------------------------------------------------------------------------
-# P-PATHS-01a invariant: "dispatch" rejected until 01b lands.
+# dispatch/ subdir (Std 33 §3 amendment, approved 2026-05-20)
 # ---------------------------------------------------------------------------
 
 
-def test_under_rejects_dispatch_until_01b(fake_home):
-    """P-PATHS-01a: dispatch/ is not in the enum yet; added by P-PATHS-01b."""
-    with pytest.raises(ValueError):
-        _paths.under("dispatch")
+def test_under_allows_dispatch(fake_home):
+    """dispatch/ is a canonical layout subdir."""
+    assert _paths.under("dispatch") == _paths.resolved_home() / "dispatch"
+
+
+def test_under_allows_dispatch_multi_segment(fake_home):
+    assert _paths.under("dispatch", "runs.db") == (
+        _paths.resolved_home() / "dispatch" / "runs.db"
+    )

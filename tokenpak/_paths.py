@@ -52,6 +52,11 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
         "templates",
         "companion",
         "pro",
+        # dispatch/ — TokenPak Dispatch runtime state (runs.db, artifacts/,
+        # tmp/, overlays/). Added per the Std 33 §3 dispatch-subdir amendment
+        # (proposals/2026-05-19-std-33-dispatch-subdir-amendment.md, approved
+        # 2026-05-20).
+        "dispatch",
     }
 )
 
