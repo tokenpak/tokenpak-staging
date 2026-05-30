@@ -287,6 +287,11 @@ def _write_settings(config: CompanionConfig) -> str:
         f"bash {session_name_hook}" if session_name_hook.is_file() else None
     )
 
+    # PakLine statusline (live telemetry line). Same defensive
+    # missing-script pattern as the hooks above.
+    pakline_script = Path(__file__).parent / "statusline" / "pakline.sh"
+    pakline_cmd = f"bash {pakline_script}" if pakline_script.is_file() else None
+
     settings: dict = {}
     user_settings_path = Path.home() / ".claude" / "settings.json"
     if user_settings_path.is_file():
@@ -360,6 +365,17 @@ def _write_settings(config: CompanionConfig) -> str:
                     ],
                 }
             ]
+
+    # Install PakLine statusline — ADDITIVE ONLY. If the user already has a
+    # ``statusLine`` configured (here or in their global settings), theirs
+    # wins and we never overwrite it. Only injected when the bundled script
+    # is present on this host.
+    if config.hooks_enabled and pakline_cmd is not None:
+        if "statusLine" not in settings:
+            settings["statusLine"] = {
+                "type": "command",
+                "command": pakline_cmd,
+            }
 
     path = config.run_dir / "settings.json"
     path.write_text(json.dumps(settings, indent=2))

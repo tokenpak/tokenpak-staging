@@ -129,6 +129,39 @@ def test_write_settings_has_mcp_permission(tmp_path):
     assert any("tokenpak-companion" in p for p in allow_list)
 
 
+def test_write_settings_installs_pakline_statusline(tmp_path):
+    """PakLine statusLine is installed when the user has none."""
+    cfg = CompanionConfig(journal_dir=tmp_path / "journal", hooks_enabled=True)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text("{}")
+    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
+        with patch.object(Path, "home", return_value=home):
+            path = launcher._write_settings(cfg)
+    settings = json.loads(Path(path).read_text())
+    assert settings["statusLine"]["type"] == "command"
+    assert settings["statusLine"]["command"].endswith("pakline.sh")
+
+
+def test_write_settings_preserves_user_statusline(tmp_path):
+    """Install is ADDITIVE — an existing user statusLine is never overwritten."""
+    cfg = CompanionConfig(journal_dir=tmp_path / "journal", hooks_enabled=True)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": "my-own-line"}})
+    )
+    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
+        with patch.object(Path, "home", return_value=home):
+            path = launcher._write_settings(cfg)
+    settings = json.loads(Path(path).read_text())
+    assert settings["statusLine"]["command"] == "my-own-line"
+
+
 # ---------------------------------------------------------------------------
 # _write_system_prompt
 # ---------------------------------------------------------------------------
