@@ -41,6 +41,14 @@ TERM_RESOLVER_MAX_BYTES: int = _cfg(
     "features.term_resolver_max_bytes", 512, "TOKENPAK_TERM_RESOLVER_MAX_BYTES", int
 )
 
+# cacheable-injection retargeting — split injected context into a
+# stable (cacheable) layer + a volatile (uncached) layer on proxy/SDK/API routes.
+# Enabled by default; opt out with TOKENPAK_CACHEABLE_INJECTION=0 to fall
+# back to the legacy single combined block.
+CACHEABLE_INJECTION_ENABLED: bool = _cfg(
+    "features.cacheable_injection", True, "TOKENPAK_CACHEABLE_INJECTION", bool
+)
+
 # Capsule builder feature flags
 ENABLE_CAPSULE_BUILDER: bool = _cfg(
     "features.capsule_builder", False, "TOKENPAK_CAPSULE_BUILDER_ENABLED", bool
@@ -639,32 +647,40 @@ def inject_vault_context(
         )
     _t_bm25_ms = (time.perf_counter() - _t3) * 1000
 
-    # Combine glossary + vault injection if both present
-    combined_injection = ""
-    combined_tokens = 0
-    if glossary_injection and injection_text:
-        combined_injection = glossary_injection + "\n\n" + injection_text
-        combined_tokens = glossary_tokens + tokens_used
-    elif glossary_injection:
-        combined_injection = glossary_injection
-        combined_tokens = glossary_tokens
-    elif injection_text:
-        combined_injection = injection_text
-        combined_tokens = tokens_used
+    # two-layer cacheable-injection split:
+    #   stable  layer = glossary / canonical term cards — durable across same-topic
+    #                   turns, so it can join the cacheable system-prompt prefix.
+    #   volatile layer = per-turn BM25 retrieval — query-derived, must stay uncached.
+    stable_layer = glossary_injection or ""
+    volatile_layer = injection_text or ""
 
-    if not combined_injection:
+    if not stable_layer and not volatile_layer:
         return body_bytes, 0, []
 
-    # Apply skeleton extraction to code blocks in injection text (70-90% reduction on code)
+    # Skeleton extraction (70-90% reduction on code) applies to the VOLATILE
+    # retrieval layer only; the stable glossary layer stays canonical and
+    # deterministic so its cache hash is stable turn-to-turn (determinism + cross-turn stability).
     _t4 = time.perf_counter()
-    if SKELETON_ENABLED:
-        combined_injection = _inject_skeleton_into_blocks(combined_injection)
-        combined_tokens = count_tokens(combined_injection)
+    if SKELETON_ENABLED and volatile_layer:
+        volatile_layer = _inject_skeleton_into_blocks(volatile_layer)
     _t_skeleton_ms = (time.perf_counter() - _t4) * 1000
 
+    combined_tokens = (glossary_tokens if stable_layer else 0)
+    combined_tokens += count_tokens(volatile_layer) if volatile_layer else 0
+
     _t5 = time.perf_counter()
+    cache_trace: dict = {}
     try:
-        new_body = active_adapter.inject_system_context(body_bytes, combined_injection)
+        if CACHEABLE_INJECTION_ENABLED:
+            new_body = active_adapter.inject_system_context(
+                body_bytes,
+                stable_text=stable_layer,
+                volatile_text=volatile_layer,
+                trace_out=cache_trace,
+            )
+        else:
+            combined = "\n\n".join(p for p in (stable_layer, volatile_layer) if p)
+            new_body = active_adapter.inject_system_context(body_bytes, combined)
     except Exception:
         return body_bytes, 0, []
     _t_inject_ms = (time.perf_counter() - _t5) * 1000
@@ -679,5 +695,9 @@ def inject_vault_context(
         "inject_body": round(_t_inject_ms, 1),
         "total": round(_total_ms, 1),
     }
+    # cacheable-injection attribution trace (hashes only — no raw
+    # prompt content). cache_origin ∈ {proxy, client, unknown}.
+    if cache_trace:
+        SESSION["cacheable_injection_last"] = cache_trace
 
     return new_body, combined_tokens, source_refs
