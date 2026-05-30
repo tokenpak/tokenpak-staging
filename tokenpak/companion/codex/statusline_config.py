@@ -23,21 +23,24 @@ Design rules (intentionally boring):
 - **Stdlib only.**  Read via ``tomllib`` (3.11+) / ``tomli`` (3.10) for
   detection; no TOML *writer* dependency.
 
-EXPERIMENTAL ITEM IDS — NOT MERGE-READY.  The defaults below are the most
-defensible tokens evidenced WITHOUT a live confirmation:
-- ``model`` / ``git-branch`` appear in Codex's own ``terminal_title`` item list
-  and are backtick-quoted in the binary.
-- ``codex doctor --strict-config`` does NOT validate ``[tui]`` item values (it
-  accepts a deliberately-bogus item), so it cannot confirm the enum.
-- The authoritative ``status_line`` item enum is built by serde at runtime (not
-  a static string) and is only surfaced by the interactive ``/status`` setup —
-  which was blocked during drafting (live session held the state lock; the TUI
-  stalls under a synthetic PTY).
-Earlier snake_case guesses (``model_name``, ``token_count``, ``rate_limit`` …)
-are now *disconfirmed* — the real tokens are kebab/short forms.  Candidate
-superset to confirm against a live ``/status`` setup before merge:
-``model, status, cwd, directory, usage, git-branch, task-progress, project,
-thread, app-name, spinner``.  Correct the two constants below once confirmed.
+VALIDATION-PENDING ITEM IDS — NOT MERGE-READY.  The defaults below are
+internet-supported (OpenAI Codex slash-command docs + openai/codex issues
+#13660 / #22120 examples), which use kebab-case IDs like
+``model-with-reasoning``, ``current-dir``, ``git-branch``, ``context-used``,
+``context-window-size``.  Earlier snake_case guesses (``model_name``,
+``token_count``, ``rate_limit`` …) are *disconfirmed*.
+
+Still NOT locally confirmed: ``codex doctor --strict-config`` does not validate
+``[tui]`` item values, and the authoritative enum is surfaced only by the
+interactive ``/statusline`` / ``/title`` setup (blocked during drafting by the
+live state lock + synthetic-PTY stall).  Confirm against a real session and
+correct the two constants below before removing this label / merging.
+
+SAFE-FALLBACK NOTE: this installer is additive (never overwrites a user's keys),
+and Codex itself **silently omits** status/title items it cannot render (see
+openai/codex#22120) rather than erroring — so an incorrect ID degrades to a
+missing item, it cannot break the user's TUI.  That graceful-omit behavior is
+the merge safety net, but it is not a substitute for confirming the IDs.
 """
 
 from __future__ import annotations
@@ -55,18 +58,26 @@ except ModuleNotFoundError:  # 3.10
     except ModuleNotFoundError:  # pragma: no cover - detection degrades gracefully
         _toml = None  # type: ignore
 
-# --- Native item sets (EXPERIMENTAL — confirm against live `/status`; see docstring) ---
+# --- Native item sets (VALIDATION-PENDING — internet-supported; see docstring) ---
 # Built-in Codex status items only.  No freeform text, no 📦, no semantic task
 # text — those are not supported natively and are explicitly out of scope.
-# Conservatively limited to the two highest-confidence tokens until the enum is
-# confirmed; widen to the documented candidate superset post-confirmation.
+# Source: OpenAI Codex slash-command docs + openai/codex#13660 / #22120 examples.
+# Confirm against a live `/statusline` + `/title` session before removing the
+# VALIDATION-PENDING label / merging.
 DEFAULT_STATUS_ITEMS: list[str] = [
-    "model",
+    "model-with-reasoning",
+    "current-dir",
     "git-branch",
+    "context-remaining",
+    "context-used",
+    "context-window-size",
 ]
 DEFAULT_TITLE_ITEMS: list[str] = [
-    "model",
+    "app-name",
+    "project",
     "git-branch",
+    "model",
+    "task-progress",
 ]
 
 _MANAGED_KEYS = ("status_line", "status_line_use_colors", "terminal_title")
