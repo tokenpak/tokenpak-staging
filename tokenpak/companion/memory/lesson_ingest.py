@@ -126,7 +126,7 @@ def extract_lessons(filepath: str) -> List[Dict[str, Any]]:
     return lessons
 
 
-MARKDOWN_SUFFIXES = ('.md', '.markdown')
+_MARKDOWN_SUFFIXES = ('.md', '.markdown')
 
 
 def _record_lessons(lessons: List[Dict[str, Any]], db: DecisionMemoryDB, source: str) -> int:
@@ -179,7 +179,7 @@ def ingest_from_dir(directory: str, db: DecisionMemoryDB) -> int:
     total_ingested = 0
     for root, _dirs, files in os.walk(directory):
         for filename in sorted(files):
-            if filename.lower().endswith(MARKDOWN_SUFFIXES):
+            if filename.lower().endswith(_MARKDOWN_SUFFIXES):
                 filepath = os.path.join(root, filename)
                 try:
                     lessons = extract_lessons(filepath)
