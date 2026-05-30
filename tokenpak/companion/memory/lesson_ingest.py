@@ -136,7 +136,7 @@ def _record_lessons(lessons: List[Dict[str, Any]], db: DecisionMemoryDB, source:
     (``lesson_<timestamp>_<task_id>``) so callers that later dedupe by query
     hash can do so.  NOTE: ``DecisionMemoryDB.record`` currently always inserts
     (it does not upsert on the query hash), so re-running ingestion re-inserts —
-    this matches the existing fleet-path behavior and is intentionally not
+    this matches the existing vault-path behavior and is intentionally not
     changed here (out of this packet's scope).
     """
     count = 0
@@ -157,9 +157,9 @@ def ingest_from_dir(directory: str, db: DecisionMemoryDB) -> int:
     Recursively ingest lessons from any directory of Markdown notes.
 
     This is the generic "bring your own knowledge base" path: it does NOT
-    require the fleet ``03_AGENT_PACKS/<agent>/memory/`` schema.  Every
+    require the vault ``03_AGENT_PACKS/<agent>/memory/`` schema.  Every
     ``.md`` / ``.markdown`` file under ``directory`` (at any depth) is parsed
-    with the same :func:`extract_lessons` parser used for fleet logs.
+    with the same :func:`extract_lessons` parser used for vault logs.
 
     Missing, unreadable, or empty directories return ``0`` without raising,
     preserving the companion's fail-open posture.  Use :func:`ingest_sources`
@@ -202,7 +202,7 @@ def ingest_sources(
     Orchestrates both ingestion paths so a fresh user gets a self-explaining
     result instead of a bare ``0``:
 
-    - ``vault_dir`` (optional): fleet-schema ingestion via
+    - ``vault_dir`` (optional): vault-schema ingestion via
       :func:`ingest_from_vault` (backwards-compatible default).
     - ``memory_dirs`` (optional): generic per-directory ingestion via
       :func:`ingest_from_dir` ("bring your own knowledge base").
@@ -221,11 +221,11 @@ def ingest_sources(
         vp = os.path.expanduser(vault_dir)
         packs = os.path.join(vp, '03_AGENT_PACKS')
         if not os.path.isdir(packs):
-            sources.append({"path": vault_dir, "kind": "fleet-vault",
-                            "ingested": 0, "reason": "missing-or-not-fleet-schema"})
+            sources.append({"path": vault_dir, "kind": "vault",
+                            "ingested": 0, "reason": "missing-or-not-vault-schema"})
         else:
             n = ingest_from_vault(vault_dir, db)
-            sources.append({"path": vault_dir, "kind": "fleet-vault", "ingested": n,
+            sources.append({"path": vault_dir, "kind": "vault", "ingested": n,
                             "reason": "ok" if n else "present-but-no-matching-files"})
             total += n
 
@@ -256,7 +256,7 @@ def ingest_from_vault(vault_dir: str, db: DecisionMemoryDB) -> int:
     Walk vault daily logs and ingest all lessons into the DecisionMemoryDB.
 
     Scans all files matching ``<vault_dir>/03_AGENT_PACKS/<agent>/memory/YYYY-MM-DD.md``
-    and extracts lessons, populating the database.  This is the fleet-schema
+    and extracts lessons, populating the database.  This is the vault-schema
     path; for arbitrary user note directories use :func:`ingest_from_dir`.
 
     Args:

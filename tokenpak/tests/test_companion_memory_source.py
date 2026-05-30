@@ -2,11 +2,11 @@
 """Tests for configurable generic memory-source ingestion.
 
 Covers the "bring your own knowledge base" path added so a fresh (solo) user
-can point the companion at any Markdown notes directory — without the fleet
+can point the companion at any Markdown notes directory — without the vault
 ``03_AGENT_PACKS/<agent>/memory/`` schema.
 
 Maps to the packet acceptance criteria:
-  AC#1 fleet default path still works (regression guard)
+  AC#1 vault-schema default path still works (regression guard)
   AC#2 custom memory dir ingests
   AC#3 Markdown supported (.md / .markdown)
   AC#4 missing / empty dirs fail gracefully (no crash) with distinct reasons
@@ -81,11 +81,11 @@ class TestFromEnvMemoryDirs:
 
 
 # --------------------------------------------------------------------------- #
-# AC#1 — fleet default path still works (regression guard)
+# AC#1 — vault-schema default path still works (regression guard)
 # --------------------------------------------------------------------------- #
 
 
-def test_fleet_schema_still_works(db):
+def test_vault_schema_still_works(db):
     with tempfile.TemporaryDirectory() as tmp:
         mem = Path(tmp) / "03_AGENT_PACKS" / "TestAgent" / "memory"
         mem.mkdir(parents=True)
@@ -164,16 +164,16 @@ class TestIngestSources:
              tempfile.TemporaryDirectory() as notes:
             mem = Path(vault) / "03_AGENT_PACKS" / "A" / "memory"
             mem.mkdir(parents=True)
-            (mem / "2026-03-27.md").write_text("## Lessons Learned\n- fleet lesson\n")
+            (mem / "2026-03-27.md").write_text("## Lessons Learned\n- vault lesson\n")
             (Path(notes) / "n.md").write_text("## Lessons Learned\n- byo lesson\n")
             res = ingest_sources(db, vault_dir=vault, memory_dirs=[notes])
             assert res["total"] == 2
             kinds = {s["kind"] for s in res["sources"]}
-            assert kinds == {"fleet-vault", "memory-dir"}
+            assert kinds == {"vault", "memory-dir"}
             assert all(s["reason"] == "ok" for s in res["sources"])
 
-    def test_rerun_matches_fleet_path_behavior(self, db):
-        """Generic path has the SAME re-run semantics as the fleet path.
+    def test_rerun_matches_vault_path_behavior(self, db):
+        """Generic path has the SAME re-run semantics as the vault path.
 
         ``DecisionMemoryDB.record`` always inserts (no upsert on the query
         hash), so both ``ingest_from_dir`` and ``ingest_from_vault`` re-insert
@@ -188,4 +188,4 @@ class TestIngestSources:
             assert ingest_from_dir(tmp, db) == 2
             first = db.count()
             assert ingest_from_dir(tmp, db) == 2
-            assert db.count() == first + 2  # re-insert, same as fleet path
+            assert db.count() == first + 2  # re-insert, same as vault path

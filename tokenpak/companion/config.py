@@ -18,7 +18,7 @@ TOKENPAK_COMPANION_PRUNE_THRESHOLD  Token count above which pruning is suggested
 TOKENPAK_COMPANION_MEMORY_DIRS  Extra memory/knowledge directories to ingest lessons
                                 from (default: none).  OS-pathsep- or comma-separated
                                 list of directories holding your own Markdown notes —
-                                "bring your own knowledge base", no fleet/vault schema
+                                "bring your own knowledge base", no vault schema
                                 required.  ``~`` is expanded; empty entries dropped.
 TOKENPAK_COMPANION_BARE         Strip Claude Code native context (default: 0)
                                 Disables CLAUDE.md, auto memory, prompt history,
@@ -56,7 +56,7 @@ class CompanionConfig:
 
     # Generic "bring your own knowledge base" memory sources.  These are
     # directories of the user's own Markdown notes the companion ingests
-    # lessons from — distinct from the fleet vault schema and from
+    # lessons from — distinct from the vault schema and from
     # ``additionalDirectories`` filesystem-access grants (EXTRA_DIRS).
     memory_dirs: list[Path] = field(default_factory=list)
 

@@ -2060,7 +2060,7 @@ def cmd_companion(args):
     """`tokenpak companion ingest|status` — manage companion memory sources.
 
     ``ingest`` points the companion at your own Markdown notes ("bring your
-    own knowledge base") — no fleet/vault schema required. ``status`` shows
+    own knowledge base") — no special vault layout required. ``status`` shows
     the configured memory source(s).
     """
     import json as _json
@@ -2425,7 +2425,7 @@ def _build_companion_parser(sub):
         help="Manage the companion's memory sources (bring your own knowledge base)",
         description=(
             "Point the tokenpak companion at your own Markdown notes/knowledge\n"
-            "base — no fleet/vault schema required.\n\n"
+            "base — no special vault layout required.\n\n"
             "Examples:\n"
             "  tokenpak companion ingest --memory-dir ~/notes\n"
             "  tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal\n"

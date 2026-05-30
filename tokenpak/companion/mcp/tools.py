@@ -266,7 +266,7 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
         },
     }
     # Make "no lessons" self-explaining: report whether a memory source is
-    # configured at all (TOKENPAK_COMPANION_MEMORY_DIRS / fleet vault), so a
+    # configured at all (TOKENPAK_COMPANION_MEMORY_DIRS / vault), so a
     # fresh user knows why ingestion may be empty and how to point it at notes.
     if not local["config"]["memory_dirs"]:
         local["config"]["memory_source_hint"] = (
