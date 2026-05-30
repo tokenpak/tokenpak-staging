@@ -2047,10 +2047,61 @@ def cmd_codex(args):
     if forwarded and forwarded[0] == "uninstall":
         from .companion.codex.uninstall import main as uninstall_main
         sys.exit(uninstall_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "statusline":
+        from .companion.codex.statusline_config import main as statusline_main
+        sys.exit(statusline_main(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     from .companion.codex import launch
     launch(args=forwarded)
+
+
+def cmd_companion(args):
+    """`tokenpak companion ingest|status` — manage companion memory sources.
+
+    ``ingest`` points the companion at your own Markdown notes ("bring your
+    own knowledge base") — no fleet/vault schema required. ``status`` shows
+    the configured memory source(s).
+    """
+    import json as _json
+
+    from .companion.config import CompanionConfig
+    from .companion.memory.decision_memory import DecisionMemoryDB
+    from .companion.memory.lesson_ingest import ingest_sources
+
+    action = getattr(args, "companion_action", None)
+    cfg = CompanionConfig.from_env()
+
+    # CLI --memory-dir overrides the env var when provided.
+    cli_dirs = [Path(os.path.expanduser(d)) for d in (getattr(args, "memory_dir", None) or [])]
+    memory_dirs = cli_dirs or cfg.memory_dirs
+
+    if action == "status":
+        print("tokenpak companion — memory sources")
+        if memory_dirs:
+            for d in memory_dirs:
+                exists = "ok" if os.path.isdir(os.path.expanduser(str(d))) else "MISSING"
+                print(f"  memory-dir: {d}  [{exists}]")
+        else:
+            print("  (no memory dirs configured)")
+            print("  set TOKENPAK_COMPANION_MEMORY_DIRS=~/notes  or")
+            print("  run: tokenpak companion ingest --memory-dir ~/notes")
+        return 0
+
+    # default action: ingest
+    if not memory_dirs:
+        print("No memory directory given. Use --memory-dir <path> (repeatable) "
+              "or set TOKENPAK_COMPANION_MEMORY_DIRS.")
+        return 1
+    db = DecisionMemoryDB()
+    result = ingest_sources(db, memory_dirs=memory_dirs)
+    for src in result["sources"]:
+        print(f"  {src['kind'] or '-'}: {src['path']}  "
+              f"ingested={src['ingested']}  ({src['reason']})")
+    print(f"Total lessons ingested: {result['total']}")
+    if getattr(args, "json", False):
+        print(_json.dumps(result, indent=2))
+    return 0
 
 
 def cmd_test(args):
@@ -2230,6 +2281,7 @@ def _build_codex_parser(sub):
             "  tokenpak codex --install-only    # set up without launching Codex\n"
             "  tokenpak codex doctor            # verify installation\n"
             "  tokenpak codex uninstall         # reverse installation\n"
+            "  tokenpak codex statusline        # enable native status modules (additive)\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
@@ -2365,6 +2417,38 @@ def _build_test_parser(sub):
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.set_defaults(func=cmd_test)
+
+
+def _build_companion_parser(sub):
+    p = sub.add_parser(
+        "companion",
+        help="Manage the companion's memory sources (bring your own knowledge base)",
+        description=(
+            "Point the tokenpak companion at your own Markdown notes/knowledge\n"
+            "base — no fleet/vault schema required.\n\n"
+            "Examples:\n"
+            "  tokenpak companion ingest --memory-dir ~/notes\n"
+            "  tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal\n"
+            "  TOKENPAK_COMPANION_MEMORY_DIRS=~/notes tokenpak companion ingest\n"
+            "  tokenpak companion status"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    comp_sub = p.add_subparsers(dest="companion_action")
+
+    p_ing = comp_sub.add_parser(
+        "ingest", help="Ingest lessons from your Markdown notes directory(ies)")
+    p_ing.add_argument("--memory-dir", action="append", dest="memory_dir",
+                       metavar="PATH",
+                       help="Directory of Markdown notes to ingest (repeatable). "
+                            "Falls back to TOKENPAK_COMPANION_MEMORY_DIRS if omitted.")
+    p_ing.add_argument("--json", action="store_true", help="Also print a JSON result")
+    p_ing.set_defaults(func=cmd_companion)
+
+    p_st = comp_sub.add_parser("status", help="Show configured memory source(s)")
+    p_st.set_defaults(func=cmd_companion)
+
+    p.set_defaults(func=cmd_companion, companion_action="status")
 
 
 def _build_stub_parsers(sub):
@@ -2931,6 +3015,7 @@ def build_parser():
     _build_home_parser(sub)
     _build_prove_parser(sub)
     _build_test_parser(sub)
+    _build_companion_parser(sub)
     _build_telemetry_parser(sub)
 
     # --- Stub parsers for commands advertised in help/registry but not yet wired ---
@@ -4465,6 +4550,7 @@ def main():
     known_cmds = set(_ALL_COMMANDS) | {
         # also include argparse-registered commands not in groups
         "help",
+        "companion",
         "start",
         "stop",
         "restart",
