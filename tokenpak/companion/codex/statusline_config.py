@@ -23,24 +23,14 @@ Design rules (intentionally boring):
 - **Stdlib only.**  Read via ``tomllib`` (3.11+) / ``tomli`` (3.10) for
   detection; no TOML *writer* dependency.
 
-VALIDATION-PENDING ITEM IDS — NOT MERGE-READY.  The defaults below are
-internet-supported (OpenAI Codex slash-command docs + openai/codex issues
-#13660 / #22120 examples), which use kebab-case IDs like
-``model-with-reasoning``, ``current-dir``, ``git-branch``, ``context-used``,
-``context-window-size``.  Earlier snake_case guesses (``model_name``,
-``token_count``, ``rate_limit`` …) are *disconfirmed*.
+The item IDs below were confirmed against a live Codex ``/statusline`` +
+``/title`` session (Codex 0.134).  ``codex doctor --strict-config`` does NOT
+validate ``[tui]`` item values, so the interactive setup is the authority.
 
-Still NOT locally confirmed: ``codex doctor --strict-config`` does not validate
-``[tui]`` item values, and the authoritative enum is surfaced only by the
-interactive ``/statusline`` / ``/title`` setup (blocked during drafting by the
-live state lock + synthetic-PTY stall).  Confirm against a real session and
-correct the two constants below before removing this label / merging.
-
-SAFE-FALLBACK NOTE: this installer is additive (never overwrites a user's keys),
-and Codex itself **silently omits** status/title items it cannot render (see
-openai/codex#22120) rather than erroring — so an incorrect ID degrades to a
-missing item, it cannot break the user's TUI.  That graceful-omit behavior is
-the merge safety net, but it is not a substitute for confirming the IDs.
+SAFE-FALLBACK: this installer is additive (never overwrites a user's keys), and
+Codex itself **silently omits** status/title items it cannot render (see
+openai/codex#22120) rather than erroring — so an unrecognized ID degrades to a
+missing item and cannot break the user's TUI.
 """
 
 from __future__ import annotations
@@ -58,12 +48,9 @@ except ModuleNotFoundError:  # 3.10
     except ModuleNotFoundError:  # pragma: no cover - detection degrades gracefully
         _toml = None  # type: ignore
 
-# --- Native item sets (VALIDATION-PENDING — internet-supported; see docstring) ---
+# --- Native item sets (confirmed via live Codex /statusline + /title, 0.134) ---
 # Built-in Codex status items only.  No freeform text, no 📦, no semantic task
 # text — those are not supported natively and are explicitly out of scope.
-# Source: OpenAI Codex slash-command docs + openai/codex#13660 / #22120 examples.
-# Confirm against a live `/statusline` + `/title` session before removing the
-# VALIDATION-PENDING label / merging.
 DEFAULT_STATUS_ITEMS: list[str] = [
     "model-with-reasoning",
     "current-dir",
@@ -71,12 +58,13 @@ DEFAULT_STATUS_ITEMS: list[str] = [
     "context-remaining",
     "context-used",
     "context-window-size",
+    "task-progress",
 ]
 DEFAULT_TITLE_ITEMS: list[str] = [
-    "app-name",
-    "project",
+    "thread-title",
+    "project-name",
     "git-branch",
-    "model",
+    "model-with-reasoning",
     "task-progress",
 ]
 
