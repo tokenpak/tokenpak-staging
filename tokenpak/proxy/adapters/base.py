@@ -2,13 +2,50 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Callable, FrozenSet, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Mapping, Optional, Tuple
 
 from .canonical import CanonicalRequest
 
 TokenCounter = Callable[[str], int]
+
+
+# --- cacheable-injection trace helpers (shared across adapters) ---
+def cacheable_layer_hash(text: str) -> str:
+    """Deterministic short hash of an injection layer's text (cacheable-injection design).
+
+    Used to attribute the stable vs volatile injection layers without exposing
+    raw prompt content. Empty text hashes to "" so absent layers are unambiguous.
+    """
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def cacheable_fill_trace(
+    trace: Dict[str, Any],
+    stable_text: str,
+    volatile_text: str,
+    cache_origin: str,
+) -> None:
+    """Populate a cacheable-injection trace dict in place.
+
+    cache_origin ∈ {proxy, client, unknown} per the status attribution contract:
+      proxy   — TokenPak stamped cache_control on the stable layer (attributable)
+      client  — the client manages cache_control (e.g. explicit TTL); not ours
+      unknown — no cacheable placement / non-attributable
+    """
+    trace.update(
+        {
+            "stable_hash": cacheable_layer_hash(stable_text),
+            "volatile_hash": cacheable_layer_hash(volatile_text),
+            "stable_present": bool(stable_text),
+            "volatile_present": bool(volatile_text),
+            "cache_origin": cache_origin,
+        }
+    )
 
 
 class FormatAdapter(ABC):
@@ -101,17 +138,55 @@ class FormatAdapter(ABC):
             last_user = " ".join(words[:50])
         return last_user
 
-    def inject_system_context(self, body: bytes, injection_text: str) -> bytes:
+    def inject_system_context(
+        self,
+        body: bytes,
+        injection_text: Optional[str] = None,
+        *,
+        stable_text: Optional[str] = None,
+        volatile_text: Optional[str] = None,
+        trace_out: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
+        """Generic injection. Two modes:
+
+        - Legacy (positional ``injection_text``): append as a single block —
+          unchanged behavior.
+        - two-layer cacheable-injection (``stable_text`` / ``volatile_text`` keywords):
+          generic adapters have no provider cache semantics, so both layers are
+          appended as ordered text (stable before volatile) and the trace reports
+          ``cache_origin="unknown"`` (no proxy-attributable cache placement).
+        """
+        two_layer = stable_text is not None or volatile_text is not None
+        if not two_layer:
+            injection_text = injection_text or ""
+            canonical = self.normalize(body)
+            system = canonical.system
+            if isinstance(system, str):
+                canonical.system = f"{system}\n\n{injection_text}" if system else injection_text
+            elif isinstance(system, list):
+                system.append({"type": "text", "text": injection_text})
+            else:
+                canonical.system = injection_text
+            if trace_out is not None:
+                cacheable_fill_trace(trace_out, "", injection_text, cache_origin="unknown")
+            return self.denormalize(canonical)
+
+        stable_text = stable_text or ""
+        volatile_text = volatile_text or ""
         canonical = self.normalize(body)
         system = canonical.system
-
+        combined = "\n\n".join(p for p in (stable_text, volatile_text) if p)
         if isinstance(system, str):
-            canonical.system = f"{system}\n\n{injection_text}" if system else injection_text
+            canonical.system = f"{system}\n\n{combined}" if system else combined
         elif isinstance(system, list):
-            system.append({"type": "text", "text": injection_text})
+            if stable_text:
+                system.append({"type": "text", "text": stable_text})
+            if volatile_text:
+                system.append({"type": "text", "text": volatile_text})
         else:
-            canonical.system = injection_text
-
+            canonical.system = combined
+        if trace_out is not None:
+            cacheable_fill_trace(trace_out, stable_text, volatile_text, cache_origin="unknown")
         return self.denormalize(canonical)
 
     def _extract_sse_output_tokens(self, sse_bytes: bytes) -> int:

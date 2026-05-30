@@ -66,7 +66,28 @@ class PassthroughAdapter(FormatAdapter):
         fallback.update(canonical.generation)
         return json.dumps(fallback, ensure_ascii=False).encode("utf-8")
 
-    def inject_system_context(self, body: bytes, injection_text: str) -> bytes:
+    def inject_system_context(
+        self,
+        body: bytes,
+        injection_text=None,
+        *,
+        stable_text=None,
+        volatile_text=None,
+        trace_out=None,
+    ) -> bytes:
+        # Byte-preserving path: never inject, never restructure cache_control.
+        # Report a non-attributable trace so callers cannot over-claim a
+        # TokenPak cache improvement on passthrough traffic (cacheable-injection design).
+        if trace_out is not None:
+            trace_out.update(
+                {
+                    "stable_hash": "",
+                    "volatile_hash": "",
+                    "stable_present": False,
+                    "volatile_present": False,
+                    "cache_origin": "client",
+                }
+            )
         return body
 
     def get_default_upstream(self) -> str:
