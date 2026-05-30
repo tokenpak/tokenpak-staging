@@ -2047,6 +2047,9 @@ def cmd_codex(args):
     if forwarded and forwarded[0] == "uninstall":
         from .companion.codex.uninstall import main as uninstall_main
         sys.exit(uninstall_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "statusline":
+        from .companion.codex.statusline_config import main as statusline_main
+        sys.exit(statusline_main(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     from .companion.codex import launch
@@ -2230,6 +2233,7 @@ def _build_codex_parser(sub):
             "  tokenpak codex --install-only    # set up without launching Codex\n"
             "  tokenpak codex doctor            # verify installation\n"
             "  tokenpak codex uninstall         # reverse installation\n"
+            "  tokenpak codex statusline        # enable native status modules (additive)\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
