@@ -83,8 +83,8 @@ def _db_writer_worker():
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
                             would_have_saved,cache_origin,user_id,
                             cache_creation_ephemeral_1h_tokens,cache_creation_ephemeral_5m_tokens,ttl_attribution,
-                            session_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            session_id,agent_id,cycle_id)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -151,7 +151,9 @@ class Monitor:
                 cache_creation_tokens INTEGER DEFAULT 0,
                 would_have_saved INTEGER DEFAULT 0,
                 user_id TEXT DEFAULT '',
-                session_id TEXT DEFAULT ''
+                session_id TEXT DEFAULT '',
+                agent_id TEXT DEFAULT '',
+                cycle_id TEXT DEFAULT ''
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -230,6 +232,19 @@ class Monitor:
                 conn.execute(_alter)
             except sqlite3.OperationalError:
                 pass
+        # D5 (finishes Fix A): fleet attribution columns on requests.
+        # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
+        # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
+        # 'unknown', never fabricated). Idempotent — columns may pre-exist
+        # from a peer migration. Std 34 §1.1: '' sentinel, not NULL.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(_alter)
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS budget_alerts (
@@ -292,6 +307,8 @@ class Monitor:
         cache_creation_ephemeral_5m_tokens=0,
         ttl_attribution=None,
         session_id="",
+        agent_id="",
+        cycle_id="",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -327,6 +344,8 @@ class Monitor:
             int(cache_creation_ephemeral_5m_tokens or 0),
             ttl_attribution,
             session_id or "",
+            agent_id or "",
+            cycle_id or "",
         )
         _queued = False
         try:
@@ -340,8 +359,8 @@ class Monitor:
                 "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
                 "would_have_saved, cache_origin, user_id, "
                 "cache_creation_ephemeral_1h_tokens, cache_creation_ephemeral_5m_tokens, ttl_attribution, "
-                "session_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "session_id, agent_id, cycle_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insert_params,
             )
             _conn.commit()
