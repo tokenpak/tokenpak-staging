@@ -42,27 +42,26 @@ CANONICAL_DIRNAME = ".tpk"
 LEGACY_DIRNAME = ".tokenpak"
 ENV_VAR = "TOKENPAK_HOME"
 
-# Canonical Std 33 §3 layout subdirectories. ``under()`` fail-loud rejects any
-# extension-less first segment that is not in this set (or _ADOPTED_SUBDIRS),
+# Canonical TokenPak home layout subdirectories. ``under()`` fail-loud rejects
+# any extension-less first segment that is not in this set (or _ADOPTED_SUBDIRS),
 # per the always-dynamic fail-loud principle: do not silently accept unknown
 # subdirs (a typo'd subdir would otherwise create junk state). New subdirs are
-# added here when Std 33 §3 is amended. ("dispatch" added by P-PATHS-01b below.)
+# added here when the canonical layout is amended.
 _STD_33_SUBDIRS: frozenset[str] = frozenset(
     {
         "templates",
         "companion",
         "pro",
         # dispatch/ — TokenPak Dispatch runtime state (runs.db, artifacts/,
-        # tmp/, overlays/). Added per the Std 33 §3 dispatch-subdir amendment
-        # (proposals/2026-05-19-std-33-dispatch-subdir-amendment.md, approved
-        # 2026-05-20).
+        # tmp/, overlays/). Added per the canonical layout amendment of
+        # 2026-05-20.
         "dispatch",
     }
 )
 
-# Subdirs in active use that are not (yet) enumerated in the Std 33 §3 layout
-# text. Tracked separately so the drift is visible and can be reconciled into
-# Std 33 §3 rather than silently blessed. ``paks/`` is written by
+# Subdirs in active use that are not (yet) enumerated in the canonical layout.
+# Tracked separately so the drift is visible and can be reconciled into the
+# canonical layout rather than silently blessed. ``paks/`` is written by
 # tokenpak/cli/commands/pak.py and predates the resolver's fail-loud contract.
 _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
     {
@@ -72,15 +71,15 @@ _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
 
 
 def _known_subdirs() -> frozenset[str]:
-    """All subdir names ``under()`` will accept (Std 33 §3 + adopted)."""
+    """All subdir names ``under()`` will accept (canonical layout + adopted)."""
     return _STD_33_SUBDIRS | _ADOPTED_SUBDIRS
 
 
 def _is_top_level_file(name: str) -> bool:
     """True when the first segment names a top-level file (e.g. ``config.json``).
 
-    Std 33 §5 explicitly sanctions ``under("file")`` for top-level files
-    ("always ... call ``_paths.under(\"file\")``"). Every Std 33 top-level file
+    The resolver contract explicitly sanctions ``under("file")`` for top-level
+    files ("always ... call ``_paths.under(\"file\")``"). Every top-level file
     carries an extension (``config.json``, ``license.json``, ``telemetry.db``
     ...), so the presence of a ``.`` distinguishes a file target from a
     (typo'd) subdir target.
@@ -161,13 +160,12 @@ def under(*parts: str) -> Path:
     ``home().joinpath(*parts)`` but spelled to encourage callsites to
     say what they want at the import site, not assemble strings.
 
-    Fail-loud per Std 33 §5: the first segment must be either a known
-    layout subdir (``_STD_33_SUBDIRS`` / ``_ADOPTED_SUBDIRS``) or a
+    Fail-loud per the resolver contract: the first segment must be either a
+    known layout subdir (``_STD_33_SUBDIRS`` / ``_ADOPTED_SUBDIRS``) or a
     top-level file (a name containing an extension). An unknown
     extension-less first segment raises ``ValueError`` rather than
     silently resolving — this catches typo'd subdirs (``under("compaion")``)
-    and not-yet-enumerated subdirs (``under("dispatch")`` until P-PATHS-01b)
-    before they create junk state.
+    and not-yet-enumerated subdirs before they create junk state.
     """
     if not parts:
         raise ValueError("under() requires at least one path segment")
@@ -175,10 +173,10 @@ def under(*parts: str) -> Path:
     if first in _known_subdirs() or _is_top_level_file(first):
         return home().joinpath(*parts)
     raise ValueError(
-        f"unknown Std 33 subdir {first!r}: allowed subdirs are "
+        f"unknown TokenPak home subdir {first!r}: allowed subdirs are "
         f"{sorted(_known_subdirs())}, or a top-level file (name with an "
         f"extension, e.g. 'config.json'). Add new subdirs to "
-        f"_STD_33_SUBDIRS per a Std 33 §3 amendment."
+        f"_STD_33_SUBDIRS per a canonical layout amendment."
     )
 
 
@@ -191,17 +189,17 @@ def is_legacy_active() -> bool:
     return home() == legacy_home() and not has_canonical()
 
 
-# Std 33 §5 contract names (P-PATHS-01a): ``resolved_home`` / ``is_legacy`` are
-# the names the standard's public API uses. They alias the module's existing
-# ``home`` / ``is_legacy_active`` so both spellings resolve identically and no
-# existing callsite breaks.
+# Resolver-contract API names: ``resolved_home`` / ``is_legacy`` are the names
+# the public path API uses. They alias the module's existing ``home`` /
+# ``is_legacy_active`` so both spellings resolve identically and no existing
+# callsite breaks.
 def resolved_home() -> Path:
-    """Std 33 §5 alias for :func:`home`."""
+    """Alias for :func:`home`."""
     return home()
 
 
 def is_legacy() -> bool:
-    """Std 33 §5 alias for :func:`is_legacy_active`."""
+    """Alias for :func:`is_legacy_active`."""
     return is_legacy_active()
 
 

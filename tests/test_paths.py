@@ -117,7 +117,7 @@ def test_under_allows_top_level_files(fake_home, fname):
 
 
 def test_under_rejects_unknown_subdir(fake_home):
-    with pytest.raises(ValueError, match="unknown Std 33 subdir"):
+    with pytest.raises(ValueError, match="unknown TokenPak home subdir"):
         _paths.under("nonexistent")
 
 
