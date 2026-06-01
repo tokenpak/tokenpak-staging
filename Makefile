@@ -18,7 +18,7 @@ MKDOCS      := $(VENV_BIN)/mkdocs
 UNAME := $(shell uname -s)
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
-.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline
+.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline audit release-readiness integrate-detect
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:  ## Show this help message
@@ -61,6 +61,18 @@ test-cov:  ## Run tests with coverage report
 
 benchmark-headline:  ## Run headline 30-50% claim benchmark (standard 21 §9.8 blocking)
 	$(PYTEST) tests/benchmarks/test_headline_claim.py -v -s
+
+# ── Audit / Release Readiness (proposal 2026-04-29 §S1.2 / §S3.2) ─────────────
+# Both targets are deterministic, local-only, and never publish anything.
+# Std 10 §B5 references `make audit` — it must exist.
+audit:  ## Run local audit bundle (quick tests + CLI smoke + inventories + leakage)
+	@PYTHON=$(PYTHON) PYTEST=$(PYTEST) bash scripts/audit.sh
+
+release-readiness:  ## Generate advisory release-readiness report (no publish action)
+	@$(PYTHON) scripts/release_readiness.py
+
+integrate-detect:  ## Detect local LLM client signals and print next-step commands
+	@$(PYTHON) scripts/integration_detector.py
 
 # ── Linting & formatting ───────────────────────────────────────────────────────
 lint:  ## Run ruff linter
