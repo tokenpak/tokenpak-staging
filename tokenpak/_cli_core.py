@@ -3206,6 +3206,8 @@ def cmd_status(args):
             hours=getattr(args, "hours", 0),
             fleet=getattr(args, "fleet", False),
             since=getattr(args, "since", None),
+            window=getattr(args, "window", None),
+            all_time=getattr(args, "all_time", False),
         )
     except Exception as e:
         print(f"⚠️  Savings-first status failed ({e}), falling back to legacy output...")
@@ -3515,6 +3517,20 @@ def cmd_check_alerts(args):
     sys.exit(1)
 
 
+def _validate_status_window(value):
+    """argparse type for ``--window`` — reuses the canonical status parser regex."""
+    import argparse as _ap
+
+    from tokenpak.cli.commands.status import _WINDOW_RE
+
+    token = (value or "").strip().lower()
+    if not _WINDOW_RE.match(token):
+        raise _ap.ArgumentTypeError(
+            f"invalid window {value!r}; use <N>m, <N>h, <N>d, or <N>mo (e.g. 30m, 4h, 7d, 2mo)"
+        )
+    return token
+
+
 def _build_status_parser(sub):
     p_status = sub.add_parser("status", help="Show savings report (default) or full system status")
     p_status.add_argument("--limit", type=int, default=20, help="Max retry events to show")
@@ -3526,6 +3542,8 @@ def _build_status_parser(sub):
     p_status.add_argument("--no-meme", dest="no_meme", action="store_true", help="Suppress tagline")
     p_status.add_argument("--days", type=int, default=0, help="Filter to last N days (combinable with --hours)")
     p_status.add_argument("--hours", type=int, default=0, help="Filter to last N hours (combinable with --days)")
+    p_status.add_argument("--window", default=None, type=_validate_status_window, help="Time window: <N>m|<N>h|<N>d|<N>mo (e.g. 30m, 4h, 7d, 2mo)")
+    p_status.add_argument("--all", dest="all_time", action="store_true", help="Show full persistent history (all time)")
     p_status.add_argument("--fleet", action="store_true", help="Fleet rollup view — reads rollup_daily")
     p_status.add_argument("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
     p_status.set_defaults(func=cmd_status)
