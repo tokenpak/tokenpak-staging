@@ -3179,6 +3179,12 @@ def _cmd_status_legacy(args):
 
 def cmd_status(args):
     """Show savings-first status (default) with optional drill-down views."""
+    # --explain dispatch (unified flag, RULED 2026-05-31): with a request id ->
+    # per-request savings/skip explanation; with no id -> value-tier notes.
+    _explain = getattr(args, "explain", None)
+    if _explain is not None:
+        from tokenpak.cli.commands.explain import run_explain
+        return run_explain(_explain)
     is_full = getattr(args, "full", False)
     is_json = getattr(args, "as_json", False)
     is_minimal = getattr(args, "minimal", False)
@@ -3528,6 +3534,10 @@ def _build_status_parser(sub):
     p_status.add_argument("--hours", type=int, default=0, help="Filter to last N hours (combinable with --days)")
     p_status.add_argument("--fleet", action="store_true", help="Fleet rollup view — reads rollup_daily")
     p_status.add_argument("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
+    p_status.add_argument(
+        "--explain", nargs="?", const="__NOARG__", default=None, metavar="REQ_ID",
+        help="Explain a request's savings/skip reasons by id; with no id, show value-tier notes",
+    )
     p_status.set_defaults(func=cmd_status)
 
 
