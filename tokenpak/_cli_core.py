@@ -31,7 +31,7 @@ def _get_monitor_db_path() -> Optional[Path]:
     this legacy-core reader, the CLI ``status`` reader, ``doctor``, and the
     proxy writer all resolve the SAME DB through one candidate chain
     (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` -> ``~/tokenpak``).
-    The previous hand-rolled list omitted ``~/.tpk`` (Std 33 canonical home),
+    The previous hand-rolled list omitted ``~/.tpk`` (the canonical TPK home),
     which is the latent split-brain this removes. Returns None when no valid
     monitor DB exists.
     """

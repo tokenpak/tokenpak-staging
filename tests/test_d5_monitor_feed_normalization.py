@@ -18,8 +18,8 @@ import sqlite3
 import pytest
 
 from tokenpak import _paths
-from tokenpak.proxy.monitor import Monitor
 from tokenpak.proxy import monitor as _monitor_mod
+from tokenpak.proxy.monitor import Monitor
 from tokenpak.proxy.request_pipeline import _resolve_agent_id, _resolve_cycle_id
 
 
@@ -119,8 +119,8 @@ def test_path_parity_all_readers_and_writer_agree(tmp_path, monkeypatch):
     # developer's real ~/.tpk / ~/.tokenpak / ~/tokenpak state.
     monkeypatch.setenv("TOKENPAK_DB", str(db))
 
-    from tokenpak.cli.commands.status import _get_db_path
     from tokenpak._cli_core import _get_monitor_db_path
+    from tokenpak.cli.commands.status import _get_db_path
 
     target = os.path.realpath(str(db))
     canon_read = _paths.monitor_db(mode="read")
@@ -138,8 +138,8 @@ def test_readers_delegate_to_canonical_resolver(tmp_path, monkeypatch):
     Monitor(str(db))
     monkeypatch.setenv("TOKENPAK_DB", str(db))
 
-    from tokenpak.cli.commands.status import _get_db_path
     from tokenpak._cli_core import _get_monitor_db_path
+    from tokenpak.cli.commands.status import _get_db_path
 
     canon = os.path.realpath(str(_paths.monitor_db(mode="read")))
     assert os.path.realpath(_get_db_path()) == canon

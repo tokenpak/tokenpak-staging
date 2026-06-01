@@ -1703,9 +1703,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # session attribution with model names.
                 try:
                     from tokenpak.proxy.request_pipeline import (
-                        _resolve_session_id as _rsi_mon,
                         _resolve_agent_id as _rai_mon,
+                    )
+                    from tokenpak.proxy.request_pipeline import (
                         _resolve_cycle_id as _rci_mon,
+                    )
+                    from tokenpak.proxy.request_pipeline import (
+                        _resolve_session_id as _rsi_mon,
                     )
                     _mon_session_id = _rsi_mon(self.headers, "")
                     _mon_agent_id = _rai_mon(self.headers)

@@ -3,7 +3,7 @@ tokenpak.proxy.request_pipeline — Router wiring, route engine singletons,
 intent classification, and style contract (protected content detection).
 
 Extracted from runtime/proxy.py (L1589-2144) as part of TPK-RESTRUCTURE-005.
-Extended in TPK-CONSOLIDATION-A2c with: _resolve_session_id (CCG-03),
+Extended in TPK-CONSOLIDATION-A2c with: _resolve_session_id,
 _apply_budget, _shadow_validate.
 """
 
@@ -561,7 +561,7 @@ def classify_message_risk(msg: dict) -> str:
 
 
 def can_compress(risk_class: str, mode: str) -> bool:
-    if mode in ("strict", "safe"):  # CCG-10: safe mode disables compression
+    if mode in ("strict", "safe"):  # safe mode disables compression
         return False
     if risk_class == "protected":
         return False
@@ -571,7 +571,7 @@ def can_compress(risk_class: str, mode: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# CCG-10: Stable/volatile partition + fingerprinting (TOKENPAK_MODE=safe)
+# Stable/volatile partition + fingerprinting (TOKENPAK_MODE=safe)
 # ---------------------------------------------------------------------------
 
 def _partition_stable_volatile(body: bytes) -> tuple:
@@ -621,7 +621,7 @@ def _partition_stable_volatile(body: bytes) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# CCG-03: Session ID resolution
+# Session ID resolution
 # Transferred from monolith (TPK-CONSOLIDATION-A2c, lines 1189–1212)
 # ---------------------------------------------------------------------------
 
@@ -652,12 +652,12 @@ def _resolve_session_id(headers: Any, model: str) -> str:
 
 
 def _resolve_agent_id(headers: Any) -> str:
-    """Resolve the fleet agent id from the ``X-Tokenpak-Agent`` header.
+    """Resolve the agent id from the ``X-Tokenpak-Agent`` header.
 
     Case-insensitive lookup, lower-cased value — matches the spend_guard
     rolling-caps attribution convention (``spend_guard/orchestrator.py``) so
     the persisted monitor.db ``agent_id`` and the live cap accounting agree.
-    Returns ``""`` (the Std 34 §1.1 sentinel, classified ``unknown``
+    Returns ``""`` (the empty-string sentinel, classified ``unknown``
     downstream) when no caller set the header. Never fabricated.
     """
     try:
@@ -670,11 +670,11 @@ def _resolve_agent_id(headers: Any) -> str:
 
 
 def _resolve_cycle_id(headers: Any) -> str:
-    """Resolve the fleet cycle id from the ``X-Tokenpak-Cycle`` header.
+    """Resolve the cycle id from the ``X-Tokenpak-Cycle`` header.
 
-    No caller stamps this header in the current fleet; it is resolved here so
+    No caller stamps this header in the current deployment; it is resolved here so
     a future worker that sets it is captured with no code change. Until then
-    the ``""`` sentinel is written and classified ``unknown`` (Std 34 §1.1) —
+    the ``""`` sentinel is written and classified ``unknown`` —
     never fabricated.
     """
     try:

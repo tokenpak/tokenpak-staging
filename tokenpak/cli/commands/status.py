@@ -107,7 +107,7 @@ def _get_db_path() -> str:
     ``status``, ``_cli_core``, ``doctor``, and the proxy writer all resolve the
     SAME DB through one candidate chain
     (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` -> ``~/tokenpak``).
-    The previous hand-rolled list omitted ``~/.tpk`` (Std 33 canonical home),
+    The previous hand-rolled list omitted ``~/.tpk`` (the canonical TPK home),
     so the dashboard could read a different DB than the proxy writes once
     ``~/.tpk/monitor.db`` exists — the latent split-brain this fixes.
     Falls back to the legacy default only if no valid DB is found.

@@ -232,11 +232,11 @@ class Monitor:
                 conn.execute(_alter)
             except sqlite3.OperationalError:
                 pass
-        # D5 (finishes Fix A): fleet attribution columns on requests.
+        # D5 (finishes Fix A): agent/cycle attribution columns on requests.
         # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
         # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
         # 'unknown', never fabricated). Idempotent — columns may pre-exist
-        # from a peer migration. Std 34 §1.1: '' sentinel, not NULL.
+        # from a peer migration. Telemetry contract: '' sentinel, not NULL.
         for _alter in (
             "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
             "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
