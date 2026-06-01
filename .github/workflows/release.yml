@@ -201,6 +201,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Tag-source ancestry validation: refuse to build a release from a v-tag
+      # that is not reachable from origin/main. The job-level `if` already
+      # restricts to refs/tags/v*, so rehearsal-* tags never reach here; the
+      # step-level `if` additionally skips workflow_dispatch preflight (allowed
+      # on any branch by contract). Enforces the staging -> public promotion path.
+      - name: Validate tag source on origin/main
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=200
+          if git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::notice::Tag verified on origin/main"
+          else
+            echo "::error::Tag ${{ github.ref }} (sha ${{ github.sha }}) is not reachable from origin/main; refusing release. Releases must promote through staging to public main before tagging."
+            exit 1
+          fi
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
