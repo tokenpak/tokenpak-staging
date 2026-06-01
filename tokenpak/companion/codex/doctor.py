@@ -12,6 +12,7 @@ adding a check is "define function, append to CHECKS list".
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -317,10 +318,89 @@ def _parse_initialize_reply(stdout: str) -> "tuple[Status, str]":
     return "FAIL", "no JSON-RPC response from MCP server"
 
 
+def _read_codex_config() -> "tuple[dict | None, Path]":
+    """Parse the resolved Codex ``config.toml`` (honors ``CODEX_HOME``).
+
+    Returns ``(data, path)`` where ``data`` is the parsed table, or
+    ``(None, path)`` when the file is absent, unparseable, or no TOML
+    reader is available.  Honors ``CODEX_HOME`` for the config location.
+    """
+    base = Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME") else Path.home() / ".codex"
+    path = base / "config.toml"
+    if not path.exists():
+        return None, path
+    try:
+        import tomllib as _toml  # 3.11+
+    except ModuleNotFoundError:  # 3.10
+        try:
+            import tomli as _toml  # type: ignore
+        except ModuleNotFoundError:  # pragma: no cover - graceful degrade
+            return None, path
+    try:
+        return _toml.loads(path.read_text(encoding="utf-8")), path
+    except Exception:
+        return None, path
+
+
+def check_proxy_routing() -> "tuple[Status, str]":
+    """§4 value-plane invariant — WARN (never FAIL) when Codex is not
+    routed through the TokenPak proxy.
+
+    ``tokenpak codex`` is observability-first by default: the companion
+    records prompt-side journal/budget data, but model traffic does NOT
+    pass through the TokenPak proxy unless the user has explicitly
+    configured a TokenPak ``model_provider``.  In that observability-only
+    mode any cache the user sees is *provider-native* (OpenAI/Codex),
+    TokenPak proxy-routed savings are *unavailable*, and the companion
+    must not claim TokenPak savings.
+
+    Not-routed is the *supported default*, so this is a WARN — the doctor
+    states the value-plane truthfully rather than gating the exit code with
+    a FAIL that would punish the current default path.  When (and if) proxy
+    routing becomes the default, this can be promoted to a hard invariant.
+    """
+    data, path = _read_codex_config()
+    if not data:
+        return (
+            "WARN",
+            f"Codex is not proxy-routed (no readable TokenPak provider in {path}) — "
+            "companion is observability-only: cache shown is provider-native, "
+            "TokenPak proxy-routed savings attribution is unavailable. "
+            "TokenPak does not claim savings for non-proxy-routed Codex sessions.",
+        )
+    model_provider = data.get("model_provider")
+    providers = data.get("model_providers")
+    providers = providers if isinstance(providers, dict) else {}
+    # Routed only when an explicit TokenPak provider is selected AND defined.
+    routed = (
+        isinstance(model_provider, str)
+        and model_provider.startswith("tokenpak")
+        and model_provider in providers
+    )
+    if routed:
+        return (
+            "PASS",
+            f"Codex is proxy-routed via model_provider='{model_provider}' — "
+            "TokenPak proxy-routed attribution active for this session.",
+        )
+    mp_label = (
+        f"model_provider='{model_provider}'" if model_provider else "model_provider unset"
+    )
+    return (
+        "WARN",
+        f"Codex is not proxy-routed ({mp_label}) — companion is observability-only: "
+        "cache shown is provider-native (not TokenPak proxy cache), and TokenPak "
+        "savings attribution is unavailable. Opt in by defining a "
+        "[model_providers.tokenpak-*] block and setting model_provider to it; "
+        "until then TokenPak does not claim savings for these sessions.",
+    )
+
+
 # ── Runner ──────────────────────────────────────────────────────────
 
 CHECKS: list["tuple[str, CheckFn]"] = [
     ("codex binary", check_codex_binary),
+    ("proxy routing (value plane)", check_proxy_routing),
     ("codex_hooks feature", check_hooks_feature),
     ("MCP registration", check_mcp_registered),
     ("hooks.json schema", check_hooks_json),
