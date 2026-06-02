@@ -657,9 +657,11 @@ def inject_vault_context(
     if not stable_layer and not volatile_layer:
         return body_bytes, 0, []
 
-    # Skeleton extraction (70-90% reduction on code) applies to the VOLATILE
-    # retrieval layer only; the stable glossary layer stays canonical and
-    # deterministic so its cache hash is stable turn-to-turn (determinism + cross-turn stability).
+    # Skeleton extraction (code-body elision, when the extractor is available)
+    # applies to the VOLATILE retrieval layer only; the stable glossary layer
+    # stays canonical and deterministic so its cache hash is stable turn-to-turn
+    # (determinism + cross-turn stability). No fixed savings percentage is
+    # asserted here — any such claim must be backed by a committed benchmark.
     _t4 = time.perf_counter()
     if SKELETON_ENABLED and volatile_layer:
         volatile_layer = _inject_skeleton_into_blocks(volatile_layer)
