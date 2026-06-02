@@ -19,6 +19,7 @@ import time
 
 import pytest
 
+from tokenpak.proxy.ssrm import decide
 from tokenpak.proxy.ssrm.contracts import (
     ACTION_BLOCK,
     ACTION_COMPRESS,
@@ -27,7 +28,6 @@ from tokenpak.proxy.ssrm.contracts import (
     ACTION_SEVERITY,
     ACTION_WARN,
 )
-from tokenpak.proxy.ssrm import decide
 
 
 def _seed_monitor_history(monitor_db_path: str, session_id: str, n: int) -> None:
@@ -74,8 +74,8 @@ def test_burn_profile_caught_by_request_10(tmp_ssrm_dbs, monkeypatch):
     # explicit monitor_db_path arg by going through compute_signals
     # directly rather than the top-level decide(). For the regression
     # we additionally exercise the policy classifier on those signals.
+    from tokenpak.proxy.ssrm.policy import DEFAULT_THRESHOLDS, _classify
     from tokenpak.proxy.ssrm.signals import compute_signals
-    from tokenpak.proxy.ssrm.policy import _classify, DEFAULT_THRESHOLDS
 
     body = json.dumps({
         "messages": [{"role": "user", "content": "continue the workload " * 50}],

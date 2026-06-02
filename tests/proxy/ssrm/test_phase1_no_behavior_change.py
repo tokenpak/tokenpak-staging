@@ -23,13 +23,13 @@ import sqlite3
 
 import pytest
 
+from tokenpak.proxy.monitor import Monitor
 from tokenpak.proxy.ssrm import Decision, Signals, decide
 from tokenpak.proxy.ssrm.contracts import (
     ACTION_BLOCK,
     ACTION_COMPRESS,
     ACTION_QUARANTINE,
 )
-from tokenpak.proxy.monitor import Monitor
 
 
 def test_block_decision_is_advisory_only(tmp_ssrm_dbs):
