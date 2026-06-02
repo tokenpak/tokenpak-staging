@@ -9,7 +9,12 @@ admin bootstrap is preserved.
 """
 from __future__ import annotations
 
-from tokenpak.telemetry.operational.rbac_auth import RBACStore
+import pytest
+
+try:
+    from tokenpak.telemetry.operational.rbac_auth import RBACStore
+except ImportError:  # flask (telemetry optional extra) not installed in slim CI
+    pytest.skip("requires flask (telemetry optional extra)", allow_module_level=True)
 
 
 def _count_users(store: RBACStore) -> int:
