@@ -26,15 +26,18 @@ property at ``vector_local`` is both sufficient (it is the module that did the
 heavy import) and canonical-only.
 
 Each test runs in a fresh subprocess so ``sys.modules`` is clean (other tests
-in the suite may legitimately import torch) and uses ``-P`` to avoid the
-repo-root cwd shadow that otherwise resolves ``tokenpak`` to a bare namespace
-package.
+in the suite may legitimately import torch). To avoid the repo-root cwd shadow
+that otherwise resolves ``tokenpak`` to a bare namespace package, the
+subprocess runs from a throwaway temporary directory (not via the ``-P`` flag,
+which is Python 3.11+ and would break the 3.10 CI leg, and unlike ``-P``/``-I``
+does not isolate the user-site editable install used in local dev).
 """
 from __future__ import annotations
 
 import importlib.util
 import subprocess
 import sys
+import tempfile
 
 # The heavy, slow-to-import optional ML dependencies that must NOT be pulled in
 # as a side effect of importing vector_local.
@@ -44,13 +47,24 @@ _SUBPROC_TIMEOUT = 120  # generous: a cold torch import (if it regressed) is ~13
 
 
 def _run_py(code: str) -> subprocess.CompletedProcess:
-    """Run ``code`` in a fresh interpreter (``-P`` = no cwd on sys.path)."""
-    return subprocess.run(
-        [sys.executable, "-P", "-c", code],
-        capture_output=True,
-        text=True,
-        timeout=_SUBPROC_TIMEOUT,
-    )
+    """Run ``code`` in a fresh interpreter from a neutral working directory.
+
+    Running from a throwaway temp dir keeps the implicit ``''`` (cwd) entry that
+    ``python -c`` puts on ``sys.path`` pointed at an empty directory, so
+    ``tokenpak`` resolves to the *installed* package rather than the repo-root
+    source tree (the cwd shadow). This replaces the ``-P`` flag, which is only
+    available on Python 3.11+ (the CI matrix includes 3.10); it also avoids
+    ``-P``/``-I`` isolation, which would drop the user-site editable install
+    relied on in local dev.
+    """
+    with tempfile.TemporaryDirectory() as neutral_cwd:
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=neutral_cwd,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROC_TIMEOUT,
+        )
 
 
 def test_vector_local_import_does_not_load_heavy_ml_stack():
