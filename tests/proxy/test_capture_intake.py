@@ -21,7 +21,6 @@ import pytest
 
 from tokenpak.proxy import capture_intake as ci
 
-
 # ── Gate: two-factor (operator flag AND opt-in header) ──────────────────────
 
 class _Hdrs:
