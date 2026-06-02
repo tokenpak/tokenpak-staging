@@ -92,6 +92,7 @@ class TIPDirective:
     bypass: bool = False
     max_cost_usd: Optional[float] = None
     max_tokens: Optional[int] = None
+    ttl_seconds: Optional[int] = None  # [TIP: allow=session ttl=<sec>] grant window
     estimate_only: bool = False
     cancel: bool = False
     reason: Optional[str] = None

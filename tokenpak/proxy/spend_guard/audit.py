@@ -39,6 +39,12 @@ EVENT_TYPES = frozenset({
     "anti_loop_hit",    # cached block returned without re-estimation
     "pending_waiting",  # subsequent request while pending exists
     "replay_race",      # race on double-consume
+    "yes_grant_created",     # session-scoped grant written on POSITIVE/allow=session
+    "yes_grant_bypass",      # held-band block bypassed by an active grant (per redemption)
+    "yes_grant_exhausted",   # grant's max=$ budget spent → fell back to block band
+    "yes_grant_expired",     # grant past expires_at → fell back to block band
+    "yes_grant_read_error",  # grant-table read failed → fail-closed to block band
+    "yes_grant_discarded",   # NEGATIVE intent / [TIP: cancel] discarded an active grant
 })
 
 

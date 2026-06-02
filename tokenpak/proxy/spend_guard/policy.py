@@ -211,6 +211,16 @@ class SpendGuardConfig:
     # Below this projected-cost floor we don't even audit (avoid noise).
     audit_min_cost_usd: float = 0.10
 
+    # ── Session-scoped Yes-grant (Standard 29 §"Yes-grant scope") ──
+    # A POSITIVE intent (or [TIP: allow=session]) grants approval for this
+    # TTL window, keyed by (session_id, fleet_id, principal/agent_id), so a
+    # single Yes covers a whole agentic turn instead of one held request.
+    yes_grant_ttl_seconds: int = 300
+    # When False (default) a Yes-grant does NOT bypass rolling caps — caps
+    # are fleet-protection, not per-request consent. Flipping True logs on
+    # every request so the config drift stays visible (W5).
+    yes_grant_covers_rolling_caps: bool = False
+
     # ── Rolling/cumulative caps (2026-05-15 post-incident P0) ──
     # Supplements the per-session cap. Catches the 2026-05-15 pattern
     # where 64 sub-cap sessions cumulated to $566 in 8 hours. Default
@@ -330,6 +340,7 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         "block_tokens",
         "hard_block_tokens",
         "pending_ttl_seconds",
+        "yes_grant_ttl_seconds",
         "session_window_seconds",
         "rolling_caps_window_seconds",
         "rolling_caps_per_agent_max_tokens_total",
@@ -342,6 +353,10 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
                 setattr(cfg, k, int(sg[k]))
             except (TypeError, ValueError):
                 pass
+
+    # Yes-grant — bool field
+    if "yes_grant_covers_rolling_caps" in sg:
+        cfg.yes_grant_covers_rolling_caps = _coerce_bool(sg["yes_grant_covers_rolling_caps"])
 
     # Rolling caps — bool + float fields
     if "rolling_caps_enabled" in sg:
@@ -441,6 +456,8 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         ("TOKENPAK_SPEND_GUARD_BLOCK_COST_USD", "block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_HARD_BLOCK_COST_USD", "hard_block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_PENDING_TTL", "pending_ttl_seconds", int),
+        ("TOKENPAK_SPEND_GUARD_YES_GRANT_TTL_SECONDS", "yes_grant_ttl_seconds", int),
+        ("TOKENPAK_SPEND_GUARD_YES_GRANT_COVERS_ROLLING_CAPS", "yes_grant_covers_rolling_caps", _coerce_bool),
         ("TOKENPAK_SPEND_GUARD_SESSION_BLOCK_COST_USD", "session_block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_SESSION_WINDOW_SECONDS", "session_window_seconds", int),
         # Rolling caps env overrides

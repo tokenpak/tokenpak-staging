@@ -149,12 +149,38 @@ Prefix any provider-bound prompt with `[TIP: ...]` at the very front of the firs
 
 | Directive | Values | Effect |
 |---|---|---|
-| `allow` | `once` / `15m` / `session` | Authorize replay of any held pending request. |
+| `allow` | `once` / `15m` / `session` | Authorize a held pending request. `once` is single-request; `session` opens a turn-scoped **Yes-grant** (see below). |
 | `bypass` | `on` (default if bare) / `off` | Skip Yes/No prompt; still subject to hard-block. |
-| `max` | `$N` (cost USD) / `Nk_tokens` / `Nm_tokens` | Per-request ceiling the directive authorizes. Unspecified dimensions are treated as user-authorized. |
+| `max` | `$N` (cost USD) / `Nk_tokens` / `Nm_tokens` | Per-request ceiling the directive authorizes. With `allow=session` the `$N` form becomes the grant's cumulative dollar budget. |
+| `ttl` | `<sec>` / `<n>m` | Yes-grant window length (default `cfg.yes_grant_ttl_seconds`, 300s). Pairs with `allow=session`. |
 | `estimate` | `on` (default if bare) | Return RiskEstimate JSON, no provider call. |
-| `cancel` | `on` (default if bare) | Discard any pending request for this session. |
+| `cancel` | `on` (default if bare) | Discard any pending request for this session (and tear down any active Yes-grant). |
 | `reason` | `"free text"` | Annotation written to the audit log. |
+
+#### Session-scoped Yes-grants
+
+A single `yes` (POSITIVE intent) **or** `[TIP: allow=session ttl=<sec> max=$<usd>]`
+opens a **Yes-grant** that covers the rest of the agentic turn — so the operator
+isn't re-prompted on every held request inside the TTL window. Semantics:
+
+- **Scope (W1).** Grants are keyed by `(session_id, fleet_id, principal/agent_id)`
+ (the `X-Tokenpak-Fleet` / `X-Tokenpak-Agent` request headers). A leaked or
+ replayed `session_id` from a different principal cannot redeem the grant.
+- **TTL (W7).** The grant is dead the instant `now >= expires_at`. Default window
+ is `cfg.yes_grant_ttl_seconds` (300s); override with `ttl=`.
+- **Dollar budget (W4).** `[TIP: allow=session max=$5]` attaches a cumulative
+ ceiling that decrements per redeemed request; once it can't cover a request the
+ grant is spent out and that request falls back to the block prompt.
+- **Non-bypass (W5).** A grant only removes the interactive prompt — it is **not**
+ a spend exemption. The hard-block band and rolling fleet caps remain
+ non-bypassable unless `cfg.yes_grant_covers_rolling_caps` is explicitly enabled.
+- **Cancel.** A `no` (NEGATIVE intent) or `[TIP: cancel]` tears the grant down.
+- **Backwards-compat.** `[TIP: allow=once]` keeps its single-request semantics and
+ opens no grant.
+
+Audit rows: `yes_grant_created` at the approval turn, `yes_grant_bypass` on each
+redemption, and `yes_grant_expired` / `yes_grant_exhausted` / `yes_grant_discarded`
+when the grant ends.
 
 Mid-sentence `[TIP: ...]` is **not** a directive — it's content the model sees verbatim. Only the leading position is parsed.
 
@@ -177,6 +203,10 @@ Refactor the auth flow.
 # Token-based ceiling
 [TIP: allow=once max=500k_tokens]
 <long prompt>
+
+# Turn-scoped grant: one approval covers the next 5 minutes / $5
+[TIP: allow=session ttl=300 max=$5 reason="multi-step refactor"]
+<first prompt of the turn>
 ```
 
 ---
