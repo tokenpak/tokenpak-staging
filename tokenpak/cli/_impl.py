@@ -3471,12 +3471,31 @@ def cmd_status(args):
     mode = resolve_mode(args)
     fmt = OutputFormatter("Status", mode=mode, minimal=getattr(args, "minimal", False))
 
+    # --explain dispatch (ruled 2026-05-31). No argument => value-tier
+    # confidence notes; a request id => per-request drop-reason surface
+    # (Universal Value Reporting Item C), wired here as a hook so the two
+    # surfaces share one flag without overwriting each other.
+    explain = getattr(args, "explain", None)
+    if explain == "__tiers__":
+        from tokenpak.cli.commands.value_report import ValueReport
+
+        print(ValueReport.build().explain())
+        return
+    if explain is not None:
+        print(
+            f"Per-request --explain {explain!r} is not available yet "
+            "(Universal Value Reporting Item C — per-request drop reasons)."
+        )
+        return
+
     # Fetch live proxy data
     health = _proxy_get("/health")
     stats = _proxy_get("/stats")
     cache = _proxy_get("/cache-stats")
 
     if mode == OutputMode.RAW:
+        from tokenpak.cli.commands.value_report import ValueReport
+
         print(
             fmt.raw(
                 {
@@ -3484,6 +3503,7 @@ def cmd_status(args):
                     "proxy": health,
                     "stats": stats.get("session") if stats else None,
                     "cache": cache,
+                    "value": ValueReport.build().as_dict(),
                 }
             )
         )
@@ -3697,6 +3717,18 @@ def cmd_status(args):
         print(fmt.signal(FS.DISABLED, "Proxy: not reachable", tone="warn"))
         print("  Run `tokenpak start` to launch the proxy.")
         print()
+
+    # Confidence-tiered value (local DB) — reads monitor.db directly so it
+    # renders whether or not the proxy is currently reachable. One reusable
+    # report object, shared with `tokenpak cost`.
+    try:
+        from tokenpak.cli.commands.value_report import ValueReport
+
+        print(ValueReport.build().render(verbose=False))
+        print()
+    except Exception:
+        # Never let the value block crash `tokenpak status`.
+        pass
 
     # Budget tracking (local DB)
     try:
@@ -4010,6 +4042,17 @@ def cmd_check_alerts(args):
 def _build_status_parser(sub):
     p_status = sub.add_parser("status", help="Show system status and recent retry events")
     p_status.add_argument("--limit", type=int, default=20, help="Max retry events to show")
+    # Unified --explain dispatcher (ruled 2026-05-31): no argument => value-tier
+    # confidence notes (this surface); a request id => per-request drop reasons
+    # (Universal Value Reporting Item C). const distinguishes the no-arg form.
+    p_status.add_argument(
+        "--explain",
+        nargs="?",
+        const="__tiers__",
+        default=None,
+        metavar="REQUEST_ID",
+        help="Explain value confidence tiers; pass a request ID for per-request detail",
+    )
     p_status.set_defaults(func=cmd_status)
 
 
@@ -5550,6 +5593,28 @@ def cmd_cost(args):
                 f"  {p.capitalize()} budget: ${status.spent_usd:.4f} / "
                 f"${status.limit_usd:.2f} ({status.percent_used:.1f}%){alert_tag}"
             )
+
+    # Confidence-tiered value breakdown — same reusable report object as
+    # `tokenpak status`, here in the deeper per-model (verbose) form scoped to
+    # the selected period.
+    try:
+        import datetime as _dt
+
+        from tokenpak.cli.commands.value_report import ValueReport
+
+        _deltas = {"daily": 1, "weekly": 7, "monthly": 30}
+        _labels = {"daily": "today", "weekly": "this week", "monthly": "this month"}
+        _since = (
+            _dt.datetime.now() - _dt.timedelta(days=_deltas[period])
+        ).isoformat()
+        print()
+        print(
+            ValueReport.build(since=_since, window_label=_labels[period]).render(
+                verbose=True
+            )
+        )
+    except Exception:
+        pass
 
 
 def cmd_budget_set(args):
