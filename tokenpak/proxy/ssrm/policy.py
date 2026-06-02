@@ -17,20 +17,17 @@ import threading
 from typing import Optional
 
 from .audit import record_decision
-from .state import open_audit_db, open_state_db
 from .contracts import (
     ACTION_BLOCK,
     ACTION_COMPRESS,
     ACTION_CONTINUE,
     ACTION_QUARANTINE,
-    ACTION_ROTATE,
     ACTION_SEVERITY,
     ACTION_WARN,
     Decision,
     Signals,
 )
 from .signals import compute_signals
-
 
 # Default thresholds (parent §6 + Amendment A1 §A1.2). All Phase 1
 # defaults; production values come from ~/.tokenpak/config.yaml `ssrm:`

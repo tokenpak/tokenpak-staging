@@ -20,13 +20,11 @@ import os
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
 
 from .contracts import Signals
 from .drift import drift_score
-from .fingerprint import canonicalize_user_turn, fingerprint_of_body, record_and_count
+from .fingerprint import canonicalize_user_turn, record_and_count
 from .state import open_state_db
-
 
 # ----- model_max_context (reuse spend_guard helper if available) ---------
 

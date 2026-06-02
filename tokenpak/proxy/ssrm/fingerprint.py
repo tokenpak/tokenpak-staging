@@ -18,10 +18,9 @@ import hashlib
 import json
 import re
 import time
-from typing import Iterable, Optional
+from typing import Optional
 
 from .state import open_state_db
-
 
 # Collapse runs of whitespace to single spaces.
 _WS_RE = re.compile(r"\s+")

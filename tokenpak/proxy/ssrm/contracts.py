@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Optional
-
 
 # Decision action enum (string literals so they're JSON-friendly).
 ACTION_CONTINUE = "continue_current_session"

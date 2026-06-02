@@ -43,7 +43,7 @@ def cmd_status(args) -> int:
         print(json.dumps(out, indent=2, default=str))
         return 0
 
-    print(f"SSRM Phase 1 (instrumentation-only)")
+    print("SSRM Phase 1 (instrumentation-only)")
     print(f"  enabled            = {enabled}")
     print(f"  audit_db           = {audit_db}")
     print(f"  total_decisions    = {stats.get('total_decisions', 0)}")
@@ -116,7 +116,7 @@ def cmd_explain(args) -> int:
         sigs = json.loads(row.get("signals_json") or "{}")
     except Exception:
         sigs = {}
-    print(f"  signals:")
+    print("  signals:")
     for k in sorted(sigs.keys()):
         print(f"    {k:<32s} = {sigs[k]}")
     return 0

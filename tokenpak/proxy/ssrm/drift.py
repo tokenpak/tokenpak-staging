@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
 
 from .fingerprint import canonicalize_user_turn
-
 
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 
