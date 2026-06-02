@@ -109,6 +109,7 @@ class _StandInDaemon:
 
     def __init__(self):
         self.received: list[dict] = []
+        self.requests: list[dict] = []  # full metadata: path + headers + body
         srv_self = self
 
         class H(BaseHTTPRequestHandler):
@@ -119,9 +120,15 @@ class _StandInDaemon:
                 length = int(self.headers.get("Content-Length", "0") or "0")
                 raw = self.rfile.read(length) if length else b""
                 try:
-                    srv_self.received.append(json.loads(raw.decode("utf-8")))
+                    body = json.loads(raw.decode("utf-8"))
                 except Exception:
-                    srv_self.received.append({"_unparseable": True})
+                    body = {"_unparseable": True}
+                srv_self.received.append(body)
+                srv_self.requests.append({
+                    "path": self.path,
+                    "headers": {k.lower(): v for k, v in self.headers.items()},
+                    "body": body,
+                })
                 payload = json.dumps({"promoted": True, "pak_id": "test-pak", "path": self.path}).encode()
                 self.send_response(201)
                 self.send_header("Content-Type", "application/json")
@@ -181,6 +188,38 @@ def test_run_capture_end_to_end(monkeypatch, active_daemon):
     result = ci._run_capture(_Hdrs({ci.OPTIN_HEADER: "opt-in"}), body, "claude-x")
     assert result is not None and result["status"] == 201
     assert active_daemon.received[0]["content"] == "answer"
+
+
+def test_no_license_channel_egress(monkeypatch, active_daemon):
+    """Privacy/egress invariant: captured content egresses ONLY to the daemon
+    capture channel (`/pak/v1/promote`) over loopback — never to a
+    license-validation endpoint — and the caller's auth/license headers are
+    NOT forwarded to the daemon.
+    """
+    monkeypatch.setenv(ci.ENABLE_ENV, "1")
+    body = json.dumps({"content": [{"type": "text", "text": "secret answer"}]}).encode()
+    hdrs = _Hdrs({
+        ci.OPTIN_HEADER: "opt-in",
+        "Authorization": "Bearer should-not-leak",
+        "X-TPK-Key": "should-not-leak",
+    })
+    result = ci._run_capture(hdrs, body, "claude-x")
+    assert result is not None and result["status"] == 201
+
+    # Exactly one egress, and it is the capture channel — not a license path.
+    assert len(active_daemon.requests) == 1
+    req = active_daemon.requests[0]
+    assert req["path"] == "/pak/v1/promote"
+    assert "license" not in req["path"]
+    assert req["path"] != "/v1/features"
+
+    # The caller's auth / license headers were NOT forwarded to the daemon.
+    assert "authorization" not in req["headers"]
+    assert "x-tpk-key" not in req["headers"]
+
+    # Positive control: the captured content reached the capture channel.
+    assert req["body"]["content"] == "secret answer"
+    assert req["body"]["source"] == "llm_response"
 
 
 def test_run_capture_inert_when_disabled(monkeypatch, active_daemon):
