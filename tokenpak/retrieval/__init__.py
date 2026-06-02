@@ -19,9 +19,15 @@ from .base import (
     RetrieverType,
 )
 from .bm25 import BM25Retriever
+from .embedding_model import (
+    EmbeddingModelInfo,
+    load_model,
+    resolve_model_id,
+    select_local_model,
+)
 from .fusion import WeightedFusion, rrf_fusion, rrf_fusion_detailed
 from .hybrid import HybridRetriever
 from .vault_index import VaultIndex, _bm25_tokenize
 from .vector_local import LocalVectorRetriever
 
-__all__ = ['HybridRetriever', 'BM25Retriever', 'LocalVectorRetriever', 'Retriever', 'RetrievalResult', 'RetrievalQuery', 'FusedResult', 'HybridSearchConfig', 'RetrieverType', 'rrf_fusion', 'rrf_fusion_detailed', 'WeightedFusion', 'VaultIndex', '_bm25_tokenize', 'base', 'bm25', 'fusion', 'hybrid', 'vault_index', 'vector_local']
+__all__ = ['HybridRetriever', 'BM25Retriever', 'LocalVectorRetriever', 'Retriever', 'RetrievalResult', 'RetrievalQuery', 'FusedResult', 'HybridSearchConfig', 'RetrieverType', 'rrf_fusion', 'rrf_fusion_detailed', 'WeightedFusion', 'VaultIndex', '_bm25_tokenize', 'EmbeddingModelInfo', 'load_model', 'resolve_model_id', 'select_local_model', 'base', 'bm25', 'embedding_model', 'fusion', 'hybrid', 'vault_index', 'vector_local']

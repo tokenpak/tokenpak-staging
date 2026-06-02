@@ -14,7 +14,9 @@ _bm25_tokenize(text)
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import math
 import os
 import re
@@ -24,6 +26,34 @@ from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+def _run_coro(coro):
+    """Run an async coroutine from sync code, tolerating an active event loop.
+
+    ``BlockStore.default()`` and proxy hooks call ``VaultIndex.search`` from
+    synchronous contexts, but the hybrid retriever is async. Use the simple
+    ``asyncio.run`` path when no loop is running; otherwise run on a dedicated
+    thread so we never error with "loop already running".
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coro)).result()
+
+
+def _hybrid_gate_enabled() -> bool:
+    """True when ``TOKENPAK_TIP_HYBRID_ENABLED`` opts into hybrid retrieval.
+
+    Default OFF: any unset/unrecognized value leaves retrieval as BM25-only.
+    """
+    return os.environ.get("TOKENPAK_TIP_HYBRID_ENABLED", "").lower() in ("1", "true", "yes")
 
 try:
     from tokenpak.tokens import count_tokens
@@ -74,6 +104,9 @@ class VaultIndex:
         self._cache_evictions: int = 0
         # Background load state
         self._ready: bool = False
+        # TIP-cache v2: lazily-built hybrid retriever (default-OFF gate).
+        self._hybrid = None  # type: Optional[object]
+        self._hybrid_init: bool = False
 
     @property
     def available(self) -> bool:
@@ -472,10 +505,75 @@ class VaultIndex:
                 ),
             }
 
+    def _get_hybrid(self):
+        """Lazily build a HybridRetriever over this vault dir. ``None`` if unusable."""
+        if self._hybrid_init:
+            return self._hybrid
+        self._hybrid_init = True
+        try:
+            from .base import HybridSearchConfig
+            from .embedding_model import resolve_model_id
+            from .hybrid import HybridRetriever
+
+            config = HybridSearchConfig(
+                vault_index_path=str(self.tokenpak_dir),
+                vector_index_path=str(self.tokenpak_dir),
+                vector_model=resolve_model_id(),
+            )
+            self._hybrid = HybridRetriever(config)
+        except Exception as exc:
+            logger.warning("VaultIndex: hybrid retriever init failed: %s; using BM25", exc)
+            self._hybrid = None
+        return self._hybrid
+
+    def _hybrid_search(self, query: str, top_k: int) -> List[Tuple[dict, float]]:
+        """Hybrid (BM25+vector RRF) search mapped to (block_dict, score) shape.
+
+        Returns ``[]`` on any failure so the caller falls back to BM25 — the
+        worst case for a vector bug is "no hybrid hits", never an exception.
+        """
+        retriever = self._get_hybrid()
+        if retriever is None:
+            return []
+        try:
+            fused = _run_coro(retriever.search(query, top_k=top_k))
+        except Exception as exc:
+            logger.warning("VaultIndex: hybrid search failed: %s; falling back to BM25", exc)
+            return []
+
+        blocks_dir = self.tokenpak_dir / "blocks"
+        results: List[Tuple[dict, float]] = []
+        for fr in fused:
+            bid = fr.doc_id
+            block = self.blocks.get(bid)
+            if block is None:
+                meta = fr.metadata or {}
+                block = {
+                    "block_id": bid,
+                    "source_path": meta.get("source_path", bid),
+                    "risk_class": meta.get("risk_class", "narrative"),
+                    "must_keep": False,
+                    "raw_tokens": int(meta.get("raw_tokens", 0)),
+                    "_content_file": str(blocks_dir / f"{bid}.txt"),
+                }
+            results.append((block, float(fr.fused_score)))
+        return results
+
     def search(
         self, query: str, top_k: int = 5, min_score: float = 2.0
     ) -> List[Tuple[dict, float]]:
-        """BM25 search across vault blocks. Returns [(block_dict, score), ...]."""
+        """Search across vault blocks. Returns [(block_dict, score), ...].
+
+        When ``TOKENPAK_TIP_HYBRID_ENABLED`` is set, delegate to the hybrid
+        (BM25 + local vector, RRF-fused) retriever; on empty/unavailable hybrid
+        results, fall through to the BM25 path below. Default-OFF: with the gate
+        unset, behavior is unchanged BM25-only retrieval.
+        """
+        if _hybrid_gate_enabled():
+            hybrid_hits = self._hybrid_search(query, top_k=top_k)
+            if hybrid_hits:
+                return hybrid_hits
+
         query_terms = _bm25_tokenize(query)
         if not query_terms or not self.blocks:
             return []

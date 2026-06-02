@@ -98,14 +98,18 @@ class LocalVectorRetriever(Retriever):
         return self._available
 
     def _ensure_model(self) -> bool:
-        """Lazy-load the sentence-transformers model."""
+        """Lazy-load the embedding model via the offline-enforced loader."""
         if not self._available:
             return False
         if self._model is None:
-            try:
-                self._model = SentenceTransformer(self._model_name)
-            except Exception as e:
-                logger.warning("Failed to load sentence-transformers model %r: %s", self._model_name, e)
+            from .embedding_model import load_model
+
+            self._model = load_model(self._model_name)
+            if self._model is None:
+                logger.warning(
+                    "LocalVectorRetriever: model %r unavailable offline; "
+                    "returning empty results (BM25 fallback)", self._model_name,
+                )
                 self._available = False
                 return False
         return True
@@ -232,6 +236,17 @@ class LocalVectorRetriever(Retriever):
         )
         (self._index_path / "meta.json").write_text(
             json.dumps(self._meta), encoding="utf-8"
+        )
+        # Artifact manifest (AC: records model id / dim / version). Read back by
+        # diagnostics + tests to confirm which local model built the index.
+        from .embedding_model import EmbeddingModelInfo, _st_version
+
+        dim = int(self._embeddings.shape[1]) if self._embeddings.ndim == 2 else 0
+        info = EmbeddingModelInfo(model_id=self._model_name, dim=dim, version=_st_version())
+        manifest = info.to_dict()
+        manifest["count"] = int(self._embeddings.shape[0])
+        (self._index_path / "embeddings.meta.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
         )
 
     def load(self) -> bool:

@@ -124,14 +124,28 @@ class BlockStore:
 
             store = cls(":memory:")  # in-memory legacy store as base
 
-            enabled = os.environ.get("TOKENPAK_TIP_BM25_ENABLED", "").lower() in ("1", "true", "yes")
+            def _flag(name: str) -> bool:
+                return os.environ.get(name, "").lower() in ("1", "true", "yes")
+
+            bm25_enabled = _flag("TOKENPAK_TIP_BM25_ENABLED")
+            hybrid_enabled = _flag("TOKENPAK_TIP_HYBRID_ENABLED")
+            # TIP-cache v2: the hybrid gate also activates the vault index, so
+            # hybrid can be enabled standalone. VaultIndex.search() then fuses
+            # BM25 + local vector; with the gate off, retrieval stays BM25-only.
+            enabled = bm25_enabled or hybrid_enabled
             if not enabled:
                 logger.info(
-                    "BlockStore.default(): TOKENPAK_TIP_BM25_ENABLED is off; "
+                    "BlockStore.default(): TOKENPAK_TIP_BM25_ENABLED / "
+                    "TOKENPAK_TIP_HYBRID_ENABLED are off; "
                     "returning empty store (no vault retrieval)"
                 )
                 cls._default_instance = store
                 return store
+            if hybrid_enabled:
+                logger.info(
+                    "BlockStore.default(): hybrid retrieval enabled "
+                    "(TOKENPAK_TIP_HYBRID_ENABLED); search() returns hybrid-scored results"
+                )
 
             index_path = os.environ.get(
                 "TOKENPAK_VAULT_INDEX_PATH",
