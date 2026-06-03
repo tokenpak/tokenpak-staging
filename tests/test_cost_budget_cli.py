@@ -103,16 +103,52 @@ class TestQuerySummary:
         result = cost_mod.query_summary("week")
         assert result["requests"] == 4
 
-    def test_month_includes_all_rows(self, cost_mod):
-        result = cost_mod.query_summary("month")
-        # Fixture: 3 rows dated today + 1 dated yesterday. On a month boundary
-        # (today is the 1st) yesterday falls in the previous month, so the
-        # "month" window correctly contains 3 rows, not 4. Derive the expected
-        # count from actual month membership so the test is boundary-safe.
-        this_month = date.today().strftime("%Y-%m")
-        yest_month = (date.today() - timedelta(days=1)).strftime("%Y-%m")
-        expected = 3 + (1 if yest_month == this_month else 0)
-        assert result["requests"] == expected
+    def test_month_includes_all_rows(self, tmp_path):
+        # Freeze the clock to a fixed mid-month date and anchor every fixture row
+        # inside that same month, so the "month" window invariantly contains all
+        # 4 rows no matter what calendar date the suite runs on. The earlier
+        # form derived the expected count from date.today(), which merely tracked
+        # the wall clock instead of pinning the window; both rows now live in a
+        # controlled month, so the assertion is a fixed 4.
+        import tokenpak.cli.commands.cost as cost
+
+        frozen_today = date(2026, 6, 15)
+
+        class _FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return frozen_today
+
+        anchor = frozen_today.isoformat()
+        prev_day = (frozen_today - timedelta(days=1)).isoformat()
+        db_path = tmp_path / "month_boundary.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, "
+            "model TEXT, request_type TEXT, input_tokens INTEGER, output_tokens INTEGER, "
+            "estimated_cost REAL, latency_ms REAL, status_code INTEGER, endpoint TEXT, "
+            "compilation_mode TEXT, protected_tokens INTEGER, compressed_tokens INTEGER, "
+            "injected_tokens INTEGER, injected_sources TEXT, cache_read_tokens INTEGER, "
+            "cache_creation_tokens INTEGER)"
+        )
+        rows = [
+            (f"{anchor}T10:00:00", "claude-sonnet-4-6", "chat", 1000, 100, 0.003),
+            (f"{anchor}T11:00:00", "claude-haiku-4-5", "chat", 500, 50, 0.001),
+            (f"{anchor}T12:00:00", "claude-sonnet-4-6", "chat", 2000, 200, 0.006),
+            (f"{prev_day}T09:00:00", "claude-sonnet-4-6", "chat", 1500, 150, 0.0045),
+        ]
+        conn.executemany(
+            "INSERT INTO requests (timestamp,model,request_type,input_tokens,output_tokens,estimated_cost) "
+            "VALUES (?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+        with patch.object(cost, "date", _FrozenDate), \
+             patch.object(cost, "_MONITOR_DB", str(db_path)):
+            result = cost.query_summary("month")
+        assert result["requests"] == 4
 
     def test_empty_db_returns_zeros(self, tmp_path):
         import tokenpak.cli.commands.cost as cost
