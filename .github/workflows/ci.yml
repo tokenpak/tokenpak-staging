@@ -231,7 +231,7 @@ jobs:
           python-version: "3.12"
       - name: Install (all extras for canonical snapshot reproduction)
         # MUST mirror release.yml's release-gate install EXACTLY or
-        # api-snapshot-check fires phantom-removal noise (Std 30 §3 R3
+        # api-snapshot-check fires phantom-removal noise (release-gate R3
         # install-shape parity — the local/CI symbol-set skew that bit
         # the v1.7.0 release).
         run: |
@@ -240,5 +240,5 @@ jobs:
           pip install python-multipart
       - name: release-gate-check (api + workflow-steps + telemetry + taxonomy)
         run: make release-gate-check
-      - name: migration-multihop (Std 30 §14.1 / Std 10 §E9)
+      - name: migration-multihop (release-gate multihop / Std 10 §E9)
         run: make migration-multihop
