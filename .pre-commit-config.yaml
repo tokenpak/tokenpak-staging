@@ -59,7 +59,15 @@ repos:
         language: pygrep
         # Patterns intentionally narrow: word-boundary on agent names so
         # product references (Claude Code, Anthropic, etc.) are unaffected.
-        entry: '\bSue\b|\bCali\b|\bTrix\b|\bSuki\b|\bAya\b|\bDee\b|\bReiPo\b|\bopenclaw\b|\bfleet\b|TSR-[0-9]|TPS-[0-9]|CCI-[0-9]|MTC-[0-9]|OAS-[0-9]|TIP7-[0-9]|TRIX-MTC|WS-[0-9]|\.claude/projects|/home/sue/|trixxie168|\bStd 2[0-9]\b|\bStd 3[0-9]\b|Suki: auto-commit'
+        # F-PE3: agent-fleet names are wrapped in a scoped case-insensitive
+        # group (?i:...) so REIPO / reipo / Reipo are all caught (the F-PE1
+        # leak `#REIPO-...` slipped a case-sensitive `\bReiPo\b`). The trailing
+        # `\b[A-Z]{2,}...-[0-9]+\b` catches generic internal-task-ID shapes
+        # (REIPO-SNAPGEN-LOG-HYGIENE-01) without hand-enumerating prefixes; it
+        # deliberately skips SHA-256 / AES-256-GCM / ISO-8859-1 / AWS keys.
+        # NOTE: this mirror still lacks CCG-/CCP-/VDS-/FIN-/TSG-/TIP-NN prefixes
+        # that the CI gate has — pre-existing drift flagged to Suki separately.
+        entry: '(?i:\bSue\b|\bCali\b|\bTrix\b|\bSuki\b|\bAya\b|\bDee\b|\bReiPo\b)|\bopenclaw\b|\bfleet\b|TSR-[0-9]|TPS-[0-9]|CCI-[0-9]|MTC-[0-9]|OAS-[0-9]|TIP7-[0-9]|TRIX-MTC|WS-[0-9]|\b[A-Z]{2,}[A-Z0-9]*(-[A-Z0-9]*[A-Z][A-Z0-9]*)+-[0-9]+\b|\.claude/projects|/home/sue/|trixxie168|\bStd 2[0-9]\b|\bStd 3[0-9]\b|Suki: auto-commit'
         types_or: [markdown, python, yaml, toml, shell, javascript, ts, json]
       - id: forbidden-files
         name: No backup / corrupt-DB / typecheck artifact files

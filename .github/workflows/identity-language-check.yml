@@ -83,6 +83,17 @@ jobs:
             'FIN-[0-9]'
             'TSG-[0-9]'
             'TIP-[0-9][0-9]'
+            # F-PE3: generic internal-task-ID shape, so new prefixes do not
+            # need to be hand-enumerated here (feedback_always_dynamic). Catches
+            # forms like REIPO-SNAPGEN-LOG-HYGIENE-01 / SNAPGEN-LOG-HYGIENE-01:
+            # an UPPER-CASE prefix (>=2 letters), one or more dash-joined
+            # segments that contain a letter, and a trailing numeric segment.
+            # Deliberately NOT matched (keeps public copy + AWS-docs clean):
+            #   2-segment constants  SHA-256 UTF-8 RFC-2119 GPT-4
+            #   numeric-only middles ISO-8859-1 SHA-512-256
+            #   alpha-tail constants AES-256-GCM CLAUDE-3-OPUS HTTP-500-ERROR (no numeric tail)
+            #   AWS example keys     AKIAIOSFODNN7EXAMPLE (single token, no dashes)
+            '\b[A-Z]{2,}[A-Z0-9]*(-[A-Z0-9]*[A-Z][A-Z0-9]*)+-[0-9]+\b'
             '\.claude/projects'
             '/home/sue/'
             'trixxie168'
@@ -292,16 +303,35 @@ jobs:
             fi
           }
 
+          # F-PE3: agent-fleet identity names are matched CASE-INSENSITIVELY so
+          # all-caps / lowercase / mixed-case spellings (REIPO, reipo, Reipo) are
+          # all caught — the F-PE1 leak `#REIPO-...` slipped a case-sensitive
+          # `\bReiPo\b`. Listed once; casing is handled by grep -i, never by
+          # hand-enumerating spellings (feedback_always_dynamic). Membership in
+          # this set ONLY selects the -i flag; the canonical pattern still lives
+          # in `patterns` above. Non-agent patterns (paths, Std refs, task-IDs)
+          # stay case-sensitive so the casing-specific mask system is untouched.
+          is_agent_name_pattern() {
+            case "$1" in
+              '\bSue\b'|'\bCali\b'|'\bTrix\b'|'\bSuki\b'|'\bAya\b'|'\bDee\b'|'\bReiPo\b')
+                return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           fail=0
           while IFS= read -r f; do
             [ -f "$f" ] || continue
             for p in "${patterns[@]}"; do
-              if grep -nE "$p" <(content_for_pattern "$p" "$f") 2>/dev/null; then
+              # -i ONLY for agent-fleet names (F-PE3); everything else is -E.
+              gflags='-nE'
+              if is_agent_name_pattern "$p"; then gflags='-niE'; fi
+              if grep $gflags "$p" <(content_for_pattern "$p" "$f") 2>/dev/null; then
                 # Print with file:line:match for clickable error annotation
                 while IFS= read -r line; do
                   ln=$(echo "$line" | cut -d: -f1)
                   echo "::error file=$f,line=$ln::Forbidden pattern '$p' in changed file."
-                done < <(grep -nE "$p" <(content_for_pattern "$p" "$f"))
+                done < <(grep $gflags "$p" <(content_for_pattern "$p" "$f"))
                 fail=1
               fi
             done
