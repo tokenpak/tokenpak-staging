@@ -4,6 +4,12 @@ All notable changes to TokenPak are documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Internal
+
+- Suppress ephemeral RBAC admin password from `Release-gate snapshot validation` CI logs (#REIPO-SNAPGEN-LOG-HYGIENE-01). Snapshot-gen now sets `TOKENPAK_SNAPSHOT_GEN=1` to skip the first-run admin bootstrap during introspection.
+
 ## [v1.7.0] — 2026-05-25
 
 > Corrected 2026-05-29: the Beta-1 CLI surface below was originally listed
