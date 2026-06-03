@@ -15,7 +15,6 @@ from tokenpak.proxy.adapters.openai_codex_responses_adapter import (
     codex_responses_payload_fixup,
 )
 
-
 # ---------------------------------------------------------------------------
 # a. JWT vs sk- detection
 # ---------------------------------------------------------------------------
