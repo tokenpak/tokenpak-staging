@@ -37,7 +37,7 @@ headline number, update the corresponding row here in the same PR.
   caveat that explains why (e.g. requires live provider credentials).
 - **Last verified** is a date, not a commit SHA. Update it whenever the
   evidence command is re-run and confirmed green.
-- **Owner** is the human (or fleet role) accountable for keeping the claim
+- **Owner** is the human (or responsible role) accountable for keeping the claim
   true. The owner is the escalation point if the evidence command starts
   failing in CI.
 
