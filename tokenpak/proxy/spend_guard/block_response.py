@@ -161,7 +161,7 @@ def build_rolling_cap_block(breach) -> bytes:
     routinely misread as "caller X spent $" and cost diagnostic time. The
     message + body below are dimension-aware so an operator reads it correctly
     once: ``triggered_by`` always names the caller; ``fleet_used``/``fleet_cap``
-    carry the aggregate for fleet breaches. Legacy fields (``agent_id``,
+    carry the aggregate for fleet-wide breaches. Legacy fields (``agent_id``,
     ``used``, ``cap``, ``projected_add``) are retained unchanged for backward
     compatibility.
     """
