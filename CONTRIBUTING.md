@@ -256,7 +256,7 @@ black --check .
 
 ## Submitting Changes
 
-1. **Branch from `master`**: `git checkout -b fix/your-fix`
+1. **Branch from `main`**: `git checkout -b fix/your-fix`
 2. **Make focused changes** — one PR per concern
 3. **Write tests** for new behavior when practical
 4. **Run the full test suite** and confirm it passes
@@ -272,6 +272,8 @@ type: brief description
 Longer explanation if needed.
 
 Fixes #123
+
+Signed-off-by: Your Name <you@example.com>
 ```
 
 Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`
@@ -283,11 +285,23 @@ Examples:
 
 ---
 
-## Response Times
+## Developer Certificate of Origin (DCO)
 
-We aim to:
-- Acknowledge all issues and PRs within **48 hours**
-- Review PRs within **1 week**
+All contributions must be signed off under the [Developer Certificate of Origin](https://developercertificate.org/). The sign-off certifies that you wrote the contribution, or otherwise have the right to submit it under the project's license.
+
+Add the sign-off automatically by committing with `-s`:
+
+```bash
+git commit -s -m "fix: handle empty response in SSE stream"
+```
+
+This appends a `Signed-off-by: Your Name <you@example.com>` trailer using your configured `user.name` and `user.email`. Every commit in your PR must carry it.
+
+---
+
+## Support & Response
+
+TokenPak is community-supported and currently in **beta**. Issues and pull requests are reviewed on a **best-effort basis** by maintainers and the community — there is **no service-level agreement (SLA) or guaranteed response time**. We appreciate your patience, and clear, reproducible reports help us respond faster.
 
 ---
 
