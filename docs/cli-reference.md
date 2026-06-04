@@ -83,6 +83,7 @@ Check proxy health
 - `--all` — Show full persistent history (all time)
 - `--fleet` — Fleet rollup view — reads rollup_daily
 - `--since` — With --fleet: window in days, e.g. '7d' (default: 7d)
+- `--explain` — Explain a request's savings/skip reasons by id; with no id, show value-tier notes
 
 ### `tokenpak logs`
 
