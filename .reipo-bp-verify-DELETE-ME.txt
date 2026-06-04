@@ -1,0 +1,1 @@
+Throwaway file for ReiPo branch-protection negative test (20260604-141535). Safe to delete. PR will be closed unmerged.
