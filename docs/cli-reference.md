@@ -325,6 +325,12 @@ Update tokenpak
 - `--core-only` — Update core only, skip config merge
 - `--dry-run` — Show what would change without applying
 
+**Update nudge:** when you run `tokenpak claude` or `tokenpak codex`, TokenPak prints
+a one-line `TokenPak X.Y.Z available — run \`tokenpak update\`` notice if a newer
+release exists on PyPI. The check is cached to at most once per day, is fail-open
+(network errors never delay or block the launcher), and can be disabled with
+`TOKENPAK_NO_UPDATE_CHECK=1`.
+
 ---
 
 ## Group: Operations
