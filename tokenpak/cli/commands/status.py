@@ -824,7 +824,7 @@ def run(
         except Exception:
             pass
     print(f"     Uptime               {uptime_str:>10}")
-    print(f"     Proxy overhead       {latency_str:>10}")
+    print(f"     Avg round-trip       {latency_str:>10}")
 
     # --- 6. HEALTH ---
     print()
