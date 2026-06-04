@@ -2455,7 +2455,7 @@ def _build_stub_parsers(sub):
     )
     p_integrate.add_argument(
         "--apply", action="store_true",
-        help="(reserved) auto-write config files — not yet implemented, prints safe instructions instead",
+        help="Write the client's config for you (merging changes, preserving unknown keys), back up the prior file, and print a rollback command. Without --apply, integrate only prints instructions.",
     )
 
     def _integrate_dispatch(args):

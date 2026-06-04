@@ -6,9 +6,11 @@ paste so their existing tool (Claude Code, Cursor, Cline, Continue.dev,
 Aider, raw OpenAI/Anthropic SDK, LiteLLM, Codex CLI) routes through
 tokenpak.
 
-Default is PRINT mode (read-only). `--apply` is reserved for future
-auto-config writing with backups — unset today so we never touch a user's
-config file without explicit opt-in and per-client write logic.
+Default is PRINT mode (read-only). Passing `--apply` writes the client's
+config for you: it merges the proxy settings (preserving unknown keys),
+backs up the prior file alongside it, and prints a rollback command so the
+change is always reversible. Clients without a config file to write (the
+raw SDKs) fall back to printing instructions even under `--apply`.
 
 Design goals:
     - Zero runtime dependency on the proxy (works before it's started).
