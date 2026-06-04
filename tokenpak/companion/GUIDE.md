@@ -57,6 +57,32 @@ TOKENPAK_COMPANION_HOOKS=0 tokenpak claude
 
 ---
 
+## Memory sources — bring your own knowledge base
+
+Point the companion at your own Markdown notes so it can surface lessons from
+your knowledge base. No special directory layout is required — any folder of
+`.md` / `.markdown` files works (scanned recursively).
+
+```bash
+# Ingest a single notes directory
+tokenpak companion ingest --memory-dir ~/notes
+
+# Multiple directories (repeat the flag, or use the env var)
+tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal
+export TOKENPAK_COMPANION_MEMORY_DIRS=~/notes:~/work/journal
+tokenpak companion ingest
+
+# See what's configured
+tokenpak companion status
+```
+
+`TOKENPAK_COMPANION_MEMORY_DIRS` accepts an OS-path-separator- or
+comma-separated list; `~` is expanded. Missing or empty directories are
+reported, never fatal. The companion extracts lessons from `## Lessons
+Learned` / `## Notes` / task-summary sections of each file.
+
+---
+
 ## MCP Tools Reference
 
 When the companion is active, Claude Code gains seven MCP tools served by

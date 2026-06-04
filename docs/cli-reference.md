@@ -917,6 +917,24 @@ Test search retrieval
 
 Evaluate alert rules and return exit code 1 if any fired.
 
+### `tokenpak companion`
+
+Point the tokenpak companion at your own Markdown notes/knowledge
+base — no special vault layout required.
+
+Examples:
+  tokenpak companion ingest --memory-dir ~/notes
+  tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal
+  TOKENPAK_COMPANION_MEMORY_DIRS=~/notes tokenpak companion ingest
+  tokenpak companion status
+
+**Subcommands:**
+
+- `ingest`
+  - `--memory-dir` — Directory of Markdown notes to ingest (repeatable). Falls back to TOKENPAK_COMPANION_MEMORY_DIRS if omitted.
+  - `--json` — Also print a JSON result
+- `status`
+
 ### `tokenpak compare`
 
 Show before/after cost comparison for last N requests.
