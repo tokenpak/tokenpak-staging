@@ -323,7 +323,7 @@ def discover_openclaw_configs() -> list[Path]:
     at least one valid path):
 
       1. ``OPENCLAW_CONFIG_PATH`` env var (what systemd units set per
-         instance — e.g. ``/home/sue/.openclaw-governor/openclaw.json``
+         instance — e.g. ``~/.openclaw-governor/openclaw.json``
          for the governor). Honored as a single-target override.
       2. Glob ``$HOME/.openclaw*/openclaw.json`` — picks up ``main``,
          ``governor``, and any future siblings without code changes.
