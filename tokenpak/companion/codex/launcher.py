@@ -26,6 +26,14 @@ def main(args: list[str] | None = None) -> int:
         install_only = True
         args = [a for a in args if a != "--install-only"]
 
+    # Opt-in: route codex through the local TokenPak proxy via a dedicated
+    # named profile. Stripped from the args before they reach codex. Default
+    # (no --proxy) behaviour is byte-identical to before this flag existed.
+    use_proxy = False
+    if "--proxy" in args:
+        use_proxy = True
+        args = [a for a in args if a != "--proxy"]
+
     config = CompanionConfig.from_env()
     config.profile_overrides()
 
@@ -102,7 +110,50 @@ def main(args: list[str] | None = None) -> int:
         env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
 
     codex_args = ["codex", *args]
+    if use_proxy:
+        try:
+            _profile = _install_tokenpak_chatgpt_profile()
+            print(f"tokenpak: proxy profile installed ({_profile})", file=sys.stderr)
+            codex_args = ["codex", "-p", "tokenpak-chatgpt", *args]
+        except Exception as exc:
+            print(
+                f"tokenpak: --proxy profile install failed ({exc}); "
+                "launching codex without proxy profile",
+                file=sys.stderr,
+            )
     os.execvpe("codex", codex_args, env)
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
     return 1
+
+
+# Exact contents of the dedicated named profile written under --proxy. This is
+# the ONLY file the launcher writes into ~/.codex, and only when --proxy is
+# passed. The global ~/.codex/config.toml and ~/.codex/AGENTS.md are never
+# touched.
+_TOKENPAK_CHATGPT_PROFILE_TOML = """model_provider = "tokenpak-chatgpt"
+
+[model_providers.tokenpak-chatgpt]
+name = "TokenPak ChatGPT"
+base_url = "http://127.0.0.1:8766/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+stream_idle_timeout_ms = 300000
+"""
+
+
+def _install_tokenpak_chatgpt_profile() -> str:
+    """Write the named ``tokenpak-chatgpt`` profile file. Returns its path.
+
+    Creates ``~/.codex`` if missing and writes
+    ``~/.codex/tokenpak-chatgpt.config.toml`` with the exact provider block.
+    Never edits ``~/.codex/config.toml`` or ``~/.codex/AGENTS.md``.
+    """
+    from pathlib import Path
+
+    codex_dir = Path.home() / ".codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    profile_path = codex_dir / "tokenpak-chatgpt.config.toml"
+    profile_path.write_text(_TOKENPAK_CHATGPT_PROFILE_TOML, encoding="utf-8")
+    return str(profile_path)

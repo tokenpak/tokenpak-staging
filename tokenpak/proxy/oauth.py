@@ -28,9 +28,15 @@ TokenPak distinguishes two auth flavors carried in ``Authorization: Bearer``:
 
 Codex OAuth Endpoint
 --------------------
-OpenAI Codex subscription uses the OpenAI API endpoint (api.openai.com).
 Requests use ``Authorization: Bearer <oauth_token>`` instead of
 ``Authorization: Bearer sk-<api_key>``.
+
+NOTE: the working Codex adapter path forwards ChatGPT-OAuth subscription
+traffic to ``chatgpt.com/backend-api`` (the ChatGPT backend), NOT
+``api.openai.com``. See
+``tokenpak/proxy/adapters/openai_codex_responses_adapter.py`` and the
+``/v1/responses`` ChatGPT-OAuth branch in ``server.do_POST``. The
+``api.openai.com`` endpoint applies to legacy API-key OpenAI routing only.
 
 Routing Logic
 -------------
