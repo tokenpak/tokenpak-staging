@@ -542,6 +542,7 @@ Examples:
   tokenpak codex --install-only    # set up without launching Codex
   tokenpak codex doctor            # verify installation
   tokenpak codex uninstall         # reverse installation
+  tokenpak codex statusline        # enable native status modules (additive)
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
