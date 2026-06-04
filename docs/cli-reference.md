@@ -79,6 +79,8 @@ Check proxy health
 - `--no-meme` — Suppress tagline
 - `--days` — Filter to last N days (combinable with --hours)
 - `--hours` — Filter to last N hours (combinable with --days)
+- `--window` — Time window: <N>m|<N>h|<N>d|<N>mo (e.g. 30m, 4h, 7d, 2mo)
+- `--all` — Show full persistent history (all time)
 - `--fleet` — Fleet rollup view — reads rollup_daily
 - `--since` — With --fleet: window in days, e.g. '7d' (default: 7d)
 
