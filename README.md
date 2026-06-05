@@ -71,7 +71,7 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 ## What's included (OSS)
 
-- **Prompt Packing** — fewer tokens on real agent workloads, <50ms added latency.
+- **Prompt Packing** — fewer tokens on real agent workloads.
   Reproduce on your own workload: `make benchmark-headline`
 - **Client integration** — one command wires Claude Code and other clients to the proxy
 - **Model routing** — send requests to the right model automatically, with fallback rules
