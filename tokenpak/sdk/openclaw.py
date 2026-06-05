@@ -38,9 +38,8 @@ def _find_claude_binary() -> Optional[str]:
 
     The tokenpak proxy runs under systemd user units whose PATH is often
     ``/usr/bin:/bin`` — it does NOT include npm/pip-user install dirs.
-    Mirrors the discovery walk in
-    ``~/vault/06_RUNTIME/scripts/agent-claude-worker.sh`` so fleet hosts
-    stay consistent without per-host env tweaks.
+    Mirrors the discovery walk a deployment-specific wrapper script performs,
+    so instances stay consistent without per-host env tweaks.
 
     Override: ``TOKENPAK_CLAUDE_BIN`` env var (absolute path) wins.
     """
