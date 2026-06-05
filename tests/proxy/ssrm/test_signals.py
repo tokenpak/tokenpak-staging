@@ -109,6 +109,42 @@ def test_session_age_turns_counts_monitor_rows(tmp_ssrm_dbs):
     assert sigs.session_age_turns == 7
 
 
+def test_idx_requests_session_id_created_by_monitor_init(tmp_path):
+    """The proxy Monitor schema creates idx_requests_session_id so the SSRM
+    session lookup seeks instead of full-scanning the requests table."""
+    from tokenpak.proxy.monitor import Monitor
+
+    db = tmp_path / "monitor.db"
+    Monitor(str(db))  # runs _init_db -> creates schema + indexes
+    con = sqlite3.connect(str(db))
+    idx = {r[1] for r in con.execute("PRAGMA index_list(requests)")}
+    con.close()
+    assert "idx_requests_session_id" in idx
+
+
+def test_monitor_recent_for_session_is_bounded(tmp_ssrm_dbs):
+    """_monitor_recent_for_session never returns more than `limit` rows, so a
+    session with many rows cannot drive an unbounded result set; ordering stays
+    most-recent-first."""
+    mdb = tmp_ssrm_dbs["monitor_db"]
+    con = sqlite3.connect(mdb)
+    con.execute("""CREATE TABLE requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, model TEXT,
+        input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+        cache_creation_tokens INTEGER, session_id TEXT)""")
+    for _ in range(60):
+        con.execute(
+            "INSERT INTO requests (timestamp, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, session_id) "
+            "VALUES (datetime('now'), 'claude-opus-4-7', 10, 5, 100, 0, 'sess-big')"
+        )
+    con.commit()
+    con.close()
+    assert len(_monitor_recent_for_session(mdb, "sess-big")) == 50  # default cap
+    assert len(_monitor_recent_for_session(mdb, "sess-big", limit=10)) == 10
+    rows = _monitor_recent_for_session(mdb, "sess-big", limit=3)
+    assert [r["id"] for r in rows] == sorted([r["id"] for r in rows], reverse=True)
+
+
 def test_burn_rate_per_min_window(tmp_ssrm_dbs):
     """token_burn_rate_per_min sums (input + output) tokens over the rolling window."""
     mdb = tmp_ssrm_dbs["monitor_db"]
