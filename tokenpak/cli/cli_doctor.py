@@ -62,31 +62,11 @@ def cmd_doctor(args):
         results["warn"] += 1
         fixes_needed.append("create config")
 
-    # Check 3: Vault index
-    index_path = Path.home() / ".tokenpak" / "index.json"
-    if index_path.exists():
-        try:
-            with open(index_path) as f:
-                data = json.load(f)
-                block_count = len(data.get("blocks", []))
-            if block_count > 0:
-                print(Colors.ok(f"Vault index         {index_path} — {block_count} blocks"))
-                results["pass"] += 1
-            else:
-                print(
-                    Colors.warn(
-                        f"Vault index         {index_path} — 0 blocks (run: tokenpak index)"
-                    )
-                )
-                results["warn"] += 1
-        except json.JSONDecodeError:
-            print(Colors.fail(f"Vault index         {index_path} — invalid JSON"))
-            results["fail"] += 1
-    else:
-        print(Colors.warn(f"Vault index         {index_path} — not found"))
-        results["warn"] += 1
-
-    # Check 4: Proxy port
+    # Pre-fetch the live proxy /health ONCE — consumed by both the vault check
+    # (Check 3) and the proxy check (Check 4). `tokenpak claude` retrieves Paks
+    # through the running companion proxy, so the doctor's vault view must
+    # reflect the LIVE retrieval path, not just the CLI-registered index.
+    # Display-only; no behaviour change to retrieval/launcher/MCP/proxy.
     import os as _os
 
     proxy_port = int(_os.environ.get("TOKENPAK_PORT", "8766"))
@@ -96,6 +76,66 @@ def cmd_doctor(args):
 
         resp = _urlreq.urlopen(f"http://127.0.0.1:{proxy_port}/health", timeout=2)
         proxy_health = json.loads(resp.read())
+    except Exception:
+        proxy_health = None
+
+    live_vault = proxy_health.get("vault_index") if isinstance(proxy_health, dict) else None
+    live_vault_available = bool(live_vault.get("available")) if isinstance(live_vault, dict) else False
+    live_vault_blocks = int(live_vault.get("blocks", 0) or 0) if isinstance(live_vault, dict) else 0
+
+    # Check 3: Vault index — reconcile the CLI-registered index with the live
+    # companion/proxy vault. These are independent: a missing/empty CLI index
+    # does NOT mean retrieval is broken when the proxy has the vault loaded.
+    index_path = Path.home() / ".tokenpak" / "index.json"
+    cli_state = "missing"  # missing | empty | ok | invalid
+    cli_blocks = 0
+    if index_path.exists():
+        try:
+            with open(index_path) as f:
+                data = json.load(f)
+            cli_blocks = len(data.get("blocks", []))
+            cli_state = "ok" if cli_blocks > 0 else "empty"
+        except json.JSONDecodeError:
+            cli_state = "invalid"
+
+    if cli_state == "invalid":
+        print(Colors.fail(f"Vault index         {index_path} — invalid JSON"))
+        results["fail"] += 1
+    elif cli_state == "ok":
+        print(Colors.ok(f"Vault index         {index_path} — {cli_blocks} blocks"))
+        results["pass"] += 1
+    elif live_vault_available and live_vault_blocks > 0:
+        # CLI index missing/empty BUT the live companion proxy has the vault
+        # loaded — `tokenpak claude` retrieval is healthy. Informational, not a
+        # warning: do not imply retrieval is broken.
+        label = "not registered" if cli_state == "missing" else "0 blocks"
+        print(
+            Colors.ok(
+                f"Vault index         CLI index {label}; "
+                f"companion proxy vault loaded — {live_vault_blocks} blocks"
+            )
+        )
+        results["pass"] += 1
+    elif cli_state == "empty":
+        print(
+            Colors.warn(
+                f"Vault index         {index_path} — 0 blocks (run: tokenpak index)"
+            )
+        )
+        results["warn"] += 1
+    else:  # missing, and no live proxy vault to fall back on
+        print(
+            Colors.warn(
+                f"Vault index         {index_path} — not available "
+                f"(run: tokenpak index <path>, or start the companion proxy)"
+            )
+        )
+        results["warn"] += 1
+
+    # Check 4: Proxy port — consumes the pre-fetched proxy_health above.
+    try:
+        if proxy_health is None:
+            raise RuntimeError("proxy health unavailable")
         mode = proxy_health.get("compilation_mode", "unknown")
         reqs = proxy_health.get("stats", {}).get("requests", 0)
         print(Colors.ok(f"Proxy reachable     port {proxy_port} — {mode} mode, {reqs} requests"))
