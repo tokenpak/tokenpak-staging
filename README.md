@@ -3,8 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-[![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)](#)
-<!-- CI badge: pending repo transfer to tokenpak/tokenpak — add after transfer is confirmed -->
+![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)
 
 TokenPak is a local-first proxy that applies **Prompt Packing** to your LLM context before it reaches the provider — fewer tokens, lower cost, same results. No code changes, no cloud, no credentials stored.
 

@@ -8,7 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Internal
 
-- Suppress ephemeral RBAC admin password from `Release-gate snapshot validation` CI logs (#REIPO-SNAPGEN-LOG-HYGIENE-01). Snapshot-gen now sets `TOKENPAK_SNAPSHOT_GEN=1` to skip the first-run admin bootstrap during introspection.
+- Suppress ephemeral RBAC admin password from `Release-gate snapshot validation` CI logs. Snapshot-gen now sets `TOKENPAK_SNAPSHOT_GEN=1` to skip the first-run admin bootstrap during introspection.
 
 ## [v1.7.0] — 2026-05-25
 
