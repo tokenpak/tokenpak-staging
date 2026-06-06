@@ -941,7 +941,12 @@ Examples:
 
 ### `tokenpak compare`
 
-Show before/after cost comparison for last N requests.
+Show recorded cost for the last N requests.
+
+    Reports the actual recorded cost per request. Per-request cache/savings
+    attribution is not available from the receipt-backed event store, so it is
+    shown as a neutral unavailable state rather than estimated from a fabricated
+    cache-hit assumption.
 
 **Flags:**
 
@@ -1050,7 +1055,7 @@ Example:
 
 ### `tokenpak leaderboard`
 
-Show per-model efficiency ranking.
+Show per-model efficiency ranking from receipt-backed telemetry.
 
 **Flags:**
 
