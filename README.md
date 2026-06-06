@@ -5,7 +5,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 ![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)
 
-TokenPak is a local-first proxy that applies **Prompt Packing** to your LLM context before it reaches the provider — fewer tokens, lower cost, same results. No code changes, no cloud, no credentials stored.
+TokenPak is a local-first proxy that applies **Prompt Packing** to your LLM context before it reaches the provider — fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
 
 **Status:** Beta — APIs and CLI may change between releases.
 
@@ -83,13 +83,23 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 - **A/B testing and replay/debug** — compare Prompt Packing configs, replay past requests
 - **50 built-in compression recipes** — YAML, customizable
 
-In favorable repeated-context workloads, cache hits can reach up to 90%+. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
+Repeated context is reused from cache instead of re-sent on every call. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
 
 ---
 
 ## Open source & editions
 
 TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are proprietary. Commercial packaging is not published yet.
+
+---
+
+## License
+
+The TokenPak open-source core is licensed under the Apache License 2.0 — see [LICENSE](LICENSE). TokenPak Pro and hosted services are proprietary.
+
+### Trademark
+
+"TokenPak", the TokenPak name, logo, and brand assets are trademarks of TokenPak and are **not** licensed under Apache-2.0 (Apache-2.0 §6 grants no trademark rights). Nominative and reference use — for example "works with TokenPak" or "a plugin for TokenPak" — is fine. Using the name or logo in a way that implies endorsement, sponsorship, or affiliation, or naming a fork, product, or service "TokenPak" (or something confusingly similar), is not.
 
 ---
 
