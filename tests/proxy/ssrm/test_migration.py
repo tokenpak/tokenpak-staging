@@ -93,3 +93,92 @@ def test_migration_on_pre_phase1_db_adds_columns(tmp_path):
     assert rows[0][0] == 100
     # ssrm_decision defaults to '' for pre-existing rows
     assert rows[0][1] == ""
+
+
+def test_migration_adds_session_id_index_and_preserves_rows(tmp_path):
+    """A legacy monitor.db that pre-dates ``idx_requests_session_id``: opening it
+    with the current Monitor adds the index idempotently AND preserves existing
+    rows.
+
+    Migration/compat guard for the additive ``idx_requests_session_id`` index on
+    ``requests(session_id)``. The index is created with ``CREATE INDEX IF NOT
+    EXISTS`` after the ``session_id`` column is guaranteed, so it is purely
+    additive and non-destructive to existing data.
+    """
+    db = str(tmp_path / "pre-index.db")
+    con = sqlite3.connect(db)
+    # Legacy schema: has the session_id column but NO idx_requests_session_id.
+    con.execute(
+        """CREATE TABLE requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL, model TEXT NOT NULL, request_type TEXT,
+        input_tokens INTEGER, output_tokens INTEGER, estimated_cost REAL,
+        latency_ms INTEGER, status_code INTEGER, endpoint TEXT,
+        compilation_mode TEXT, protected_tokens INTEGER,
+        compressed_tokens INTEGER, injected_tokens INTEGER DEFAULT 0,
+        injected_sources TEXT DEFAULT '', cache_read_tokens INTEGER DEFAULT 0,
+        cache_creation_tokens INTEGER DEFAULT 0, would_have_saved INTEGER DEFAULT 0,
+        user_id TEXT DEFAULT '', session_id TEXT DEFAULT ''
+    )"""
+    )
+    con.execute(
+        "INSERT INTO requests (timestamp, model, input_tokens, output_tokens, "
+        "estimated_cost, session_id) VALUES "
+        "(datetime('now'), 'claude-opus-4-7', 100, 10, 0.01, 'sess-legacy')"
+    )
+    con.commit()
+    # Precondition: the additive index does not exist in the legacy db yet.
+    idx_before = {
+        r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    assert "idx_requests_session_id" not in idx_before
+    con.close()
+
+    # Apply the current migration.
+    Monitor(db)
+
+    con = sqlite3.connect(db)
+    # The additive index now exists.
+    idx_after = {
+        r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    assert "idx_requests_session_id" in idx_after
+    # Existing row survives intact — no data loss, value unchanged.
+    rows = list(
+        con.execute(
+            "SELECT input_tokens, session_id FROM requests WHERE session_id='sess-legacy'"
+        )
+    )
+    assert rows == [(100, "sess-legacy")]
+    # Row count unchanged: migration is non-destructive.
+    assert con.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+    con.close()
+
+
+def test_migration_session_id_index_idempotent(tmp_path):
+    """Re-running the migration on a db that already carries
+    ``idx_requests_session_id`` is a no-op (``CREATE INDEX IF NOT EXISTS``) and
+    preserves both the data and the index."""
+    db = str(tmp_path / "idx-idem.db")
+    Monitor(db)  # fresh schema -> index created
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO requests (timestamp, model, input_tokens, output_tokens, "
+        "estimated_cost, session_id) VALUES "
+        "(datetime('now'), 'claude-opus-4-7', 7, 3, 0.001, 'sess-x')"
+    )
+    con.commit()
+    con.close()
+
+    # Re-run the migration twice: must not raise, drop the index, or lose rows.
+    Monitor(db)
+    Monitor(db)
+
+    con = sqlite3.connect(db)
+    idx = {
+        r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    assert "idx_requests_session_id" in idx
+    assert con.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+    assert con.execute("SELECT session_id FROM requests").fetchone()[0] == "sess-x"
+    con.close()
