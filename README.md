@@ -59,6 +59,15 @@ Run `tokenpak integrate` to see the current client list with setup guides for ea
 pip install tokenpak
 ```
 
+To upgrade an existing install (a plain `pip install tokenpak` will **not**
+upgrade an already-installed version):
+
+```bash
+pip install -U tokenpak
+# or
+tokenpak update
+```
+
 See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
 
 Requirements: Python 3.10+. No external dependencies for core functionality.

@@ -658,14 +658,37 @@ def cmd_setup(args):
             anthropic_via_oauth = False
 
         if anthropic_via_oauth:
+            # OAuth/session auth covers Anthropic, so no direct API key is
+            # needed. Rather than dead-ending, complete onboarding: if a
+            # Claude Code login is present, point it at the local proxy so
+            # the no-key path actually finishes setup.
             print("ℹ️  Anthropic is authenticated via OAuth/session "
                   "(no direct API key needed).")
+            try:
+                from tokenpak.cli.commands.setup import (
+                    configure_claude_code,
+                    detect_claude_code,
+                )
+
+                if detect_claude_code():
+                    configure_claude_code()
+                    print("✅ Configured Claude Code to use the TokenPak proxy "
+                          "(ANTHROPIC_BASE_URL).")
+            except Exception as _e:
+                print(f"   (Claude Code auto-config skipped: {_e})")
             print("   Set OPENAI_API_KEY or GOOGLE_API_KEY to proxy those providers.")
             return
 
         print("⚠️  No API keys detected in environment variables.")
-        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
-        print("   Example: export ANTHROPIC_API_KEY='sk-...'")
+        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY,")
+        print("   or sign in with Claude Code (OAuth) — no API key required.")
+        print("   Example (set ANTHROPIC_API_KEY for your shell):")
+        try:
+            from tokenpak.cli.commands.setup import env_var_help
+
+            print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
+        except Exception:
+            print("    export ANTHROPIC_API_KEY='sk-...'")
         return
 
     # Auto-detect primary provider
