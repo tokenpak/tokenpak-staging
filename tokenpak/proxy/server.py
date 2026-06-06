@@ -1292,6 +1292,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                     get_degradation_tracker().record_compression_failure(hook_err)
                     sent_input_tokens = input_tokens
+                    # Mark this request as forwarded-unchanged so the monitor.db
+                    # row carries an honest skip_reason (rendered by
+                    # `tokenpak status --explain`). Best-effort; never raises.
+                    try:
+                        self._tokenpak_skip_reason = "compression-failed"
+                    except Exception:
+                        pass
                     # body is unchanged (assignment failed, original value retained)
 
         if sent_input_tokens == 0:
@@ -1868,6 +1875,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             }
                         except Exception:
                             _ssrm_kwargs = {}
+                    # Per-request skip_reason: an honest, human-readable note for
+                    # why optimization was NOT applied to this request, surfaced
+                    # by `tokenpak status --explain <id>` (renders the recorded
+                    # value instead of the "unknown" fallback). Derived from
+                    # state already in scope on this request path — no new
+                    # decision logic, no behavior change. Fail-open: any error
+                    # yields "" (the non-skip default), never raises.
+                    try:
+                        _skip_reason = _derive_skip_reason(
+                            explicit_reason=getattr(self, "_tokenpak_skip_reason", "") or "",
+                            is_byte_preserved=_is_byte_preserved,
+                            compilation_mode=ps.compilation_mode,
+                            compressed_tokens=max(0, input_tokens - sent_input_tokens),
+                        )
+                    except Exception:
+                        _skip_reason = ""
                     try:
                         ps.monitor.log(
                             model=model,
@@ -1899,6 +1922,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             session_id=_mon_session_id,
                             agent_id=_mon_agent_id,
                             cycle_id=_mon_cycle_id,
+                            skip_reason=_skip_reason,
                             **_ssrm_kwargs,
                         )
                     except Exception:
@@ -2677,6 +2701,44 @@ def _estimate_tokens_from_body(body: bytes) -> int:
         return total
     except Exception:
         return len(body) // 4
+
+
+def _derive_skip_reason(
+    *,
+    explicit_reason: str = "",
+    is_byte_preserved: bool = False,
+    compilation_mode: str = "",
+    compressed_tokens: int = 0,
+) -> str:
+    """Derive an honest per-request optimization ``skip_reason``.
+
+    Surfaced by ``tokenpak status --explain <id>`` (renders the recorded value
+    instead of the ``unknown`` fallback). Derived entirely from state already
+    known on the request path — no new decision logic, no behavior change.
+
+    Returns the empty string when the request WAS optimized (the non-skip
+    default), so the monitor.db column stays empty for optimized traffic.
+    Fail-open: callers should still default to "" on any unexpected error,
+    but this function itself never raises for well-typed inputs.
+
+    Precedence (most specific first):
+      * ``explicit_reason`` — a concrete reason recorded upstream
+        (e.g. ``compression-failed`` when the request was forwarded unchanged).
+      * ``byte-preserved`` — byte-preserved traffic skips compression by design
+        to preserve upstream billing routing.
+      * ``transparent-mode`` — transparent mode is side-effect-free by contract.
+      * ``no-compression-applied`` — compression ran but reduced nothing.
+      * ``""`` — compression reduced tokens; the request was optimized.
+    """
+    if explicit_reason:
+        return explicit_reason
+    if is_byte_preserved:
+        return "byte-preserved"
+    if compilation_mode == "transparent":
+        return "transparent-mode"
+    if compressed_tokens <= 0:
+        return "no-compression-applied"
+    return ""
 
 
 def _extract_response_tokens(body: bytes) -> int:
