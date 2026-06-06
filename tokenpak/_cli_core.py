@@ -647,6 +647,22 @@ def cmd_setup(args):
         api_keys["google"] = os.environ["GOOGLE_API_KEY"]
 
     if not api_keys:
+        # A direct ANTHROPIC_API_KEY is only genuinely needed when no OAuth /
+        # proxy / session-auth path covers Anthropic. Suppress the false-alarm
+        # warning when OAuth/session auth is already available.
+        try:
+            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+
+            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+        except Exception:
+            anthropic_via_oauth = False
+
+        if anthropic_via_oauth:
+            print("ℹ️  Anthropic is authenticated via OAuth/session "
+                  "(no direct API key needed).")
+            print("   Set OPENAI_API_KEY or GOOGLE_API_KEY to proxy those providers.")
+            return
+
         print("⚠️  No API keys detected in environment variables.")
         print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
         print("   Example: export ANTHROPIC_API_KEY='sk-...'")

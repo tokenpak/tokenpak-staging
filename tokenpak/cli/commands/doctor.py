@@ -786,12 +786,31 @@ def run_doctor(
             f"API keys            {', '.join(found_keys)} — env vars set",
         )
     else:
-        _record(
-            "api_keys",
-            "warn",
-            "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "or GOOGLE_API_KEY",
-        )
+        # No direct key env var set. A direct ANTHROPIC_API_KEY is only
+        # genuinely needed when no OAuth / proxy / session-auth path covers
+        # Anthropic; warning otherwise is a false alarm. Reuse the canonical
+        # credential discovery to decide.
+        try:
+            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+
+            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+        except Exception:
+            anthropic_via_oauth = False
+
+        if anthropic_via_oauth:
+            _record(
+                "api_keys",
+                "pass",
+                "API keys            Anthropic authenticated via OAuth/session "
+                "(no direct API key needed)",
+            )
+        else:
+            _record(
+                "api_keys",
+                "warn",
+                "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+                "or GOOGLE_API_KEY",
+            )
 
     # Proxy degradation check
     try:
