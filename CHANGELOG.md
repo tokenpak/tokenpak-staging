@@ -4,7 +4,51 @@ All notable changes to TokenPak are documented in this file.
 
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.8.0] — 2026-06-06
+
+Minor release. Headline: the default install footprint is now slim — the heavy ML/CUDA
+extras are opt-in. Also adds configurable companion memory-source ingestion and CLI
+plugin verbs, plus public-trust and release-gate hardening. Runtime behaviour is unchanged
+for existing default flows; the single breaking change is install metadata only (below).
+
+### Breaking — install footprint: heavy extras are now opt-in
+
+**Background:** `pip install tokenpak` previously pulled ~5 GB of CUDA/ML wheels (torch, nvidia/\*, transformers, sentence-transformers, scipy, tree-sitter-languages, pandas, litellm, llmlingua) as hard runtime dependencies. This made first-run installs impractical on machines without CUDA or a fast connection.
+
+**What changed:** the six heavy packages listed below have been moved from `[project.dependencies]` to named `[project.optional-dependencies]` extras. The runtime behaviour is **unchanged** — every import site was already guarded with `try/except ImportError` before this release. Only the install metadata changed.
+
+**Migration:** if your code uses any of the features below, add the corresponding extra to your install command:
+
+| Feature | Add to install command |
+|---|---|
+| Semantic search / vector embeddings (sentence-transformers) | `pip install tokenpak[retrieval]` |
+| Tree-sitter code parsing | `pip install tokenpak[code-compression]` |
+| A/B testing optimizer (scipy) | `pip install tokenpak[intelligence]` |
+| Pandas data utilities | `pip install tokenpak[data]` |
+| LLMLingua prompt compression | `pip install tokenpak[compression]` |
+| LiteLLM Router integration | `pip install tokenpak[integrations-litellm]` |
+| **Everything (previous default)** | `pip install tokenpak[full]` |
+
+If you previously ran `pip install tokenpak` and relied on retrieval / code-compression / intelligence / compression / integrations-litellm features, you must add the extra to your install. Features that use the guarded import will raise a clear `ImportError` with the correct `pip install` command if the extra is absent.
+
+**Slim install target:** `pip install tokenpak` on a clean machine resolves in under 30 seconds and uses under 200 MB of disk. The `[full]` extra restores the previous behaviour for users who want everything.
+
+### Added
+
+- Named install extras: `tokenpak[retrieval]`, `tokenpak[code-compression]`, `tokenpak[intelligence]`, `tokenpak[data]`, `tokenpak[compression]`, `tokenpak[integrations-litellm]`, `tokenpak[full]`.
+- **companion:** configurable generic memory-source ingestion ("bring your own knowledge base") — ingest lessons from any directory of Markdown notes without the multi-agent vault layout. New surface: `tokenpak companion ingest --memory-dir <path>`, `tokenpak companion status`, the `TOKENPAK_COMPANION_MEMORY_DIRS` env var, and `CompanionConfig.memory_dirs`. Additive public API: `tokenpak.companion.memory.lesson_ingest.ingest_from_dir` / `ingest_sources`. Existing `ingest_from_vault` behaviour is unchanged.
+- **cli:** load the `tokenpak.commands` entry-point group so third-party packages can register plugin verbs.
+- CI: slim-install smoke test (no extras; asserts site-packages < 200 MB and imports the proxy client); full-install matrix (`pip install -e .[full,dev]` + full suite); `tests/test_dependencies_extras.py` slim-core invariant gate; `tests/test_extras_import_guard.py` guarded-import gate.
+
+### Changed
+
+- **install:** the guarded-import error messages now suggest the correct `pip install tokenpak[extra]` (e.g. `tokenpak/integrations/litellm/proxy.py` points to `tokenpak[integrations-litellm]`).
+- **proxy:** thread a per-request `skip_reason` into `Monitor.log` for clearer cache-attribution.
+- **docs:** remove unsupported savings percentages and "same results" claims from the README, CLI preview, and other trust surfaces, reframing to capability language; re-author the README License/Trademark section (Apache-2.0 core + trademark boundary).
+
+### Fixed
+
+- **proxy:** restore the `CLAUDE_CODE_HEADER_ALLOWLIST` back-compat re-export at `tokenpak.proxy.passthrough`, so the historical import path `from tokenpak.proxy.passthrough import CLAUDE_CODE_HEADER_ALLOWLIST` keeps working unchanged.
 
 ### Added
 
@@ -14,13 +58,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Internal
 
-- Suppress ephemeral RBAC admin password from `Release-gate snapshot validation` CI logs. Snapshot-gen now sets `TOKENPAK_SNAPSHOT_GEN=1` to skip the first-run admin bootstrap during introspection.
+- **release-gate:** tag-source ancestry check — `release.yml` now validates that a pushed `v*` tag is reachable from `origin/main` before any artifact is built, failing fast on a wrong-source tag.
+- Regenerate the public-API snapshot for the v1.8.0 surface (additive public symbols only; no removals).
 
 ## [1.7.1] — 2026-06-03
 
 Surgical patch release: fixes, hardening, and public-safety/CI hygiene only. No new
 features, no default-behavior changes, no breaking changes. (The install-footprint
-extras split remains parked for a future minor — see the Unreleased section below.)
+extras split was parked at 1.7.1 and ships in 1.8.0 — see above.)
 
 ### Fixed
 
@@ -240,44 +285,6 @@ This release ships no runtime, CLI, or public-API behavior change. It is a packa
 - **Performance/benchmark hermeticity**: hermetic compression benchmark and re-baseline; non-flaky throughput-ratio test (pre-encoded bytes, deterministic timing); load-test timeouts adjusted for CI runner stability.
 
 > v1.5.3 itself is not on PyPI; see v1.5.4 above.
-
----
-
-## [Unreleased] — install footprint extras split
-
-### Breaking — install footprint: heavy extras are now opt-in
-
-**Background:** `pip install tokenpak` previously pulled ~5 GB of CUDA/ML wheels (torch, nvidia/\*, transformers, sentence-transformers, scipy, tree-sitter-languages, pandas, litellm, llmlingua) as hard runtime dependencies. This made first-run installs impractical on machines without CUDA or a fast connection.
-
-**What changed:** the six heavy packages listed below have been moved from `[project.dependencies]` to named `[project.optional-dependencies]` extras. The runtime behaviour is **unchanged** — every import site was already guarded with `try/except ImportError` before this release. Only the install metadata changed.
-
-**Migration:** if your code uses any of the features below, add the corresponding extra to your install command:
-
-| Feature | Add to install command |
-|---|---|
-| Semantic search / vector embeddings (sentence-transformers) | `pip install tokenpak[retrieval]` |
-| Tree-sitter code parsing | `pip install tokenpak[code-compression]` |
-| A/B testing optimizer (scipy) | `pip install tokenpak[intelligence]` |
-| Pandas data utilities | `pip install tokenpak[data]` |
-| LLMLingua prompt compression | `pip install tokenpak[compression]` |
-| LiteLLM Router integration | `pip install tokenpak[integrations-litellm]` |
-| **Everything (previous default)** | `pip install tokenpak[full]` |
-
-If you previously ran `pip install tokenpak` and relied on retrieval / code-compression / intelligence / compression / integrations-litellm features, you must add the extra to your install. Features that use the guarded import will raise a clear `ImportError` with the correct `pip install` command if the extra is absent.
-
-**Slim install target:** `pip install tokenpak` on a clean machine resolves in under 30 seconds and uses under 200 MB of disk. The `[full]` extra restores the previous behaviour for users who want everything.
-
-### Added — install footprint extras split
-
-- Named extras: `tokenpak[retrieval]`, `tokenpak[code-compression]`, `tokenpak[intelligence]`, `tokenpak[data]`, `tokenpak[compression]`, `tokenpak[integrations-litellm]`, `tokenpak[full]`.
-- CI: slim-install smoke test — installs tokenpak with no extras, asserts venv site-packages < 200 MB, runs `python -c "import tokenpak; from tokenpak.proxy import client"`.
-- CI: full-install matrix — `pip install -e .[full,dev]` + full test suite.
-- `tests/test_dependencies_extras.py` — slim-core invariant gate.
-- `tests/test_extras_import_guard.py` — lightweight post-demotion gate that asserts each heavy package is absent from `[project.dependencies]` and smoke-tests each guarded import path.
-
-### Changed — import error messages
-
-- `tokenpak/integrations/litellm/proxy.py` — error message updated to suggest `pip install tokenpak[integrations-litellm]` instead of bare `pip install litellm`.
 
 ---
 

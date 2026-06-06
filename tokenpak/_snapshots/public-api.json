@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-05-30T21:06:46.675932Z",
-  "package_version": "1.7.0",
+  "generated_at": "2026-06-06T22:40:50Z",
+  "package_version": "1.8.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -604,6 +604,10 @@
       "name": "cmd_alerts_test"
     },
     {
+      "module": "tokenpak.cli.commands.alerts",
+      "name": "error"
+    },
+    {
       "module": "tokenpak.cli.commands.budget",
       "name": "SEP"
     },
@@ -764,6 +768,10 @@
       "name": "run_fleet_doctor"
     },
     {
+      "module": "tokenpak.cli.commands.doctor",
+      "name": "run_stream_check"
+    },
+    {
       "module": "tokenpak.cli.commands.doctor_claude_code",
       "name": "CheckResult"
     },
@@ -798,6 +806,22 @@
     {
       "module": "tokenpak.cli.commands.exec",
       "name": "run_macro"
+    },
+    {
+      "module": "tokenpak.cli.commands.explain",
+      "name": "NO_ARG"
+    },
+    {
+      "module": "tokenpak.cli.commands.explain",
+      "name": "explain_request"
+    },
+    {
+      "module": "tokenpak.cli.commands.explain",
+      "name": "render_value_tier_notes"
+    },
+    {
+      "module": "tokenpak.cli.commands.explain",
+      "name": "run_explain"
     },
     {
       "module": "tokenpak.cli.commands.features",
@@ -1641,6 +1665,10 @@
     },
     {
       "module": "tokenpak.companion.codex.doctor",
+      "name": "check_agents_md_size"
+    },
+    {
+      "module": "tokenpak.companion.codex.doctor",
       "name": "check_codex_binary"
     },
     {
@@ -1669,6 +1697,10 @@
     },
     {
       "module": "tokenpak.companion.codex.doctor",
+      "name": "check_proxy_routing"
+    },
+    {
+      "module": "tokenpak.companion.codex.doctor",
       "name": "check_rates_snapshot"
     },
     {
@@ -1677,7 +1709,15 @@
     },
     {
       "module": "tokenpak.companion.codex.doctor",
+      "name": "check_skills_legacy_orphans"
+    },
+    {
+      "module": "tokenpak.companion.codex.doctor",
       "name": "main"
+    },
+    {
+      "module": "tokenpak.companion.codex.doctor",
+      "name": "orphaned_legacy_skills"
     },
     {
       "module": "tokenpak.companion.codex.doctor",
@@ -1765,7 +1805,31 @@
     },
     {
       "module": "tokenpak.companion.codex.skills_installer",
+      "name": "orphaned_legacy_skills"
+    },
+    {
+      "module": "tokenpak.companion.codex.skills_installer",
       "name": "uninstall_skills"
+    },
+    {
+      "module": "tokenpak.companion.codex.statusline_config",
+      "name": "DEFAULT_STATUS_ITEMS"
+    },
+    {
+      "module": "tokenpak.companion.codex.statusline_config",
+      "name": "DEFAULT_TITLE_ITEMS"
+    },
+    {
+      "module": "tokenpak.companion.codex.statusline_config",
+      "name": "default_config_path"
+    },
+    {
+      "module": "tokenpak.companion.codex.statusline_config",
+      "name": "install_status_line"
+    },
+    {
+      "module": "tokenpak.companion.codex.statusline_config",
+      "name": "main"
     },
     {
       "module": "tokenpak.companion.codex.uninstall",
@@ -2182,6 +2246,50 @@
     {
       "module": "tokenpak.companion.recall.store",
       "name": "open_recall_store"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "EVENT_KIND"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "EVENT_NAME"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "EVENT_SEVERITY"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "GUARD_ENV"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "STREAM_TRUNCATED_CODE"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "STREAM_TRUNCATED_REMEDY"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "StreamTruncatedError"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "guard_enabled"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "guarded_stream"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "read_provider_errors"
+    },
+    {
+      "module": "tokenpak.companion.stream",
+      "name": "self_check"
     },
     {
       "module": "tokenpak.companion.trace",
@@ -5888,6 +5996,522 @@
       "name": "search"
     },
     {
+      "module": "tokenpak.orchestration.dispatch",
+      "name": "DISPATCH_CAPABILITIES"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch",
+      "name": "DISPATCH_RECORD_MODELS"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch",
+      "name": "PakSuffixCollisionError"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch",
+      "name": "UnknownCapabilityError"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch",
+      "name": "load_dispatch_models"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch",
+      "name": "validate_capabilities"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "AcceptanceCriterion"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "Constraint"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DISPATCH_RECORD_MODELS"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DecisionDefaultAction"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DecisionOption"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DecisionRecommendation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DecisionResolution"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "Deliverable"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchArtifact"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchBaseModel"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchDecision"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchEffect"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchJob"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchManifest"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchReceipt"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchRoute"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchRun"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchStationRun"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "DispatchWorker"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "LateResult"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "ManifestPermissions"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "PakSuffixCollisionError"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "PathPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "QualityRequirements"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "ReceiptDecision"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "ReceiptEffect"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "ReceiptStation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "ReceiptTelemetry"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "RouteDelivery"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "RouteRetryPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "RouteStation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "RouteTriggers"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "StationLoopPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "WorkerLoopDefault"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "WorkerPermissionProfile"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models",
+      "name": "load_dispatch_models"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.artifact",
+      "name": "DispatchArtifact"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "AcceptanceCriterion"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "Constraint"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "Deliverable"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "DispatchBaseModel"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "MANDATORY_DENIED_PATHS"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "ManifestPermissions"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "PathPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "QualityRequirements"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "StationLoopPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.common",
+      "name": "WorkerLoopDefault"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.decision",
+      "name": "DecisionDefaultAction"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.decision",
+      "name": "DecisionOption"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.decision",
+      "name": "DecisionRecommendation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.decision",
+      "name": "DecisionResolution"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.decision",
+      "name": "DispatchDecision"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.effect",
+      "name": "DispatchEffect"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "AutoApplyAfter"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "AutonomyMode"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "DecisionScope"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "DecisionStatus"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "DispatchJobStatus"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "EffectStatus"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "EffectTargetType"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "LoopOnExhausted"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "LoopStopCondition"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "ManifestStatus"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "ModifyFilesPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "ResolvedBy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "RiskLevel"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "RollbackBehavior"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "RunCommandsPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.enums",
+      "name": "StationRunStatus"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.job",
+      "name": "DispatchJob"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.late_result",
+      "name": "LateResult"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.manifest",
+      "name": "DispatchManifest"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.policy",
+      "name": "DispatchPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.receipt",
+      "name": "DispatchReceipt"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.receipt",
+      "name": "ReceiptDecision"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.receipt",
+      "name": "ReceiptEffect"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.receipt",
+      "name": "ReceiptStation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.receipt",
+      "name": "ReceiptTelemetry"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.route",
+      "name": "DispatchRoute"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.route",
+      "name": "RouteDelivery"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.route",
+      "name": "RouteRetryPolicy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.route",
+      "name": "RouteStation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.route",
+      "name": "RouteTriggers"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.run",
+      "name": "DispatchRun"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.station_run",
+      "name": "DispatchStationRun"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.worker",
+      "name": "DispatchWorker"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.models.worker",
+      "name": "WorkerPermissionProfile"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.schemas",
+      "name": "SCHEMA_DIR"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.schemas",
+      "name": "export_all_schemas"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.schemas",
+      "name": "generate_schemas"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.schemas",
+      "name": "load_schema"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.schemas",
+      "name": "schema_path"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ALLOWED_COMMAND_CATEGORIES"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "AUTONOMY_TOOL_MATRIX"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ApplyPatchResult"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ApprovalRequiredError"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "CATEGORY_MUTATES_WORKSPACE"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "CommandCategory"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "CommandCategoryError"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "FORBIDDEN_COMMAND_CATEGORIES"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "POLICY_DEPENDENT"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "PathPolicyViolation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "RunCommandResult"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "TOOL_REGISTRY"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ToolName"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ToolPermission"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ToolPolicyViolation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "ToolSpec"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "apply_patch"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "authorize_tool_call"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "check_path_policy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "resolve_tool_permission"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "run_command"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools",
+      "name": "validate_command_category"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.apply_patch",
+      "name": "ApplyPatchResult"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.apply_patch",
+      "name": "PathPolicyViolation"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.apply_patch",
+      "name": "apply_patch"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.apply_patch",
+      "name": "check_path_policy"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.run_command",
+      "name": "CommandCategoryError"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.run_command",
+      "name": "RunCommandResult"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.run_command",
+      "name": "run_command"
+    },
+    {
+      "module": "tokenpak.orchestration.dispatch.tools.run_command",
+      "name": "validate_command_category"
+    },
+    {
       "module": "tokenpak.orchestration.episode_distiller",
       "name": "EpisodeRecord"
     },
@@ -7496,12 +8120,24 @@
       "name": "FormatAdapter"
     },
     {
+      "module": "tokenpak.proxy.adapters.anthropic_adapter",
+      "name": "cacheable_fill_trace"
+    },
+    {
       "module": "tokenpak.proxy.adapters.base",
       "name": "CanonicalRequest"
     },
     {
       "module": "tokenpak.proxy.adapters.base",
       "name": "FormatAdapter"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.base",
+      "name": "cacheable_fill_trace"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.base",
+      "name": "cacheable_layer_hash"
     },
     {
       "module": "tokenpak.proxy.adapters.canonical",
@@ -7666,6 +8302,10 @@
     {
       "module": "tokenpak.proxy.adapters.openai_codex_responses_adapter",
       "name": "OpenAIResponsesAdapter"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.openai_codex_responses_adapter",
+      "name": "codex_responses_payload_fixup"
     },
     {
       "module": "tokenpak.proxy.adapters.openai_embedding",
@@ -7906,6 +8546,42 @@
     {
       "module": "tokenpak.proxy.capsule_integration",
       "name": "get_capsule_request_hook"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "ENABLE_ENV"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "OPTIN_HEADER"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "OPTIN_VALUE"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "build_capture_payload"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "extract_response_text"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "forward_to_daemon"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "maybe_forward_capture"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "opt_in_requested"
+    },
+    {
+      "module": "tokenpak.proxy.capture_intake",
+      "name": "should_attempt"
     },
     {
       "module": "tokenpak.proxy.circuit_breaker",
@@ -8306,6 +8982,14 @@
     {
       "module": "tokenpak.proxy.config",
       "name": "load_custom_providers"
+    },
+    {
+      "module": "tokenpak.proxy.config",
+      "name": "skeleton_active"
+    },
+    {
+      "module": "tokenpak.proxy.config",
+      "name": "skeleton_available"
     },
     {
       "module": "tokenpak.proxy.connection_pool",
@@ -10012,6 +10696,30 @@
       "name": "estimate"
     },
     {
+      "module": "tokenpak.proxy.spend_guard.grants",
+      "name": "EXHAUSTED"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.grants",
+      "name": "EXPIRED"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.grants",
+      "name": "GrantStore"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.grants",
+      "name": "NO_GRANT"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.grants",
+      "name": "REDEEMED"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.grants",
+      "name": "SessionGrant"
+    },
+    {
       "module": "tokenpak.proxy.spend_guard.intent",
       "name": "Intent"
     },
@@ -10184,6 +10892,242 @@
       "name": "strip_tip_header"
     },
     {
+      "module": "tokenpak.proxy.ssrm",
+      "name": "Decision"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm",
+      "name": "Signals"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm",
+      "name": "decide"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm",
+      "name": "prewarm"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.audit",
+      "name": "Decision"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.audit",
+      "name": "explain"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.audit",
+      "name": "open_audit_db"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.audit",
+      "name": "record_decision"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.audit",
+      "name": "summary_stats"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.audit",
+      "name": "tail"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "build_parser"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "cmd_explain"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "cmd_status"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "cmd_tail"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "explain"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "main"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "summary_stats"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.cli",
+      "name": "tail"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_BLOCK"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_COMPRESS"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_CONTINUE"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_QUARANTINE"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_ROTATE"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_SEVERITY"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ACTION_WARN"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "ALL_ACTIONS"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "Decision"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.contracts",
+      "name": "Signals"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.drift",
+      "name": "canonicalize_user_turn"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.drift",
+      "name": "drift_for_body"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.drift",
+      "name": "drift_score"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.drift",
+      "name": "jaccard"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.fingerprint",
+      "name": "canonicalize_user_turn"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.fingerprint",
+      "name": "fingerprint_of_body"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.fingerprint",
+      "name": "hash_canonical"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.fingerprint",
+      "name": "open_state_db"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.fingerprint",
+      "name": "record_and_count"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "ACTION_BLOCK"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "ACTION_COMPRESS"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "ACTION_CONTINUE"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "ACTION_QUARANTINE"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "ACTION_SEVERITY"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "ACTION_WARN"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "DEFAULT_THRESHOLDS"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "Decision"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "Signals"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "compute_signals"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "decide"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "record_decision"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.policy",
+      "name": "reset_config_cache"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.signals",
+      "name": "Signals"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.signals",
+      "name": "canonicalize_user_turn"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.signals",
+      "name": "compute_signals"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.signals",
+      "name": "drift_score"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.signals",
+      "name": "open_state_db"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.signals",
+      "name": "record_and_count"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.state",
+      "name": "open_audit_db"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.state",
+      "name": "open_state_db"
+    },
+    {
+      "module": "tokenpak.proxy.ssrm.state",
+      "name": "reset_handles_for_testing"
+    },
+    {
       "module": "tokenpak.proxy.startup",
       "name": "format_startup_report"
     },
@@ -10214,6 +11158,14 @@
     {
       "module": "tokenpak.proxy.stats",
       "name": "StatsCollector"
+    },
+    {
+      "module": "tokenpak.proxy.stats",
+      "name": "build_health_response"
+    },
+    {
+      "module": "tokenpak.proxy.stats",
+      "name": "build_stats_response"
     },
     {
       "module": "tokenpak.proxy.stats",
@@ -10290,6 +11242,10 @@
     {
       "module": "tokenpak.proxy.tracing",
       "name": "TraceStorage"
+    },
+    {
+      "module": "tokenpak.proxy.vault_bridge",
+      "name": "CACHEABLE_INJECTION_ENABLED"
     },
     {
       "module": "tokenpak.proxy.vault_bridge",
@@ -13901,6 +14857,10 @@
     },
     {
       "module": "tokenpak.telemetry.operational.rbac_auth",
+      "name": "SNAPSHOT_GEN_ENV"
+    },
+    {
+      "module": "tokenpak.telemetry.operational.rbac_auth",
       "name": "User"
     },
     {
@@ -16076,6 +17036,10 @@
       "name": "reshape_chunks"
     },
     {
+      "module": "tokenpak.vault.chunk_shaping",
+      "name": "skeleton_runtime_status"
+    },
+    {
       "module": "tokenpak.vault.config",
       "name": "SCHEMA_VERSION"
     },
@@ -16806,6 +17770,10 @@
     {
       "module": "tokenpak.vault.retrieval.vector_local",
       "name": "RetrieverType"
+    },
+    {
+      "module": "tokenpak.vault.retrieval.vector_local",
+      "name": "SentenceTransformer"
     },
     {
       "module": "tokenpak.vault.retrieval.vector_local",
