@@ -113,6 +113,10 @@ def _monitor_recent_for_session(
     try:
         con = sqlite3.connect(str(p))
         con.row_factory = sqlite3.Row
+        # Bounded by LIMIT and backed by idx_requests_session_id (created in the
+        # monitor _init_db). Without that index this WHERE session_id=? + ORDER
+        # BY id DESC degrades to a full-table scan on a populated monitor.db
+        # under live-writer load. Keep the index if editing this query.
         rows = con.execute(
             """SELECT id, timestamp, input_tokens, output_tokens,
                       cache_read_tokens, cache_creation_tokens

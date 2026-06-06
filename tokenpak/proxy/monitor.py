@@ -298,6 +298,20 @@ class Monitor:
         except Exception as e:
             print(f"⚠️  schema migration error (non-fatal): {e}")
 
+        # Index session_id AFTER the column is guaranteed (fresh schema has it;
+        # legacy pre-phase1 DBs get it from ensure_schema above). Lets the SSRM
+        # lookup (signals._monitor_recent_for_session: WHERE session_id=? ORDER
+        # BY id DESC LIMIT N) seek instead of full-scanning the requests table
+        # under live-writer load. Additive + idempotent; guarded for any DB
+        # still missing the column.
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id)"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
         # Run migrations to bring DB schema up to current version
         try:
             if MIGRATION_AVAILABLE:
