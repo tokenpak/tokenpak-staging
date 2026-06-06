@@ -82,7 +82,7 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 - **A/B testing and replay/debug** — compare compression configs, replay past requests
 - **50 built-in compression recipes** — YAML, customizable
 
-80%+ of operations cost zero tokens. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
+Repeated context is reused from cache instead of re-sent on every call. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
 
 ---
 
