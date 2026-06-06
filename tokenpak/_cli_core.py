@@ -556,9 +556,9 @@ def cmd_setup(args):
 
     # Ask for profile
     print("\nChoose a compression profile:")
-    print("  [1] minimal    — compression only (safest, ~5% savings)")
-    print("  [2] balanced   — compression + caching + routing (recommended, ~30% savings)")
-    print("  [3] aggressive — all modules enabled (maximum savings, ~40%+)")
+    print("  [1] minimal    — compression only (safest, lowest overhead)")
+    print("  [2] balanced   — compression + caching + routing (recommended)")
+    print("  [3] aggressive — all modules enabled (maximum optimization)")
 
     profile_input = input("\nProfile [2]: ").strip()
     profile_map = {"1": "minimal", "2": "balanced", "3": "aggressive"}
@@ -4788,7 +4788,7 @@ def main():
             req_count = len(recent) if recent else 0
             cache_hit = report.cache_hit_rate * 100 if report.cache_hit_rate else 0
 
-            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | 5.6% compression")
+            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | compression active")
 
             # Top model savings
             from .telemetry.query import get_model_usage
