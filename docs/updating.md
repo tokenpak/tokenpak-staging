@@ -15,6 +15,15 @@ tokenpak update
 tokenpak update --dry-run
 ```
 
+## Update Availability Notice
+
+When you run `tokenpak claude` or `tokenpak codex`, TokenPak prints a one-line notice if a newer release is available on PyPI (for example, `TokenPak X.Y.Z available — run tokenpak update`). This check:
+
+- runs only on the `tokenpak claude` / `tokenpak codex` launchers,
+- is cached to at most once per day,
+- is fail-open and offline-safe — network errors never delay or block the launcher, and
+- can be disabled by setting `TOKENPAK_NO_UPDATE_CHECK=1`.
+
 ## What Gets Updated
 
 | Component | Update Source | User Files Touched? |

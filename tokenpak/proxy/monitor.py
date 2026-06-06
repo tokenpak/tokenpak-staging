@@ -87,8 +87,8 @@ def _db_writer_worker():
                             ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
                             ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
                             ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
-                            ssrm_progress_signal,ssrm_signals_json)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            ssrm_progress_signal,ssrm_signals_json,skip_reason)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -184,6 +184,14 @@ class Monitor:
             pass
         try:
             conn.execute("ALTER TABLE requests ADD COLUMN cache_origin TEXT DEFAULT 'unknown'")
+        except sqlite3.OperationalError:
+            pass
+        # Per-request optimization drop/skip reason (e.g. 'route-unknown',
+        # 'flag-off', 'capability-missing'). Additive + idempotent; legacy rows
+        # keep ''. Populated when a caller threads the in-flight stage reason
+        # (see Monitor.log ``skip_reason``); read by ``tokenpak status --explain``.
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN skip_reason TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
         # Anthropic prompt-cache TTL attribution (additive, backward-compatible).
@@ -290,6 +298,20 @@ class Monitor:
         except Exception as e:
             print(f"⚠️  schema migration error (non-fatal): {e}")
 
+        # Index session_id AFTER the column is guaranteed (fresh schema has it;
+        # legacy pre-phase1 DBs get it from ensure_schema above). Lets the SSRM
+        # lookup (signals._monitor_recent_for_session: WHERE session_id=? ORDER
+        # BY id DESC LIMIT N) seek instead of full-scanning the requests table
+        # under live-writer load. Additive + idempotent; guarded for any DB
+        # still missing the column.
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id)"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
         # Run migrations to bring DB schema up to current version
         try:
             if MIGRATION_AVAILABLE:
@@ -340,6 +362,7 @@ class Monitor:
         ssrm_session_age_turns=0,
         ssrm_progress_signal=None,
         ssrm_signals_json=None,
+        skip_reason="",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -389,6 +412,7 @@ class Monitor:
             int(ssrm_session_age_turns or 0),
             ssrm_progress_signal,
             ssrm_signals_json,
+            skip_reason or "",
         )
         _queued = False
         try:
@@ -406,9 +430,9 @@ class Monitor:
                 "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
                 "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
                 "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
-                "ssrm_progress_signal, ssrm_signals_json) "
+                "ssrm_progress_signal, ssrm_signals_json, skip_reason) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insert_params,
             )
             _conn.commit()

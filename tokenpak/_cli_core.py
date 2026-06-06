@@ -2006,6 +2006,7 @@ def cmd_claude(args):
     import os
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
+    _maybe_update_nudge()
     from .companion import launch
     launch(args=list(args.args))
 
@@ -2032,6 +2033,7 @@ def cmd_codex(args):
         sys.exit(statusline_main(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
+    _maybe_update_nudge()
     from .companion.codex import launch
     launch(args=forwarded)
 
@@ -4062,6 +4064,96 @@ def cmd_version(args):
         print(f"\n  Lock file not found at {_LOCK_FILE}")
 
 
+# ── Update check (shared by `update` and the claude/codex launcher nudge) ──────
+
+_UPDATE_CHECK_TTL = 24 * 60 * 60  # cache the result for <=1 day
+_UPDATE_NUDGE_OPTOUT_ENV = "TOKENPAK_NO_UPDATE_CHECK"
+
+
+def _fetch_latest_pypi_version(timeout: float = 5.0) -> str:
+    """Return the latest tokenpak version string from PyPI.
+
+    Raises on any network/parse error — callers decide how to handle failure
+    (``cmd_update`` surfaces it; the launcher nudge swallows it, fail-open).
+    """
+    import urllib.request as _ur
+
+    with _ur.urlopen("https://pypi.org/pypi/tokenpak/json", timeout=timeout) as resp:
+        data = json.loads(resp.read())
+        return data["info"]["version"]
+
+
+def _read_update_cache() -> Tuple[float, Optional[str]]:
+    """Return (checked_at_epoch, cached_latest_version). (0.0, None) on any failure."""
+    try:
+        from tokenpak import _paths
+
+        data = json.loads(_paths.update_check_cache().read_text())
+        return float(data.get("checked_at", 0.0)), data.get("latest")
+    except Exception:
+        return 0.0, None
+
+
+def _write_update_cache(latest: Optional[str]) -> None:
+    """Persist last-checked timestamp + latest version. Best-effort (never raises)."""
+    try:
+        from tokenpak import _paths
+
+        _paths.ensure_home()
+        _paths.update_check_cache().write_text(
+            json.dumps({"checked_at": time.time(), "latest": latest})
+        )
+    except Exception:
+        pass
+
+
+def _update_nudge_opted_out() -> bool:
+    """True when TOKENPAK_NO_UPDATE_CHECK is set to a truthy value."""
+    return os.environ.get(_UPDATE_NUDGE_OPTOUT_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _maybe_update_nudge(stream=None) -> None:
+    """Print a one-line 'update available' nudge if a newer PyPI version exists.
+
+    Called ONLY from the ``claude`` / ``codex`` launchers. Cached <=1/day,
+    fully fail-open (never raises into the launcher), and opt-out via
+    ``TOKENPAK_NO_UPDATE_CHECK=1``. The daily refresh uses a short (2s) timeout
+    so it cannot meaningfully stall the launch; the cached path does no network.
+    """
+    out = stream if stream is not None else sys.stderr
+    try:
+        if _update_nudge_opted_out():
+            return
+
+        checked_at, cached_latest = _read_update_cache()
+        if time.time() - checked_at < _UPDATE_CHECK_TTL:
+            latest = cached_latest  # fresh cache → no network call
+        else:
+            try:
+                latest = _fetch_latest_pypi_version(timeout=2.0)
+            except Exception:
+                latest = None
+            _write_update_cache(latest)
+
+        if not latest:
+            return
+
+        from packaging.version import Version as _PV
+
+        from tokenpak import __version__ as current_ver
+
+        if _PV(latest) > _PV(current_ver):
+            print(f"TokenPak {latest} available — run `tokenpak update`", file=out)
+    except Exception:
+        # Fail-open: a broken update check must never disturb the launcher.
+        return
+
+
 def cmd_update(args):
     """Update TokenPak proxy and CLI to latest."""
     import subprocess as _sp
@@ -4077,11 +4169,7 @@ def cmd_update(args):
     # Check latest version from PyPI
     print("Checking for updates...")
     try:
-        import urllib.request as _ur
-
-        with _ur.urlopen("https://pypi.org/pypi/tokenpak/json", timeout=5) as resp:
-            data = json.loads(resp.read())
-            latest = data["info"]["version"]
+        latest = _fetch_latest_pypi_version()
     except Exception as e:
         print(f"  ✗ Could not reach PyPI: {e}")
         latest = None
