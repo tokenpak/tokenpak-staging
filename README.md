@@ -83,7 +83,7 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 - **A/B testing and replay/debug** — compare Prompt Packing configs, replay past requests
 - **50 built-in compression recipes** — YAML, customizable
 
-In favorable repeated-context workloads, cache hits can reach up to 90%+. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
+Repeated context is reused from cache instead of re-sent on every call. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
 
 ---
 
