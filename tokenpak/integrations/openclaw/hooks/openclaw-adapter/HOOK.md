@@ -68,7 +68,7 @@ event types short-circuit the handler immediately.
 
 If two conversations on the same agent host fire concurrently, the second
 write wins. Acceptable for the typical single-active-Telegram-conversation
-pattern deployments use today. Sharded multi-session (one file per session
+pattern fleet hosts use today. Sharded multi-session (one file per session
 key) is future work and would require a parallel proxy-side reader update.
 
 ## Failure mode
@@ -90,11 +90,11 @@ The host gateway is never affected by adapter failures; absence of
 ## Source of truth
 
 - Repo: `tokenpak/integrations/openclaw/hooks/openclaw-adapter/`
-- Handler: `handler.js` — schema authority for `active.json` payload shape
+- Handler: `handler.js` (OAS-02) — schema authority for `active.json` payload shape
 - Initiative: `2026-04-28-openclaw-adapter-session-binding` (Path C)
 - Phase A finding: `PHASE-A-MEMO.md`
 - Spec: `03-SPEC.md §Component 2`
-- Proxy-side reader: `platform_bridge.py _openclaw_extract`
+- Proxy-side reader: OAS-11 (`platform_bridge.py _openclaw_extract`)
 
 ## Revert
 
