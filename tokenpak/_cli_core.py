@@ -73,54 +73,6 @@ def _monitor_db_cost(period: str = "daily") -> float:
         return 0.0
 
 
-def _monitor_db_savings(days: int = 30) -> dict:
-    """Return savings summary from monitor.db."""
-    import sqlite3
-    from datetime import date, timedelta
-
-    db = _get_monitor_db_path()
-    if db is None:
-        return {}
-
-    since = (date.today() - timedelta(days=days)).isoformat()
-    try:
-        conn = sqlite3.connect(str(db), timeout=2)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT
-                COALESCE(SUM(estimated_cost), 0)      AS actual_cost,
-                COALESCE(SUM(input_tokens), 0)         AS total_input,
-                COALESCE(SUM(output_tokens), 0)        AS total_output,
-                COALESCE(SUM(cache_read_tokens), 0)    AS cache_read,
-                COALESCE(SUM(cache_creation_tokens), 0) AS cache_created,
-                COALESCE(SUM(compressed_tokens), 0)    AS compressed,
-                COALESCE(SUM(protected_tokens), 0)     AS protected
-            FROM requests WHERE timestamp >= ? AND status_code < 400""",
-            (since,),
-        )
-        row = dict(cur.fetchone())
-        conn.close()
-
-        actual = row["actual_cost"]
-        cache_read = row["cache_read"]
-        total_in = row["total_input"] + cache_read
-
-        # Rough baseline: what it would cost without cache/compression
-        raw_input = row["total_input"] + row["compressed"]
-        return {
-            "actual_cost": actual,
-            "cache_read": cache_read,
-            "cache_hit_rate": cache_read / total_in if total_in else 0,
-            "compressed_tokens": row["compressed"],
-            "raw_input_tokens": raw_input,
-            "total_input": row["total_input"],
-            "total_output": row["total_output"],
-        }
-    except Exception:
-        return {}
-
-
 def _monitor_db_models(days: int = 30) -> list:
     """Return per-model usage from monitor.db."""
     import sqlite3
@@ -3516,46 +3468,10 @@ def cmd_savings(args):
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Try monitor.db first (proxy's live data source)
-    monitor_data = _monitor_db_savings(days=days)
-
-    if monitor_data and monitor_data.get("actual_cost", 0) > 0:
-        actual = monitor_data["actual_cost"]
-        cache_hit_rate = monitor_data["cache_hit_rate"]
-        compressed = monitor_data["compressed_tokens"]
-        cache_read = monitor_data["cache_read"]
-
-        total_input = monitor_data["total_input"] + monitor_data.get("total_output", 0)
-        avg_rate = actual / total_input if total_input > 0 else 0
-        savings_amount = (cache_read + compressed) * avg_rate
-        estimated_without = actual + savings_amount
-        savings_pct = (savings_amount / estimated_without * 100) if estimated_without > 0 else 0
-
-        if mode == OutputMode.RAW:
-            print(json.dumps({
-                "section": "savings", "days": days,
-                "actual_cost": actual, "savings_amount": savings_amount,
-                "savings_pct": savings_pct, "cache_hit_rate": cache_hit_rate,
-                "estimated_without_compression": estimated_without,
-            }))
-            return
-
-        if fmt.minimal:
-            print(fmt.minimal_line([f"{savings_pct:.1f}%", f"${savings_amount:.2f}", f"{days}d"]))
-            return
-
-        print(fmt.header())
-        print()
-        print(fmt.kv([
-            ("Actual Cost", f"${actual:.2f}"),
-            ("Est. Baseline", f"${estimated_without:.2f}"),
-            ("Est. Savings", f"${savings_amount:.2f} ({savings_pct:.1f}%)"),
-            ("Cache Hit Rate", f"{cache_hit_rate * 100:.1f}%"),
-            ("Compressed Tokens", f"{compressed:,}"),
-        ]))
-        return
-
-    # Fallback to telemetry.db
+    # Savings are read only from the receipt-backed telemetry engine, which
+    # counts proxy-attributable savings from real cost records. There is no
+    # estimated/derived path: when no receipt-backed data exists, a neutral
+    # "no data yet" state is shown rather than an invented figure.
     from .telemetry.query import get_savings_report
     report = get_savings_report(days=days)
 
@@ -3622,9 +3538,14 @@ def cmd_savings(args):
 
 
 def cmd_compare(args):
-    """Show before/after cost comparison for last N requests."""
+    """Show recorded cost for the last N requests.
 
-    from .telemetry.pricing_rates import calculate_request_cost, calculate_request_cost_baseline
+    Reports the actual recorded cost per request. Per-request cache/savings
+    attribution is not available from the receipt-backed event store, so it is
+    shown as a neutral unavailable state rather than estimated from a fabricated
+    cache-hit assumption.
+    """
+
     from .telemetry.query import get_recent_events
 
     limit = getattr(args, "last", 1)
@@ -3634,101 +3555,68 @@ def cmd_compare(args):
         print("No recent requests found.")
         return
 
-    # Show comparison for each request
+    # Show recorded cost for each request.
     for idx, evt in enumerate(recent[:limit], 1):
         model = evt.get("model", "unknown")
         input_tokens = evt.get("input_tokens", 0) or 0
         output_tokens = evt.get("output_tokens", 0) or 0
+        cost = evt.get("cost")
 
-        # For this demo, assume cache_read is 30% of input (adjust per actual data)
-        # In production, we'd fetch actual cache_read from tp_usage table
-        cache_read = int(input_tokens * 0.30)
-        sent_input = input_tokens - cache_read
-
-        without_cache = calculate_request_cost_baseline(model, input_tokens, output_tokens)
-        with_cache = calculate_request_cost(model, sent_input, cache_read, output_tokens)
-        saved = without_cache - with_cache
-        pct_saved = (saved / without_cache * 100) if without_cache > 0 else 0
-
-        duration_s = getattr(args, "duration_s", 5.1)
-
-        print(f"Request #{idx}: {model} ({duration_s:.1f}s)")
-        print(
-            f"  Without TokenPak: ${without_cache:.2f} ({input_tokens:,} input tokens × ${15/1e6:.2e})"
-        )
-        print(
-            f"  With TokenPak:    ${with_cache:.2f} ({sent_input:,} sent + {cache_read:,} cached)"
-        )
-        print(f"  💰 Saved: ${saved:.2f} ({pct_saved:.0f}% cheaper)")
+        print(f"Request #{idx}: {model}")
+        print(f"  Tokens:  {input_tokens:,} in / {output_tokens:,} out")
+        if cost is not None:
+            print(f"  Cost:    ${cost:.4f} (recorded)")
+        else:
+            print("  Cost:    cost data unavailable for this request")
+        # Per-request savings attribution is not tracked in the event store.
+        print("  Savings: per-request savings data unavailable "
+              "(see `tokenpak savings` for the receipt-backed total)")
         print()
 
 
 def cmd_leaderboard(args):
-    """Show per-model efficiency ranking."""
-    from .telemetry.query import get_model_usage, get_savings_report
+    """Show per-model efficiency ranking from receipt-backed telemetry."""
+    from .telemetry.query import get_model_compression_breakdown
 
     days = getattr(args, "days", 1)
-    usage = get_model_usage(days=days)
-    savings = get_savings_report(days=days)
+    # Receipt-backed per-model breakdown: request counts, tokens saved, real
+    # compression ratio, and USD savings — all derived from recorded cost/usage.
+    # No per-model figure is estimated or assigned by model name.
+    rows = get_model_compression_breakdown(days=days)
 
-    if not usage:
+    if not rows:
         print("No model usage data available.")
         print("Run requests through the proxy to gather metrics.")
         return
 
-    # Calculate per-model stats
-    model_stats = []
-    for u in usage:
-        model = u.model or "unknown"
-        cost = (u.total_input_tokens / 1_000_000) * 15 + (u.total_output_tokens / 1_000_000) * 75
-        # Estimate savings (assume 30% cache + 5% compression for demo)
-        estimated_saved = cost * 0.35
-        cache_pct = 96 if "opus" in model.lower() else 94 if "sonnet" in model.lower() else 98
-        compress_pct = 5.1 if "opus" in model.lower() else 8.2 if "sonnet" in model.lower() else 3.2
-
-        model_stats.append(
-            {
-                "model": model,
-                "requests": u.request_count,
-                "cost": cost,
-                "saved": estimated_saved,
-                "cache_pct": cache_pct,
-                "compress_pct": compress_pct,
-            }
-        )
-
-    # Sort by cost (highest spender first)
-    model_stats.sort(key=lambda x: x["cost"], reverse=True)
+    # Sort by savings (highest first), falling back to request volume.
+    rows = sorted(rows, key=lambda r: (r.savings_amount, r.request_count), reverse=True)
 
     print("TokenPak Model Leaderboard")
     print("──────────────────────────")
     print()
 
-    if model_stats:
-        # Show top 3 insights
-        most_efficient = max(model_stats, key=lambda x: x["cache_pct"])
-        biggest_spender = max(model_stats, key=lambda x: x["cost"])
-        best_compression = max(model_stats, key=lambda x: x["compress_pct"])
-
+    # Top insight: only show a savings leader when receipt-backed savings exist.
+    leader = max(rows, key=lambda r: r.savings_amount)
+    if leader.savings_amount > 0:
         print(
-            f"🏆 Most Efficient:   {most_efficient['model']}  ({most_efficient['cache_pct']}% cached, ${most_efficient['saved']/most_efficient['requests']:.3f}/req avg)"
-        )
-        print(
-            f"💸 Biggest Spender:  {biggest_spender['model']}   (${biggest_spender['cost']:.2f} today, but ${biggest_spender['saved']:.2f} saved)"
-        )
-        print(
-            f"📈 Best Compression: {best_compression['model']}  ({best_compression['compress_pct']:.1f}% rate)"
+            f"🏆 Top Saver: {leader.model}  "
+            f"(${leader.savings_amount:.2f} saved across {leader.request_count} requests)"
         )
         print()
 
-    # Table of all models
+    # Table of all models. compression_ratio < 1.0 means input was compressed;
+    # reduction% = (1 - ratio) * 100. Savings shown only as receipt-backed USD.
     print(
-        f"{'Model':<20} {'Requests':>10} {'Cost':>10} {'Saved':>10} {'Cache%':>8} {'Compress%':>10}"
+        f"{'Model':<24} {'Requests':>10} {'Tokens Saved':>14} {'Reduction':>11} {'Saved':>10}"
     )
-    print("-" * 70)
-    for stat in model_stats:
+    print("-" * 72)
+    for r in rows:
+        reduction_pct = (1.0 - r.avg_compression_ratio) * 100 if r.avg_compression_ratio else 0.0
+        reduction = f"{reduction_pct:.1f}%" if reduction_pct > 0 else "—"
+        saved = f"${r.savings_amount:.2f}" if r.savings_amount > 0 else "—"
         print(
-            f"{stat['model']:<20} {stat['requests']:>10} ${stat['cost']:>9.2f} ${stat['saved']:>9.2f} {stat['cache_pct']:>7}% {stat['compress_pct']:>9.1f}%"
+            f"{r.model:<24} {r.request_count:>10} {r.tokens_saved:>14,} {reduction:>11} {saved:>10}"
         )
 
 
@@ -4928,10 +4816,12 @@ def main():
 
             usage = get_model_usage(days=1)
             if usage:
+                # Show the busiest model by request count (receipt-backed).
+                # Per-model savings attribution is not tracked, so no dollar
+                # figure is invented here.
                 top = usage[0]
-                top_saved = report.savings_amount * 0.95  # Estimate top model saved ~95% of total
                 print(
-                    f"🔥 Top: {top.model} saved ${top_saved:.0f} across {top.request_count} requests"
+                    f"🔥 Top model: {top.model} ({top.request_count} requests)"
                 )
 
             print()
