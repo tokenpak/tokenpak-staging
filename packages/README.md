@@ -74,7 +74,7 @@ Learn more: https://github.com/tokenpak/tokenpak
 
 - Issues: https://github.com/tokenpak/tokenpak/issues
 - Discussions: https://github.com/tokenpak/tokenpak/discussions
-- Email: support@tokenpak.dev
+- Email: hello@tokenpak.ai
 
 ## License
 
