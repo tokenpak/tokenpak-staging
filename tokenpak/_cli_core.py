@@ -1899,28 +1899,22 @@ def cmd_preview(args):
         print("Usage: tokenpak preview <text> [--file FILE] [--json|--raw|--verbose]")
         sys.exit(1)
 
-    # Simulate compression dry-run
-    # In the real implementation, this would call the compressor pipeline
-    input_tokens = len(text.split())  # Rough estimate
-    output_tokens = max(int(input_tokens * 0.65), 10)  # Approx 35% reduction
-    saved_tokens = input_tokens - output_tokens
+    # Pre-send preview: nothing is sent and no compressor runs here, so there
+    # is no receipt-backed savings figure to report. Show only what is honest
+    # at preview time (the input size) and a neutral unavailable state for
+    # savings. Actual savings are recorded after the request runs and can be
+    # reviewed via `tokenpak savings`.
+    input_tokens = len(text.split())  # Rough word-count estimate
+
+    savings_note = "Savings are available after the request runs (see `tokenpak savings`)."
 
     result = {
         "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "saved_tokens": saved_tokens,
-        "compression_ratio": 1.0 - (output_tokens / max(input_tokens, 1)),
-        "retained_blocks": [
-            {"type": "system_prompt", "tokens": int(output_tokens * 0.3)},
-            {"type": "user_context", "tokens": int(output_tokens * 0.4)},
-        ],
-        "removed_blocks": [
-            {"type": "debug_logs", "tokens": int(saved_tokens * 0.5)},
-            {"type": "duplicate_text", "tokens": int(saved_tokens * 0.5)},
-        ],
-        "flags": ["skeleton_enabled", "cache_ready"],
-        "mode": "hybrid",
-        "duration_ms": 2.3,
+        "output_tokens": None,
+        "saved_tokens": None,
+        "compression_ratio": None,
+        "savings_available": False,
+        "note": savings_note,
     }
 
     # Output
@@ -1928,18 +1922,8 @@ def cmd_preview(args):
         print(json.dumps(result, indent=2))
     elif args.raw:
         print(f"Input:     {result['input_tokens']:,} tokens")
-        print(f"Output:    {result['output_tokens']:,} tokens")
-        print(
-            f"Saved:     {result['saved_tokens']:,} tokens ({result['compression_ratio']*100:.1f}%)"
-        )
-        print()
-        print("Retained blocks:")
-        for block in result["retained_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
-        print()
-        print("Removed blocks:")
-        for block in result["removed_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
+        print("Savings:   not available at preview")
+        print(savings_note)
     else:
         # Pretty format (default)
         mode = resolve_mode(args)
@@ -1948,27 +1932,9 @@ def cmd_preview(args):
         print()
 
         print(f"  Input:          {result['input_tokens']:,} tokens")
-        print(f"  → Compressed:   {result['output_tokens']:,} tokens")
-        print(
-            f"  Savings:        {result['saved_tokens']:,} tokens ({result['compression_ratio']*100:.1f}% reduction)"
-        )
+        print("  Savings:        not available at preview")
         print()
-
-        print(f"  Retained blocks ({len(result['retained_blocks'])}):")
-        for block in result["retained_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Removed blocks ({len(result['removed_blocks'])}):")
-        for block in result["removed_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Mode: {result['mode']} | Duration: {result['duration_ms']:.1f}ms")
-
-        if args.verbose:
-            print()
-            print(f"  Flags: {', '.join(result['flags'])}")
+        print(f"  {savings_note}")
 
 
 def cmd_dashboard(args):
