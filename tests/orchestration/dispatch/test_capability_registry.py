@@ -8,6 +8,12 @@ validation wired into DispatchWorker and RouteStation.
 from __future__ import annotations
 
 import pytest
+
+# Dispatch is pydantic-native; deps ship via the opt-in `dispatch` extra
+# (pyproject [project.optional-dependencies]). Skip cleanly on slim installs
+# that lack it rather than erroring at collection time.
+pytest.importorskip("pydantic")
+
 from pydantic import ValidationError
 
 from tokenpak.orchestration.dispatch.models import DispatchRoute, DispatchWorker

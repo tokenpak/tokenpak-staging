@@ -12,8 +12,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import jsonschema
 import pytest
+
+# Dispatch is pydantic-native and round-trips records through jsonschema; both
+# deps ship via the opt-in `dispatch` extra (pyproject
+# [project.optional-dependencies]). Skip cleanly on slim installs that lack
+# them rather than erroring at collection time.
+pytest.importorskip("jsonschema")
+pytest.importorskip("pydantic")
+
+import jsonschema
 from pydantic import BaseModel, ValidationError
 
 from tokenpak.orchestration.dispatch.models import (

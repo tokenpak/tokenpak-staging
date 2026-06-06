@@ -19,6 +19,11 @@ from datetime import datetime, timezone
 
 import pytest
 
+# Dispatch is pydantic-native; deps ship via the opt-in `dispatch` extra
+# (pyproject [project.optional-dependencies]). Skip cleanly on slim installs
+# that lack it rather than erroring at collection time.
+pytest.importorskip("pydantic")
+
 from tokenpak.orchestration.dispatch.models.common import PathPolicy
 from tokenpak.orchestration.dispatch.models.enums import (
     AutonomyMode,
