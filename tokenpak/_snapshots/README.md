@@ -1,6 +1,6 @@
 # Release-gate snapshots
 
-These JSON files are the canonical, checked-in artifacts that gate every PR per **Standard 30 — Release-Gate Trust Contract** (ratified 2026-05-09). Authoritative spec: `~/vault/01_PROJECTS/tokenpak/standards/30-release-gate-trust-contract.md`.
+These JSON files are the canonical, checked-in artifacts that gate every PR per the **Release-Gate Trust Contract** (ratified 2026-05-09).
 
 | File | Std 30 § | Purpose |
 |---|---|---|

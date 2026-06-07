@@ -255,7 +255,7 @@ def ingest_from_vault(vault_dir: str, db: DecisionMemoryDB) -> int:
     """
     Walk vault daily logs and ingest all lessons into the DecisionMemoryDB.
 
-    Scans all files matching ``<vault_dir>/03_AGENT_PACKS/<agent>/memory/YYYY-MM-DD.md``
+    Scans all files matching ``<vault_dir>/<agent>/memory/YYYY-MM-DD.md``
     and extracts lessons, populating the database.  This is the vault-schema
     path; for arbitrary user note directories use :func:`ingest_from_dir`.
 

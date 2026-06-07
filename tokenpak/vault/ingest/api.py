@@ -9,7 +9,7 @@ Endpoints:
   POST /ingest/batch  — ingest a list of entries
 
 Storage:
-  ~/vault/.tokenpak/entries/YYYY-MM-DD.jsonl  (append-only, one entry per line)
+  ~/.tokenpak/entries/YYYY-MM-DD.jsonl  (append-only, one entry per line)
 """
 
 from __future__ import annotations

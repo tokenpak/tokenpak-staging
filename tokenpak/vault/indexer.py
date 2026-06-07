@@ -269,7 +269,7 @@ def _ingest_write_entry(entry: Dict[str, Any]) -> str:
 
 
 def sync_to_vault() -> None:
-    """Write current tokenpak stats to ~/vault/System/tokenpak-stats.json."""
+    """Write current tokenpak stats to the vault stats file (when a vault dir is present)."""
     from tokenpak.proxy.config import ACTIVE_PROFILE, COMPILATION_MODE  # lazy import
 
     vault_path = Path.home() / "vault" / "System" / "tokenpak-stats.json"

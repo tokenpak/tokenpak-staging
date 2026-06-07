@@ -1,6 +1,6 @@
 """Vault source adapters — additive content sources for the BM25 index.
 
-Adapters write into the same ``~/vault/.tokenpak/index.json`` + ``blocks/``
+Adapters write into the same ``~/.tokenpak/index.json`` + ``blocks/``
 store consumed by ``tokenpak.proxy.vault_bridge.VaultIndex``. Each adapter
 tags its blocks with a distinct ``source_type`` so callers can label hits
 separately from filesystem-vault docs.
