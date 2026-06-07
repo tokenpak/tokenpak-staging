@@ -117,7 +117,7 @@ If some entries fail but others succeed, successful entries are written and erro
 Ingest entries are stored in append-only JSONL files:
 
 ```
-~/vault/.tokenpak/entries/YYYY-MM-DD.jsonl
+~/.tokenpak/entries/YYYY-MM-DD.jsonl
 ```
 
 Each line is a valid JSON object with all submitted fields plus:
@@ -205,7 +205,7 @@ This is included in health/stats responses for monitoring.
 Run the full test suite:
 
 ```bash
-cd /home/trix/Projects/tokenpak
+cd /path/to/tokenpak
 python3 -m pytest tests/test_ingest_tokenpak.proxy.py -v
 ```
 
@@ -294,7 +294,7 @@ print(resp.json()) # {"status": "ok", "ids": [...]}
  - `_ingest_write_entry(entry)` — Write entry to JSONL, return ID
 
 3. **Configuration**:
- - `INGEST_ENTRIES_DIR` — ~/vault/.tokenpak/entries
+ - `INGEST_ENTRIES_DIR` — ~/.tokenpak/entries
  - Entries grouped by date (timestamp.split('T')[0])
 
 ---

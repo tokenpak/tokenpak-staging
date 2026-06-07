@@ -1039,8 +1039,8 @@ az container show --resource-group <rg> --name tokenpak --query "instanceView.ev
 ---
 
 # Backup broken package and restore from main repo
-mv ~/vault/Projects/tokenpak/packages/pypi/tokenpak ~/vault/Projects/tokenpak/packages/pypi/tokenpak.broken
-cp -r ~/tokenpak ~/vault/Projects/tokenpak/packages/pypi/tokenpak
+mv <your-vault>/packages/pypi/tokenpak <your-vault>/packages/pypi/tokenpak.broken
+cp -r ~/tokenpak <your-vault>/packages/pypi/tokenpak
 python3 -c "from tokenpak.agent.proxy import server; print('✅ Import works')"
 ```
 
@@ -1060,14 +1060,14 @@ python3 -c "from tokenpak.agent.semantic.term_card_resolver import TermCardResol
 
 ### 20.4 Case sensitivity collision in queue directories
 
-**Symptoms:** Tasks in lowercase queue dirs (`~/vault/Agents/trix/queue/`) never execute; active tasks are in uppercase dirs.
+**Symptoms:** Tasks in lowercase queue dirs (`<your-vault>/agents/<agent>/queue/`) never execute; active tasks are in uppercase dirs.
 
 **Fix:**
 ```bash
 # Identify orphaned tasks first
-find ~/vault/Agents/{trix,cali}/queue -name "*.md" 2>/dev/null
+find <your-vault>/agents/*/queue -name "*.md" 2>/dev/null
 # Then remove orphaned lowercase dirs
-rm -rf ~/vault/Agents/trix/queue ~/vault/Agents/cali/queue
+rm -rf <your-vault>/agents/*/queue
 ```
 
 ---

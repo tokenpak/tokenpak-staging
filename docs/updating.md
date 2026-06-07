@@ -48,7 +48,7 @@ tokenpak update --core-only # Skip config merge
 1. Check PyPI for latest `tokenpak` version
 2. Download and install via `pip install --upgrade tokenpak`
 3. If proxy was running → restart it
-4. Update `~/vault/System/tokenpak.lock.json` with new version/hash
+4. Update `~/.tokenpak/tokenpak.lock.json` with new version/hash
 
 ## Multi-Agent Environments
 
@@ -60,7 +60,7 @@ tokenpak update
 tokenpak version # verify all match
 ```
 
-The lock file at `~/vault/System/tokenpak.lock.json` acts as the canonical version pin. Any agent with drift will warn on startup.
+The lock file at `~/.tokenpak/tokenpak.lock.json` acts as the canonical version pin. Any agent with drift will warn on startup.
 
 ## Config Sync
 
@@ -84,6 +84,6 @@ Future: `tokenpak rollback <version>`
 
 ## Troubleshooting
 
-See `~/vault/System/TROUBLESHOOTING.md` for common issues.
+See the troubleshooting guide for common issues.
 
 Run `tokenpak doctor` for a full diagnostics report.
