@@ -185,6 +185,65 @@ class LoopOnExhausted(str, Enum):
     BLOCK_DELIVERY = "block_delivery"
 
 
+# ---------------------------------------------------------------------------
+# Reviewer Station I/O enums (Standards Delta v0 §5.7)
+# ---------------------------------------------------------------------------
+
+
+class ReviewerStatus(str, Enum):
+    """ReviewerStationResult.status (Standards Delta v0 §5.7).
+
+    The top-level semantic verdict. The Reviewer→Gatehouse handoff table (§5.7)
+    keys entirely off this value; ``delivery_recommendation.status`` is DERIVED
+    from it.
+    """
+
+    PASS = "pass"
+    WARNING = "warning"
+    FAIL = "fail"
+
+
+class CriterionStatus(str, Enum):
+    """ReviewerStationResult.criteria_results[].status (Standards Delta v0 §5.7)."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    UNCLEAR = "unclear"
+
+
+class FixSeverity(str, Enum):
+    """ReviewerStationResult.required_fixes[].severity (Standards Delta v0 §5.7)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class SuggestedStation(str, Enum):
+    """ReviewerStationResult.required_fixes[].suggested_station (§5.7).
+
+    Which station should address the fix: a build re-run, a doc re-run, or a
+    user decision.
+    """
+
+    BUILD = "build"
+    DOC = "doc"
+    USER_DECISION = "user_decision"
+
+
+class DeliveryRecommendationStatus(str, Enum):
+    """ReviewerStationResult.delivery_recommendation.status (§5.7).
+
+    DERIVED from :class:`ReviewerStatus` (never authored independently):
+    ``pass`` → ``ready``, ``warning`` → ``ready_with_warning``, ``fail`` →
+    ``blocked``.
+    """
+
+    READY = "ready"
+    BLOCKED = "blocked"
+    READY_WITH_WARNING = "ready_with_warning"
+
+
 __all__ = [
     "AutonomyMode",
     "DispatchJobStatus",
@@ -202,4 +261,9 @@ __all__ = [
     "RunCommandsPolicy",
     "LoopStopCondition",
     "LoopOnExhausted",
+    "ReviewerStatus",
+    "CriterionStatus",
+    "FixSeverity",
+    "SuggestedStation",
+    "DeliveryRecommendationStatus",
 ]
