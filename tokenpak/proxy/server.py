@@ -1854,6 +1854,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _mon_session_id = ""
                     _mon_agent_id = ""
                     _mon_cycle_id = ""
+                # Dispatch correlation headers (P-TELEMETRY-01). '' when absent
+                # or when self.headers is None; never fabricated.
+                _hdrs = self.headers
+                _mon_dispatch_job_id = (
+                    (_hdrs.get("x-tokenpak-dispatch-job-id", "") or "") if _hdrs else ""
+                )
+                _mon_dispatch_station_id = (
+                    (_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _hdrs else ""
+                )
                 if ps.monitor is not None:
                     # SSRM Phase 1: pull the advisory decision computed earlier
                     # in the request flow (see the SSRM hook above the DLP scan)
@@ -1923,6 +1932,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             agent_id=_mon_agent_id,
                             cycle_id=_mon_cycle_id,
                             skip_reason=_skip_reason,
+                            dispatch_job_id=_mon_dispatch_job_id,
+                            dispatch_station_id=_mon_dispatch_station_id,
                             **_ssrm_kwargs,
                         )
                     except Exception:
@@ -2109,6 +2120,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     except Exception:
                         _cx_in = 0
                         _cx_out = 0
+                    # Dispatch correlation headers (P-TELEMETRY-01). '' when
+                    # absent or when self.headers is None; never fabricated.
+                    _cx_hdrs = self.headers
+                    _cx_dispatch_job_id = (
+                        (_cx_hdrs.get("x-tokenpak-dispatch-job-id", "") or "") if _cx_hdrs else ""
+                    )
+                    _cx_dispatch_station_id = (
+                        (_cx_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _cx_hdrs else ""
+                    )
                     ps.monitor.log(
                         model=_cx_model,
                         input_tokens=_cx_in,
@@ -2118,6 +2138,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         status_code=_cx_status,
                         endpoint=target_url or "/v1/responses",
                         user_id=getattr(self, "_tokenpak_user_id", "") or "",
+                        dispatch_job_id=_cx_dispatch_job_id,
+                        dispatch_station_id=_cx_dispatch_station_id,
                     )
                 except Exception:
                     pass  # DB errors must never break the request
