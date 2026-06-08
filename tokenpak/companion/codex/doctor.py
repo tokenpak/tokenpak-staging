@@ -38,6 +38,8 @@ CheckFn = Callable[[], "tuple[Status, str]"]
 # climbs above 80% so users can shed content before truncation kicks in.
 _AGENTS_MD_MAX_BYTES_DEFAULT = 32 * 1024
 _AGENTS_MD_WARN_FRACTION = 0.80
+SANDBOX_TIMEOUT_SECONDS = 5
+SANDBOX_HELP_ANCHOR = "docs/troubleshooting.md#20-codex-linux-sandbox-warning"
 
 
 # ── Individual checks ────────────────────────────────────────────────
@@ -55,6 +57,50 @@ def check_codex_binary() -> "tuple[Status, str]":
     if result.returncode != 0:
         return "FAIL", result.stderr.strip() or "codex --version exited nonzero"
     return "PASS", result.stdout.strip() or result.stderr.strip()
+
+
+def check_linux_sandbox() -> "tuple[Status, str]":
+    """Smoke-test Codex's Linux sandbox without mutating the host."""
+    if not sys.platform.startswith("linux"):
+        return "PASS", f"not applicable on {sys.platform}"
+
+    try:
+        result = subprocess.run(
+            ["codex", "sandbox", "true"],
+            capture_output=True,
+            text=True,
+            timeout=SANDBOX_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        return "WARN", "codex sandbox smoke skipped: codex not on PATH"
+    except subprocess.TimeoutExpired:
+        return (
+            "WARN",
+            "codex sandbox smoke timed out after "
+            f"{SANDBOX_TIMEOUT_SECONDS}s; see {SANDBOX_HELP_ANCHOR}",
+        )
+
+    if result.returncode == 0:
+        return "PASS", "codex sandbox smoke OK"
+
+    detail = _first_nonempty_line(result.stderr, result.stdout)
+    if not detail:
+        detail = f"codex sandbox true exited {result.returncode}"
+    return (
+        "WARN",
+        "codex sandbox smoke failed: "
+        f"{detail}; on restricted Linux hosts install bubblewrap and load the "
+        f"bwrap AppArmor profile; see {SANDBOX_HELP_ANCHOR}",
+    )
+
+
+def _first_nonempty_line(*chunks: str) -> str:
+    for chunk in chunks:
+        for line in chunk.splitlines():
+            stripped = line.strip()
+            if stripped:
+                return stripped
+    return ""
 
 
 def check_hooks_feature() -> "tuple[Status, str]":
@@ -400,6 +446,7 @@ def check_proxy_routing() -> "tuple[Status, str]":
 
 CHECKS: list["tuple[str, CheckFn]"] = [
     ("codex binary", check_codex_binary),
+    ("linux sandbox", check_linux_sandbox),
     ("proxy routing (value plane)", check_proxy_routing),
     ("hooks feature", check_hooks_feature),
     ("MCP registration", check_mcp_registered),

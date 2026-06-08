@@ -25,6 +25,7 @@ Find your problem fast. Every section follows **Problem → Cause → Fix** with
 17. [Performance Profiling](#17-performance-profiling)
 18. [Cloud Deployments](#18-cloud-deployments)
 19. [Quick Triage Runbook](#19-quick-triage-runbook)
+20. [Codex Linux Sandbox Warning](#20-codex-linux-sandbox-warning)
 21. [Getting More Help](#getting-more-help)
 
 ---
@@ -1035,6 +1036,66 @@ az container show --resource-group <rg> --name tokenpak --query "instanceView.ev
 4. **If compression poor:** verify flags, thresholds, ratios, cache hit rate (sections 11, 12).
 5. **If cloud-only:** use provider logs/events and fix runtime env/network mismatches (section 18).
 6. **After fix:** validate health, run smoke test, and capture root cause + prevention note.
+
+---
+
+## 20. Codex Linux Sandbox Warning
+
+### Problem
+
+`tokenpak codex doctor` reports a WARN row for the Linux sandbox, or `tokenpak codex`
+previously printed a raw Codex warning about bubblewrap, AppArmor, or user
+namespaces.
+
+### Diagnose
+
+Run Codex's sandbox smoke test directly:
+
+```bash
+codex sandbox true
+```
+
+If the command exits nonzero, TokenPak reports it as a WARN because the companion
+can still install hooks, skills, and MCP configuration. The warning means Codex's
+own Linux sandbox may not be usable on this host until the OS configuration is
+fixed.
+
+### Cause
+
+Codex's Linux sandbox uses bubblewrap. On Ubuntu 24.04 and other
+AppArmor-restricted hosts, unprivileged user namespaces can be globally
+restricted unless the `bwrap-userns-restrict` AppArmor profile is installed and
+loaded. Common failure text includes `bwrap`, `AppArmor`, `user namespace`, or
+`Operation not permitted`.
+
+### Fix
+
+TokenPak does not install packages, run `apt` or `dpkg`, or modify `/etc`
+automatically. A host administrator can apply the OS-side fix manually:
+
+```bash
+sudo apt update
+sudo apt install bubblewrap
+sudo apt install apparmor-profiles apparmor-utils
+sudo install -m 0644 \
+  /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+  /etc/apparmor.d/bwrap-userns-restrict
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+This profile-based approach allows bubblewrap while leaving the global AppArmor
+user-namespace restriction enabled. Avoid disabling the global restriction unless
+that is an explicit host administration decision.
+
+### Verify
+
+```bash
+codex sandbox true
+tokenpak codex doctor
+```
+
+The direct Codex smoke test should exit 0. `tokenpak codex doctor` should report
+the Linux sandbox check as PASS.
 
 ---
 
