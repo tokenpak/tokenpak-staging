@@ -37,7 +37,10 @@ from tokenpak.orchestration.dispatch.loop_policy import (  # noqa: E402
     resolve_loop_policy,
     system_default_loop_policy,
 )
-from tokenpak.orchestration.dispatch.models.common import StationLoopPolicy, WorkerLoopDefault  # noqa: E402
+from tokenpak.orchestration.dispatch.models.common import (  # noqa: E402
+    StationLoopPolicy,
+    WorkerLoopDefault,
+)
 from tokenpak.orchestration.dispatch.models.effect import DispatchEffect  # noqa: E402
 from tokenpak.orchestration.dispatch.models.enums import (  # noqa: E402
     AutonomyMode,

@@ -53,7 +53,7 @@ from ..models import (
     LateResult,
 )
 from ..models.enums import EffectStatus
-from .migrations import SCHEMA_VERSION, get_current_schema_version, migrate
+from .migrations import get_current_schema_version, migrate
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pydantic import BaseModel

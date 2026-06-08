@@ -512,6 +512,56 @@ Live request explorer
 - `--limit`, `-n` — Number of rows to show (default: 10)
 - `--once` — Print once and exit
 
+### `tokenpak dispatch`
+
+TokenPak Dispatch — scoped, station-based, resumable, gated work packages with a Decision Inbox and delivery receipts (OSS, v0.1-alpha; CLI-first).
+
+**Subcommands:**
+
+- `run`
+  - `REQUEST` — The request text to dispatch
+  - `--route` — Force an explicit Route (e.g. code_task); overrides auto-routing
+  - `--autonomy` — Autonomy mode override (default depends on caller — §14.2) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
+  - `--ci` — CI/automation caller; default autonomy = auto_dispatch_limited
+  - `--dry-run` — Draft only; default autonomy = draft
+  - `--confirm` — Treat an approval-gated route as approved (record the bound route)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `status`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `inspect`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--late` — Include late results (post-cancellation TIP output)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `decisions`
+  - `--job` — Filter to one job id
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `approve`
+  - `DECISION_ID` — Decision id (decision_…)
+  - `--option` — Selected option id (default: the recommended option)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `reject`
+  - `DECISION_ID` — Decision id (decision_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `pause`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `resume`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `cancel`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `discard-late`
+  - `STATION_RUN_ID` — Station run id (stationrun_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `delivery`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `receipt`
+  - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+
 ---
 
 ## Group: Companion

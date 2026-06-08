@@ -32,7 +32,6 @@ user overrides) plus the live worker registry are the single sources of truth.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 
 import yaml

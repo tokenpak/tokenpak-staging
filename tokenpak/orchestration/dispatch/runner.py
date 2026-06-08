@@ -72,12 +72,6 @@ from .registry.workers import (
     assert_route_binding,
 )
 from .resume import ResumeAction, ResumeOutcome, reconcile_run
-from .stations.reviewer import (
-    ReviewerLLM,
-    ReviewerStation,
-    ReviewerStationInput,
-    ReviewerStationResult,
-)
 from .station_runner import (
     SPEND_GUARD_EXCEEDED_REASON,
     CancelToken,
@@ -87,6 +81,13 @@ from .station_runner import (
     WorkerLLM,
     unlimited_spend_guard,
 )
+from .stations.reviewer import (
+    ReviewerLLM,
+    ReviewerStation,
+    ReviewerStationInput,
+    ReviewerStationResult,
+)
+
 
 # Status the line returns. Distinct from any single station's status: it reports
 # the *line-level* outcome the caller acts on.

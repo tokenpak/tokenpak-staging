@@ -50,7 +50,6 @@ from tokenpak.orchestration.dispatch.models.enums import (
 from tokenpak.orchestration.dispatch.models.job import DispatchJob
 from tokenpak.orchestration.dispatch.models.manifest import DispatchManifest
 
-
 # ---------------------------------------------------------------------------
 # Fake injected TIP client
 # ---------------------------------------------------------------------------

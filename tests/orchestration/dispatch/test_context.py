@@ -37,7 +37,6 @@ from tokenpak.orchestration.dispatch.models.enums import (
 from tokenpak.orchestration.dispatch.models.manifest import DispatchManifest
 from tokenpak.orchestration.dispatch.models.route import RouteStation
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
