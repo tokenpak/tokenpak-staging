@@ -259,6 +259,38 @@ class RunLedger:
             "dispatch_station_runs", station_run_id, DispatchStationRun
         )
 
+    def read_station_runs_for_run(self, run_id: str) -> list[DispatchStationRun]:
+        """Return every station run for *run_id*, ordered by insertion (rowid).
+
+        Resume reconciliation (Standards Delta v0 §5.5) needs the station runs of
+        a run in execution order so it can inspect the *last* one. SQLite assigns
+        a monotonically increasing implicit ``rowid`` in insert order, so ordering
+        by it reproduces the order the runner wrote the rows (the runner runs
+        stations sequentially — there is no parallel interleaving to disambiguate).
+        """
+
+        rows = self._conn.execute(
+            "SELECT payload FROM dispatch_station_runs WHERE run_id = ? ORDER BY rowid ASC",
+            (run_id,),
+        ).fetchall()
+        return [DispatchStationRun.model_validate_json(row["payload"]) for row in rows]
+
+    def read_effects_for_station_run(self, station_run_id: str) -> list[DispatchEffect]:
+        """Return every effect recorded for *station_run_id* (ordered by created_at).
+
+        Used by resume reconciliation (Standards Delta v0 §5.5 cases 3 & 4) to
+        enumerate the applied / planned effects of the interrupted station so the
+        runner can compare current workspace hashes against each effect's
+        ``after_hash`` / ``before_hash``.
+        """
+
+        rows = self._conn.execute(
+            "SELECT payload FROM dispatch_effects WHERE station_run_id = ? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (station_run_id,),
+        ).fetchall()
+        return [DispatchEffect.model_validate_json(row["payload"]) for row in rows]
+
     # -- DispatchDecision ---------------------------------------------------
 
     def write_decision(self, decision: DispatchDecision) -> None:
