@@ -490,13 +490,16 @@ def test_receipt_renders(home):
     assert "Worker worker.builder.default.v1" in out
 
 
-def test_receipt_is_std36_sanitized(home):
-    """Receipt output is run through the Std 36 public-safe path (§10).
+def test_receipt_is_public_safe_sanitized(home):
+    """Receipt output is run through the public-safe path (§10).
 
-    An internal agent name + home path planted in the excerpt must be redacted
-    in both JSON and human-readable output.
+    Home paths and internal task-ID-shaped tokens planted in the excerpt must be
+    redacted by default in both JSON and human-readable output. (Agent-name
+    redaction is caller-injectable via ``extra_terms`` — exercised directly in
+    :func:`test_sanitizer_extra_terms_redacts_injected_names` — so it is not
+    asserted here at the CLI surface, which passes no extra terms by default.)
     """
-    leaky = "Sue reviewed /home/sue/secret/path and approved task TSR-1234"
+    leaky = "Reviewed /home/operator/secret/path and approved task TSR-1234"
     _seed_receipt(home, excerpt=leaky)
 
     # JSON path
@@ -505,8 +508,7 @@ def test_receipt_is_std36_sanitized(home):
         argparse.Namespace(job_id="job_rcpt", as_json=True),
     )
     assert rc == 0
-    assert "Sue" not in out
-    assert "/home/sue/" not in out
+    assert "/home/operator/" not in out
     assert "TSR-1234" not in out
     assert "[redacted]" in out
 
@@ -516,8 +518,35 @@ def test_receipt_is_std36_sanitized(home):
         argparse.Namespace(job_id="job_rcpt", as_json=False),
     )
     assert rc == 0
-    assert "/home/sue/" not in out
+    assert "/home/operator/" not in out
     assert "TSR-1234" not in out
+
+
+def test_sanitizer_extra_terms_redacts_injected_names():
+    """The sanitizer redacts paths + id-shaped tokens by default, and redacts
+    caller-supplied ``extra_terms`` (e.g. internal agent names) on top of that.
+
+    This is where a non-public caller would inject internal names; the
+    open-source default carries none, so they must be passed explicitly.
+    """
+    from tokenpak.orchestration.dispatch.public_safe import (
+        sanitize_public_text,
+    )
+
+    leaky = "Sue reviewed /home/sue/secret/path and approved task TSR-1234"
+
+    # Default: paths + id-shaped tokens redacted; injected name still present.
+    default_out = sanitize_public_text(leaky)
+    assert "/home/sue/" not in default_out
+    assert "TSR-1234" not in default_out
+    assert "[redacted]" in default_out
+    assert "Sue" in default_out  # not redacted without extra_terms
+
+    # With extra_terms: the injected name is redacted too.
+    injected_out = sanitize_public_text(leaky, extra_terms=["Sue"])
+    assert "Sue" not in injected_out
+    assert "/home/sue/" not in injected_out
+    assert "TSR-1234" not in injected_out
 
 
 # ---------------------------------------------------------------------------

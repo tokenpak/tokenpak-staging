@@ -744,7 +744,7 @@ class FulfillmentLine:
                 "the job?"
             ),
             reason=(
-                "Standards Delta v0 §8: a station hit the Std 29 Spend Guard hard "
+                "Standards Delta v0 §8: a station hit the Spend Guard cap hard "
                 "stop (reason=spend_guard_exceeded). Dispatch surfaces a decision "
                 "rather than bypassing Spend Guard."
             ),

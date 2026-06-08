@@ -15,7 +15,7 @@ Public surface:
   migration ladder.
 
 The Run Ledger stores Dispatch execution records ONLY; it does not promote any
-record to a canonical Pak type (Std 32 §2 boundary).
+record to a canonical Pak type (the Pak taxonomy boundary).
 """
 
 from __future__ import annotations

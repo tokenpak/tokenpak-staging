@@ -36,7 +36,7 @@ Design notes:
   ``--json`` fallback for scripting (§13 item 17).
 * User-facing output uses plain **Worker / Route / Station** terminology. The
   literal string "Fleet Worker" never appears (§11 verification gate).
-* Receipt + Delivery output is run through the Std 36 public-safe sanitizer
+* Receipt + Delivery output is run through the public-safe sanitizer
   (:func:`tokenpak.orchestration.dispatch.public_safe.sanitize_public_text`)
   before display — these surfaces are public-export-eligible (§10).
 """
@@ -640,7 +640,7 @@ def cmd_dispatch_discard_late(args: Any) -> int:
 
 
 # ---------------------------------------------------------------------------
-# delivery / receipt  (public-export-eligible → Std 36 sanitized)
+# delivery / receipt  (public-export-eligible → public-safe sanitized)
 # ---------------------------------------------------------------------------
 
 
@@ -701,7 +701,7 @@ def cmd_dispatch_delivery(args: Any) -> int:
 
     The Gatehouse builds a :class:`DeliveryPackage` during a run; the alpha CLI
     derives a delivery view from the persisted run + receipt (the delivery
-    surfaces are public-export-eligible, so the view is Std 36 sanitized).
+    surfaces are public-export-eligible, so the view is public-safe sanitized).
     """
     from tokenpak.orchestration.dispatch.public_safe import sanitize_public_obj
 

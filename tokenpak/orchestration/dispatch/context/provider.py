@@ -3,7 +3,7 @@
 The Dispatch ``ContextProvider`` is the seam between *how context is assembled*
 and *what consumes it* (a station run). v0.1-alpha ships exactly one working
 provider — :class:`LocalContextProvider` — plus a deliberately-inert
-:class:`PaidContextProvider` stub so the Pro boundary (Std 32 §1.3) is visible
+:class:`PaidContextProvider` stub so the Pro-tier boundary is visible
 from day one and Pro activation is a constructor swap, not a rewrite.
 
 Contract (Standards Delta v0 §5.9)::
@@ -22,7 +22,7 @@ therefore types ``build_context``'s ``station`` parameter against
 
 * deterministic given the same inputs (same repo tree + same manifest/station +
   same attachments → byte-identical :class:`ContextBundle`);
-* **no LLM call**; **no network call**; **no Std 32 Pak system dependency**.
+* **no LLM call**; **no network call**; **no Pro-tier Pak system dependency**.
 
 It assembles context from five sources, in this fixed precedence order
 (earlier sources win on duplicate paths, and the ordering makes the output
@@ -170,7 +170,7 @@ class SkippedItem(DispatchBaseModel):
 class ContextBudget(DispatchBaseModel):
     """Per-station size + token budget for context assembly (§5.9 filters).
 
-    ``token_budget`` inherits the Std 29 Spend Guard cap at runtime
+    ``token_budget`` inherits the Spend Guard cap at runtime
     (Standards Delta v0 §8); the default here is a placeholder the runtime
     overrides with the live cap. Both budgets are hard ceilings: a file that
     would push a running total over either ceiling is skipped, not truncated.
@@ -657,14 +657,14 @@ class LocalContextProvider:
 
 
 # ---------------------------------------------------------------------------
-# PaidContextProvider (stub — interface boundary marker, Std 32 §1.3)
+# PaidContextProvider (stub — interface boundary marker, Pro-tier boundary)
 # ---------------------------------------------------------------------------
 
 
 class PaidContextProvider:
     """Pro context provider — NOT implemented in v0.1-alpha (Standards Delta v0 §5.9).
 
-    Exists from day one so the OSS/Pro boundary (Std 32 §1.3) is visible and
+    Exists from day one so the OSS/Pro boundary is visible and
     Phase D activation is a constructor swap, not a rewrite. The real
     implementation delegates to the ``tokenpak-paid`` Context Package Builder
     over the loopback Pro daemon, falling back to :class:`LocalContextProvider`
