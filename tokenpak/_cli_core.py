@@ -174,6 +174,7 @@ _COMMAND_GROUPS = {
         ("fleet", "Fleet status"),
         ("aggregate", "Aggregate ledger"),
         ("requests", "Live request explorer"),
+        ("dispatch", "Workflow control: run, decide, deliver"),
     ],
     "Companion": [
         ("claude", "Launch with Claude Code"),
@@ -255,6 +256,8 @@ _EXTRA_KNOWN_COMMANDS = frozenset({
     "features",
     "pakplan",
     "home",
+    # Dispatch v0.1-alpha (workflow-control layer)
+    "dispatch",
 })
 
 
@@ -3114,6 +3117,7 @@ def build_parser():
     _build_tip_parser(sub)
     _build_features_parser(sub)
     _build_pakplan_parser(sub)
+    _build_dispatch_parser(sub)
     _build_home_parser(sub)
     _build_prove_parser(sub)
     _build_test_parser(sub)
@@ -6149,6 +6153,20 @@ def _build_pakplan_parser(sub):
     from tokenpak.cli.commands.pakplan import build_pakplan_parser
 
     build_pakplan_parser(sub)
+
+
+def _build_dispatch_parser(sub):
+    """Register the ``tokenpak dispatch`` command group (Dispatch v0.1-alpha).
+
+    TokenPak Dispatch is the OSS workflow-control layer (Standards Delta v0):
+    Decision Inbox + ``run|status|inspect|decisions|approve|reject|pause|resume|
+    cancel|discard-late|delivery|receipt`` verbs over the Run Ledger.
+    Implementation lives in :mod:`tokenpak.cli.commands.dispatch_cmd`; lazy
+    import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.dispatch_cmd import build_dispatch_parser
+
+    build_dispatch_parser(sub)
 
 
 def _build_home_parser(sub):
