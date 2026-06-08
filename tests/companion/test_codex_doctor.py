@@ -197,17 +197,17 @@ def test_check_hooks_feature_failure_when_row_absent(monkeypatch):
     monkeypatch.setattr(doctor.subprocess, "run", fake_run)
     status, detail = doctor.check_hooks_feature()
     assert status == "FAIL"
-    assert "codex_hooks" in detail
+    assert "hooks" in detail
 
 
-def test_parse_codex_hooks_maturity_multiword_label():
-    sample = "codex_hooks   under development   true\n"
-    label_enabled = doctor._parse_codex_hooks_maturity(sample)
+def test_parse_hooks_maturity_multiword_label():
+    sample = "hooks   under development   true\n"
+    label_enabled = doctor._parse_hooks_maturity(sample)
     assert label_enabled == ("under development", True)
 
 
-def test_parse_codex_hooks_maturity_returns_none_when_missing():
-    assert doctor._parse_codex_hooks_maturity("other  stable  true\n") is None
+def test_parse_hooks_maturity_returns_none_when_missing():
+    assert doctor._parse_hooks_maturity("other  stable  true\n") is None
 
 
 # ---------------------------------------------------------------------------
