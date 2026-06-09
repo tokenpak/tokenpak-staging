@@ -25,7 +25,7 @@ Env overrides:
 
 * ``TOKENPAK_VAULT_CONFIG``      — path to the YAML file itself.
 * ``TOKENPAK_VAULT_INDEX_PATH``  — vault index output directory; falls back to
-  ``~/vault/.tokenpak`` (proxy-compatible default per spec).
+  ``~/.tokenpak`` (proxy-compatible default per spec).
 
 This module is OSS — no license check. It is the single source of truth for
 *which* directories tokenpak indexes; the paid scheduler writes to
@@ -60,7 +60,7 @@ def default_index_path() -> Path:
 
     Resolution order:
       1. ``$TOKENPAK_VAULT_INDEX_PATH``
-      2. proxy-compatible default ``~/vault/.tokenpak``
+      2. proxy-compatible default ``~/.tokenpak``
     """
     override = os.environ.get("TOKENPAK_VAULT_INDEX_PATH")
     if override:

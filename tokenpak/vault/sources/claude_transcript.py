@@ -10,7 +10,7 @@ OFF BY DEFAULT.  Enable with::
     TOKENPAK_INDEX_CLAUDE_TRANSCRIPTS=1
 
 The adapter is **read-only**: transcripts are never modified.  Output blocks
-land in the same ``~/vault/.tokenpak/{index.json,blocks/}`` store consumed
+land in the same ``~/.tokenpak/{index.json,blocks/}`` store consumed
 by :class:`tokenpak.proxy.vault_bridge.VaultIndex`.  Blocks from other
 ``source_type`` values (notably ``filesystem``) are left untouched on merge,
 and ``vault_health.VaultHealth._do_rebuild`` preserves transcript blocks

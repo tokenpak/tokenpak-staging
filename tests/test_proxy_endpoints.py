@@ -525,7 +525,7 @@ class TestRecentAndTraceEndpoints(unittest.TestCase):
             "available": True,
             "blocks": 2,
             "total_tokens": 800,
-            "path": "/mock/vault/path",
+            "path": "/mock/index/path",
             "block_list": [
                 {
                     "block_id": "block_1",

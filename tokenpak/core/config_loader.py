@@ -332,7 +332,7 @@ capsule:
   hot_window: 2
 
 vault:
-  index_path: ~/vault/.tokenpak
+  index_path: ~/.tokenpak
   inject_budget: 4000
   inject_top_k: 5
   inject_min_score: 2.0
@@ -399,16 +399,16 @@ spend_guard:
   pending_ttl_seconds: 600            # held requests expire after 10 min
   audit_db_path: ~/.tokenpak/spend_guard.db
 
-# MultiPak Pro (Std 32) — local-first cross-platform AI context continuity.
+# MultiPak Pro — local-first cross-platform AI context continuity.
 # Phase 1 OSS surface: Vault Pak adapter, companion Pak-aware journal,
 # tokenpak pak CLI, /pak/v1/* proxy stubs. Pro daemon (closed source)
-# is gated by Std 25 §9.3 and ships separately.
-# multipak.enabled defaults to false until 1-week soak per Std 32 §13.1
+# is gated by the Pro-tier boundary and ships separately.
+# multipak.enabled defaults to false until a 1-week soak per the MultiPak
 # Decision #6. The OSS surface (read-only Vault Pak inspection,
 # /pak/v1/status diagnostic) works regardless of this flag.
 pro:
   multipak:
-    enabled: false                    # opt-in until soak (Std 32 §13.1 D6)
+    enabled: false                    # opt-in until soak (MultiPak rollout)
 
 # Custom providers — register any OpenAI/Anthropic/Google-compatible endpoint.
 # Each entry becomes a routable provider with full compression/caching pipeline.

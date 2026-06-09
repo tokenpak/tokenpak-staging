@@ -19,6 +19,9 @@ Get from zero to savings in 5 minutes. Pick your path:
 pip install tokenpak
 ```
 
+Already installed? Upgrade with `pip install -U tokenpak` or `tokenpak update`
+(a plain `pip install tokenpak` will not upgrade an existing version).
+
 ### Minute 2: Start the proxy
 
 ```bash

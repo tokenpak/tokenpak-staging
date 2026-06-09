@@ -227,7 +227,7 @@ Background agents (cron jobs, scheduled cycles, automated pipelines) have no hum
  ```
 3. **Tolerate clean-exit on block.** Receive the structured 402, log it, terminate. **Never retry-loop** — the proxy enforces 30s anti-loop dedup, but a well-behaved agent shouldn't need that protection.
 
-A reference cron-prompt example lives at `~/vault/06_RUNTIME/cron-prompts/spend-guard-pre-declaration-example.md`.
+A reference cron-prompt example ships with the spend-guard recipes.
 
 ---
 
@@ -303,4 +303,4 @@ The session window reads from `~/.tokenpak/monitor.db`, which is the proxy's wir
 - **Standard 29:** [`29-spend-guard-agent-contract.md`](https://github.com/tokenpak/docs/blob/main/standards/29-spend-guard-agent-contract.md) — wire contract.
 - **Reference implementation:** `tokenpak/proxy/spend_guard/`
 - **Tests:** `tokenpak/tests/test_spend_guard_*.py` (149 tests including the canonical 2026-05-07 spike-replay).
-- **Initiative record:** `~/vault/01_PROJECTS/tokenpak/initiatives/2026-05-07-tip-spend-guard-oss/_index.md`
+- **Design:** the TIP spend-guard initiative (project history).

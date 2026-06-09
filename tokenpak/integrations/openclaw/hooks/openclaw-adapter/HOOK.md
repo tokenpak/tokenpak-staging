@@ -68,7 +68,7 @@ event types short-circuit the handler immediately.
 
 If two conversations on the same agent host fire concurrently, the second
 write wins. Acceptable for the typical single-active-Telegram-conversation
-pattern fleet hosts use today. Sharded multi-session (one file per session
+pattern in use today. Sharded multi-session (one file per session
 key) is future work and would require a parallel proxy-side reader update.
 
 ## Failure mode
