@@ -33,9 +33,17 @@ from .contracts import TIPDirective
 def _set_allow(d: TIPDirective, v: Optional[str]) -> None:
     if v in ("once", "15m", "session"):
         d.allow_scope = v  # type: ignore[assignment]
-    # ``allow=on`` is treated as ``allow=session`` for ergonomics.
-    elif v in ("on", "true", "1"):
+    # ``allow=on`` / ``allow=true`` are treated as ``allow=session`` for ergonomics.
+    elif v in ("on", "true"):
         d.allow_scope = "session"
+    # ``allow=<N>`` (positive integer) → pre-approve the next N blocked sends
+    # (count grant). N behaves exactly like answering "yes" N times. A bare
+    # ``allow=1`` is therefore a single approval (== allow=once); 0, negatives,
+    # and non-integers are ignored (the directive simply does nothing).
+    elif v is not None and v.isdigit():
+        n = int(v)
+        if n >= 1:
+            d.allow_count = n
 
 def _set_bypass(d: TIPDirective, v: Optional[str]) -> None:
     if v is None or v in ("on", "true", "1", "yes"):
@@ -100,7 +108,7 @@ def _set_reason(d: TIPDirective, v: Optional[str]) -> None:
 
 
 DIRECTIVE_REGISTRY: dict = {
-    "allow":    (_set_allow,    "Authorize the held request: once / 15m / session."),
+    "allow":    (_set_allow,    "Authorize the held request: once / 15m / session / <N> (pre-approve next N sends)."),
     "bypass":   (_set_bypass,   "Skip Yes/No prompt; still subject to hard-block."),
     "max":      (_set_max,      "Cost ceiling ($N) or token ceiling (Nk_tokens / Nm_tokens)."),
     "ttl":      (_set_ttl,      "Session-grant window length, seconds (e.g. 300, 5m). Pairs with allow=session."),

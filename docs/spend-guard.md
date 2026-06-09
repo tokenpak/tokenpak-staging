@@ -17,7 +17,7 @@ When a client sends a request to the TokenPak proxy:
 2. Before forwarding upstream, the **estimator** projects total tokens and cost (using `tokenpak.models.get_rates(model)` as the single source of truth for pricing).
 3. The **policy engine** compares the projection against four thresholds (warn / block / hard-block) and, separately, against your **session-cumulative running cost** for the last hour.
 4. If the request is in the block band, the proxy returns an HTTP **402 Payment Required** with a structured JSON body. **Zero outbound bytes hit the provider.**
-5. You release the held request by replying `yes` (or `no` to cancel), or by re-sending the request with a leading `[TIP: allow=once max=$X]` directive.
+5. You release the held request by replying `yes` (approve one), `no` (cancel), or a number like `20` (pre-approve the next 20 sends) — or by re-sending with a leading `[TIP: allow=once|15m|session|<N> max=$X]` directive.
 6. Hard-block exceeds an immutable ceiling (default 1M tokens / $50) and **cannot** be bypassed.
 
 ---
@@ -101,7 +101,7 @@ The default ratio 0.80 is published as `tokenpak.proxy.spend_guard.DEFAULT_BLOCK
 {
  "error": {
  "type": "tokenpak_spend_guard_blocked",
- "message": "TIP Spend Guard blocked this request before provider send. Reply 'yes' to proceed, 'no' to cancel, or prepend '[TIP: allow=once]' to bypass.",
+ "message": "TIP Spend Guard blocked this request before provider send. Reply 'yes' to approve this one, 'no' to cancel, or a number like '20' to pre-approve the next 20 sends. TIP directives: [TIP: allow=once] / [TIP: allow=15m] / [TIP: allow=session] (this session only) / [TIP: allow=N]. Hard-block ceilings and rolling caps always still apply.",
  "reason": "session_cumulative_cost_exceeded",
  "threshold_hit": "session_block_cost_usd>=10.0 running=9.85",
  "projected_input_tokens": 78000,
@@ -149,7 +149,7 @@ Prefix any provider-bound prompt with `[TIP: ...]` at the very front of the firs
 
 | Directive | Values | Effect |
 |---|---|---|
-| `allow` | `once` / `15m` / `session` | Authorize a held pending request. `once` is single-request; `session` opens a turn-scoped **Yes-grant** (see below). |
+| `allow` | `once` / `15m` / `session` / `<N>` | Authorize a held pending request. `once` is single-request; `session` opens a turn-scoped **Yes-grant** (see below); `<N>` (a positive integer) pre-approves the next **N** blocked sends, behaving exactly like answering `yes` N times. |
 | `bypass` | `on` (default if bare) / `off` | Skip Yes/No prompt; still subject to hard-block. |
 | `max` | `$N` (cost USD) / `Nk_tokens` / `Nm_tokens` | Per-request ceiling the directive authorizes. With `allow=session` the `$N` form becomes the grant's cumulative dollar budget. |
 | `ttl` | `<sec>` / `<n>m` | Yes-grant window length (default `cfg.yes_grant_ttl_seconds`, 300s). Pairs with `allow=session`. |
@@ -174,6 +174,16 @@ isn't re-prompted on every held request inside the TTL window. Semantics:
 - **Non-bypass (W5).** A grant only removes the interactive prompt — it is **not**
  a spend exemption. The hard-block band and rolling fleet caps remain
  non-bypassable unless `cfg.yes_grant_covers_rolling_caps` is explicitly enabled.
+- **Count budget (allow=N).** A bare integer reply (`20`) or `[TIP: allow=20]`
+ opens a **count grant** that pre-approves the next N blocked sends — exactly like
+ answering `yes` N times. This works **both** as a reply to a 402 **and** prepended
+ to a fresh request: the request being approved (the held 402 send, or the fresh
+ request carrying the directive) is send #1, so the grant carries `remaining_count
+ = N-1`, decrementing once per redemption and re-prompting at zero. A count grant is still TTL-bounded, and `max=$N` may be attached too —
+ whichever ceiling (count, dollars, or TTL) is hit first ends the grant. `allow=1`
+ is therefore a single approval, identical to `allow=once`. `0`, negatives, and
+ non-integers are ignored (normal prompting). "Bypass" is always **session-scoped
+ at most** — there is no global/forever bypass.
 - **Cancel.** A `no` (NEGATIVE intent) or `[TIP: cancel]` tears the grant down.
 - **Backwards-compat.** `[TIP: allow=once]` keeps its single-request semantics and
  opens no grant.
