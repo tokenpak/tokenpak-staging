@@ -1085,7 +1085,8 @@ Examples:
 - `CLIENT` — Client key: claude-code | cursor | cline | continue | aider | codex | openai-sdk | anthropic-sdk | litellm
 - `--all` — Show instructions for every supported client
 - `--proxy-url` — Override the printed proxy URL (default: $TOKENPAK_PROXY_URL or http://localhost:8766)
-- `--apply` — (reserved) auto-write config files — not yet implemented, prints safe instructions instead
+- `--apply` — Auto-write config files for the given client (headless / scripted path)
+- `--revert` — Restore the most recent backup for the given client (undoes --apply)
 
 ### `tokenpak last`
 
