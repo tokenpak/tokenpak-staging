@@ -12,9 +12,17 @@ configures MCP, hooks, and AGENTS.md — the launcher is convenience.
 from __future__ import annotations
 
 import os
+import random
 import sys
+from typing import TextIO
 
 from ..config import CompanionConfig
+
+_TEAL = "\033[38;2;0;180;170m"
+_DIM = "\033[2m"
+_RESET = "\033[0m"
+_CLEAR_LINE = "\033[2K"
+_TOKENPAK_CHATGPT_BASE_URL = "http://127.0.0.1:8766/v1"
 
 
 def main(args: list[str] | None = None) -> int:
@@ -38,58 +46,68 @@ def main(args: list[str] | None = None) -> int:
     config.profile_overrides()
 
     config.journal_dir.mkdir(parents=True, exist_ok=True)
+    progress = _LoadingStatus(sys.stderr)
 
     # ── Step 0: Refresh model-rate snapshot for shell hooks ──
     from .rates_snapshot import refresh as refresh_rates
 
-    rates_path = refresh_rates()
-    print(f"tokenpak: rates snapshot refreshed ({rates_path})", file=sys.stderr)
+    progress.step("refreshing Codex companion rates")
+    refresh_rates()
 
     # ── Step 1: Register MCP server ──────────────────────────
     from .mcp_config import get_env_vars, register
 
+    progress.step("registering Codex MCP server")
     env_vars = get_env_vars(config)
-    if register(env_vars=env_vars):
-        print("tokenpak: MCP server registered", file=sys.stderr)
-    else:
+    if not register(env_vars=env_vars):
+        progress.clear()
         print("tokenpak: MCP registration failed (continuing)", file=sys.stderr)
 
     # ── Step 2: Install hooks ────────────────────────────────
     if config.hooks_enabled:
         from .hooks import ensure_hooks_feature_enabled, install_hooks
 
+        progress.step("installing Codex hooks")
         if ensure_hooks_feature_enabled():
-            hooks_path = install_hooks(target="global")
-            print(f"tokenpak: hooks installed ({hooks_path})", file=sys.stderr)
+            install_hooks(target="global")
         else:
+            progress.clear()
             print(
                 "tokenpak: hooks feature could not be enabled",
                 file=sys.stderr,
             )
+    else:
+        progress.step("skipping Codex hooks")
 
     # ── Step 3: Install AGENTS.md ────────────────────────────
     from .agents_md import install_agents_md
 
-    agents_path = install_agents_md(target="global")
-    print(f"tokenpak: AGENTS.md installed ({agents_path})", file=sys.stderr)
+    progress.step("installing Codex AGENTS.md")
+    install_agents_md(target="global")
 
     # ── Step 4: Install skills ───────────────────────────────
     from .skills_installer import install_skills
 
-    installed = install_skills()
-    if installed:
-        print(f"tokenpak: {len(installed)} skills installed", file=sys.stderr)
+    progress.step("installing TokenPak skills")
+    install_skills()
 
     # ── Step 5: Banner ───────────────────────────────────────
-    budget_phrase = (
-        f"budget ${config.budget_daily_usd:.2f}/day"
-        if config.budget_daily_usd > 0
-        else "no budget cap"
-    )
-    print(
-        f"tokenpak: companion ready for codex ({config.profile}, {budget_phrase})",
-        file=sys.stderr,
-    )
+    proxy_url = ""
+    if use_proxy and not install_only:
+        progress.step("installing TokenPak proxy profile")
+        try:
+            _install_tokenpak_chatgpt_profile()
+            proxy_url = _TOKENPAK_CHATGPT_BASE_URL
+        except Exception as exc:
+            progress.clear()
+            print(
+                f"tokenpak: --proxy profile install failed ({exc}); "
+                "launching codex without proxy profile",
+                file=sys.stderr,
+            )
+
+    progress.clear()
+    _print_ready_banner(config, proxy_url, sys.stderr)
 
     if install_only:
         print(
@@ -110,32 +128,79 @@ def main(args: list[str] | None = None) -> int:
         env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
 
     codex_args = ["codex", *args]
-    if use_proxy:
-        try:
-            _profile = _install_tokenpak_chatgpt_profile()
-            print(f"tokenpak: proxy profile installed ({_profile})", file=sys.stderr)
-            codex_args = ["codex", "-p", "tokenpak-chatgpt", *args]
-        except Exception as exc:
-            print(
-                f"tokenpak: --proxy profile install failed ({exc}); "
-                "launching codex without proxy profile",
-                file=sys.stderr,
-            )
+    if proxy_url:
+        codex_args = ["codex", "-p", "tokenpak-chatgpt", *args]
     os.execvpe("codex", codex_args, env)
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
     return 1
 
 
+class _LoadingStatus:
+    """Transient setup status for interactive terminals, plain lines for logs."""
+
+    def __init__(self, stream: TextIO) -> None:
+        self.stream = stream
+        self.interactive = bool(getattr(stream, "isatty", lambda: False)())
+        self._active = False
+        self._started = False
+
+    def step(self, message: str) -> None:
+        if self.interactive:
+            if not self._started:
+                self.stream.write("\n")
+                self._started = True
+            self.stream.write(f"\r{_CLEAR_LINE}{_DIM}tokenpak: {message}...{_RESET}")
+            self.stream.flush()
+            self._active = True
+            return
+        print(f"tokenpak: {message}...", file=self.stream)
+
+    def clear(self) -> None:
+        if not self.interactive or not self._active:
+            return
+        self.stream.write(f"\r{_CLEAR_LINE}")
+        self.stream.flush()
+        self._active = False
+
+
+def _print_ready_banner(
+    config: CompanionConfig,
+    proxy_url: str,
+    stream: TextIO,
+) -> None:
+    """Print the Codex companion banner using the Claude launcher style."""
+    from tokenpak.cli.commands.status import MEME_LINES, _get_version
+
+    mode = config.profile.capitalize()
+    budget = (
+        f"${config.budget_daily_usd:.2f}/day"
+        if config.budget_daily_usd > 0
+        else "Unlimited"
+    )
+    meme = random.choice(MEME_LINES)
+    version = _get_version()
+
+    print(file=stream)
+    print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Codex Companion", file=stream)
+    print(f"     {_DIM}TokenPak {version}{_RESET}", file=stream)
+    print(f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{_RESET}", file=stream)
+    if proxy_url:
+        print(f"     {_DIM}Proxy active \u2192 {proxy_url}{_RESET}", file=stream)
+    print(file=stream)
+    print(f"     {_DIM}{meme}{_RESET}", file=stream)
+    print(file=stream)
+
+
 # Exact contents of the dedicated named profile written under --proxy. This is
 # the ONLY file the launcher writes into ~/.codex, and only when --proxy is
 # passed. The global ~/.codex/config.toml and ~/.codex/AGENTS.md are never
 # touched.
-_TOKENPAK_CHATGPT_PROFILE_TOML = """model_provider = "tokenpak-chatgpt"
+_TOKENPAK_CHATGPT_PROFILE_TOML = f"""model_provider = "tokenpak-chatgpt"
 
 [model_providers.tokenpak-chatgpt]
 name = "TokenPak ChatGPT"
-base_url = "http://127.0.0.1:8766/v1"
+base_url = "{_TOKENPAK_CHATGPT_BASE_URL}"
 wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false
