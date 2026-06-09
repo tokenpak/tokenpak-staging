@@ -2512,7 +2512,11 @@ def _build_stub_parsers(sub):
     )
     p_integrate.add_argument(
         "--apply", action="store_true",
-        help="(reserved) auto-write config files — not yet implemented, prints safe instructions instead",
+        help="Auto-write config files for the given client (headless / scripted path)",
+    )
+    p_integrate.add_argument(
+        "--revert", action="store_true",
+        help="Restore the most recent backup for the given client (undoes --apply)",
     )
 
     def _integrate_dispatch(args):
