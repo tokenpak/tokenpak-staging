@@ -30,8 +30,10 @@ def test_passthrough_allowlist_is_canonical_or_absent():
         assert passthrough.CLAUDE_CODE_HEADER_ALLOWLIST is CANONICAL
 
 
-def test_allowlist_size_is_canonical_18():
-    assert len(CANONICAL) == 18
+def test_allowlist_size_is_canonical_20():
+    # 18 base Claude Code headers + 2 dispatch correlation headers
+    # (x-tokenpak-dispatch-job-id, x-tokenpak-dispatch-station-id).
+    assert len(CANONICAL) == 20
 
 
 def test_required_billing_routing_headers_present():

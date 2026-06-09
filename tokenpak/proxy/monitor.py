@@ -87,8 +87,9 @@ def _db_writer_worker():
                             ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
                             ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
                             ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
-                            ssrm_progress_signal,ssrm_signals_json,skip_reason)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            ssrm_progress_signal,ssrm_signals_json,skip_reason,
+                            dispatch_job_id,dispatch_station_id)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -157,7 +158,9 @@ class Monitor:
                 user_id TEXT DEFAULT '',
                 session_id TEXT DEFAULT '',
                 agent_id TEXT DEFAULT '',
-                cycle_id TEXT DEFAULT ''
+                cycle_id TEXT DEFAULT '',
+                dispatch_job_id TEXT DEFAULT '',
+                dispatch_station_id TEXT DEFAULT ''
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -275,6 +278,19 @@ class Monitor:
                 conn.execute(_col_sql)
             except sqlite3.OperationalError:
                 pass
+        # Dispatch correlation columns (P-TELEMETRY-01). dispatch_job_id <-
+        # X-Tokenpak-Dispatch-Job-Id header; dispatch_station_id <-
+        # X-Tokenpak-Dispatch-Station-Id. Additive + idempotent — columns may
+        # pre-exist from a peer migration. Telemetry contract: '' sentinel for
+        # legacy/unattributed rows, never NULL, never fabricated.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN dispatch_job_id TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN dispatch_station_id TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(_alter)
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS budget_alerts (
@@ -363,6 +379,8 @@ class Monitor:
         ssrm_progress_signal=None,
         ssrm_signals_json=None,
         skip_reason="",
+        dispatch_job_id="",
+        dispatch_station_id="",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -413,6 +431,8 @@ class Monitor:
             ssrm_progress_signal,
             ssrm_signals_json,
             skip_reason or "",
+            dispatch_job_id or "",
+            dispatch_station_id or "",
         )
         _queued = False
         try:
@@ -430,9 +450,10 @@ class Monitor:
                 "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
                 "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
                 "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
-                "ssrm_progress_signal, ssrm_signals_json, skip_reason) "
+                "ssrm_progress_signal, ssrm_signals_json, skip_reason, "
+                "dispatch_job_id, dispatch_station_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insert_params,
             )
             _conn.commit()

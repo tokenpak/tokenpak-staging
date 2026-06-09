@@ -14,7 +14,17 @@ internal execution records, NOT Paks).
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+# Pydantic is the contract layer for every Dispatch record model. Guard the
+# import at this package boundary (Std 02 §9) so a slim install — one that
+# lacks the opt-in ``dispatch`` extra — fails with an actionable install hint
+# rather than a raw ImportError from deep inside the submodule import chain.
+try:
+    from pydantic import BaseModel
+except ImportError as exc:  # pragma: no cover - exercised only on slim installs
+    raise ImportError(
+        "TokenPak Dispatch record models require pydantic. Install the dispatch "
+        "extra: `pip install tokenpak[dispatch]`."
+    ) from exc
 
 from .artifact import DispatchArtifact
 from .common import (
