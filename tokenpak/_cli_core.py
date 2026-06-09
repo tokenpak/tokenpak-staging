@@ -21,6 +21,18 @@ from typing import Optional, Tuple
 from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
 from tokenpak._formatting import symbols as FS
 
+# ── --no-tui global escape ────────────────────
+# Set true when --no-tui is present anywhere on the command line. Stripped
+# from sys.argv early in main() so per-subcommand parsers don't need to
+# know about it. Honored at every TTY entry point: bare `tokenpak`, `tokenpak
+# setup`, and `tokenpak integrate <X>` without `--apply`.
+_NO_TUI_FLAG = False
+
+
+def _no_tui() -> bool:
+    return _NO_TUI_FLAG
+
+
 # ── Monitor DB Access ────────────────────────────────────────────────────────
 
 
@@ -617,11 +629,12 @@ def cmd_setup(args):
 
     config_dir = Path.home() / ".tokenpak"
     config_file = config_dir / "config.yaml"
+    is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
     if config_file.exists():
         print(f"Configuration already exists at {config_file}")
-        if not sys.stdin.isatty():
+        if not is_tty:
             print("Non-interactive mode: skipping reconfigure.")
             return
         try:
@@ -2644,7 +2657,11 @@ def _build_stub_parsers(sub):
     )
     p_integrate.add_argument(
         "--apply", action="store_true",
-        help="(reserved) auto-write config files — not yet implemented, prints safe instructions instead",
+        help="Auto-write config files for the given client (headless / scripted path)",
+    )
+    p_integrate.add_argument(
+        "--revert", action="store_true",
+        help="Restore the most recent backup for the given client (undoes --apply)",
     )
 
     def _integrate_dispatch(args):
@@ -4749,6 +4766,13 @@ def _bare_help(name, description, subs, exit_nonzero=False):
 
 
 def main():
+    global _NO_TUI_FLAG
+    # Strip --no-tui from argv before any other parsing so per-subcommand
+    # parsers don't need to know about it.
+    if "--no-tui" in sys.argv:
+        _NO_TUI_FLAG = True
+        sys.argv = [a for a in sys.argv if a != "--no-tui"]
+
     parser = build_parser()
 
     # ── Intercept --version / -V ──────────────────────────────────────────────
@@ -4759,8 +4783,9 @@ def main():
         sys.exit(0)
 
     # ── Intercept bare invocation: launch interactive menu on TTY ──────────────
+    # --no-tui short-circuits the TUI launch even on a real TTY.
     if len(sys.argv) == 1:
-        if sys.stdin.isatty() and sys.stdout.isatty():
+        if sys.stdin.isatty() and sys.stdout.isatty() and not _no_tui():
             try:
                 from tokenpak.cli.commands.menu import run_menu
                 run_menu()
