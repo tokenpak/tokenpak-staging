@@ -195,6 +195,28 @@ jobs:
             esac
           }
 
+          # The installable OpenClaw hook bundle under
+          # tokenpak/integrations/openclaw/** IS the public OpenClaw adapter
+          # shipped to users. On those paths every lowercase `openclaw` token
+          # is functional/product surface that must remain verbatim: the
+          # integration path itself, the `openclaw-adapter` hook directory,
+          # the `openclaw-gateway` systemd unit, the `~/.openclaw/...`
+          # config-discovery dirs, the `User-Agent: openclaw*` match, the
+          # external `openclaw hooks` / `openclaw doctor` CLI verbs, and the
+          # openclaw.ai / openclaw.md documentation references. The extra
+          # masks below are SCOPED to this exact hook surface (mirroring
+          # is_openclaw_integration_path for the importable module surface)
+          # and mask ONLY those functional openclaw forms. OAS-/agent/
+          # /home/sue//Std/fleet patterns are NOT masked here and remain
+          # enforced; a bare `openclaw` on any path OUTSIDE this hook bundle
+          # is still caught.
+          is_openclaw_integration_hook_path() {
+            case "$1" in
+              tokenpak/integrations/openclaw/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           content_for_pattern() {
             local pat="$1" file="$2"
             # Order matters here. Tier 2 snapshot files get checked FIRST
@@ -340,6 +362,23 @@ jobs:
                   -e 's/openclaw-shaped/__OCINT_SHAPE_PROSE__-shaped/g' \
                   -e 's/openclaw-\{/__OCINT_ID_PREFIX__-{/g' \
                   -e 's/openclaw:/__OCINT_SECRETREF_SCHEME__:/g'
+              elif is_openclaw_integration_hook_path "$file"; then
+                # Installable OpenClaw hook bundle. Mask ONLY the functional
+                # openclaw product/runtime/config identifiers shipped in the
+                # adapter. Order: specific compounds first, then the path
+                # component, then dir/domain/doc/UA/CLI forms. Nothing else
+                # (OAS-/agent/path/Std/fleet) is masked here, so a real leak
+                # in these files is still caught.
+                printf '%s\n' "$masked" | sed -E \
+                  -e 's/openclaw-adapter/__OCHOOK_ADAPTER__/g' \
+                  -e 's/openclaw-gateway/__OCHOOK_GATEWAY__/g' \
+                  -e 's#integrations/openclaw#integrations/__OCHOOK_PATH__#g' \
+                  -e 's/\.openclaw-governor/.__OCHOOK_GOVERNOR_DIR__/g' \
+                  -e 's/\.openclaw\b/.__OCHOOK_CONFIG_DIR__/g' \
+                  -e 's/openclaw\.ai/__OCHOOK_DOMAIN__.ai/g' \
+                  -e 's/openclaw\.md/__OCHOOK_DOC__.md/g' \
+                  -e 's/openclaw\*/__OCHOOK_UA__*/g' \
+                  -e 's/openclaw (hooks|doctor)/__OCHOOK_CLI__ \1/g'
               else
                 printf '%s\n' "$masked"
               fi
