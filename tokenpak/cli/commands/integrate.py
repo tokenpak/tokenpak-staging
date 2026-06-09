@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from tokenpak._formatting.shell_detect import render_env_var as _env
+
 DEFAULT_PROXY_URL = os.environ.get("TOKENPAK_PROXY_URL", "http://localhost:8766")
 
 
@@ -125,10 +127,11 @@ class ApplyResult:
 
 def _instr_claude_code(proxy_url: str) -> str:
     return (
-        f"Set before launching Claude Code (or export permanently):\n"
-        f"    export ANTHROPIC_BASE_URL={proxy_url}\n\n"
-        f"Claude Code reads OAuth creds from ~/.claude/.credentials.json — the\n"
-        f"proxy forwards byte-preserved, so subscription billing is untouched.\n\n"
+        f"No API key required — Claude Code reads your OAuth credentials\n"
+        f"from ~/.claude/.credentials.json, and the proxy forwards them\n"
+        f"byte-preserved so your subscription billing is untouched.\n\n"
+        f"Set before launching Claude Code (or persist in your shell rc):\n"
+        f"    {_env('ANTHROPIC_BASE_URL', proxy_url)}\n\n"
         f"Verify:\n"
         f"    tokenpak status   # monitor.db should show rows after your next Claude Code turn"
     )
@@ -179,10 +182,10 @@ def _instr_aider(proxy_url: str) -> str:
     return (
         f"Point Aider at tokenpak via env vars:\n\n"
         f"  # Anthropic models\n"
-        f"  export ANTHROPIC_API_BASE={proxy_url}\n"
+        f"  {_env('ANTHROPIC_API_BASE', proxy_url)}\n"
         f"  aider --model anthropic/claude-sonnet-4-6\n\n"
         f"  # OpenAI models\n"
-        f"  export OPENAI_API_BASE={proxy_url}/v1\n"
+        f"  {_env('OPENAI_API_BASE', proxy_url + '/v1')}\n"
         f"  aider --model gpt-4o"
     )
 
@@ -193,7 +196,7 @@ def _instr_openai_sdk(proxy_url: str) -> str:
         f"    from openai import OpenAI\n"
         f"    client = OpenAI(base_url=\"{proxy_url}/v1\", api_key=\"<your key>\")\n\n"
         f"Or env var (picked up automatically):\n"
-        f"    export OPENAI_BASE_URL={proxy_url}/v1"
+        f"    {_env('OPENAI_BASE_URL', proxy_url + '/v1')}"
     )
 
 
@@ -203,7 +206,7 @@ def _instr_anthropic_sdk(proxy_url: str) -> str:
         f"    from anthropic import Anthropic\n"
         f"    client = Anthropic(base_url=\"{proxy_url}\", api_key=\"<your key>\")\n\n"
         f"Or env var:\n"
-        f"    export ANTHROPIC_BASE_URL={proxy_url}"
+        f"    {_env('ANTHROPIC_BASE_URL', proxy_url)}"
     )
 
 
@@ -223,7 +226,7 @@ def _instr_codex(proxy_url: str) -> str:
     return (
         f"Codex CLI reads OpenAI creds from ~/.codex/auth.json.\n"
         f"Point it at tokenpak with:\n\n"
-        f"    export OPENAI_BASE_URL={proxy_url}/v1\n"
+        f"    {_env('OPENAI_BASE_URL', proxy_url + '/v1')}\n"
         f"    codex exec \"your prompt\"\n\n"
         f"tokenpak's Codex adapter handles the OAuth credential injection;\n"
         f"see project_tokenpak_codex_three_paths memory for path choice."
