@@ -128,13 +128,20 @@ def evaluate(
     existing_pending = store.get_by_session(session_id)
     if existing_pending is not None:
         try:
-            from .intent import parse_intent
+            from .intent import Intent, parse_intent
             from .replay import resolve_pending
             intent = parse_intent(forward_body)
+            # allow=N / bare-integer reply ("20"): a positive count is itself an
+            # approval — treated as POSITIVE so the held request replays — that
+            # also pre-approves the next N-1 blocked sends via a count grant.
+            count = _approval_count(forward_body, tip_directive)
+            effective_intent = intent
+            if count is not None and intent != Intent.NEGATIVE:
+                effective_intent = Intent.POSITIVE
             outcome = resolve_pending(
                 store=store,
                 pending=existing_pending,
-                intent=intent,
+                intent=effective_intent,
                 tip=tip_directive,
                 cfg=cfg,
                 builders={
@@ -148,12 +155,17 @@ def evaluate(
                    tip=tip_directive)
             # Yes-grant lifecycle on the approval turn. A turn-scoped Yes
             # (POSITIVE intent or [TIP: allow=session]) opens a grant so the
-            # rest of the turn skips the soft-block prompt; an explicit
-            # allow=once / bare bypass keeps single-request semantics. A
-            # NEGATIVE/cancel tears any active grant down.
-            if outcome.kind == "replay" and _should_create_grant(intent, tip_directive):
-                _create_grant(cfg, session_id, fleet_id, agent_id,
-                              tip_directive, existing_pending.pending_id)
+            # rest of the turn skips the soft-block prompt; allow=N opens a
+            # count-bounded grant; an explicit allow=once / bare bypass keeps
+            # single-request semantics. A NEGATIVE/cancel tears any grant down.
+            if outcome.kind == "replay":
+                if count is not None:
+                    _create_grant(cfg, session_id, fleet_id, agent_id,
+                                  tip_directive, existing_pending.pending_id,
+                                  count=count)
+                elif _should_create_grant(intent, tip_directive):
+                    _create_grant(cfg, session_id, fleet_id, agent_id,
+                                  tip_directive, existing_pending.pending_id)
             elif outcome.kind == "cancel":
                 _discard_grant(cfg, session_id, fleet_id, agent_id)
             return outcome
@@ -461,18 +473,41 @@ def _should_create_grant(intent, tip) -> bool:
     return False
 
 
-def _create_grant(cfg, session_id, fleet_id, agent_id, tip, pending_id) -> None:
+def _approval_count(body, tip) -> Optional[int]:
+    """The pre-approval count for this turn, or ``None``.
+
+    Sourced from ``[TIP: allow=<N>]`` (``tip.allow_count``) or a bare-integer
+    reply (``"20"``). Returns a positive int, or ``None`` when neither is
+    present or the value is invalid (0 / negative / non-integer).
+    """
+    if tip is not None:
+        n = getattr(tip, "allow_count", None)
+        if isinstance(n, int) and n >= 1:
+            return n
+    try:
+        from .intent import parse_count
+        return parse_count(body)
+    except Exception:
+        return None
+
+
+def _create_grant(cfg, session_id, fleet_id, agent_id, tip, pending_id, count=None) -> None:
     """Open a session-scoped Yes-grant for the composite key (W1).
 
     TTL defaults to ``cfg.yes_grant_ttl_seconds``; ``[TIP: ttl=<sec>]`` and
     ``[TIP: max=$<usd>]`` override the window / attach a dollar ceiling (W4).
-    Audits ``yes_grant_created`` (W2). Best-effort — never raises.
+    ``count`` (allow=N) attaches a request-count ceiling: the held request
+    being approved is send #1, so the grant covers the remaining ``N-1`` blocked
+    sends (allow=N == answering "yes" N times). ``count<=1`` opens no grant —
+    a single approval, identical to ``allow=once``. Audits ``yes_grant_created``
+    (W2). Best-effort — never raises.
     """
     try:
         from .grants import GrantStore
         ttl = cfg.yes_grant_ttl_seconds
         max_cost = None
         kind = "session"
+        remaining_count = None
         if tip is not None:
             if tip.ttl_seconds:
                 ttl = tip.ttl_seconds
@@ -480,10 +515,16 @@ def _create_grant(cfg, session_id, fleet_id, agent_id, tip, pending_id) -> None:
                 max_cost = tip.max_cost_usd
             if tip.allow_scope == "session":
                 kind = "tip_session"
+        if count is not None:
+            remaining_count = int(count) - 1
+            kind = "count"
+            if remaining_count < 1:
+                # allow=1 (== a single yes / allow=once): no multi-request grant.
+                return
         GrantStore(cfg.audit_db_path).create(
             session_id=session_id, fleet_id=fleet_id, agent_id=agent_id,
             ttl_seconds=ttl, granted_by_pending_id=pending_id or "",
-            grant_kind=kind, max_cost_usd=max_cost,
+            grant_kind=kind, max_cost_usd=max_cost, remaining_count=remaining_count,
         )
         _audit(cfg, "yes_grant_created", session_id,
                decision_str="allow", pending_id=pending_id, tip=tip)

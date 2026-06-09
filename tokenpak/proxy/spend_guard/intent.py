@@ -13,6 +13,7 @@ import json
 import re
 import string
 from enum import Enum
+from typing import Optional
 
 
 class Intent(Enum):
@@ -109,4 +110,24 @@ def parse_intent(body: bytes) -> Intent:
     return Intent.AMBIGUOUS
 
 
-__all__ = ["Intent", "parse_intent"]
+def parse_count(body: bytes) -> Optional[int]:
+    """Parse a bare positive-integer approval reply (``"20"`` → ``20``).
+
+    Returns the integer only when the *entire* normalized last-user-text is a
+    positive integer — the same strict whole-string discipline as
+    :func:`parse_intent`, so an agent message that merely contains a number is
+    not misread as a count. ``"0"``, negatives, and non-integers return
+    ``None`` (the caller then treats the reply as normal/ambiguous).
+
+    Semantics: ``N`` means "approve this held send and pre-approve the next
+    ``N-1`` blocked sends" — i.e. exactly like answering ``yes`` ``N`` times.
+    """
+    norm = _normalize(_last_user_text(body))
+    if norm.isdigit():
+        n = int(norm)
+        if n >= 1:
+            return n
+    return None
+
+
+__all__ = ["Intent", "parse_intent", "parse_count"]

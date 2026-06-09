@@ -43,8 +43,12 @@ def block(decision: PreflightDecision, pending: PendingRequest) -> bytes:
             "type": ERR_BLOCKED,
             "message": (
                 "TIP Spend Guard blocked this request before provider send. "
-                "Reply 'yes' to proceed, 'no' to cancel, or prepend "
-                "'[TIP: allow=once]' to bypass."
+                "Reply 'yes' to approve this one, 'no' to cancel, or a number "
+                "like '20' to pre-approve the next 20 sends. TIP directives: "
+                "[TIP: allow=once] (this one), [TIP: allow=15m] (15-minute "
+                "window), [TIP: allow=session] (rest of THIS session only), "
+                "[TIP: allow=N] (next N sends). Hard-block ceilings and rolling "
+                "caps always still apply."
             ),
             "reason": decision.reason,
             "threshold_hit": decision.threshold_hit,
@@ -55,7 +59,19 @@ def block(decision: PreflightDecision, pending: PendingRequest) -> bytes:
             "model": risk.model if risk else None,
             "pending_id": pending.pending_id,
             "expires_at": pending.expires_at,
-            "approval_prompt": "Proceed? Yes / No",
+            "approval_prompt": "Proceed? yes / no / <N> (approve next N sends)",
+            # Structured options so clients can render the menu without parsing
+            # the message string. Session scope is bounded to this session — it
+            # is never a global/forever bypass.
+            "approval_options": [
+                {"reply": "yes", "effect": "approve this request only"},
+                {"reply": "no", "effect": "cancel this request"},
+                {"reply": "<N>", "effect": "approve the next N blocked sends"},
+                {"directive": "[TIP: allow=once]", "effect": "approve this request only"},
+                {"directive": "[TIP: allow=15m]", "effect": "approve for a 15-minute window"},
+                {"directive": "[TIP: allow=session]", "effect": "approve for the rest of this session"},
+                {"directive": "[TIP: allow=N]", "effect": "approve the next N blocked sends"},
+            ],
             "retryable": True,        # client may retry after approval
             "recovery_status": "user_action_required",
         }
@@ -94,7 +110,8 @@ def pending_waiting(pending: PendingRequest) -> bytes:
             "message": (
                 "A previous request from this session is held by the Spend "
                 "Guard awaiting approval. Reply 'yes' to proceed, 'no' to "
-                "cancel, or '[TIP: cancel]' to discard."
+                "cancel, a number like '20' to pre-approve the next 20 sends, "
+                "or '[TIP: cancel]' to discard."
             ),
             "pending_id": pending.pending_id,
             "expires_at": pending.expires_at,

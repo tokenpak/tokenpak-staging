@@ -651,7 +651,7 @@ def decide(
         )
 
     # 3. TIP-declared ceiling
-    if tip is not None and (tip.bypass or tip.allow_scope or tip.max_cost_usd is not None or tip.max_tokens is not None):
+    if tip is not None and (tip.bypass or tip.allow_scope or tip.allow_count or tip.max_cost_usd is not None or tip.max_tokens is not None):
         # When a TIP ceiling is specified, only the *specified* dimensions
         # bind. Unspecified dimensions are treated as user-authorized — the
         # caller has explicitly opted in. Hard-block / hard-stop (already

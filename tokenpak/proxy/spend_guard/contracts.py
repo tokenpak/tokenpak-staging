@@ -89,6 +89,9 @@ class TIPDirective:
 
     raw: str = ""
     allow_scope: Optional[Literal["once", "15m", "session"]] = None
+    # [TIP: allow=<N>] — pre-approve the next N blocked sends (count grant).
+    # Mutually exclusive with allow_scope in the grammar; a positive int only.
+    allow_count: Optional[int] = None
     bypass: bool = False
     max_cost_usd: Optional[float] = None
     max_tokens: Optional[int] = None
