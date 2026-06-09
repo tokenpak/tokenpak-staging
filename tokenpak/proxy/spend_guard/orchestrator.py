@@ -346,6 +346,15 @@ def evaluate(
         if tip_directive is not None:
             _audit(cfg, "tip_bypass", session_id, decision_str="allow",
                    projected_cost=est.projected_cost_usd, tip=tip_directive)
+        # Proactive count: a fresh (non-reply) request carrying [TIP: allow=N]
+        # approves THIS send as #1 and pre-arms a count grant for the next N-1
+        # blocked sends — same mental model as replying N to a 402, so the
+        # "prepend [TIP: allow=N]" promise holds without a reply round-trip.
+        # (Reached only after the hard-block and rolling-cap checks above, so
+        # those bands stay non-bypassable; allow=1 opens no grant.)
+        if tip_directive is not None and getattr(tip_directive, "allow_count", None):
+            _create_grant(cfg, session_id, fleet_id, agent_id,
+                          tip_directive, "", count=tip_directive.allow_count)
         kind = "forward_modified" if forward_body is not body else "forward"
         return GuardOutcome(kind=kind, body=forward_body, decision=decision)
 

@@ -176,9 +176,10 @@ isn't re-prompted on every held request inside the TTL window. Semantics:
  non-bypassable unless `cfg.yes_grant_covers_rolling_caps` is explicitly enabled.
 - **Count budget (allow=N).** A bare integer reply (`20`) or `[TIP: allow=20]`
  opens a **count grant** that pre-approves the next N blocked sends — exactly like
- answering `yes` N times. The held request being approved is send #1, so the grant
- covers the remaining N-1 sends, decrementing once per redemption and re-prompting
- at zero. A count grant is still TTL-bounded, and `max=$N` may be attached too —
+ answering `yes` N times. This works **both** as a reply to a 402 **and** prepended
+ to a fresh request: the request being approved (the held 402 send, or the fresh
+ request carrying the directive) is send #1, so the grant carries `remaining_count
+ = N-1`, decrementing once per redemption and re-prompting at zero. A count grant is still TTL-bounded, and `max=$N` may be attached too —
  whichever ceiling (count, dollars, or TTL) is hit first ends the grant. `allow=1`
  is therefore a single approval, identical to `allow=once`. `0`, negatives, and
  non-integers are ignored (normal prompting). "Bypass" is always **session-scoped

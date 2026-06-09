@@ -247,3 +247,64 @@ class TestAllowOneIsSingleApproval:
         assert "yes_grant_created" not in _events(tmp_cfg, sid)
         # The next runaway blocks again (single-request semantics held).
         assert evaluate(_runaway("b"), "claude-opus-4-7", sid, {}, config=tmp_cfg).kind == "block"
+
+
+# --------------------------------------------------------------------------
+# Proactive prepend: [TIP: allow=N] on a FRESH request pre-arms the full count
+# --------------------------------------------------------------------------
+
+class TestProactivePrependArmsFullCount:
+    def test_fresh_prepend_arms_grant_and_forwards(self, tmp_cfg):
+        sid = "sess-proactive-arm"
+        # No prior 402 — a fresh request that carries [TIP: allow=3].
+        out = evaluate(_opus_body("[TIP: allow=3] do the thing"),
+                       "claude-opus-4-7", sid, {}, config=tmp_cfg)
+        # This send (#1) goes through, and a count grant is armed.
+        assert out.kind in ("forward", "forward_modified")
+        assert "yes_grant_created" in _events(tmp_cfg, sid)
+        # Grant carries remaining_count = N-1 = 2 for the (sid, "", "") key.
+        grant = GrantStore(tmp_cfg.audit_db_path).get_active(sid, "", "")
+        assert grant is not None and grant.remaining_count == 2
+
+    def test_fresh_prepend_covers_next_n_minus_one_sends(self, tmp_cfg):
+        sid = "sess-proactive-ride"
+        # Prepend allow=3 on a fresh send (#1) → next two blocked sends ride.
+        assert evaluate(_opus_body("[TIP: allow=3] go"), "claude-opus-4-7", sid, {}, config=tmp_cfg).kind in ("forward", "forward_modified")  # #1
+        assert evaluate(_runaway("a"), "claude-opus-4-7", sid, {}, config=tmp_cfg).kind in ("forward", "forward_modified")  # #2
+        assert evaluate(_runaway("b"), "claude-opus-4-7", sid, {}, config=tmp_cfg).kind in ("forward", "forward_modified")  # #3
+        # Grant spent — the 4th send re-prompts.
+        assert evaluate(_runaway("c"), "claude-opus-4-7", sid, {}, config=tmp_cfg).kind == "block"
+
+    def test_fresh_prepend_allow_one_opens_no_grant(self, tmp_cfg):
+        sid = "sess-proactive-1"
+        out = evaluate(_opus_body("[TIP: allow=1] go"), "claude-opus-4-7", sid, {}, config=tmp_cfg)
+        assert out.kind in ("forward", "forward_modified")
+        # allow=1 is a single send — no grant armed.
+        assert "yes_grant_created" not in _events(tmp_cfg, sid)
+        assert GrantStore(tmp_cfg.audit_db_path).get_active(sid, "", "") is None
+
+    @pytest.mark.parametrize("token", ["allow=0", "allow=-2", "allow=nan"])
+    def test_fresh_prepend_invalid_count_opens_no_grant(self, tmp_cfg, token):
+        sid = f"sess-proactive-bad-{abs(hash(token))}"
+        evaluate(_opus_body(f"[TIP: {token}] go"), "claude-opus-4-7", sid, {}, config=tmp_cfg)
+        assert "yes_grant_created" not in _events(tmp_cfg, sid)
+        assert GrantStore(tmp_cfg.audit_db_path).get_active(sid, "", "") is None
+
+    def test_fresh_prepend_does_not_cross_hard_block(self, tmp_cfg):
+        sid = "sess-proactive-hardblock"
+        # allow=5 must NOT push a hard-block-band request through, nor arm a grant.
+        hard = _opus_body("[TIP: allow=5] " + "x" * 4_000_000, max_tokens=50_000)
+        out = evaluate(hard, "claude-opus-4-7", sid, {}, config=tmp_cfg)
+        assert out.kind == "hard_block"
+        assert GrantStore(tmp_cfg.audit_db_path).get_active(sid, "", "") is None
+
+    def test_fresh_prepend_does_not_bypass_rolling_cap(self, tmp_cfg):
+        sid = "sess-proactive-rollingcap"
+        tmp_cfg.rolling_caps_enabled = True
+        tmp_cfg.rolling_caps_per_agent_max_cost_usd = 1e-6  # any send breaches
+        out = evaluate(_opus_body("[TIP: allow=5] go"), "claude-opus-4-7", sid,
+                       {"x-tokenpak-agent": "a1"}, config=tmp_cfg)
+        assert out.kind == "block"
+        assert out.audit_event == "rolling_cap_block"
+        # No grant armed when the send itself was rolling-cap blocked.
+        assert GrantStore(tmp_cfg.audit_db_path).get_active(sid, "", "a1") is None
