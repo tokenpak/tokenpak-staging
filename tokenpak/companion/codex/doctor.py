@@ -58,7 +58,7 @@ def check_codex_binary() -> "tuple[Status, str]":
 
 
 def check_hooks_feature() -> "tuple[Status, str]":
-    """Surface codex_hooks maturity as WARN — Codex labels it "under development".
+    """Surface the ``hooks`` feature maturity, WARN while marked unstable.
 
     The companion still installs hooks (the launcher needs them), but we
     refuse to tell the user "all green" while Codex itself marks the
@@ -72,26 +72,26 @@ def check_hooks_feature() -> "tuple[Status, str]":
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         return "FAIL", f"codex features list failed: {exc}"
 
-    maturity = _parse_codex_hooks_maturity(result.stdout)
+    maturity = _parse_hooks_maturity(result.stdout)
     if maturity is None:
-        return "FAIL", "codex_hooks feature not found in `codex features list`"
+        return "FAIL", "hooks feature not found in `codex features list`"
 
     label, enabled = maturity
     if label == "under development":
         return (
             "WARN",
-            f"codex_hooks={label} (enabled={enabled}) — Codex may break this; "
+            f"hooks={label} (enabled={enabled}) — Codex may break this; "
             "consider unpinning hooks plane if encountering failures",
         )
     # Once Codex bumps the label to experimental/beta/stable, treat
     # enabled=true as PASS, enabled=false as FAIL (companion needs it on).
     if enabled:
-        return "PASS", f"codex_hooks={label} (enabled=true)"
-    return "FAIL", f"codex_hooks={label} (enabled=false)"
+        return "PASS", f"hooks={label} (enabled=true)"
+    return "FAIL", f"hooks={label} (enabled=false)"
 
 
-def _parse_codex_hooks_maturity(stdout: str) -> "tuple[str, bool] | None":
-    """Parse ``codex features list`` output for the codex_hooks row.
+def _parse_hooks_maturity(stdout: str) -> "tuple[str, bool] | None":
+    """Parse ``codex features list`` output for the ``hooks`` row.
 
     Returns ``(maturity_label, enabled)`` or ``None`` if the row is
     absent.  Maturity labels can be multi-word ("under development"), so
@@ -103,7 +103,7 @@ def _parse_codex_hooks_maturity(stdout: str) -> "tuple[str, bool] | None":
         if not stripped or stripped.startswith("#"):
             continue
         parts = stripped.split()
-        if not parts or parts[0] != "codex_hooks":
+        if not parts or parts[0] != "hooks":
             continue
         if len(parts) < 3:
             return None
@@ -401,7 +401,7 @@ def check_proxy_routing() -> "tuple[Status, str]":
 CHECKS: list["tuple[str, CheckFn]"] = [
     ("codex binary", check_codex_binary),
     ("proxy routing (value plane)", check_proxy_routing),
-    ("codex_hooks feature", check_hooks_feature),
+    ("hooks feature", check_hooks_feature),
     ("MCP registration", check_mcp_registered),
     ("hooks.json schema", check_hooks_json),
     ("AGENTS.md", check_agents_md),

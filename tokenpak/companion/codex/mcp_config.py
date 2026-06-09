@@ -46,10 +46,14 @@ def register(
     if is_registered():
         return True
 
+    # ``-P`` (PYTHONSAFEPATH) keeps the spawn cwd off sys.path.  Codex starts
+    # MCP servers from the user's cwd, where a ``tokenpak`` symlink to a repo
+    # root can shadow the installed package as a namespace package and break
+    # ``from ... import __version__`` at server import time.
     cmd = [
         "codex", "mcp", "add", SERVER_NAME,
         "--",
-        sys.executable, "-m", "tokenpak.companion.mcp.server",
+        sys.executable, "-P", "-m", "tokenpak.companion.mcp.server",
     ]
 
     # Pass companion env vars to the MCP server process.

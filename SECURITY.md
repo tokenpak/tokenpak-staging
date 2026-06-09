@@ -6,7 +6,7 @@ If you discover a suspected security vulnerability in TokenPak, please report it
 **Please do not open a public issue.**
 
 - **Preferred:** [GitHub private vulnerability reporting](https://github.com/tokenpak/tokenpak/security/advisories/new)
-- **Email:** security@tokenpak.ai
+- **Email:** hello@tokenpak.ai
 
 ### What to include
 

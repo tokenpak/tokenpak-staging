@@ -2,7 +2,7 @@
 # Source: Codex CLI v0.42.0; format documented at
 #   developers.openai.com/codex/feature-maturity
 # Layout: <feature_name>  <maturity_label_words…>  <enabled_bool>
-codex_hooks         under development  true
+hooks               under development  true
 codex_mcp_servers   beta              true
 codex_skills        experimental      true
 codex_agents_md     stable            true

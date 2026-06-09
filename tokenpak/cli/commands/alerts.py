@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import sys
 
+from tokenpak.cli._messages import error
+
 
 def cmd_alerts_test(args) -> None:
     """Test an alert delivery channel by sending a sample payload."""
@@ -14,7 +16,7 @@ def cmd_alerts_test(args) -> None:
 
     if channel == "webhook":
         if not args.url:
-            print("❌ --url is required for --channel webhook", file=sys.stderr)
+            print(error("--url is required for --channel webhook"), file=sys.stderr)
             sys.exit(1)
         from tokenpak.alerts.channels import webhook
         request_body = json.loads(
@@ -37,7 +39,7 @@ def cmd_alerts_test(args) -> None:
 
     elif channel == "slack":
         if not args.webhook:
-            print("❌ --webhook is required for --channel slack", file=sys.stderr)
+            print(error("--webhook is required for --channel slack"), file=sys.stderr)
             sys.exit(1)
         from tokenpak.alerts.channels import slack
         request_body = {"text": slack._build_text("test", "info", "TokenPak alert delivery test")}
@@ -51,11 +53,11 @@ def cmd_alerts_test(args) -> None:
         )
 
     else:
-        print(f"❌ Unknown channel: {channel!r}. Use 'webhook' or 'slack'.", file=sys.stderr)
+        print(error(f"Unknown channel: {channel!r}. Use 'webhook' or 'slack'."), file=sys.stderr)
         sys.exit(1)
 
     if success:
         print("✅ Delivery succeeded")
     else:
-        print("❌ Delivery failed (check logs for details)")
+        print(error("Delivery failed (check logs for details)"))
         sys.exit(1)

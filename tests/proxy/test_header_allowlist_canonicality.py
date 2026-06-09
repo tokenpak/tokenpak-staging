@@ -21,14 +21,19 @@ def test_package_export_is_canonical_object():
     assert PKG_ALLOWLIST is CANONICAL
 
 
-def test_passthrough_no_longer_defines_allowlist():
+def test_passthrough_allowlist_is_canonical_or_absent():
+    # passthrough may re-export the canonical allowlist as a backward-compat
+    # alias, but must never define a divergent copy (the original bug).
     from tokenpak.proxy import passthrough
 
-    assert not hasattr(passthrough, "CLAUDE_CODE_HEADER_ALLOWLIST")
+    if hasattr(passthrough, "CLAUDE_CODE_HEADER_ALLOWLIST"):
+        assert passthrough.CLAUDE_CODE_HEADER_ALLOWLIST is CANONICAL
 
 
-def test_allowlist_size_is_canonical_18():
-    assert len(CANONICAL) == 18
+def test_allowlist_size_is_canonical_20():
+    # 18 base Claude Code headers + 2 dispatch correlation headers
+    # (x-tokenpak-dispatch-job-id, x-tokenpak-dispatch-station-id).
+    assert len(CANONICAL) == 20
 
 
 def test_required_billing_routing_headers_present():

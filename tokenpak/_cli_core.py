@@ -73,54 +73,6 @@ def _monitor_db_cost(period: str = "daily") -> float:
         return 0.0
 
 
-def _monitor_db_savings(days: int = 30) -> dict:
-    """Return savings summary from monitor.db."""
-    import sqlite3
-    from datetime import date, timedelta
-
-    db = _get_monitor_db_path()
-    if db is None:
-        return {}
-
-    since = (date.today() - timedelta(days=days)).isoformat()
-    try:
-        conn = sqlite3.connect(str(db), timeout=2)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT
-                COALESCE(SUM(estimated_cost), 0)      AS actual_cost,
-                COALESCE(SUM(input_tokens), 0)         AS total_input,
-                COALESCE(SUM(output_tokens), 0)        AS total_output,
-                COALESCE(SUM(cache_read_tokens), 0)    AS cache_read,
-                COALESCE(SUM(cache_creation_tokens), 0) AS cache_created,
-                COALESCE(SUM(compressed_tokens), 0)    AS compressed,
-                COALESCE(SUM(protected_tokens), 0)     AS protected
-            FROM requests WHERE timestamp >= ? AND status_code < 400""",
-            (since,),
-        )
-        row = dict(cur.fetchone())
-        conn.close()
-
-        actual = row["actual_cost"]
-        cache_read = row["cache_read"]
-        total_in = row["total_input"] + cache_read
-
-        # Rough baseline: what it would cost without cache/compression
-        raw_input = row["total_input"] + row["compressed"]
-        return {
-            "actual_cost": actual,
-            "cache_read": cache_read,
-            "cache_hit_rate": cache_read / total_in if total_in else 0,
-            "compressed_tokens": row["compressed"],
-            "raw_input_tokens": raw_input,
-            "total_input": row["total_input"],
-            "total_output": row["total_output"],
-        }
-    except Exception:
-        return {}
-
-
 def _monitor_db_models(days: int = 30) -> list:
     """Return per-model usage from monitor.db."""
     import sqlite3
@@ -174,7 +126,7 @@ def _proxy_get(path: str, port: Optional[int] = None) -> "dict | None":
 _FIRST_RUN_FLAG = Path.home() / ".tokenpak" / ".seen_intro"
 
 # Commands shown in quick --help (beginner view)
-_QUICK_COMMANDS = ["start", "demo", "cost", "status"]
+_QUICK_COMMANDS = ["start", "demo", "cost", "status", "metrics"]
 
 # All commands grouped for `tokenpak help`
 _COMMAND_GROUPS = {
@@ -222,6 +174,7 @@ _COMMAND_GROUPS = {
         ("fleet", "Fleet status"),
         ("aggregate", "Aggregate ledger"),
         ("requests", "Live request explorer"),
+        ("dispatch", "Workflow control: run, decide, deliver"),
     ],
     "Companion": [
         ("claude", "Launch with Claude Code"),
@@ -252,6 +205,165 @@ _COMMAND_GROUPS = {
 
 # All known command names (for typo detection)
 _ALL_COMMANDS = [cmd for group in _COMMAND_GROUPS.values() for cmd, _ in group]
+
+# Built-in verbs that are registered via argparse / stubs but are NOT part of
+# the grouped ``_COMMAND_GROUPS`` table. Kept here (module level) so plugin
+# discovery and the dispatcher share one authoritative core-name set — a plugin
+# must never be able to shadow any of these.
+_EXTRA_KNOWN_COMMANDS = frozenset({
+    "help",
+    "companion",
+    "start",
+    "stop",
+    "restart",
+    "logs",
+    "version",
+    "update",
+    "config",
+    "setup",
+    "compare",
+    "leaderboard",
+    "report",
+    "check-alerts",
+    "alerts",
+    "watch",
+    "integrate",
+    "openclaw",
+    "savings",
+    "recommendations",
+    "usage",
+    "preview",
+    "aggregate",
+    "requests",
+    "validate-config",
+    "vault",
+    "vault-health",
+    "compress",
+    "optimize",
+    "last",
+    "prune",
+    "retrieval",
+    "menu",
+    # Stub commands (advertised in help/registry, not yet implemented)
+    "license",
+    "plan",
+    "activate",
+    "deactivate",
+    "init",
+    "monitor",
+    # Beta 1 verb families (TIP, features, PAKPlan preview, home)
+    "tip",
+    "features",
+    "pakplan",
+    "home",
+    # Dispatch v0.1-alpha (workflow-control layer)
+    "dispatch",
+})
+
+
+def _core_command_names() -> set:
+    """Return the authoritative set of all built-in CLI verb names.
+
+    This is the union of the grouped commands and the argparse/stub commands.
+    Plugin discovery excludes every name in this set so a plugin can never
+    shadow a built-in verb.
+    """
+    return set(_ALL_COMMANDS) | set(_EXTRA_KNOWN_COMMANDS)
+
+
+# ── Plugin command discovery (tokenpak.commands entry-point group) ────────────
+#
+# Installed plugins (e.g. the premium tier) register additional CLI verbs under
+# the ``tokenpak.commands`` setuptools entry-point group. Each entry point
+# resolves to a callable that takes the remaining argv list and returns an int
+# exit code; that callable is the plugin's own gated wrapper, so entitlement
+# enforcement lives entirely inside the plugin — the core CLI only routes to it.
+#
+# Built-in verbs always win on a name collision: a plugin can never shadow a
+# command that ships in the core CLI. Discovery is lazy (only walked when an
+# unknown verb is seen or full help is rendered) and cached for the process.
+#
+# Discovery is on by default. Set ``TOKENPAK_ENABLE_PLUGINS=0`` to disable it
+# (e.g. for a fully hermetic core-only invocation).
+
+_plugin_commands_cache: Optional[dict] = None
+
+
+def _plugins_enabled() -> bool:
+    """Return False only when discovery is explicitly disabled via env."""
+    val = os.environ.get("TOKENPAK_ENABLE_PLUGINS")
+    if val is None:
+        return True
+    return val.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _discover_plugin_commands(force: bool = False) -> dict:
+    """Discover CLI verbs registered under the ``tokenpak.commands`` group.
+
+    Returns a mapping of ``verb name -> entry point``, excluding any verb whose
+    name collides with a built-in command (built-ins always win). The result is
+    cached for the lifetime of the process. Returns an empty dict when discovery
+    is disabled or no plugins are installed. Never raises — a broken plugin
+    environment must not break the core CLI.
+    """
+    global _plugin_commands_cache
+    if _plugin_commands_cache is not None and not force:
+        return _plugin_commands_cache
+
+    discovered: dict = {}
+    if not _plugins_enabled():
+        _plugin_commands_cache = discovered
+        return discovered
+
+    core_names = _core_command_names()
+    try:
+        from importlib.metadata import entry_points
+
+        eps = entry_points()
+        # Python 3.12+ exposes .select(); older returns a dict-like mapping.
+        if hasattr(eps, "select"):
+            command_eps = eps.select(group="tokenpak.commands")
+        else:  # pragma: no cover - legacy importlib.metadata
+            command_eps = eps.get("tokenpak.commands", [])
+
+        for ep in command_eps:
+            # Built-in verbs win on collision: never let a plugin shadow core.
+            if ep.name in core_names or ep.name in discovered:
+                continue
+            discovered[ep.name] = ep
+    except Exception:
+        # Any failure to read entry points leaves the core CLI fully functional.
+        discovered = {}
+
+    _plugin_commands_cache = discovered
+    return discovered
+
+
+def _dispatch_plugin_command(verb: str, argv: list) -> int:
+    """Invoke a discovered plugin verb's callable with the remaining argv.
+
+    ``argv`` is everything after the verb itself. The loaded callable is the
+    plugin's own gated wrapper: an unentitled invocation returns the plugin's
+    upgrade stub exit code, while an entitled one runs the real command. The
+    core CLI does not inspect or alter that gating — it only routes.
+
+    Returns the plugin callable's int exit code (defaulting to 0 when the
+    callable returns ``None``), or a non-zero code if the plugin fails to load.
+    """
+    plugins = _discover_plugin_commands()
+    ep = plugins.get(verb)
+    if ep is None:
+        return 1
+    try:
+        func = ep.load()
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"❌ Failed to load plugin command '{verb}': {exc}",
+            file=sys.stderr,
+        )
+        return 3
+    rc = func(argv)
+    return rc if isinstance(rc, int) else 0
 
 
 def _suggest_command(unknown: str) -> Optional[str]:
@@ -342,6 +454,12 @@ def _print_full_help():
             print(f"  {group_name}:")
             for cmd, desc in commands:
                 print(f"    {cmd:<14} {desc}")
+            print()
+        _plugin_cmds = _discover_plugin_commands()
+        if _plugin_cmds:
+            print("  Pro / plugins:")
+            for name in sorted(_plugin_cmds):
+                print(f"    {name:<14} Provided by an installed plugin")
             print()
         print("Run `tokenpak <command> --help` for command details.")
 
@@ -532,9 +650,48 @@ def cmd_setup(args):
         api_keys["google"] = os.environ["GOOGLE_API_KEY"]
 
     if not api_keys:
+        # A direct ANTHROPIC_API_KEY is only genuinely needed when no OAuth /
+        # proxy / session-auth path covers Anthropic. Suppress the false-alarm
+        # warning when OAuth/session auth is already available.
+        try:
+            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+
+            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+        except Exception:
+            anthropic_via_oauth = False
+
+        if anthropic_via_oauth:
+            # OAuth/session auth covers Anthropic, so no direct API key is
+            # needed. Rather than dead-ending, complete onboarding: if a
+            # Claude Code login is present, point it at the local proxy so
+            # the no-key path actually finishes setup.
+            print("ℹ️  Anthropic is authenticated via OAuth/session "
+                  "(no direct API key needed).")
+            try:
+                from tokenpak.cli.commands.setup import (
+                    configure_claude_code,
+                    detect_claude_code,
+                )
+
+                if detect_claude_code():
+                    configure_claude_code()
+                    print("✅ Configured Claude Code to use the TokenPak proxy "
+                          "(ANTHROPIC_BASE_URL).")
+            except Exception as _e:
+                print(f"   (Claude Code auto-config skipped: {_e})")
+            print("   Set OPENAI_API_KEY or GOOGLE_API_KEY to proxy those providers.")
+            return
+
         print("⚠️  No API keys detected in environment variables.")
-        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
-        print("   Example: export ANTHROPIC_API_KEY='sk-...'")
+        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY,")
+        print("   or sign in with Claude Code (OAuth) — no API key required.")
+        print("   Example (set ANTHROPIC_API_KEY for your shell):")
+        try:
+            from tokenpak.cli.commands.setup import env_var_help
+
+            print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
+        except Exception:
+            print("    export ANTHROPIC_API_KEY='sk-...'")
         return
 
     # Auto-detect primary provider
@@ -556,9 +713,9 @@ def cmd_setup(args):
 
     # Ask for profile
     print("\nChoose a compression profile:")
-    print("  [1] minimal    — compression only (safest, ~5% savings)")
-    print("  [2] balanced   — compression + caching + routing (recommended, ~30% savings)")
-    print("  [3] aggressive — all modules enabled (maximum savings, ~40%+)")
+    print("  [1] minimal    — compression only (safest, lowest overhead)")
+    print("  [2] balanced   — compression + caching + routing (recommended)")
+    print("  [3] aggressive — all modules enabled (maximum optimization)")
 
     profile_input = input("\nProfile [2]: ").strip()
     profile_map = {"1": "minimal", "2": "balanced", "3": "aggressive"}
@@ -1784,28 +1941,22 @@ def cmd_preview(args):
         print("Usage: tokenpak preview <text> [--file FILE] [--json|--raw|--verbose]")
         sys.exit(1)
 
-    # Simulate compression dry-run
-    # In the real implementation, this would call the compressor pipeline
-    input_tokens = len(text.split())  # Rough estimate
-    output_tokens = max(int(input_tokens * 0.65), 10)  # Approx 35% reduction
-    saved_tokens = input_tokens - output_tokens
+    # Pre-send preview: nothing is sent and no compressor runs here, so there
+    # is no receipt-backed savings figure to report. Show only what is honest
+    # at preview time (the input size) and a neutral unavailable state for
+    # savings. Actual savings are recorded after the request runs and can be
+    # reviewed via `tokenpak savings`.
+    input_tokens = len(text.split())  # Rough word-count estimate
+
+    savings_note = "Savings are available after the request runs (see `tokenpak savings`)."
 
     result = {
         "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "saved_tokens": saved_tokens,
-        "compression_ratio": 1.0 - (output_tokens / max(input_tokens, 1)),
-        "retained_blocks": [
-            {"type": "system_prompt", "tokens": int(output_tokens * 0.3)},
-            {"type": "user_context", "tokens": int(output_tokens * 0.4)},
-        ],
-        "removed_blocks": [
-            {"type": "debug_logs", "tokens": int(saved_tokens * 0.5)},
-            {"type": "duplicate_text", "tokens": int(saved_tokens * 0.5)},
-        ],
-        "flags": ["skeleton_enabled", "cache_ready"],
-        "mode": "hybrid",
-        "duration_ms": 2.3,
+        "output_tokens": None,
+        "saved_tokens": None,
+        "compression_ratio": None,
+        "savings_available": False,
+        "note": savings_note,
     }
 
     # Output
@@ -1813,18 +1964,8 @@ def cmd_preview(args):
         print(json.dumps(result, indent=2))
     elif args.raw:
         print(f"Input:     {result['input_tokens']:,} tokens")
-        print(f"Output:    {result['output_tokens']:,} tokens")
-        print(
-            f"Saved:     {result['saved_tokens']:,} tokens ({result['compression_ratio']*100:.1f}%)"
-        )
-        print()
-        print("Retained blocks:")
-        for block in result["retained_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
-        print()
-        print("Removed blocks:")
-        for block in result["removed_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
+        print("Savings:   not available at preview")
+        print(savings_note)
     else:
         # Pretty format (default)
         mode = resolve_mode(args)
@@ -1833,27 +1974,9 @@ def cmd_preview(args):
         print()
 
         print(f"  Input:          {result['input_tokens']:,} tokens")
-        print(f"  → Compressed:   {result['output_tokens']:,} tokens")
-        print(
-            f"  Savings:        {result['saved_tokens']:,} tokens ({result['compression_ratio']*100:.1f}% reduction)"
-        )
+        print("  Savings:        not available at preview")
         print()
-
-        print(f"  Retained blocks ({len(result['retained_blocks'])}):")
-        for block in result["retained_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Removed blocks ({len(result['removed_blocks'])}):")
-        for block in result["removed_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Mode: {result['mode']} | Duration: {result['duration_ms']:.1f}ms")
-
-        if args.verbose:
-            print()
-            print(f"  Flags: {', '.join(result['flags'])}")
+        print(f"  {savings_note}")
 
 
 def cmd_dashboard(args):
@@ -2994,6 +3117,7 @@ def build_parser():
     _build_tip_parser(sub)
     _build_features_parser(sub)
     _build_pakplan_parser(sub)
+    _build_dispatch_parser(sub)
     _build_home_parser(sub)
     _build_prove_parser(sub)
     _build_test_parser(sub)
@@ -3353,46 +3477,10 @@ def cmd_savings(args):
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Try monitor.db first (proxy's live data source)
-    monitor_data = _monitor_db_savings(days=days)
-
-    if monitor_data and monitor_data.get("actual_cost", 0) > 0:
-        actual = monitor_data["actual_cost"]
-        cache_hit_rate = monitor_data["cache_hit_rate"]
-        compressed = monitor_data["compressed_tokens"]
-        cache_read = monitor_data["cache_read"]
-
-        total_input = monitor_data["total_input"] + monitor_data.get("total_output", 0)
-        avg_rate = actual / total_input if total_input > 0 else 0
-        savings_amount = (cache_read + compressed) * avg_rate
-        estimated_without = actual + savings_amount
-        savings_pct = (savings_amount / estimated_without * 100) if estimated_without > 0 else 0
-
-        if mode == OutputMode.RAW:
-            print(json.dumps({
-                "section": "savings", "days": days,
-                "actual_cost": actual, "savings_amount": savings_amount,
-                "savings_pct": savings_pct, "cache_hit_rate": cache_hit_rate,
-                "estimated_without_compression": estimated_without,
-            }))
-            return
-
-        if fmt.minimal:
-            print(fmt.minimal_line([f"{savings_pct:.1f}%", f"${savings_amount:.2f}", f"{days}d"]))
-            return
-
-        print(fmt.header())
-        print()
-        print(fmt.kv([
-            ("Actual Cost", f"${actual:.2f}"),
-            ("Est. Baseline", f"${estimated_without:.2f}"),
-            ("Est. Savings", f"${savings_amount:.2f} ({savings_pct:.1f}%)"),
-            ("Cache Hit Rate", f"{cache_hit_rate * 100:.1f}%"),
-            ("Compressed Tokens", f"{compressed:,}"),
-        ]))
-        return
-
-    # Fallback to telemetry.db
+    # Savings are read only from the receipt-backed telemetry engine, which
+    # counts proxy-attributable savings from real cost records. There is no
+    # estimated/derived path: when no receipt-backed data exists, a neutral
+    # "no data yet" state is shown rather than an invented figure.
     from .telemetry.query import get_savings_report
     report = get_savings_report(days=days)
 
@@ -3459,9 +3547,14 @@ def cmd_savings(args):
 
 
 def cmd_compare(args):
-    """Show before/after cost comparison for last N requests."""
+    """Show recorded cost for the last N requests.
 
-    from .telemetry.pricing_rates import calculate_request_cost, calculate_request_cost_baseline
+    Reports the actual recorded cost per request. Per-request cache/savings
+    attribution is not available from the receipt-backed event store, so it is
+    shown as a neutral unavailable state rather than estimated from a fabricated
+    cache-hit assumption.
+    """
+
     from .telemetry.query import get_recent_events
 
     limit = getattr(args, "last", 1)
@@ -3471,101 +3564,68 @@ def cmd_compare(args):
         print("No recent requests found.")
         return
 
-    # Show comparison for each request
+    # Show recorded cost for each request.
     for idx, evt in enumerate(recent[:limit], 1):
         model = evt.get("model", "unknown")
         input_tokens = evt.get("input_tokens", 0) or 0
         output_tokens = evt.get("output_tokens", 0) or 0
+        cost = evt.get("cost")
 
-        # For this demo, assume cache_read is 30% of input (adjust per actual data)
-        # In production, we'd fetch actual cache_read from tp_usage table
-        cache_read = int(input_tokens * 0.30)
-        sent_input = input_tokens - cache_read
-
-        without_cache = calculate_request_cost_baseline(model, input_tokens, output_tokens)
-        with_cache = calculate_request_cost(model, sent_input, cache_read, output_tokens)
-        saved = without_cache - with_cache
-        pct_saved = (saved / without_cache * 100) if without_cache > 0 else 0
-
-        duration_s = getattr(args, "duration_s", 5.1)
-
-        print(f"Request #{idx}: {model} ({duration_s:.1f}s)")
-        print(
-            f"  Without TokenPak: ${without_cache:.2f} ({input_tokens:,} input tokens × ${15/1e6:.2e})"
-        )
-        print(
-            f"  With TokenPak:    ${with_cache:.2f} ({sent_input:,} sent + {cache_read:,} cached)"
-        )
-        print(f"  💰 Saved: ${saved:.2f} ({pct_saved:.0f}% cheaper)")
+        print(f"Request #{idx}: {model}")
+        print(f"  Tokens:  {input_tokens:,} in / {output_tokens:,} out")
+        if cost is not None:
+            print(f"  Cost:    ${cost:.4f} (recorded)")
+        else:
+            print("  Cost:    cost data unavailable for this request")
+        # Per-request savings attribution is not tracked in the event store.
+        print("  Savings: per-request savings data unavailable "
+              "(see `tokenpak savings` for the receipt-backed total)")
         print()
 
 
 def cmd_leaderboard(args):
-    """Show per-model efficiency ranking."""
-    from .telemetry.query import get_model_usage, get_savings_report
+    """Show per-model efficiency ranking from receipt-backed telemetry."""
+    from .telemetry.query import get_model_compression_breakdown
 
     days = getattr(args, "days", 1)
-    usage = get_model_usage(days=days)
-    savings = get_savings_report(days=days)
+    # Receipt-backed per-model breakdown: request counts, tokens saved, real
+    # compression ratio, and USD savings — all derived from recorded cost/usage.
+    # No per-model figure is estimated or assigned by model name.
+    rows = get_model_compression_breakdown(days=days)
 
-    if not usage:
+    if not rows:
         print("No model usage data available.")
         print("Run requests through the proxy to gather metrics.")
         return
 
-    # Calculate per-model stats
-    model_stats = []
-    for u in usage:
-        model = u.model or "unknown"
-        cost = (u.total_input_tokens / 1_000_000) * 15 + (u.total_output_tokens / 1_000_000) * 75
-        # Estimate savings (assume 30% cache + 5% compression for demo)
-        estimated_saved = cost * 0.35
-        cache_pct = 96 if "opus" in model.lower() else 94 if "sonnet" in model.lower() else 98
-        compress_pct = 5.1 if "opus" in model.lower() else 8.2 if "sonnet" in model.lower() else 3.2
-
-        model_stats.append(
-            {
-                "model": model,
-                "requests": u.request_count,
-                "cost": cost,
-                "saved": estimated_saved,
-                "cache_pct": cache_pct,
-                "compress_pct": compress_pct,
-            }
-        )
-
-    # Sort by cost (highest spender first)
-    model_stats.sort(key=lambda x: x["cost"], reverse=True)
+    # Sort by savings (highest first), falling back to request volume.
+    rows = sorted(rows, key=lambda r: (r.savings_amount, r.request_count), reverse=True)
 
     print("TokenPak Model Leaderboard")
     print("──────────────────────────")
     print()
 
-    if model_stats:
-        # Show top 3 insights
-        most_efficient = max(model_stats, key=lambda x: x["cache_pct"])
-        biggest_spender = max(model_stats, key=lambda x: x["cost"])
-        best_compression = max(model_stats, key=lambda x: x["compress_pct"])
-
+    # Top insight: only show a savings leader when receipt-backed savings exist.
+    leader = max(rows, key=lambda r: r.savings_amount)
+    if leader.savings_amount > 0:
         print(
-            f"🏆 Most Efficient:   {most_efficient['model']}  ({most_efficient['cache_pct']}% cached, ${most_efficient['saved']/most_efficient['requests']:.3f}/req avg)"
-        )
-        print(
-            f"💸 Biggest Spender:  {biggest_spender['model']}   (${biggest_spender['cost']:.2f} today, but ${biggest_spender['saved']:.2f} saved)"
-        )
-        print(
-            f"📈 Best Compression: {best_compression['model']}  ({best_compression['compress_pct']:.1f}% rate)"
+            f"🏆 Top Saver: {leader.model}  "
+            f"(${leader.savings_amount:.2f} saved across {leader.request_count} requests)"
         )
         print()
 
-    # Table of all models
+    # Table of all models. compression_ratio < 1.0 means input was compressed;
+    # reduction% = (1 - ratio) * 100. Savings shown only as receipt-backed USD.
     print(
-        f"{'Model':<20} {'Requests':>10} {'Cost':>10} {'Saved':>10} {'Cache%':>8} {'Compress%':>10}"
+        f"{'Model':<24} {'Requests':>10} {'Tokens Saved':>14} {'Reduction':>11} {'Saved':>10}"
     )
-    print("-" * 70)
-    for stat in model_stats:
+    print("-" * 72)
+    for r in rows:
+        reduction_pct = (1.0 - r.avg_compression_ratio) * 100 if r.avg_compression_ratio else 0.0
+        reduction = f"{reduction_pct:.1f}%" if reduction_pct > 0 else "—"
+        saved = f"${r.savings_amount:.2f}" if r.savings_amount > 0 else "—"
         print(
-            f"{stat['model']:<20} {stat['requests']:>10} ${stat['cost']:>9.2f} ${stat['saved']:>9.2f} {stat['cache_pct']:>7}% {stat['compress_pct']:>9.1f}%"
+            f"{r.model:<24} {r.request_count:>10} {r.tokens_saved:>14,} {reduction:>11} {saved:>10}"
         )
 
 
@@ -4719,54 +4779,24 @@ def main():
 
     # ── Intercept unknown commands for typo suggestions ───────────────────────
     raw_cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    known_cmds = set(_ALL_COMMANDS) | {
-        # also include argparse-registered commands not in groups
-        "help",
-        "companion",
-        "start",
-        "stop",
-        "restart",
-        "logs",
-        "version",
-        "update",
-        "config",
-        "setup",
-        "compare",
-        "leaderboard",
-        "report",
-        "check-alerts",
-        "alerts",
-        "watch",
-        "integrate",
-        "openclaw",
-        "savings",
-        "recommendations",
-        "usage",
-        "preview",
-        "aggregate",
-        "requests",
-        "validate-config",
-        "vault",
-        "vault-health",
-        "compress",
-        "optimize",
-        "last",
-        "prune",
-        "retrieval",
-        "menu",
-        # Stub commands (advertised in help/registry, not yet implemented)
-        "license",
-        "plan",
-        "activate",
-        "deactivate",
-        "init",
-        "monitor",
-        # Beta 1 verb families (TIP, features, PAKPlan preview, home)
-        "tip",
-        "features",
-        "pakplan",
-        "home",
-    }
+    # Authoritative built-in verb set (grouped + argparse/stub commands). Plugin
+    # verbs are dispatched only when raw_cmd is NOT in this set, so built-ins
+    # always win on a name collision.
+    known_cmds = _core_command_names()
+    # ── Plugin verbs (tokenpak.commands entry-point group) ────────────────────
+    # A verb that is not a built-in but is registered by an installed plugin is
+    # routed straight to the plugin's own (already gated) callable. Built-ins win
+    # on collision because this branch only runs for verbs not in known_cmds, and
+    # discovery itself excludes any name that shadows a core command. Everything
+    # after the verb is forwarded verbatim so the plugin owns its own flags
+    # (including its own --help). Entitlement gating is the plugin's job.
+    if raw_cmd and not raw_cmd.startswith("-") and raw_cmd not in known_cmds:
+        _plugin_cmds = _discover_plugin_commands()
+        if raw_cmd in _plugin_cmds:
+            _verb_idx = sys.argv.index(raw_cmd)
+            _rc = _dispatch_plugin_command(raw_cmd, sys.argv[_verb_idx + 1:])
+            sys.exit(_rc)
+
     # If user asks --help on an unrecognised command, just show that command's usage + exit 0
     if (
         raw_cmd
@@ -4864,17 +4894,19 @@ def main():
             req_count = len(recent) if recent else 0
             cache_hit = report.cache_hit_rate * 100 if report.cache_hit_rate else 0
 
-            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | 5.6% compression")
+            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | compression active")
 
             # Top model savings
             from .telemetry.query import get_model_usage
 
             usage = get_model_usage(days=1)
             if usage:
+                # Show the busiest model by request count (receipt-backed).
+                # Per-model savings attribution is not tracked, so no dollar
+                # figure is invented here.
                 top = usage[0]
-                top_saved = report.savings_amount * 0.95  # Estimate top model saved ~95% of total
                 print(
-                    f"🔥 Top: {top.model} saved ${top_saved:.0f} across {top.request_count} requests"
+                    f"🔥 Top model: {top.model} ({top.request_count} requests)"
                 )
 
             print()
@@ -6197,6 +6229,20 @@ def _build_pakplan_parser(sub):
     from tokenpak.cli.commands.pakplan import build_pakplan_parser
 
     build_pakplan_parser(sub)
+
+
+def _build_dispatch_parser(sub):
+    """Register the ``tokenpak dispatch`` command group (Dispatch v0.1-alpha).
+
+    TokenPak Dispatch is the OSS workflow-control layer (Standards Delta v0):
+    Decision Inbox + ``run|status|inspect|decisions|approve|reject|pause|resume|
+    cancel|discard-late|delivery|receipt`` verbs over the Run Ledger.
+    Implementation lives in :mod:`tokenpak.cli.commands.dispatch_cmd`; lazy
+    import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.dispatch_cmd import build_dispatch_parser
+
+    build_dispatch_parser(sub)
 
 
 def _build_home_parser(sub):

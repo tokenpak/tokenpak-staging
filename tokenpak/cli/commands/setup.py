@@ -11,6 +11,31 @@ PROXY_URL = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
 OPENAI_PROXY_URL = os.environ.get("TOKENPAK_OPENAI_PROXY_URL", "http://127.0.0.1:8767")
 
 
+def env_var_help(var: str, value: str = "...") -> str:
+    """Render per-OS shell syntax for setting an environment variable.
+
+    Returns a small multi-line block showing the platform-appropriate form
+    first, followed by the alternates, so the guidance is correct on
+    Windows (cmd / PowerShell) as well as macOS / Linux instead of being
+    bash-only.
+    """
+    bash = f"export {var}={value}"
+    powershell = f'$env:{var}="{value}"'
+    cmd = f"set {var}={value}"
+
+    if os.name == "nt":
+        primary, alternates = powershell, (cmd, bash)
+        labels = ("PowerShell", "cmd", "bash/zsh")
+    else:
+        primary, alternates = bash, (powershell, cmd)
+        labels = ("bash/zsh", "PowerShell", "cmd")
+
+    lines = [f"    {primary}    # {labels[0]}"]
+    for form, label in zip(alternates, labels[1:]):
+        lines.append(f"    {form}    # {label}")
+    return "\n".join(lines)
+
+
 def detect_claude_code() -> Optional[Path]:
     """Find the Claude Code settings directory."""
     p = Path.home() / ".claude"
@@ -69,5 +94,6 @@ __all__ = [
     "detect_claude_code",
     "detect_openai",
     "detect_google",
+    "env_var_help",
     "run_setup_cmd",
 ]
