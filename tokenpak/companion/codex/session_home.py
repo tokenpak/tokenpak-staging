@@ -22,8 +22,8 @@ mode        CODEX_HOME                                    semantics
 **Option C** is the shipped policy: ``workspace`` is the natural default for
 interactive use (same project directory ⇒ same Codex state, different
 projects ⇒ no contention); ``isolated`` is the advanced mode for
-fleet/automation where multiple workers share one project and must not
-share state.  ``shared`` remains the literal default until a release flips
+unattended multi-worker automation where multiple workers share one
+project and must not share state.  ``shared`` remains the literal default until a release flips
 the target default, so existing behavior is unchanged unless the user opts
 in.
 
