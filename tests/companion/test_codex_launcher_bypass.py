@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from tokenpak.companion.codex import launcher
 
-
 BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
 
