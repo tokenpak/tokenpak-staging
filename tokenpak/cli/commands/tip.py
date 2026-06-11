@@ -23,8 +23,8 @@ Subcommands:
                      verb-side). Same exit-code contract.
     scaffold-adapter <name>
                      Emit a starter capability-declaring adapter file.
-    sources          List external-tool TIP source adapters (Std 23 §9
-                     category) and the off-by-default gate state.
+    sources          List external-tool TIP source adapters and the
+                     off-by-default gate state.
     observe          Run external-tool source adapters on demand and
                      show TokenPak-observed records.  No-op unless
                      TOKENPAK_TIP_TOOL_ADAPTERS=1.
@@ -115,7 +115,7 @@ def build_tip_parser(sub: Any) -> None:
 
     p_sources = tipsub.add_parser(
         "sources",
-        help="List external-tool TIP source adapters (Std 23 §9 category)",
+        help="List external-tool TIP source adapters",
     )
     p_sources.add_argument(
         "--json", action="store_true", help="Emit JSON instead of text"

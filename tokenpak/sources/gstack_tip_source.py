@@ -3,9 +3,9 @@
 
 Observes **gstack** (an MIT-licensed sprint/role agent toolkit driven by
 slash commands) through the Claude Code transcript surface and projects
-detected invocations into TokenPak-observed TIP records (Std 23 §9).
+detected invocations into TokenPak-observed TIP records.
 
-What it reads (READ-ONLY — Std 23 §9.3(3); packet AC #6):
+What it reads (READ-ONLY — the spec; packet AC #6):
 
 * Claude Code session transcripts under the standard projects root
   (same dynamic discovery as
@@ -186,7 +186,7 @@ def parse_session_events(path: Path) -> List[Dict[str, Any]]:
 
 @register_external_tool_source
 class GstackTIPSource(ExternalToolTIPSource):
-    """Read-only gstack → TIP observation adapter (Std 23 §9 category)."""
+    """Read-only gstack → TIP observation adapter (the spec category)."""
 
     tool_slug = TOOL_SLUG
 

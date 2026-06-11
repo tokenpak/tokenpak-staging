@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Non-routing external-tool TIP source-adapter interface + registry.
 
-Std 23 §9 category: a TokenPak component that *observes* usage events
+the spec category: a TokenPak component that *observes* usage events
 surfaced by a third-party developer tool and projects them into
 TIP-shaped **observed** records — without routing any model traffic and
 without holding or injecting any credential.
 
-Honesty contract (Std 23 §9.3, mandatory):
+Honesty contract (the spec, mandatory):
 
 1. Records are labeled **TokenPak-observed** — the observed tool does
    NOT speak TIP natively and is never represented as emitting TIP.
@@ -17,7 +17,7 @@ Honesty contract (Std 23 §9.3, mandatory):
    state, or output.
 
 Capability labels use the ``ext.<tool>.<feature>`` namespace per
-Std 23 §1.4 / §9.2 (pattern subset of
+the spec (pattern subset of
 ``tokenpak/tip/schemas/tip-capabilities.v1.json``). ``tip.*`` labels
 are reserved for protocol-native capabilities and are rejected here.
 
@@ -69,7 +69,7 @@ EXT_LABEL_RE = re.compile(r"^ext\.[a-z0-9._-]+$")
 #: segment: ``ext.<tool>.<feature>``).
 TOOL_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
-#: Std 23 §9.3(1) — provenance claim string carried by every record.
+#: the spec — provenance claim string carried by every record.
 OBSERVED_CLAIM = "tokenpak-observed"
 
 #: pkgutil discovery convention: in-tree adapter modules end with this.
@@ -88,7 +88,7 @@ def is_enabled(env: Optional[Dict[str, str]] = None) -> bool:
 # ---------------------------------------------------------------------------
 
 def _default_provenance() -> Dict[str, Any]:
-    """Std 23 §9.3 provenance block: observed/derived by TokenPak, never tool-native."""
+    """the spec provenance block: observed/derived by TokenPak, never tool-native."""
     return {
         "observed_by": "tokenpak",
         "claim": OBSERVED_CLAIM,
@@ -102,7 +102,7 @@ class ObservedTIPRecord:
 
     ``observed_usage`` carries raw observed counts only (e.g. token
     counters summed over the span).  Derived savings / percentage
-    figures are forbidden absent a committed benchmark (Std 23 §9.3(2))
+    figures are forbidden absent a committed benchmark
     and have no field here on purpose.
     """
 
@@ -125,12 +125,12 @@ class ObservedTIPRecord:
         claim = self.provenance.get("claim")
         if claim != OBSERVED_CLAIM:
             raise ValueError(
-                "Std 23 §9.3 honesty contract: provenance.claim must be "
+                "the spec honesty contract: provenance.claim must be "
                 f"{OBSERVED_CLAIM!r}, got {claim!r}"
             )
         if self.provenance.get("tool_native_tip"):
             raise ValueError(
-                "Std 23 §9.3 honesty contract: records must never claim "
+                "the spec honesty contract: records must never claim "
                 "tool-native TIP emission"
             )
 
@@ -164,13 +164,13 @@ class ObservedTIPRecord:
 
 
 def validate_ext_labels(tool: str, labels: Iterable[str]) -> None:
-    """Enforce Std 23 §1.4 / §9.2: ``ext.<tool>.*`` only, never ``tip.*``."""
+    """Enforce the spec: ``ext.<tool>.*`` only, never ``tip.*``."""
     prefix = f"ext.{tool}."
     for label in labels:
         if label.startswith("tip."):
             raise ValueError(
                 f"label {label!r}: tip.* is reserved for protocol-native "
-                "capabilities (Std 23 §9.2) — use ext.<tool>.* instead"
+                "capabilities — use ext.<tool>.* instead"
             )
         if not EXT_LABEL_RE.match(label):
             raise ValueError(
