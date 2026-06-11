@@ -116,6 +116,172 @@ def _upstream_retry_backoff(attempt: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# [TIP: deterministic=on] — reproducible eval mode (PROP4-1B; Std 31 draft)
+#
+# Deterministic contour in this hot path:
+#   - transparent upstream retries forced to a single attempt (fail loud);
+#   - prompt-mutating stages (vault injection, compression request hook)
+#     disabled; DLP redaction stays active (security control) but is
+#     explicitly RECORDED as a transform;
+#   - semantic response substitution disabled (tokenpak.cache.semantic_cache
+#     honors deterministic=True at the API level);
+#   - no cross-provider fallback exists in this request path — the route is
+#     locked to the client-addressed provider/model;
+#   - reproducibility metadata emitted as X-TokenPak-Deterministic-* headers,
+#     including a SHA-256 request fingerprint (strip-list documented in
+#     tokenpak/proxy/spend_guard/tip_header.py and docs/evals.md);
+#   - precedence vs other TIP directives enforced BEFORE the spend guard
+#     (see spend_guard.policy.deterministic_precedence): estimate=on is
+#     compatible; allow=*/bypass=on are rejected with a structured 400.
+#     Unsupported deterministic values fail loudly (400), never silent-strip.
+#   - NOT a spend bypass: spend-guard bands fire exactly as without it.
+# ---------------------------------------------------------------------------
+
+# Generation-control fields echoed in the metadata headers when present in
+# the request body. Never injected — absence upstream is preserved (do not
+# assume any provider supports seed).
+_DETERMINISTIC_GENERATION_PARAMS: tuple = (
+    "temperature", "top_p", "top_k", "stop", "stop_sequences", "max_tokens",
+)
+
+
+def _deterministic_preflight(body: Optional[bytes]):
+    """Peek-parse a leading ``[TIP: ...]`` header for deterministic mode.
+
+    Returns ``(state, error)``:
+
+    - ``state`` — dict with the deterministic request context when
+      ``deterministic=on`` is present and the directive combination is valid,
+      else ``None``.
+    - ``error`` — ``(http_status, error_type, message)`` when the request
+      must be REJECTED (fail-loud contract: invalid deterministic value or an
+      incompatible directive combination), else ``None``.
+
+    Read-only peek: the body forwarded upstream is stripped later by the
+    spend-guard layer (with a fixup if that layer is disabled).
+    """
+    if not body:
+        return None, None
+    from tokenpak.proxy.spend_guard.policy import deterministic_precedence
+    from tokenpak.proxy.spend_guard.tip_header import parse_and_strip_tip_header
+
+    directive, stripped = parse_and_strip_tip_header(body)
+    if directive is None:
+        return None, None
+    invalid = getattr(directive, "deterministic_invalid_value", None)
+    if invalid is not None:
+        return None, (
+            400,
+            "tokenpak_deterministic_invalid_value",
+            f"[TIP: deterministic={invalid}] is not supported. "
+            "Allowed values: on/true/1/yes (enable), off/false/0/no (disable). "
+            "Unsupported deterministic fields fail loudly and are never "
+            "silently stripped.",
+        )
+    if not getattr(directive, "deterministic", False):
+        return None, None
+    conflict = deterministic_precedence(directive)
+    if conflict:
+        return None, (
+            400,
+            "tokenpak_deterministic_directive_conflict",
+            f"[TIP: deterministic=on] is incompatible with the supplied "
+            f"directive ({conflict}). allow/bypass release-or-replay semantics "
+            "conflict with the deterministic no-retry/no-substitution "
+            "guarantees. Re-send without the conflicting directive "
+            "([TIP: estimate=on] remains compatible).",
+        )
+
+    state: Dict[str, Any] = {
+        "active": True,
+        "stripped_body": stripped,
+        "transforms": ["tip_header_strip"],
+        "prompt_mutation_delta_tokens": 0,
+        "fingerprint": "",
+        "provider": "",
+        "model": "",
+        "seed": None,
+        "params": {},
+    }
+    try:
+        parsed = json.loads(stripped.decode("utf-8", errors="replace"))
+        if isinstance(parsed, dict):
+            state["model"] = str(parsed.get("model") or "")
+            if "seed" in parsed:
+                state["seed"] = parsed.get("seed")
+            for key in _DETERMINISTIC_GENERATION_PARAMS:
+                if key in parsed:
+                    state["params"][key] = parsed.get(key)
+    except Exception:
+        pass
+    return state, None
+
+
+def _deterministic_finalize(state: dict, final_body: Optional[bytes], provider: str) -> None:
+    """Compute the fingerprint + mutation delta over the FINAL forwarded bytes.
+
+    Called once after every body-mutating stage has run (or been skipped).
+    ``prompt_mutation_delta_tokens`` is the estimated token delta between the
+    TIP-stripped request as received and the bytes actually forwarded — 0
+    unless a recorded transform (e.g. DLP redaction) mutated the prompt.
+    """
+    from tokenpak.proxy.spend_guard.tip_header import compute_request_fingerprint
+
+    state["provider"] = provider or ""
+    body = final_body if final_body is not None else b""
+    state["fingerprint"] = compute_request_fingerprint(body)
+    baseline = state.get("stripped_body") or b""
+    if body != baseline:
+        try:
+            state["prompt_mutation_delta_tokens"] = (
+                _estimate_tokens_from_body(body) - _estimate_tokens_from_body(baseline)
+            )
+        except Exception:
+            state["prompt_mutation_delta_tokens"] = 0
+
+
+def _deterministic_response_headers(state: dict) -> list:
+    """Build the ``X-TokenPak-Deterministic-*`` metadata header list.
+
+    Required metadata per the PROP4-1B contract: deterministic_mode,
+    request_fingerprint, provider, model, model_version (when available —
+    omitted here: providers on this path do not expose a distinct version
+    surface), seed (only when the CLIENT supplied one), generation params,
+    fallback_used=false, retry_used=false, cache_substitution_used=false,
+    prompt_mutation_delta_tokens, adapter_required_transform.
+    """
+    headers = [("X-TokenPak-Deterministic", "on")]
+    if state.get("fingerprint"):
+        headers.append(("X-TokenPak-Deterministic-Fingerprint", state["fingerprint"]))
+    if state.get("provider"):
+        headers.append(("X-TokenPak-Deterministic-Provider", state["provider"]))
+    if state.get("model"):
+        headers.append(("X-TokenPak-Deterministic-Model", state["model"]))
+    if state.get("seed") is not None:
+        headers.append(("X-TokenPak-Deterministic-Seed", str(state["seed"])))
+    if state.get("params"):
+        headers.append((
+            "X-TokenPak-Deterministic-Params",
+            json.dumps(state["params"], sort_keys=True, separators=(",", ":")),
+        ))
+    headers.extend([
+        # Honest by construction: the mechanisms are disabled in this mode.
+        ("X-TokenPak-Deterministic-Fallback-Used", "false"),
+        ("X-TokenPak-Deterministic-Retry-Used", "false"),
+        ("X-TokenPak-Deterministic-Cache-Substitution-Used", "false"),
+        (
+            "X-TokenPak-Deterministic-Prompt-Mutation-Delta-Tokens",
+            str(int(state.get("prompt_mutation_delta_tokens") or 0)),
+        ),
+        (
+            "X-TokenPak-Deterministic-Adapter-Required-Transform",
+            ",".join(state.get("transforms") or []) or "none",
+        ),
+    ])
+    return headers
+
+
+# ---------------------------------------------------------------------------
 # Per-(provider, session) outbound concurrency limiter.
 #
 # With session-isolated upstream clients, each session holds its own HTTP/2
@@ -953,6 +1119,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         is_streaming = False
         cache_read_tokens = 0
         cache_creation_tokens = 0
+        # [TIP: deterministic=on] request context (None → normal mode).
+        _det_state: Optional[dict] = None
         # Per-TTL prompt-cache attribution (additive telemetry; populated only
         # when the upstream response includes ``usage.cache_creation`` breakdown).
         cache_creation_1h_tokens = 0
@@ -994,6 +1162,58 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _platform,
                 target_url[:60],
             )
+
+        # ── [TIP: deterministic=on] preflight (PROP4-1B; Std 31 draft) ───────
+        # Peek-parse the directive BEFORE the spend guard so (a) invalid
+        # values and incompatible combinations fail loudly with a structured
+        # 400 before any provider send, and (b) deterministic metadata can be
+        # attached to spend-guard early returns (e.g. the compatible
+        # estimate=on path). Gated on a cheap substring check so the
+        # no-directive hot path pays one memchr scan, nothing more.
+        _det_original_body = body
+        if should_log and is_messages and body and b"[TIP:" in body:
+            try:
+                _det_state, _det_error = _deterministic_preflight(body)
+                if _det_error is not None:
+                    _det_status, _det_type, _det_msg = _det_error
+                    _det_resp = json.dumps({
+                        "error": {"type": _det_type, "message": _det_msg}
+                    }).encode()
+                    self.send_response(_det_status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(_det_resp)))
+                    self.send_header("X-TokenPak-Deterministic", "rejected")
+                    self.end_headers()
+                    self.wfile.write(_det_resp)
+                    return
+            except Exception as _det_exc:
+                import re as _det_re
+                if _det_re.search(rb"\[TIP:[^\]]*deterministic", body):
+                    # Fail LOUD: a request asking for deterministic mode must
+                    # never silently proceed without its guarantees.
+                    _det_resp = json.dumps({
+                        "error": {
+                            "type": "tokenpak_deterministic_mode_error",
+                            "message": (
+                                "Deterministic-mode preflight failed "
+                                f"({type(_det_exc).__name__}); refusing to "
+                                "forward without deterministic guarantees."
+                            ),
+                        }
+                    }).encode()
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(_det_resp)))
+                    self.send_header("X-TokenPak-Deterministic", "error")
+                    self.end_headers()
+                    self.wfile.write(_det_resp)
+                    return
+                import logging as _det_log
+                _det_log.getLogger(__name__).debug(
+                    "tokenpak.deterministic: preflight error (passthrough, "
+                    "no deterministic directive in body): %s: %s",
+                    type(_det_exc).__name__, _det_exc,
+                )
 
         # ── TIP Spend Guard: pre-send circuit breaker ─────────────────────────
         # Blocks risky requests BEFORE provider send. Returns structured
@@ -1045,6 +1265,24 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(_sg_resp)))
                     self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
+                    # Deterministic + estimate=on is the documented COMPATIBLE
+                    # combination (estimate is side-effect-free); deterministic
+                    # + block/hard_block means the spend guard outranks the
+                    # directive (deterministic is not a spend bypass). Either
+                    # way, mark the mode and emit the fingerprint of the
+                    # TIP-stripped request so eval harnesses can correlate.
+                    if _det_state is not None:
+                        try:
+                            from tokenpak.proxy.spend_guard.tip_header import (
+                                compute_request_fingerprint as _det_fp,
+                            )
+                            self.send_header("X-TokenPak-Deterministic", "on")
+                            self.send_header(
+                                "X-TokenPak-Deterministic-Fingerprint",
+                                _det_fp(_det_state.get("stripped_body") or b""),
+                            )
+                        except Exception:
+                            pass
                     self.end_headers()
                     self.wfile.write(_sg_resp)
                     return
@@ -1056,6 +1294,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     "tokenpak.spend_guard: error (passthrough): %s: %s",
                     type(_sg_exc).__name__, _sg_exc,
                 )
+
+        # Deterministic fixup: the spend-guard layer normally strips the TIP
+        # header from the forwarded body. If that layer was disabled or
+        # errored (body still the original object), the directive text must
+        # STILL never reach the provider — substitute the preflight's
+        # stripped bytes.
+        if _det_state is not None and body is _det_original_body:
+            body = _det_state["stripped_body"]
 
         # ── SSRM Phase 1 — Session Swap Relevance Management ───────────────────
         # Instrumentation-only.  Computes 11 signals + an advisory action per
@@ -1122,6 +1368,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _dlp_redacted = _dlp.redact(_dlp_text)
                     if _dlp_redacted != _dlp_text:
                         body = _dlp_redacted.encode("utf-8")
+                        # Deterministic mode: DLP redaction stays ACTIVE
+                        # (security control, operator-configured) but the
+                        # mutation is explicitly recorded — never hidden.
+                        if _det_state is not None:
+                            _det_state["transforms"].append("dlp_redact")
                 elif _dlp.mode == "block":
                     if not _dlp.block_check(_dlp_text):
                         _dlp_findings = _dlp.scan(_dlp_text)
@@ -1239,22 +1490,26 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # Use the modular pipeline for vault injection (byte splice)
                 # but skip compression entirely to preserve Anthropic billing routing.
                 is_streaming = b'"stream":true' in body or b'"stream": true' in body
-                try:
-                    from tokenpak.proxy.pipeline import process_request as _pipeline_run
-                    from tokenpak.proxy.request import ProxyRequest as _PReq
-                    from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
-                    _pr = _PReq(
-                        method="POST",
-                        url=target_url,
-                        headers=dict(self.headers),
-                        body=body,
-                        source_platform=_source_platform,
-                        session_id=_rsi(self.headers, model),
-                    )
-                    _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
-                    body = _result.request.body
-                except Exception:
-                    pass  # fail-open: vault injection failure must never break a request
+                # Deterministic mode: vault injection is a hidden prompt
+                # mutation — disabled (PROP4-1B; Std 31 draft). The request
+                # is forwarded exactly as the client sent it (post TIP strip).
+                if _det_state is None:
+                    try:
+                        from tokenpak.proxy.pipeline import process_request as _pipeline_run
+                        from tokenpak.proxy.request import ProxyRequest as _PReq
+                        from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
+                        _pr = _PReq(
+                            method="POST",
+                            url=target_url,
+                            headers=dict(self.headers),
+                            body=body,
+                            source_platform=_source_platform,
+                            session_id=_rsi(self.headers, model),
+                        )
+                        _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
+                        body = _result.request.body
+                    except Exception:
+                        pass  # fail-open: vault injection failure must never break a request
             else:
                 # READ-ONLY parse — body bytes must NOT be reconstructed from this dict
                 try:
@@ -1271,7 +1526,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             ):
                 is_streaming = True
 
-            if ps.request_hook and not _is_byte_preserved:
+            # Deterministic mode: the compression request hook is a hidden
+            # prompt mutation — disabled (PROP4-1B; Std 31 draft).
+            if ps.request_hook and not _is_byte_preserved and _det_state is None:
                 try:
                     body, sent_input_tokens, input_tokens, protected_tokens = ps.request_hook(
                         body, model, trace
@@ -1303,6 +1560,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         if sent_input_tokens == 0:
             sent_input_tokens = input_tokens
+
+        # ── Deterministic finalize ─────────────────────────────────────────
+        # All body-mutating stages have run (or been skipped). Compute the
+        # request fingerprint + prompt-mutation delta over the bytes that
+        # will actually be forwarded upstream.
+        if _det_state is not None:
+            try:
+                _deterministic_finalize(
+                    _det_state, body, provider_from_url(target_url)
+                )
+            except Exception as _det_fin_exc:
+                import logging as _det_log
+                _det_log.getLogger(__name__).warning(
+                    "tokenpak.deterministic: finalize failed: %s: %s",
+                    type(_det_fin_exc).__name__, _det_fin_exc,
+                )
 
         # ── Circuit breaker check ──────────────────────────────────────────
         # Fast-fail immediately if the target provider's circuit is OPEN.
@@ -1561,6 +1834,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _cb_success = False  # track whether request succeeded for circuit breaker
 
             output_tokens = 0
+            # Deterministic mode: transparent upstream retries DISABLED —
+            # exactly one attempt; transient failures surface to the client
+            # (fail loud) instead of being retried (PROP4-1B; Std 31 draft).
+            _max_upstream_attempts = 1 if _det_state is not None else MAX_UPSTREAM_RETRIES
             if is_streaming:
                 # ── Streaming (SSE) path ──────────────────────────────────
                 # Use pool.stream() so the connection is kept alive after SSE ends.
@@ -1574,14 +1851,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # `response.completed` SSE event WITHOUT persisting any content.
                 _codex_sse_tail = b""
                 _stream_wrote_to_client = False
-                for _ustream_attempt in range(MAX_UPSTREAM_RETRIES):
+                for _ustream_attempt in range(_max_upstream_attempts):
                     _stream_retry = False
                     try:
                         with pool.stream(method, target_url, content=body, headers=fwd_headers, session_key=_session_key) as resp:
                             if (
                                 _is_retryable_upstream_status(resp.status_code)
                                 and not _stream_wrote_to_client
-                                and _ustream_attempt < MAX_UPSTREAM_RETRIES - 1
+                                and _ustream_attempt < _max_upstream_attempts - 1
                             ):
                                 # Drain body to release the pooled connection, then retry
                                 for _ in resp.iter_bytes(chunk_size=4096):
@@ -1599,6 +1876,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.send_header("Content-Type", "application/json")
                                 self.send_header("Content-Length", str(len(_norm_err_body)))
                                 self.send_header("X-Request-ID", _req_id)
+                                if _det_state is not None:
+                                    for _dk, _dv in _deterministic_response_headers(_det_state):
+                                        self.send_header(_dk, _dv)
                                 self.end_headers()
                                 self.wfile.write(_norm_err_body)
                             else:
@@ -1625,6 +1905,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.send_header("X-Accel-Buffering", "no")
                                 # Propagate request ID to client for correlation
                                 self.send_header("X-Request-ID", _req_id)
+                                # Deterministic reproducibility metadata
+                                if _det_state is not None:
+                                    for _dk, _dv in _deterministic_response_headers(_det_state):
+                                        self.send_header(_dk, _dv)
                                 self.end_headers()
 
                                 for chunk in resp.iter_bytes(chunk_size=4096):
@@ -1646,7 +1930,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
                         if _stream_wrote_to_client:
                             raise
-                        if _ustream_attempt >= MAX_UPSTREAM_RETRIES - 1:
+                        if _ustream_attempt >= _max_upstream_attempts - 1:
                             raise
                         _stream_retry = True
 
@@ -1669,12 +1953,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # Server disconnected, 502/503/504). Safe because the client
                 # has not yet received any bytes at this point.
                 resp = None
-                for _ustream_attempt in range(MAX_UPSTREAM_RETRIES):
+                for _ustream_attempt in range(_max_upstream_attempts):
                     try:
                         resp = pool.request(method, target_url, content=body, headers=fwd_headers, session_key=_session_key)
                         if (
                             _is_retryable_upstream_status(resp.status_code)
-                            and _ustream_attempt < MAX_UPSTREAM_RETRIES - 1
+                            and _ustream_attempt < _max_upstream_attempts - 1
                         ):
                             try:
                                 resp.close()
@@ -1684,7 +1968,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             continue
                         break
                     except _RETRYABLE_UPSTREAM_EXCEPTIONS:
-                        if _ustream_attempt >= MAX_UPSTREAM_RETRIES - 1:
+                        if _ustream_attempt >= _max_upstream_attempts - 1:
                             raise
                         time.sleep(_upstream_retry_backoff(_ustream_attempt))
                         continue
@@ -1728,6 +2012,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         self.send_header("X-Tokenpak-Cache-Prefix-Hash", _ph)
                 # Propagate request ID to client for correlation
                 self.send_header("X-Request-ID", _req_id)
+                # Deterministic reproducibility metadata
+                if _det_state is not None:
+                    for _dk, _dv in _deterministic_response_headers(_det_state):
+                        self.send_header(_dk, _dv)
                 self.end_headers()
 
                 self.wfile.write(resp_body)
