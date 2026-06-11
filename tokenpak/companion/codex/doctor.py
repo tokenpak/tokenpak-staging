@@ -12,7 +12,6 @@ adding a check is "define function, append to CHECKS list".
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -20,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from ..config import CompanionConfig
-from .mcp_config import SERVER_NAME
+from .mcp_config import SERVER_NAME, codex_config_path, codex_home, verify_policy
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .rates_snapshot import count as rates_count
 from .skills_installer import (
@@ -161,12 +160,13 @@ def check_hooks_json() -> "tuple[Status, str]":
 
 
 def check_agents_md() -> "tuple[Status, str]":
-    path = Path.home() / ".codex" / "AGENTS.md"
+    """Report whether the TokenPak section is installed in the resolved Codex home."""
+    path = codex_home() / "AGENTS.md"
     if not path.exists():
         return "FAIL", f"{path} missing"
     content = path.read_text()
     if "# TokenPak Companion" not in content:
-        return "FAIL", "TokenPak section missing from AGENTS.md"
+        return "FAIL", f"TokenPak section missing from {path}"
     return "PASS", f"{path} ({len(content)} bytes)"
 
 
@@ -180,7 +180,7 @@ def check_agents_md_size(
     when guidance stops landing.  Surfacing the size early lets them
     shed content before they hit it.
     """
-    path = Path.home() / ".codex" / "AGENTS.md"
+    path = codex_home() / "AGENTS.md"
     if not path.exists():
         # A missing AGENTS.md is already flagged by check_agents_md;
         # don't double-fail. Treat as PASS for the size check.
@@ -325,8 +325,7 @@ def _read_codex_config() -> "tuple[dict | None, Path]":
     ``(None, path)`` when the file is absent, unparseable, or no TOML
     reader is available.  Honors ``CODEX_HOME`` for the config location.
     """
-    base = Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME") else Path.home() / ".codex"
-    path = base / "config.toml"
+    path = codex_home() / "config.toml"
     if not path.exists():
         return None, path
     try:
@@ -340,6 +339,53 @@ def _read_codex_config() -> "tuple[dict | None, Path]":
         return _toml.loads(path.read_text(encoding="utf-8")), path
     except Exception:
         return None, path
+
+
+def check_codex_homes_orphaned() -> "tuple[Status, str]":
+    """Surface provisioned Codex homes with no live session (orphans).
+
+    Isolated/workspace homes are created by
+    ``TOKENPAK_CODEX_SESSION_MODE``.  Ephemeral isolated homes with no live
+    Codex process are reclaimable by ``tokenpak codex clean``; WARN (not
+    FAIL) so the doctor stays informative without gating the exit code.
+    """
+    from .session_home import MODE_ISOLATED, list_homes
+
+    homes = list_homes(include_workspaces=True)
+    if not homes:
+        return "PASS", "no provisioned codex homes"
+    orphaned_isolated = [h for h in homes if h.mode == MODE_ISOLATED and not h.alive]
+    live = [h for h in homes if h.alive]
+    if orphaned_isolated:
+        names = ", ".join(h.path.name for h in orphaned_isolated[:5])
+        more = "" if len(orphaned_isolated) <= 5 else f" (+{len(orphaned_isolated) - 5} more)"
+        return (
+            "WARN",
+            f"{len(orphaned_isolated)} orphaned isolated home(s): {names}{more} — "
+            "reclaim with `tokenpak codex clean`",
+        )
+    return "PASS", f"{len(homes)} home(s), {len(live)} with a live session"
+
+
+def check_codex_homes_disk_usage() -> "tuple[Status, str]":
+    """WARN when provisioned isolated homes exceed the retention size cap."""
+    from .session_home import (
+        MODE_ISOLATED,
+        RETENTION_MAX_TOTAL_BYTES,
+        list_homes,
+    )
+
+    homes = [h for h in list_homes(include_workspaces=False) if h.mode == MODE_ISOLATED]
+    total = sum(h.size_bytes for h in homes)
+    cap_mb = RETENTION_MAX_TOTAL_BYTES // (1024 * 1024)
+    used_mb = total / (1024 * 1024)
+    if total > RETENTION_MAX_TOTAL_BYTES:
+        return (
+            "WARN",
+            f"isolated codex homes use {used_mb:.0f} MB (> {cap_mb} MB cap) — "
+            "run `tokenpak codex clean`",
+        )
+    return "PASS", f"isolated codex homes use {used_mb:.0f}/{cap_mb} MB"
 
 
 def check_proxy_routing() -> "tuple[Status, str]":
@@ -396,6 +442,70 @@ def check_proxy_routing() -> "tuple[Status, str]":
     )
 
 
+def check_agents_override() -> "tuple[Status, str]":
+    """WARN when ``AGENTS.override.md`` shadows the TokenPak guidance.
+
+    Codex versions that honor ``AGENTS.override.md`` load it *instead of*
+    ``AGENTS.md`` — an override file without the TokenPak section silently
+    drops every companion behavior rule.  AGENTS guidance is advisory
+    (critical behavior is enforced by config/hooks/MCP), so this is a WARN,
+    but the user should know the guidance is not landing.
+    """
+    override = codex_home() / "AGENTS.override.md"
+    if not override.exists():
+        return "PASS", "no AGENTS.override.md shadowing"
+    try:
+        content = override.read_text(encoding="utf-8")
+    except OSError as exc:
+        return "WARN", f"{override} present but unreadable ({exc}) — may shadow TokenPak guidance"
+    if "# TokenPak Companion" in content:
+        return "PASS", f"{override} present and includes the TokenPak section"
+    return (
+        "WARN",
+        f"{override} shadows AGENTS.md and lacks the TokenPak section — "
+        "companion guidance will not load; merge the TokenPak section into "
+        "the override or remove the override file",
+    )
+
+
+def check_mcp_policy() -> "tuple[Status, str]":
+    """Verify the explicit MCP policy block in Codex ``config.toml``.
+
+    A registered companion server must carry startup/tool timeouts, the
+    registry-derived tool allowlist, and approval modes for mutating
+    tools.  Registered-without-policy is a FAIL (rerun
+    ``tokenpak codex install`` to apply); an unregistered server is the
+    MCP-registration check's job, so this check skips rather than
+    double-failing.
+    """
+    path = codex_config_path()
+    if not path.exists():
+        return (
+            "PASS",
+            f"{path} missing (policy check skipped — MCP registration check covers setup)",
+        )
+    data, _ = _read_codex_config()
+    if data is None:
+        return "WARN", f"{path} unreadable — cannot verify MCP policy"
+    servers = data.get("mcp_servers")
+    if not isinstance(servers, dict) or SERVER_NAME not in servers:
+        return (
+            "PASS",
+            f"{SERVER_NAME} not in config.toml (policy check skipped — "
+            "MCP registration check covers setup)",
+        )
+    ok, problems = verify_policy(path)
+    if ok:
+        return (
+            "PASS",
+            "startup/tool timeouts + tool allowlist + mutating-tool approval policy verified",
+        )
+    return (
+        "FAIL",
+        "; ".join(problems) + " — run `tokenpak codex install` to apply the policy block",
+    )
+
+
 # ── Runner ──────────────────────────────────────────────────────────
 
 CHECKS: list["tuple[str, CheckFn]"] = [
@@ -403,13 +513,17 @@ CHECKS: list["tuple[str, CheckFn]"] = [
     ("proxy routing (value plane)", check_proxy_routing),
     ("hooks feature", check_hooks_feature),
     ("MCP registration", check_mcp_registered),
+    ("MCP config policy", check_mcp_policy),
     ("hooks.json schema", check_hooks_json),
     ("AGENTS.md", check_agents_md),
     ("AGENTS.md size", check_agents_md_size),
+    ("AGENTS.override shadowing", check_agents_override),
     ("skills installed", check_skills_installed),
     ("skills legacy orphans", check_skills_legacy_orphans),
     ("storage dbs", check_databases),
     ("rates snapshot", check_rates_snapshot),
+    ("codex homes (orphans)", check_codex_homes_orphaned),
+    ("codex homes (disk usage)", check_codex_homes_disk_usage),
     ("MCP import", check_mcp_import),
     ("MCP initialize ping", check_mcp_ping),
 ]
