@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tokenpak.companion.codex import agents_md, doctor
+from tokenpak.companion.codex import agents_md, doctor, uninstall
 from tokenpak.companion.codex.agents_md import generate_agents_md, install_agents_md
 from tokenpak.companion.mcp.tools import TOOLS
 
@@ -163,3 +163,58 @@ def test_override_check_passes_when_override_carries_tokenpak_section(
 def test_override_check_is_registered_in_doctor_checks():
     names = [name for name, _ in doctor.CHECKS]
     assert "AGENTS.override shadowing" in names
+
+
+# ---------------------------------------------------------------------------
+# AGENTS.md surfaces resolve the Codex home (CODEX_HOME-aware)
+# ---------------------------------------------------------------------------
+
+def test_global_install_writes_to_resolved_codex_home(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    path = install_agents_md(target="global")
+    assert path == tmp_path / "AGENTS.md"
+    assert "vault_search" in path.read_text()
+
+
+def test_agents_md_check_reports_install_in_resolved_codex_home(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    install_agents_md(target="global")
+    status, detail = doctor.check_agents_md()
+    assert status == "PASS"
+    assert str(tmp_path) in detail
+
+
+def test_agents_md_check_fails_when_missing_in_resolved_codex_home(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    status, detail = doctor.check_agents_md()
+    assert status == "FAIL"
+    assert str(tmp_path) in detail
+
+
+def test_agents_md_check_fails_when_section_missing(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "AGENTS.md").write_text("# Other Rules\n\nnot ours\n")
+    status, detail = doctor.check_agents_md()
+    assert status == "FAIL"
+    assert "TokenPak section missing" in detail
+
+
+def test_agents_md_size_check_uses_resolved_codex_home(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "AGENTS.md").write_text("x" * (32 * 1024))
+    status, _ = doctor.check_agents_md_size()
+    assert status == "WARN"
+
+
+def test_uninstall_clean_agents_md_uses_resolved_codex_home(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    install_agents_md(target="global")
+    ok, _ = uninstall.clean_agents_md()
+    assert ok
+    assert not (tmp_path / "AGENTS.md").exists()

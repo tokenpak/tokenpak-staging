@@ -60,14 +60,22 @@ _POLICY_KEYS: "tuple[str, ...]" = (
 )
 
 
+def codex_home() -> Path:
+    """Resolved Codex home directory (honors ``CODEX_HOME``).
+
+    Single resolver for every Codex-home surface the companion touches
+    (config.toml, AGENTS.md, AGENTS.override.md, doctor checks,
+    uninstall) so the writer and the verifier can never disagree about
+    which tree Codex actually reads.
+    """
+    if os.environ.get("CODEX_HOME"):
+        return Path(os.environ["CODEX_HOME"])
+    return Path.home() / ".codex"
+
+
 def codex_config_path() -> Path:
     """Resolved Codex ``config.toml`` path (honors ``CODEX_HOME``)."""
-    base = (
-        Path(os.environ["CODEX_HOME"])
-        if os.environ.get("CODEX_HOME")
-        else Path.home() / ".codex"
-    )
-    return base / "config.toml"
+    return codex_home() / "config.toml"
 
 
 def enabled_tool_names() -> "list[str]":

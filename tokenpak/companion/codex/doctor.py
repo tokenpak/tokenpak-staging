@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from ..config import CompanionConfig
-from .mcp_config import SERVER_NAME, codex_config_path, verify_policy
+from .mcp_config import SERVER_NAME, codex_config_path, codex_home, verify_policy
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .rates_snapshot import count as rates_count
 from .skills_installer import (
@@ -161,12 +161,13 @@ def check_hooks_json() -> "tuple[Status, str]":
 
 
 def check_agents_md() -> "tuple[Status, str]":
-    path = Path.home() / ".codex" / "AGENTS.md"
+    """Report whether the TokenPak section is installed in the resolved Codex home."""
+    path = codex_home() / "AGENTS.md"
     if not path.exists():
         return "FAIL", f"{path} missing"
     content = path.read_text()
     if "# TokenPak Companion" not in content:
-        return "FAIL", "TokenPak section missing from AGENTS.md"
+        return "FAIL", f"TokenPak section missing from {path}"
     return "PASS", f"{path} ({len(content)} bytes)"
 
 
@@ -180,7 +181,7 @@ def check_agents_md_size(
     when guidance stops landing.  Surfacing the size early lets them
     shed content before they hit it.
     """
-    path = Path.home() / ".codex" / "AGENTS.md"
+    path = codex_home() / "AGENTS.md"
     if not path.exists():
         # A missing AGENTS.md is already flagged by check_agents_md;
         # don't double-fail. Treat as PASS for the size check.
@@ -318,13 +319,6 @@ def _parse_initialize_reply(stdout: str) -> "tuple[Status, str]":
     return "FAIL", "no JSON-RPC response from MCP server"
 
 
-def _codex_home() -> Path:
-    """Resolved Codex home directory (honors ``CODEX_HOME``)."""
-    if os.environ.get("CODEX_HOME"):
-        return Path(os.environ["CODEX_HOME"])
-    return Path.home() / ".codex"
-
-
 def _read_codex_config() -> "tuple[dict | None, Path]":
     """Parse the resolved Codex ``config.toml`` (honors ``CODEX_HOME``).
 
@@ -332,7 +326,7 @@ def _read_codex_config() -> "tuple[dict | None, Path]":
     ``(None, path)`` when the file is absent, unparseable, or no TOML
     reader is available.  Honors ``CODEX_HOME`` for the config location.
     """
-    path = _codex_home() / "config.toml"
+    path = codex_home() / "config.toml"
     if not path.exists():
         return None, path
     try:
@@ -411,7 +405,7 @@ def check_agents_override() -> "tuple[Status, str]":
     (critical behavior is enforced by config/hooks/MCP), so this is a WARN,
     but the user should know the guidance is not landing.
     """
-    override = _codex_home() / "AGENTS.override.md"
+    override = codex_home() / "AGENTS.override.md"
     if not override.exists():
         return "PASS", "no AGENTS.override.md shadowing"
     try:

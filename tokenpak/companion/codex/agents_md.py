@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..mcp.tools import TOOLS
+from .mcp_config import codex_home
 
 
 def _tool_summary(description: str) -> str:
@@ -113,8 +114,9 @@ def install_agents_md(target: str = "global") -> Path:
     """Write AGENTS.md to the appropriate Codex config directory.
 
     Args:
-        target: "global" for ~/.codex/AGENTS.md, or a repo path for
-                <repo>/AGENTS.md.
+        target: "global" for AGENTS.md in the resolved Codex home
+                (``CODEX_HOME`` if set, else ``~/.codex``), or a repo
+                path for <repo>/AGENTS.md.
 
     Returns:
         Path to the written AGENTS.md file.
@@ -124,7 +126,7 @@ def install_agents_md(target: str = "global") -> Path:
     any other content.
     """
     if target == "global":
-        agents_path = Path.home() / ".codex" / "AGENTS.md"
+        agents_path = codex_home() / "AGENTS.md"
     else:
         agents_path = Path(target) / "AGENTS.md"
 
