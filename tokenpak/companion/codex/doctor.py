@@ -12,7 +12,6 @@ adding a check is "define function, append to CHECKS list".
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
