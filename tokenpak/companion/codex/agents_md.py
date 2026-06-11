@@ -10,13 +10,39 @@ The companion installs a global AGENTS.md with rules for:
 - How to use the journal
 - Budget-aware behavior
 - Context bloat avoidance
+
+The "Available MCP tools" list is generated from the canonical MCP TOOLS
+registry (``tokenpak.companion.mcp.tools``) at import time, so the prompt
+artifact can never drift from the tools the server actually exposes.  The
+assembled content is a module-level constant: byte-deterministic across
+calls, which keeps the provider-side prefix cache stable.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-_AGENTS_CONTENT = """\
+from ..mcp.tools import TOOLS
+
+
+def _tool_summary(description: str) -> str:
+    """Return the first sentence of a registry tool description.
+
+    The registry descriptions open with a one-sentence summary followed by
+    usage guidance; the AGENTS.md bullet list only needs the summary.
+    """
+    head, sep, _rest = description.partition(". ")
+    return (head + ".") if sep else head
+
+
+def _render_tool_bullets() -> str:
+    """Render the MCP tool list from the TOOLS registry (registry order)."""
+    return "\n".join(
+        f"- **{tool.name}** — {_tool_summary(tool.description)}" for tool in TOOLS
+    )
+
+
+_AGENTS_HEADER = """\
 # TokenPak Companion
 
 You have access to TokenPak companion tools via MCP. These tools help manage
@@ -24,13 +50,9 @@ cost, context, and session continuity.
 
 ## Available MCP tools
 
-- **estimate_tokens** — Check token count before including large content.
-- **check_budget** — Query remaining cost budget for this session and today.
-- **load_capsule** — Load compressed context from a prior session.
-- **prune_context** — Compress verbose tool output to reduce token usage.
-- **journal_read** — Read notes from past sessions.
-- **journal_write** — Save important decisions or milestones.
-- **session_info** — Get companion status and configuration.
+"""
+
+_AGENTS_GUIDANCE = """\
 
 ## When to use tools
 
@@ -44,6 +66,9 @@ cost, context, and session continuity.
   output exceeds ~2000 tokens and you only need the summary.
 - **When making architectural decisions**: call `journal_write` to record
   the decision and rationale for future sessions.
+- **When the user references project docs or stored knowledge**: call
+  `vault_search` to locate relevant blocks, then `vault_retrieve` to fetch
+  the full content of a specific block.
 
 ## When NOT to load capsules
 
@@ -73,6 +98,10 @@ Do not load capsules automatically on every session start.  Only load when:
 - Do not claim a task is done based solely on writing code — confirm it
   compiles, passes tests, or visibly works.
 """
+
+# Assembled once at import: a static constant (no per-call computation), but
+# sourced from the TOOLS registry so the tool list cannot drift.
+_AGENTS_CONTENT = _AGENTS_HEADER + _render_tool_bullets() + "\n" + _AGENTS_GUIDANCE
 
 
 def generate_agents_md() -> str:
