@@ -111,6 +111,43 @@ def main(args: list[str] | None = None) -> int:
     config.journal_dir.mkdir(parents=True, exist_ok=True)
     progress = _LoadingStatus(sys.stderr)
 
+    # ── Step 0a: Resolve CODEX_HOME isolation mode ───────────
+    # workspace = default isolation unit (per-project), isolated =
+    # advanced (per-session). shared = current behavior (literal default).
+    # Provisioning + preflight run before any exec so a contended home
+    # is surfaced instead of hung on.
+    from . import session_home, state_lock
+
+    codex_home = None
+    try:
+        mode = session_home.resolve_mode()
+        if mode == session_home.MODE_ATTACH:
+            progress.clear()
+            print(
+                "tokenpak: TOKENPAK_CODEX_SESSION_MODE=attach is deferred; "
+                "falling back to shared mode",
+                file=sys.stderr,
+            )
+            mode = session_home.MODE_SHARED
+        provisioned = session_home.provision_codex_home(mode)
+        codex_home = provisioned.home
+    except Exception as exc:  # never let isolation block the launcher
+        progress.clear()
+        print(
+            f"tokenpak: codex home provisioning failed ({exc}); "
+            "using default ~/.codex",
+            file=sys.stderr,
+        )
+        provisioned = None
+
+    # State-lock preflight against the home that Codex will actually use.
+    if not install_only:
+        lock = state_lock.probe(codex_home)
+        if lock.locked:
+            progress.clear()
+            print(state_lock.remediation_hint(lock), file=sys.stderr)
+            return 1
+
     # ── Step 0: Refresh model-rate snapshot for shell hooks ──
     from .rates_snapshot import refresh as refresh_rates
 
@@ -189,6 +226,13 @@ def main(args: list[str] | None = None) -> int:
     default_journal_dir = str(config.journal_dir.__class__.home() / ".tokenpak" / "companion")
     if str(config.journal_dir) != default_journal_dir:
         env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
+
+    # Point the child Codex process at the provisioned home and record the
+    # PID sentinel (same PID survives execvpe, so it stays accurate). Do this
+    # before the fleet flag injection so the bypass logic sees the final env.
+    if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
+        env = session_home.apply_to_env(provisioned.home, env)
+        session_home.record_pid(provisioned.home)
 
     fleet = _fleet_state_enabled()
     forwarded = _maybe_inject_bypass_flag(args, env, fleet=fleet)

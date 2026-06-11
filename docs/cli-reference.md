@@ -623,6 +623,9 @@ Examples:
   tokenpak codex doctor            # verify installation
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
+  tokenpak codex clean             # reclaim orphaned isolated codex homes
+  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
+  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write

@@ -2168,11 +2168,35 @@ def cmd_codex(args):
     if forwarded and forwarded[0] == "statusline":
         from .companion.codex.statusline_config import main as statusline_main
         sys.exit(statusline_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "clean":
+        sys.exit(_codex_clean(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     _maybe_update_nudge()
     from .companion.codex import launch
     launch(args=forwarded)
+
+
+def _codex_clean(argv):
+    """`tokenpak codex clean [--workspace] [--all]` — reclaim codex homes.
+
+    Removes orphaned isolated session homes by default.  ``--workspace``
+    also reclaims orphaned per-project homes; ``--all`` additionally
+    removes homes with a live session (destructive — used to clear a
+    wedged home).
+    """
+    from .companion.codex.session_home import clean
+
+    include_workspaces = "--workspace" in argv or "--all" in argv
+    force = "--all" in argv
+    removed = clean(include_workspaces=include_workspaces, force=force)
+    if not removed:
+        print("tokenpak codex clean: no reclaimable codex homes")
+        return 0
+    for path in removed:
+        print(f"removed {path}")
+    print(f"tokenpak codex clean: removed {len(removed)} codex home(s)")
+    return 0
 
 
 def cmd_companion(args):
@@ -2401,6 +2425,9 @@ def _build_codex_parser(sub):
             "  tokenpak codex doctor            # verify installation\n"
             "  tokenpak codex uninstall         # reverse installation\n"
             "  tokenpak codex statusline        # enable native status modules (additive)\n"
+            "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
