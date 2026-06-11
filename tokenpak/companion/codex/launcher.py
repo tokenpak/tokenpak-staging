@@ -229,7 +229,7 @@ def main(args: list[str] | None = None) -> int:
 
     # Point the child Codex process at the provisioned home and record the
     # PID sentinel (same PID survives execvpe, so it stays accurate). Do this
-    # before the fleet flag injection so the bypass logic sees the final env.
+    # before the bypass-flag injection so the bypass logic sees the final env.
     if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
         env = session_home.apply_to_env(provisioned.home, env)
         session_home.record_pid(provisioned.home)
