@@ -341,6 +341,53 @@ def _read_codex_config() -> "tuple[dict | None, Path]":
         return None, path
 
 
+def check_codex_homes_orphaned() -> "tuple[Status, str]":
+    """Surface provisioned Codex homes with no live session (orphans).
+
+    Isolated/workspace homes are created by
+    ``TOKENPAK_CODEX_SESSION_MODE``.  Ephemeral isolated homes with no live
+    Codex process are reclaimable by ``tokenpak codex clean``; WARN (not
+    FAIL) so the doctor stays informative without gating the exit code.
+    """
+    from .session_home import MODE_ISOLATED, list_homes
+
+    homes = list_homes(include_workspaces=True)
+    if not homes:
+        return "PASS", "no provisioned codex homes"
+    orphaned_isolated = [h for h in homes if h.mode == MODE_ISOLATED and not h.alive]
+    live = [h for h in homes if h.alive]
+    if orphaned_isolated:
+        names = ", ".join(h.path.name for h in orphaned_isolated[:5])
+        more = "" if len(orphaned_isolated) <= 5 else f" (+{len(orphaned_isolated) - 5} more)"
+        return (
+            "WARN",
+            f"{len(orphaned_isolated)} orphaned isolated home(s): {names}{more} — "
+            "reclaim with `tokenpak codex clean`",
+        )
+    return "PASS", f"{len(homes)} home(s), {len(live)} with a live session"
+
+
+def check_codex_homes_disk_usage() -> "tuple[Status, str]":
+    """WARN when provisioned isolated homes exceed the retention size cap."""
+    from .session_home import (
+        MODE_ISOLATED,
+        RETENTION_MAX_TOTAL_BYTES,
+        list_homes,
+    )
+
+    homes = [h for h in list_homes(include_workspaces=False) if h.mode == MODE_ISOLATED]
+    total = sum(h.size_bytes for h in homes)
+    cap_mb = RETENTION_MAX_TOTAL_BYTES // (1024 * 1024)
+    used_mb = total / (1024 * 1024)
+    if total > RETENTION_MAX_TOTAL_BYTES:
+        return (
+            "WARN",
+            f"isolated codex homes use {used_mb:.0f} MB (> {cap_mb} MB cap) — "
+            "run `tokenpak codex clean`",
+        )
+    return "PASS", f"isolated codex homes use {used_mb:.0f}/{cap_mb} MB"
+
+
 def check_proxy_routing() -> "tuple[Status, str]":
     """§4 value-plane invariant — WARN (never FAIL) when Codex is not
     routed through the TokenPak proxy.
@@ -475,6 +522,8 @@ CHECKS: list["tuple[str, CheckFn]"] = [
     ("skills legacy orphans", check_skills_legacy_orphans),
     ("storage dbs", check_databases),
     ("rates snapshot", check_rates_snapshot),
+    ("codex homes (orphans)", check_codex_homes_orphaned),
+    ("codex homes (disk usage)", check_codex_homes_disk_usage),
     ("MCP import", check_mcp_import),
     ("MCP initialize ping", check_mcp_ping),
 ]
