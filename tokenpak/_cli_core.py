@@ -4045,8 +4045,8 @@ def _save_lock(lock: dict):
 
 
 def cmd_config(args):
-    """Config management: show, init, edit."""
-    from tokenpak.core.config_loader import CONFIG_PATH, generate_default_yaml, get_all
+    """Config management: show, path."""
+    from tokenpak.core.config_loader import CONFIG_PATH, get_all
 
     subcmd = getattr(args, "config_cmd", "show")
 
@@ -4074,17 +4074,36 @@ def cmd_config(args):
                     print(f"    {key:<30} = {val}")
                 print()
 
-    elif subcmd == "init":
-        if CONFIG_PATH.exists() and not getattr(args, "force", False):
-            print(f"Config already exists: {CONFIG_PATH}")
-            print("Use --force to overwrite.")
-            return
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(generate_default_yaml())
-        print(f"Created: {CONFIG_PATH}")
-
     elif subcmd == "path":
         print(str(CONFIG_PATH))
+
+
+def cmd_config_init(args):
+    """Scaffold <tpk-home>/config.yaml (SAFE sub-scope, Packet B design §2)."""
+    from tokenpak.cli.commands.config_init import run_config_init
+
+    return run_config_init(
+        force=getattr(args, "force", False),
+        with_env_stub=getattr(args, "with_env_stub", False),
+        print_only=getattr(args, "print_only", False),
+        json_output=getattr(args, "json", False),
+        quiet=getattr(args, "quiet", False),
+    )
+
+
+def cmd_config_doctor(args):
+    """Read-only config diagnostics (SAFE sub-scope, Packet B design §1)."""
+    from tokenpak.cli.commands.config_doctor import run_config_doctor
+
+    try:
+        return run_config_doctor(
+            json_output=getattr(args, "json", False),
+            quiet=getattr(args, "quiet", False),
+            verbose=getattr(args, "verbose", False),
+        )
+    except Exception as exc:  # unexpected user-facing error (Std 03 §3 code 1)
+        print(f"✗ config doctor failed: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_version(args):
@@ -4717,10 +4736,38 @@ def _build_config_mgmt_parser(sub):
     p_show.add_argument("--json", action="store_true", help="Output as JSON")
     p_show.set_defaults(func=cmd_config)
 
-    # init — create default config.yaml
-    p_init = csub.add_parser("init", help="Create default config.yaml")
-    p_init.add_argument("--force", action="store_true", help="Overwrite existing config")
-    p_init.set_defaults(func=cmd_config)
+    # init — scaffold default config.yaml under <tpk-home> (design §2)
+    p_init = csub.add_parser("init", help="Scaffold default config.yaml under <tpk-home>")
+    p_init.add_argument(
+        "--force", action="store_true",
+        help="Overwrite existing config (backup-first to config.yaml.bak)",
+    )
+    p_init.add_argument(
+        "--with-env-stub", action="store_true", dest="with_env_stub",
+        help="Also write <tpk-home>/.env.example (placeholders only, never values)",
+    )
+    p_init.add_argument(
+        "--print", action="store_true", dest="print_only",
+        help="Show what would be written without writing",
+    )
+    p_init.add_argument("--json", action="store_true", help="Output as JSON")
+    p_init.add_argument("--quiet", action="store_true", help="Suppress non-essential output")
+    p_init.set_defaults(func=cmd_config_init)
+
+    # doctor — read-only config diagnostics (design §1)
+    p_doctor = csub.add_parser(
+        "doctor",
+        help="Read-only config diagnostics (sources, precedence, masked env, drift)",
+    )
+    p_doctor.add_argument("--json", action="store_true", help="Output as JSON")
+    p_doctor.add_argument(
+        "--quiet", action="store_true",
+        help="Print only the worst finding (nothing on all-ok)",
+    )
+    p_doctor.add_argument(
+        "--verbose", "-v", action="store_true", help="Include per-check detail"
+    )
+    p_doctor.set_defaults(func=cmd_config_doctor)
 
     # path — print config file path
     p_path = csub.add_parser("path", help="Print config file path")
@@ -4747,7 +4794,7 @@ def _build_config_mgmt_parser(sub):
     p_migrate.set_defaults(func=cmd_config_migrate)
     p.set_defaults(func=_bare_help(
         "config", "Manage configuration files",
-        ["sync", "pull", "validate", "show", "init", "path", "migrate"],
+        ["sync", "pull", "validate", "show", "init", "doctor", "path", "migrate"],
         exit_nonzero=True,
     ))
 
