@@ -110,7 +110,7 @@ response = client.chat.completions.create(
 
 ---
 
-### OpenClaw
+### Config-file Clients
 
 In your config file:
 ```json

@@ -610,7 +610,7 @@ Examples:
 
 Inspect, manage, and dry-run-route credentials tokenpak can see from
 all registered providers (Codex CLI, Claude CLI, env vars,
-~/.tokenpak/credentials.toml, OpenClaw agent profiles).
+~/.tokenpak/credentials.toml, agent profiles).
 
 Proxy fast-path integration still deferred — `creds route` is a
 dry-run (what would I pick) with no side effects.

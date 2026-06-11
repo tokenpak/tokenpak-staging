@@ -935,7 +935,7 @@ File lock registry for multi-agent coordination.
 Parameters
 ----------
 agent_id : str
- Identifier for the agent claiming locks (default: $TOKENPAK_AGENT or 'cali').
+ Identifier for the agent claiming locks (default: $TOKENPAK_AGENT or 'app-1').
 lock_dir : Path | str | None
  Directory where lock files are stored.
 timeout_s : int
@@ -5362,8 +5362,8 @@ Persists to a JSON file. A background thread marks stale agents.
 Usage::
 
  registry = AgentRegistry("~/.tokenpak/team/agents.json")
- registry.register("cali", capabilities=["compression", "tools"])
- registry.heartbeat("cali")
+ registry.register("app-1", capabilities=["compression", "tools"])
+ registry.heartbeat("app-1")
  agents = registry.list_agents()
  registry.start_health_checker()
 
