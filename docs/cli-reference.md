@@ -660,6 +660,56 @@ MultiPak Pro Phase 1 OSS surface. Read-only Vault Pak operations work without Pr
 - `status`
   - `--json` — Emit JSON instead of text
 
+### `tokenpak cards`
+
+TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into canonical TokenPak contracts. The runtime trusts only validated compiled manifests; raw Markdown is never executed. Note: `tokenpak cards` operates on authoring sources, `tokenpak pak` on runtime Pak objects — they are not aliases.
+
+**Subcommands:**
+
+- `discover`
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `validate`
+  - `PATH` — Card file to validate (default: all)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--strict` — Require exact card == adapter capability equality
+  - `--json` — Emit JSON instead of text
+- `compile` — Validates then compiles cards into canonical JSON manifests under .tokenpak/cache/cards/compiled/. Only validated compiled manifests are runtime inputs.
+  - `PATH` — Card file to compile (default: all)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--strict` — Require exact card == adapter capability equality
+  - `--json` — Emit JSON instead of text
+- `install`
+  - `PATH` — Card file to install (default: all)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--strict` — Require exact card == adapter capability equality
+- `list`
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `inspect`
+  - `NAME` — Card name (frontmatter `name:`)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `preview` — OSS preview is a static declared scope/filter dump — no scored recall, no hydration, no render-to-messages injection. Live unranked candidates additionally require a registered connector (Phase 2). --pro probes the Pro Local daemon and falls back to the static dump when absent.
+  - `NAME` — Card name (frontmatter `name:`)
+  - `--pro` — Use Pro Local scoring when available
+  - `--query` — Recall query (used with --pro)
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `scaffold` — Scaffolds into the project (integrations/<name>/ for tip cards, paks/ for pak cards) — NEVER into the installed package tree.
+  - `--type` — Card type to scaffold (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--kind` — tip_kind for tip cards (Phase 1: provider_adapter) (default: provider_adapter)
+  - `--name` — Card name (lowercase slug)
+- `doctor`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+
 ### `tokenpak test`
 
 Launch an interactive test that auto-detects your available

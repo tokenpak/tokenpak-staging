@@ -193,6 +193,7 @@ _COMMAND_GROUPS = {
         ("codex", "Launch with Codex"),
         ("creds", "Discover credentials + doctor"),
         ("pak", "Inspect/export/import Paks (MultiPak Pro Phase 1)"),
+        ("cards", "Author, validate, compile Markdown cards (TIP/PAK)"),
         ("test", "Interactive A/B test"),
         ("prove", "A/B value proof"),
     ],
@@ -3131,6 +3132,7 @@ def build_parser():
     _build_codex_parser(sub)
     _build_creds_parser(sub)
     _build_pak_parser(sub)
+    _build_cards_parser(sub)
     _build_tip_parser(sub)
     _build_features_parser(sub)
     _build_pakplan_parser(sub)
@@ -6223,6 +6225,20 @@ def _build_pak_parser(sub):
     from tokenpak.cli.commands.pak import build_pak_parser
 
     build_pak_parser(sub)
+
+
+def _build_cards_parser(sub):
+    """Register the ``tokenpak cards`` subcommand (Cards authoring layer, Std 54).
+
+    One new top-level verb for the ``.tip.md`` / ``.pak.md`` authoring
+    layer. NOT an alias of ``tokenpak pak`` — cards are authoring
+    sources; ``pak`` operates on runtime Pak objects (Std 54 invariant
+    13). Implementation lives in :mod:`tokenpak.cli.commands.cards`;
+    lazy import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.cards import build_cards_parser
+
+    build_cards_parser(sub)
 
 
 def _build_tip_parser(sub):
