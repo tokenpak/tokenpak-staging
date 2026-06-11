@@ -16,7 +16,6 @@ from tokenpak.companion.hooks import pre_send
 from tokenpak.companion.mcp import server as mcp_server
 from tokenpak.companion.mcp.tools import CompanionState, current_session_id
 
-
 # ---------------------------------------------------------------------------
 # _write_session_marker (hook side)
 # ---------------------------------------------------------------------------
