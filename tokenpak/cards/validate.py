@@ -289,7 +289,7 @@ def _validate_capabilities(value: Any, report: CardValidationReport) -> None:
     """Capability declarations come from capabilities.py only (Std 54 §E).
 
     ``tip.*`` strings must exist in the canonical vocabulary — inventing
-    capability strings inline is blocked (invariant 8 / Std 31 §2).
+    capability strings inline is blocked (invariant 8).
     ``ext.<vendor>.<feature>`` strings are metadata/hints only.
     """
     if value is None:
@@ -313,7 +313,7 @@ def _validate_capabilities(value: Any, report: CardValidationReport) -> None:
                 "invented-capability",
                 f"capability {cap!r} is not in the canonical vocabulary "
                 "(tokenpak/tip/capabilities.py) — cards MUST NOT invent "
-                "capability strings inline (Std 54 §E / Std 31 §2)",
+                "capability strings inline (Std 54 §E)",
             )
         elif cap.startswith("ext."):
             report.warning(

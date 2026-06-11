@@ -12,7 +12,7 @@ Compile targets (Phase 1):
   ``Pak.from_dict(...)`` / ``to_dict()`` — if the frozen dataclass
   rejects it, compilation fails.
 * ``.tip.md tip_kind: provider_adapter`` → provider adapter manifest
-  with the Std 23 §2.2 ``{Name}CredentialProvider`` class-name
+  with the spec ``{Name}CredentialProvider`` class-name
   derivation and the declared capability set.
 
 Schema stamping (Std 54 §C): pak manifests stamp ``pak-v1.json``
@@ -193,7 +193,7 @@ def _body_summary(card: ParsedCard) -> str:
 
 
 def _compile_adapter_payload(card: ParsedCard) -> dict[str, Any]:
-    """Build the provider adapter manifest payload (Std 23 §1.2 / §2.2)."""
+    """Build the provider adapter manifest payload."""
     fm = card.frontmatter
     name = str(fm["name"])
     payload: dict[str, Any] = {
@@ -212,7 +212,7 @@ def _compile_adapter_payload(card: ParsedCard) -> dict[str, Any]:
 
 
 def derive_provider_class_name(slug: str) -> str:
-    """Slug → ``{CamelCase}CredentialProvider`` per Std 23 §2.2.
+    """Slug → ``{CamelCase}CredentialProvider`` per the spec.
 
     ``acme-llm`` → ``AcmeLlmCredentialProvider``.
     """

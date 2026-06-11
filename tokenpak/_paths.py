@@ -68,7 +68,7 @@ _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
         "paks",
         # cards/ — user-global installed/compiled card manifests per the
         # Cards authoring layer (Std 54 §K: ~/.tpk/cards/installed/,
-        # ~/.tpk/cards/compiled/). Std 33 §3 reconciliation pending.
+        # ~/.tpk/cards/compiled/). Path-layout reconciliation pending.
         "cards",
     }
 )

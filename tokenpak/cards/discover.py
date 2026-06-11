@@ -8,7 +8,7 @@ Project layout (Std 54 §K):
 * generated state (gitignored): ``.tokenpak/cache/cards/compiled/`` and
   ``.tokenpak/cache/cards/installed.json``
 
-User-global state lives under ``~/.tpk/cards/`` per Std 33 / Std 54 §K
+User-global state lives under ``~/.tpk/cards/`` per Std 54 §K
 and resolves through :func:`tokenpak._paths.under`. Phase 1 writes only
 the project-local store; the user-global tree is read for listing and
 diagnostics.

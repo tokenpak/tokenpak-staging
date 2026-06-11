@@ -20,7 +20,7 @@ Phase 1 card kinds:
 
 * ``.pak.md`` → :class:`tokenpak.tip.pak.Pak` manifest
 * ``.tip.md tip_kind: provider_adapter`` → provider adapter manifest
-  (Std 23 §1.2 ``{Vendor}{Product}CredentialProvider`` naming)
+  (the spec ``{Vendor}{Product}CredentialProvider`` naming)
 
 Phase 2 kinds (``context_connector`` / ``mcp_bridge`` / ``.worker.md``)
 are recognized and rejected with a clear message — their canonical
