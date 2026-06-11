@@ -307,8 +307,11 @@ def test_prefix_session_name_does_not_mutate_input():
 # main() — proxy detection exception path
 # ---------------------------------------------------------------------------
 
-def test_main_proxy_detection_exception_path(tmp_path):
+def test_main_proxy_detection_exception_path(tmp_path, monkeypatch):
     """When httpx raises, proxy detection falls through without setting ANTHROPIC_BASE_URL."""
+    # An ANTHROPIC_BASE_URL inherited from the invoking shell would leak
+    # into the captured exec env and shadow what the launcher itself does.
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     run_dir = tmp_path / "run"
     journal_dir = tmp_path / "journal"
 
