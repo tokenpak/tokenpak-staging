@@ -4,10 +4,10 @@ name: Trust Conformance
 # Consolidates the project's release-readiness trust assertions into one check
 # so published artifacts cannot silently drift from the project's standards.
 #
-# ADVISORY (report-only) for now: the gate prints findings but does not fail the
-# build. Once the target tree is confirmed at the conformant baseline, flip the
-# `--mode` argument from "advisory" to "enforcing" to make drift block merges.
-# Until then this surfaces drift without red-barring legitimate work.
+# ENFORCING: the gate exits non-zero on any ERROR finding, so trust drift
+# (a missing NOTICE / hero / DCO / LICENSE / security contact, or a retired or
+# forbidden public claim) fails the build and blocks the merge. The target tree
+# was confirmed at the conformant baseline before this was enabled.
 
 on:
   push:
@@ -33,18 +33,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run trust-conformance gate (advisory)
+      - name: Run trust-conformance gate (enforcing)
         run: |
           set -euo pipefail
-          # --mode advisory always exits 0; it reports but never blocks.
+          # --mode enforcing exits non-zero on any ERROR finding, so trust
+          # drift fails this step (and the build) instead of merely warning.
           python -m scripts.release_gate.trust_conformance \
-            --scope public --mode advisory --json | tee trust-conformance.json
-
-          # Surface any reported drift as a non-blocking annotation so reviewers
-          # see it in the PR without the build going red.
-          errors="$(python -c "import json,sys; print(json.load(open('trust-conformance.json'))['errors'])")"
-          if [ "$errors" != "0" ]; then
-            echo "::warning::Trust-conformance reported ${errors} drift finding(s) (advisory; not blocking). See job log."
-          else
-            echo "Trust-conformance: clean."
-          fi
+            --scope public --mode enforcing --json | tee trust-conformance.json
+          echo "Trust-conformance: clean."
