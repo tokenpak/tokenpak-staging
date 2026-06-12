@@ -194,6 +194,7 @@ _COMMAND_GROUPS = {
         ("codex", "Launch with Codex"),
         ("creds", "Discover credentials + doctor"),
         ("pak", "Inspect/export/import Paks (MultiPak Pro Phase 1)"),
+        ("cards", "Author, validate, compile Markdown cards (TIP/PAK)"),
         ("test", "Interactive A/B test"),
         ("prove", "A/B value proof"),
     ],
@@ -3222,6 +3223,7 @@ def build_parser():
     _build_codex_parser(sub)
     _build_creds_parser(sub)
     _build_pak_parser(sub)
+    _build_cards_parser(sub)
     _build_tip_parser(sub)
     _build_features_parser(sub)
     _build_pakplan_parser(sub)
@@ -4135,6 +4137,21 @@ def _save_lock(lock: dict):
     _LOCK_FILE.write_text(json.dumps(lock, indent=2) + "\n")
 
 
+def _maybe_write_env_stub(*, force: bool) -> None:
+    """Write a placeholders-only .env.example under the resolved TokenPak home.
+
+    Scaffold-only: never writes a real .env and never writes credential values.
+    """
+    from tokenpak import _paths
+    from tokenpak.cli.commands.config_env import write_env_stub
+
+    created, target = write_env_stub(_paths.home(), force=force)
+    if created:
+        print(f"Created env template: {target} (placeholders only)")
+    else:
+        print(f"Env template already exists: {target} (use --force to overwrite)")
+
+
 def cmd_config(args):
     """Config management: show, init, edit."""
     from tokenpak.core.config_loader import CONFIG_PATH, generate_default_yaml, get_all
@@ -4169,10 +4186,14 @@ def cmd_config(args):
         if CONFIG_PATH.exists() and not getattr(args, "force", False):
             print(f"Config already exists: {CONFIG_PATH}")
             print("Use --force to overwrite.")
+            if getattr(args, "with_env_stub", False):
+                _maybe_write_env_stub(force=getattr(args, "force", False))
             return
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(generate_default_yaml())
         print(f"Created: {CONFIG_PATH}")
+        if getattr(args, "with_env_stub", False):
+            _maybe_write_env_stub(force=getattr(args, "force", False))
 
     elif subcmd == "path":
         print(str(CONFIG_PATH))
@@ -4811,7 +4832,37 @@ def _build_config_mgmt_parser(sub):
     # init — create default config.yaml
     p_init = csub.add_parser("init", help="Create default config.yaml")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing config")
+    p_init.add_argument(
+        "--with-env-stub",
+        action="store_true",
+        dest="with_env_stub",
+        help="Also drop a placeholders-only .env.example under the TokenPak home",
+    )
     p_init.set_defaults(func=cmd_config)
+
+    # doctor — read-only config-subsystem diagnostics
+    p_doctor = csub.add_parser(
+        "doctor",
+        help="Read-only config diagnostics (home, precedence, env vars, .env hygiene)",
+    )
+    p_doctor.add_argument("--json", action="store_true", help="Output as JSON")
+    p_doctor.add_argument("--quiet", action="store_true", help="Print only the worst finding")
+    p_doctor.add_argument("--verbose", "-v", action="store_true", help="Include per-check detail")
+    p_doctor.set_defaults(func=_config_doctor_dispatch)
+
+    # env — loaded env vars + provenance (masked by default)
+    p_env = csub.add_parser(
+        "env",
+        help="Show loaded env vars + provenance (secret values masked by default)",
+    )
+    p_env.add_argument("--json", action="store_true", help="Output as JSON")
+    p_env.add_argument(
+        "--no-mask",
+        action="store_false",
+        dest="mask",
+        help="Show low-class values unmasked (secret-class values are still masked)",
+    )
+    p_env.set_defaults(func=_config_env_dispatch, mask=True)
 
     # path — print config file path
     p_path = csub.add_parser("path", help="Print config file path")
@@ -4838,9 +4889,19 @@ def _build_config_mgmt_parser(sub):
     p_migrate.set_defaults(func=cmd_config_migrate)
     p.set_defaults(func=_bare_help(
         "config", "Manage configuration files",
-        ["sync", "pull", "validate", "show", "init", "path", "migrate"],
+        ["sync", "pull", "validate", "show", "init", "doctor", "env", "path", "migrate"],
         exit_nonzero=True,
     ))
+
+
+def _config_doctor_dispatch(args):
+    from tokenpak.cli.commands.config_env import cmd_config_doctor
+    return cmd_config_doctor(args)
+
+
+def _config_env_dispatch(args):
+    from tokenpak.cli.commands.config_env import cmd_config_env
+    return cmd_config_env(args)
 
 
 # ── End Version Control Commands ──────────────────────────────────────────────
@@ -6314,6 +6375,20 @@ def _build_pak_parser(sub):
     from tokenpak.cli.commands.pak import build_pak_parser
 
     build_pak_parser(sub)
+
+
+def _build_cards_parser(sub):
+    """Register the ``tokenpak cards`` subcommand (Cards authoring layer, Std 54).
+
+    One new top-level verb for the ``.tip.md`` / ``.pak.md`` authoring
+    layer. NOT an alias of ``tokenpak pak`` — cards are authoring
+    sources; ``pak`` operates on runtime Pak objects (Std 54 invariant
+    13). Implementation lives in :mod:`tokenpak.cli.commands.cards`;
+    lazy import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.cards import build_cards_parser
+
+    build_cards_parser(sub)
 
 
 def _build_tip_parser(sub):

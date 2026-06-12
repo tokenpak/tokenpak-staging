@@ -81,10 +81,6 @@ MEME_LINES = [
 SEP = "────────────────────────────────────────"
 SEP_INNER = "─────────────────────────────────"
 PROXY_DEFAULT = "http://127.0.0.1:8766"
-DB_DEFAULT = os.environ.get(
-    "TOKENPAK_DB",
-    os.path.expanduser("~/tokenpak/monitor.db"),
-)
 
 
 # ---------------------------------------------------------------------------
@@ -104,23 +100,18 @@ def _fetch(url: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
 def _get_db_path() -> str:
     """Resolve the monitor DB path via the canonical resolver.
 
-    D5 (feed normalization): delegate to ``tokenpak._paths.monitor_db()`` so
-    ``status``, ``_cli_core``, ``doctor``, and the proxy writer all resolve the
-    SAME DB through one candidate chain
-    (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` -> ``~/tokenpak``).
-    The previous hand-rolled list omitted ``~/.tpk`` (the canonical TPK home),
-    so the dashboard could read a different DB than the proxy writes once
-    ``~/.tpk/monitor.db`` exists — the latent split-brain this fixes.
-    Falls back to the legacy default only if no valid DB is found.
+    Delegates to ``tokenpak.core.paths.get_db_path`` (which routes through
+    ``tokenpak._paths.monitor_db()``) so ``status``, ``_cli_core``,
+    ``doctor``, and the proxy writer all resolve the SAME DB through one
+    candidate chain (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` ->
+    ``~/tokenpak``). When no valid DB exists anywhere, the resolver's
+    canonical fresh-install path is returned (the former hand-rolled
+    ``DB_DEFAULT`` constant pointed at a legacy location and has been
+    removed — the resolver is the only path source).
     """
-    try:
-        from tokenpak import _paths
-        resolved = _paths.monitor_db(mode="read")
-        if resolved is not None:
-            return str(resolved)
-    except Exception:
-        pass
-    return DB_DEFAULT
+    from tokenpak.core.paths import get_db_path
+
+    return str(get_db_path("monitor.db"))
 
 
 def _connect_db(db_path: Optional[str] = None) -> Optional[sqlite3.Connection]:
