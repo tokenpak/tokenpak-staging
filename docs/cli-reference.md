@@ -293,6 +293,14 @@ View and edit config
   - `--json` — Output as JSON
 - `init`
   - `--force` — Overwrite existing config
+  - `--with-env-stub` — Also drop a placeholders-only .env.example under the TokenPak home
+- `doctor`
+  - `--json` — Output as JSON
+  - `--quiet` — Print only the worst finding
+  - `--verbose`, `-v` — Include per-check detail
+- `env`
+  - `--json` — Output as JSON
+  - `--no-mask` — Show low-class values unmasked (secret-class values are still masked)
 - `path`
 - `migrate`
   - `--config-json` — Path to legacy config.json (default: ~/.tokenpak/config.json) (default: ~/.tokenpak/config.json)
@@ -305,6 +313,33 @@ Explain workflow profiles
 **Flags:**
 
 - `--profile` — Profile name (safe|balanced|aggressive|agentic); omit to show all
+
+### `tokenpak permissions`
+
+Manage the TokenPak permission tier system.
+
+Persistent tiers (strict/standard/auto) are written into the client's
+own config (Claude Code settings.json / Codex config.toml). Fleet mode
+is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject
+bypass flags at launch and print a banner — client configs are never
+modified by fleet mode.
+
+Examples:
+  tokenpak permissions show                      # current tiers + fleet mode
+  tokenpak permissions set auto                  # both clients
+  tokenpak permissions set strict --client codex # one client
+  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)
+  tokenpak permissions reset                     # scoped reset + fleet off
+
+**Subcommands:**
+
+- `show`
+- `set`
+  - `TIER` — Tier to apply ('fleet' sets launcher state only) — choices: `strict`, `standard`, `auto`, `fleet`
+  - `--client` — Which client to configure (default: both) (default: both) — choices: `claude-code`, `codex`, `both`
+  - `--yes` — Skip the fleet-mode confirmation prompt (explicit opt-in)
+- `reset`
+  - `--client` — Which client to reset (default: both) (default: both) — choices: `claude-code`, `codex`, `both`
 
 ---
 
@@ -596,6 +631,9 @@ Examples:
   tokenpak codex doctor            # verify installation
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
+  tokenpak codex clean             # reclaim orphaned isolated codex homes
+  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
+  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
@@ -1087,6 +1125,8 @@ Examples:
 - `--proxy-url` — Override the printed proxy URL (default: $TOKENPAK_PROXY_URL or http://localhost:8766)
 - `--apply` — Auto-write config files for the given client (headless / scripted path)
 - `--revert` — Restore the most recent backup for the given client (undoes --apply)
+- `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). 'fleet' is launcher-scoped and never persists into client config — see `tokenpak permissions --help`. — choices: `strict`, `standard`, `auto`, `fleet`
+- `--yes` — Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)
 
 ### `tokenpak last`
 
