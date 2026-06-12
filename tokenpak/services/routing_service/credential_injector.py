@@ -2,12 +2,12 @@
 
 This module is the canonical compile target for ``provider_adapter`` cards
 (Std 54 §D: ``tokenpak.services.routing_service.CredentialProvider``) and the
-contract home Std 23 §2 points at. It is a fresh authoring against the current
+contract home §2 points at. It is a fresh authoring against the current
 architecture — the pre-pivot ``canonical-main`` implementation of the same
-contract is lineage reference only (Std 23 §2.4 truth-alignment note) and was
+contract is lineage reference only (§2.4 truth-alignment note) and was
 deliberately not used as a source.
 
-Contract summary (Std 23):
+Contract summary:
 
 * ``InjectionPlan`` (§2.1) — seven orthogonal, declarative slots describing
   what the proxy does to a forward request, applied in slot order
@@ -19,7 +19,7 @@ Contract summary (Std 23):
 
 No I/O happens here: this module defines the contract only. Concrete
 providers live with their integrations (a compiled ``provider_adapter`` card
-names its ``{Name}CredentialProvider`` class per Std 23 §2.2).
+names its ``{Name}CredentialProvider`` class per §2.2).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ __all__ = [
     "RequestShape",
 ]
 
-#: Declarative request shapes (Std 23 §2.5). ``sse-upgrade`` is reserved.
+#: Declarative request shapes (§2.5). ``sse-upgrade`` is reserved.
 RequestShape = Literal["http", "ws-upgrade", "sse-upgrade"]
 
 #: Body-aware URL computation: ``(body, headers) -> url or None``.
@@ -49,11 +49,11 @@ TargetUrlResolver = Callable[[bytes, Mapping[str, str]], Optional[str]]
 
 #: Dynamic per-request headers (SigV4, OAuth refresh, ...):
 #: ``(body, url, method, headers) -> headers``. Runs last (slot 6) and
-#: OVERRIDES ``add_headers`` on key conflict (Std 23 §2.2).
+#: OVERRIDES ``add_headers`` on key conflict (§2.2).
 HeaderResolver = Callable[[bytes, str, str, Mapping[str, str]], dict[str, str]]
 
 #: Body mutation before forward (slot 5). Must be declared, never implicit
-#: (Std 23 §2.3 — no hidden destructive behavior).
+#: (§2.3 — no hidden destructive behavior).
 BodyTransform = Callable[[bytes], bytes]
 
 
@@ -62,7 +62,7 @@ class InjectionPlan:
     """Declarative description of one provider's forward-request mutation.
 
     Slots apply in the documented order; the record itself never performs
-    I/O and must not depend on external mutable state (Std 23 §2.3 —
+    I/O and must not depend on external mutable state (§2.3 —
     refreshable state belongs inside resolver closures, not here).
     """
 
@@ -82,7 +82,7 @@ class InjectionPlan:
     #: Slot 6 — dynamic per-request headers; overrides ``add_headers``
     #: on conflict. Receives ``b""`` bodies on handshakes.
     header_resolver: Optional[HeaderResolver] = None
-    #: Plan shape (Std 23 §2.5). ``"http"`` preserves prior behavior.
+    #: Plan shape (§2.5). ``"http"`` preserves prior behavior.
     request_shape: RequestShape = "http"
 
     def __post_init__(self) -> None:
@@ -90,21 +90,21 @@ class InjectionPlan:
         if lowered != frozenset(self.strip_headers):
             object.__setattr__(self, "strip_headers", lowered)
         if self.request_shape == "ws-upgrade" and self.body_transform is not None:
-            # Std 23 §2.5: the upgrade handshake carries no transformable
+            # §2.5: the upgrade handshake carries no transformable
             # body — this combination MUST be rejected at plan-load time.
             raise ValueError(
                 "InjectionPlan: body_transform cannot be combined with "
-                "request_shape='ws-upgrade' (Std 23 §2.5 — rejected at "
+                "request_shape='ws-upgrade' (§2.5 — rejected at "
                 "plan-load time)"
             )
 
 
 @runtime_checkable
 class CredentialProvider(Protocol):
-    """Auth + URL routing for one tokenpak provider slug (Std 23 §1).
+    """Auth + URL routing for one tokenpak provider slug (§1).
 
     Implementations are named ``{Vendor}{Product}CredentialProvider``
-    (Std 23 §2.2, vendor-explicit per §1.1) and are typically registered
+    (§2.2, vendor-explicit per §1.1) and are typically registered
     once at module import and reused for the proxy lifetime.
     """
 
@@ -116,7 +116,7 @@ class CredentialProvider(Protocol):
         """Read credentials and build the plan for this provider.
 
         Returns ``None`` — never raises — when credentials or optional
-        dependencies are unavailable (Std 23 §2.3: graceful skip; a
+        dependencies are unavailable (§2.3: graceful skip; a
         crashing provider would break startup for every other provider).
         """
         ...

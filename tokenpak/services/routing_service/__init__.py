@@ -7,9 +7,9 @@ the shared execution backbone at Level 3).
 Exposes:
     * :class:`PlatformOrigin` — dataclass returned by extractors.
     * :func:`_openclaw_extract` — Path C reader that resolves the active
-      OpenClaw session from ``~/.openclaw/sessions/active.json``.
+      host session file recorded by the local runtime.
     * :class:`CredentialProvider` / :class:`InjectionPlan` — the
-      credential-injection contract (Std 23 §2); the canonical compile
+      credential-injection contract (§2); the canonical compile
       target for ``provider_adapter`` cards (Std 54 §D).
 """
 
