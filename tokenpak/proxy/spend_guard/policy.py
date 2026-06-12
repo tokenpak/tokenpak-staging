@@ -238,6 +238,16 @@ class SpendGuardConfig:
     rolling_caps_per_fleet_max_tokens_total: int = 15_000_000
     rolling_caps_per_fleet_max_cache_read_tokens: int = 0
 
+    # ── Concurrent budget reservations (Standard 29 §15) ──
+    # Atomic admission control for in-flight requests against the SAME
+    # rolling-cap budget (settled + reserved + this request ≤ cap).
+    # Default OFF until the proxy response path settles holds
+    # (reservation.settle_reservation); until then every forward would
+    # hold its projection for the full TTL and over-block sustained
+    # traffic. The settle-wiring follow-up flips this default.
+    reservations_enabled: bool = False
+    reservation_ttl_seconds: int = 600
+
 
 # ---------------------------------------------------------------------------
 # Config loader — single source of truth for thresholds
@@ -342,6 +352,7 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         "pending_ttl_seconds",
         "yes_grant_ttl_seconds",
         "session_window_seconds",
+        "reservation_ttl_seconds",
         "rolling_caps_window_seconds",
         "rolling_caps_per_agent_max_tokens_total",
         "rolling_caps_per_agent_max_cache_read_tokens",
@@ -357,6 +368,10 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
     # Yes-grant — bool field
     if "yes_grant_covers_rolling_caps" in sg:
         cfg.yes_grant_covers_rolling_caps = _coerce_bool(sg["yes_grant_covers_rolling_caps"])
+
+    # Concurrent reservations — bool field (Standard 29 §15)
+    if "reservations_enabled" in sg:
+        cfg.reservations_enabled = _coerce_bool(sg["reservations_enabled"])
 
     # Rolling caps — bool + float fields
     if "rolling_caps_enabled" in sg:
@@ -460,6 +475,9 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         ("TOKENPAK_SPEND_GUARD_YES_GRANT_COVERS_ROLLING_CAPS", "yes_grant_covers_rolling_caps", _coerce_bool),
         ("TOKENPAK_SPEND_GUARD_SESSION_BLOCK_COST_USD", "session_block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_SESSION_WINDOW_SECONDS", "session_window_seconds", int),
+        # Concurrent reservations env overrides (Standard 29 §15)
+        ("TOKENPAK_SPEND_GUARD_RESERVATIONS_ENABLED", "reservations_enabled", _coerce_bool),
+        ("TOKENPAK_SPEND_GUARD_RESERVATION_TTL", "reservation_ttl_seconds", int),
         # Rolling caps env overrides
         ("TOKENPAK_SPEND_GUARD_ROLLING_CAPS_ENABLED", "rolling_caps_enabled", _coerce_bool),
         ("TOKENPAK_SPEND_GUARD_ROLLING_WINDOW_SECONDS", "rolling_caps_window_seconds", int),
