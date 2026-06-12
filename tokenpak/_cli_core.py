@@ -8891,7 +8891,7 @@ def cmd_retrieval_test(args):
     """Test a query through all enabled retrievers."""
     import asyncio
 
-    from .vault.retrieval.base import HybridSearchConfig, RetrievalQuery
+    from .vault.retrieval.base import HybridSearchConfig
     from .vault.retrieval.hybrid import HybridRetriever
 
     cfg = HybridSearchConfig.from_env()
@@ -8902,8 +8902,13 @@ def cmd_retrieval_test(args):
     retriever = HybridRetriever(cfg)
 
     async def _run():
-        q = RetrievalQuery(text=query_text, top_k=top_k)
-        return await retriever.search(q)
+        # search() expects the query string + top_k directly. Passing a
+        # RetrievalQuery here double-wrapped it (search() re-wraps query_text
+        # into its own RetrievalQuery), so BM25 tokenization received a
+        # dataclass instead of a str and crashed: _tokenize is lru_cache'd and
+        # RetrievalQuery is not frozen -> "TypeError: unhashable type". It also
+        # silently dropped top_k. Pass the string and top_k through.
+        return await retriever.search(query_text, top_k=top_k)
 
     import time
     t0 = time.perf_counter()
