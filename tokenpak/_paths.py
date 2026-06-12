@@ -56,6 +56,10 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
         # tmp/, overlays/). Added per the canonical layout amendment of
         # 2026-05-20.
         "dispatch",
+        # deliberation/ — Deliberation Dispatch system state (file-based JSON
+        # Deliberation Receipts under deliberation/receipts/).
+        # Added per the canonical layout amendment of 2026-06-12.
+        "deliberation",
     }
 )
 
