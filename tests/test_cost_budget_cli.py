@@ -78,7 +78,10 @@ def budget_mod(temp_db, tmp_path):
     import tokenpak.cli.commands.budget as budget
     importlib.reload(budget)
     cfg_path = tmp_path / "budget_config.yaml"
-    with patch.object(budget, "_MONITOR_DB", temp_db), \
+    # budget resolves monitor.db at call time via the canonical resolver;
+    # patch the resolution function (the module-level _MONITOR_DB constant
+    # was removed with the resolver rewire).
+    with patch.object(budget, "_monitor_db_path", lambda: str(temp_db)), \
          patch.object(budget, "_BUDGET_CONFIG", cfg_path):
         yield budget, cfg_path
 
