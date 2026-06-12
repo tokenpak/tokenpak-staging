@@ -23,6 +23,11 @@ Subcommands:
                      verb-side). Same exit-code contract.
     scaffold-adapter <name>
                      Emit a starter capability-declaring adapter file.
+    sources          List external-tool TIP source adapters and the
+                     off-by-default gate state.
+    observe          Run external-tool source adapters on demand and
+                     show TokenPak-observed records.  No-op unless
+                     TOKENPAK_TIP_TOOL_ADAPTERS=1.
 """
 
 from __future__ import annotations
@@ -107,6 +112,30 @@ def build_tip_parser(sub: Any) -> None:
         help="Output file path (default: ./<name>_adapter.py)",
     )
     p_scaffold.set_defaults(func=cmd_tip_scaffold)
+
+    p_sources = tipsub.add_parser(
+        "sources",
+        help="List external-tool TIP source adapters",
+    )
+    p_sources.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of text"
+    )
+    p_sources.set_defaults(func=cmd_tip_sources)
+
+    p_observe = tipsub.add_parser(
+        "observe",
+        help=(
+            "Run external-tool TIP source adapters on demand and show "
+            "TokenPak-observed records (requires TOKENPAK_TIP_TOOL_ADAPTERS=1)"
+        ),
+    )
+    p_observe.add_argument(
+        "--tool", default=None, help="Only run the adapter for this tool slug"
+    )
+    p_observe.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of text"
+    )
+    p_observe.set_defaults(func=cmd_tip_observe)
 
     p_tip.set_defaults(func=lambda a: p_tip.print_help())
 
@@ -482,6 +511,114 @@ def cmd_tip_scaffold(args: Any) -> int:
     return 0
 
 
+def cmd_tip_sources(args: Any) -> int:
+    """List discovered external-tool TIP source adapters + gate state.
+
+    Read-only metadata listing — discovery imports adapter modules but
+    never runs collection; with the gate unset nothing is observed.
+    """
+    from tokenpak.sources.external_tool_tip import (
+        ENV_FLAG,
+        discover_sources,
+        is_enabled,
+    )
+
+    enabled = is_enabled()
+    sources = discover_sources()
+    entries = []
+    for slug in sorted(sources):
+        cls = sources[slug]
+        entries.append({
+            "tool": slug,
+            "adapter": cls.__name__,
+            "capabilities": sorted(getattr(cls, "static_capabilities", ())),
+        })
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "enabled": enabled,
+            "flag": ENV_FLAG,
+            "sources": entries,
+        }, indent=2, sort_keys=True))
+        return 0
+
+    state = "enabled" if enabled else f"disabled (set {ENV_FLAG}=1 to enable)"
+    print(f"External-tool TIP sources — {state}")
+    print("─" * 50)
+    if not entries:
+        print("  (no adapters registered)")
+    for e in entries:
+        print(f"  {e['tool']:12s} {e['adapter']}")
+        for cap in e["capabilities"]:
+            print(f"               {cap}")
+    return 0
+
+
+def cmd_tip_observe(args: Any) -> int:
+    """Run external-tool source adapters on demand; print observed records.
+
+    Off-by-default: with ``TOKENPAK_TIP_TOOL_ADAPTERS`` unset this is a
+    no-op (no adapter runs, nothing is read) and exits 0.
+    """
+    from tokenpak.sources.external_tool_tip import (
+        ENV_FLAG,
+        collect_observed_records,
+    )
+
+    result = collect_observed_records(tool=getattr(args, "tool", None))
+    as_json = bool(getattr(args, "json", False))
+
+    if result.get("skipped"):
+        if as_json:
+            print(json.dumps({
+                "skipped": True,
+                "reason": result.get("reason"),
+                "flag": ENV_FLAG,
+                "records": [],
+            }, indent=2))
+        else:
+            print(
+                f"External-tool TIP source adapters are disabled — "
+                f"set {ENV_FLAG}=1 to enable (off by default)."
+            )
+        return 0
+
+    records = [r.to_dict() for r in result.get("records", [])]
+    if as_json:
+        print(json.dumps({
+            "skipped": False,
+            "sources": result.get("sources", []),
+            "errors": result.get("errors", []),
+            "records": records,
+        }, indent=2))
+        return 0
+
+    print(f"TokenPak-observed external-tool TIP records ({len(records)})")
+    print("─" * 50)
+    if not records:
+        print("  (no records detected)")
+    for r in records:
+        print(f"\n  {r['record_id']}  tool={r['tool']}")
+        if r.get("command"):
+            print(f"    command : {r['command']}")
+        if r.get("role"):
+            print(f"    role    : {r['role']}")
+        if r.get("phase"):
+            print(f"    phase   : {r['phase']}")
+        if r.get("session_id"):
+            print(f"    session : {r['session_id']}")
+        usage = r.get("observed_usage") or {}
+        if usage:
+            rendered = ", ".join(f"{k}={v}" for k, v in sorted(usage.items()))
+            print(f"    observed: {rendered}")
+        print(f"    labels  : {', '.join(r['labels'])}")
+    if result.get("errors"):
+        print("\n  errors:")
+        for e in result["errors"]:
+            print(f"    - {e}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -603,4 +740,6 @@ __all__ = [
     "summarize",
     "exit_code_for",
     "CheckResult",
+    "cmd_tip_sources",
+    "cmd_tip_observe",
 ]

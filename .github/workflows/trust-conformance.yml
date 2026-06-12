@@ -1,0 +1,50 @@
+name: Trust Conformance
+
+# Licensing, security-contact, contribution, and public-claim conformance gate.
+# Consolidates the project's release-readiness trust assertions into one check
+# so published artifacts cannot silently drift from the project's standards.
+#
+# ADVISORY (report-only) for now: the gate prints findings but does not fail the
+# build. Once the target tree is confirmed at the conformant baseline, flip the
+# `--mode` argument from "advisory" to "enforcing" to make drift block merges.
+# Until then this surfaces drift without red-barring legitimate work.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  trust-conformance:
+    name: Licensing, security-contact & public-claim conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run trust-conformance gate (advisory)
+        run: |
+          set -euo pipefail
+          # --mode advisory always exits 0; it reports but never blocks.
+          python -m scripts.release_gate.trust_conformance \
+            --scope public --mode advisory --json | tee trust-conformance.json
+
+          # Surface any reported drift as a non-blocking annotation so reviewers
+          # see it in the PR without the build going red.
+          errors="$(python -c "import json,sys; print(json.load(open('trust-conformance.json'))['errors'])")"
+          if [ "$errors" != "0" ]; then
+            echo "::warning::Trust-conformance reported ${errors} drift finding(s) (advisory; not blocking). See job log."
+          else
+            echo "Trust-conformance: clean."
+          fi

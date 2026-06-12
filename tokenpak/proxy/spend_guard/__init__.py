@@ -21,7 +21,7 @@ The whole subsystem is config-driven via ``spend_guard.*`` keys
 a no-op (returns ``GuardOutcome.passthrough()``).
 
 Authority:
-- Initiative: ``~/vault/01_PROJECTS/tokenpak/initiatives/2026-05-07-tip-spend-guard-oss/``
+- Design: the TIP spend-guard initiative (see project history).
 - Standard 29: agent contract for the structured block error.
 - Pricing single source of truth: ``tokenpak.models.get_rates``.
 """

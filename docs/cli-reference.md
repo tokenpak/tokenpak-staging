@@ -293,6 +293,14 @@ View and edit config
   - `--json` — Output as JSON
 - `init`
   - `--force` — Overwrite existing config
+  - `--with-env-stub` — Also drop a placeholders-only .env.example under the TokenPak home
+- `doctor`
+  - `--json` — Output as JSON
+  - `--quiet` — Print only the worst finding
+  - `--verbose`, `-v` — Include per-check detail
+- `env`
+  - `--json` — Output as JSON
+  - `--no-mask` — Show low-class values unmasked (secret-class values are still masked)
 - `path`
 - `migrate`
   - `--config-json` — Path to legacy config.json (default: ~/.tokenpak/config.json) (default: ~/.tokenpak/config.json)
@@ -305,6 +313,33 @@ Explain workflow profiles
 **Flags:**
 
 - `--profile` — Profile name (safe|balanced|aggressive|agentic); omit to show all
+
+### `tokenpak permissions`
+
+Manage the TokenPak permission tier system.
+
+Persistent tiers (strict/standard/auto) are written into the client's
+own config (Claude Code settings.json / Codex config.toml). Fleet mode
+is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject
+bypass flags at launch and print a banner — client configs are never
+modified by fleet mode.
+
+Examples:
+  tokenpak permissions show                      # current tiers + fleet mode
+  tokenpak permissions set auto                  # both clients
+  tokenpak permissions set strict --client codex # one client
+  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)
+  tokenpak permissions reset                     # scoped reset + fleet off
+
+**Subcommands:**
+
+- `show`
+- `set`
+  - `TIER` — Tier to apply ('fleet' sets launcher state only) — choices: `strict`, `standard`, `auto`, `fleet`
+  - `--client` — Which client to configure (default: both) (default: both) — choices: `claude-code`, `codex`, `both`
+  - `--yes` — Skip the fleet-mode confirmation prompt (explicit opt-in)
+- `reset`
+  - `--client` — Which client to reset (default: both) (default: both) — choices: `claude-code`, `codex`, `both`
 
 ---
 
@@ -324,6 +359,19 @@ Update tokenpak
 - `--force` — Force update even if already up to date
 - `--core-only` — Update core only, skip config merge
 - `--dry-run` — Show what would change without applying
+
+### `tokenpak uninstall`
+
+Un-route (--soft) or purge state + remove package (--hard)
+
+**Flags:**
+
+- `--soft` — Un-route only (reversible via `tokenpak setup`); keep config/state/package
+- `--hard` — Soft + purge state (keeps journal/budget/capsules) + offer package removal
+- `--dry-run` — Show the exact operations that would run, change nothing
+- `--yes` — Skip confirmation (required for --hard in non-interactive use)
+- `--keep-data` — Under --hard, also retain all ~/.tpk user data (config + dbs)
+- `--json` — Emit a machine-readable receipt
 
 ---
 
@@ -366,6 +414,7 @@ Run diagnostics
 - `--verbose`, `-v` — Show extra detail for each check
 - `--claude-code` — Run Claude Code integration checks (ENABLE_TOOL_SEARCH, mode, IDE detection)
 - `--conformance` — Run TIP self-conformance checks (alias for `tokenpak tip conformance`)
+- `--lifecycle` — Show only the compact lifecycle summary (installed/setup/routed/proxy/update)
 
 ### `tokenpak diagnose`
 
@@ -596,6 +645,9 @@ Examples:
   tokenpak codex doctor            # verify installation
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
+  tokenpak codex clean             # reclaim orphaned isolated codex homes
+  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
+  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
@@ -610,7 +662,7 @@ Examples:
 
 Inspect, manage, and dry-run-route credentials tokenpak can see from
 all registered providers (Codex CLI, Claude CLI, env vars,
-~/.tokenpak/credentials.toml, OpenClaw agent profiles).
+~/.tokenpak/credentials.toml, external agent profiles).
 
 Proxy fast-path integration still deferred — `creds route` is a
 dry-run (what would I pick) with no side effects.
@@ -658,6 +710,56 @@ MultiPak Pro Phase 1 OSS surface. Read-only Vault Pak operations work without Pr
   - `PAK_FILE` — Path to a Pak file to install
   - `--force` — Overwrite if a Pak with the same id is already installed
 - `status`
+  - `--json` — Emit JSON instead of text
+
+### `tokenpak cards`
+
+TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into canonical TokenPak contracts. The runtime trusts only validated compiled manifests; raw Markdown is never executed. Note: `tokenpak cards` operates on authoring sources, `tokenpak pak` on runtime Pak objects — they are not aliases.
+
+**Subcommands:**
+
+- `discover`
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `validate`
+  - `PATH` — Card file to validate (default: all)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--strict` — Require exact card == adapter capability equality
+  - `--json` — Emit JSON instead of text
+- `compile` — Validates then compiles cards into canonical JSON manifests under .tokenpak/cache/cards/compiled/. Only validated compiled manifests are runtime inputs.
+  - `PATH` — Card file to compile (default: all)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--strict` — Require exact card == adapter capability equality
+  - `--json` — Emit JSON instead of text
+- `install`
+  - `PATH` — Card file to install (default: all)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--strict` — Require exact card == adapter capability equality
+- `list`
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `inspect`
+  - `NAME` — Card name (frontmatter `name:`)
+  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `preview` — OSS preview is a static declared scope/filter dump — no scored recall, no hydration, no render-to-messages injection. Live unranked candidates additionally require a registered connector (Phase 2). --pro probes the Pro Local daemon and falls back to the static dump when absent.
+  - `NAME` — Card name (frontmatter `name:`)
+  - `--pro` — Use Pro Local scoring when available
+  - `--query` — Recall query (used with --pro)
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
+  - `--json` — Emit JSON instead of text
+- `scaffold` — Scaffolds into the project (integrations/<name>/ for tip cards, paks/ for pak cards) — NEVER into the installed package tree.
+  - `--type` — Card type to scaffold (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
+  - `--kind` — tip_kind for tip cards (Phase 1: provider_adapter) (default: provider_adapter)
+  - `--name` — Card name (lowercase slug)
+- `doctor`
+  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--json` — Emit JSON instead of text
 
 ### `tokenpak test`
@@ -1085,7 +1187,10 @@ Examples:
 - `CLIENT` — Client key: claude-code | cursor | cline | continue | aider | codex | openai-sdk | anthropic-sdk | litellm
 - `--all` — Show instructions for every supported client
 - `--proxy-url` — Override the printed proxy URL (default: $TOKENPAK_PROXY_URL or http://localhost:8766)
-- `--apply` — (reserved) auto-write config files — not yet implemented, prints safe instructions instead
+- `--apply` — Auto-write config files for the given client (headless / scripted path)
+- `--revert` — Restore the most recent backup for the given client (undoes --apply)
+- `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). 'fleet' is launcher-scoped and never persists into client config — see `tokenpak permissions --help`. — choices: `strict`, `standard`, `auto`, `fleet`
+- `--yes` — Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)
 
 ### `tokenpak last`
 
@@ -1245,6 +1350,11 @@ TIP is the protocol layer that adapter providers and platform integrations decla
 - `scaffold-adapter`
   - `NAME` — Adapter name (e.g. 'my-platform')
   - `--output`, `-o` — Output file path (default: ./<name>_adapter.py)
+- `sources`
+  - `--json` — Emit JSON instead of text
+- `observe`
+  - `--tool` — Only run the adapter for this tool slug
+  - `--json` — Emit JSON instead of text
 
 ### `tokenpak usage`
 
