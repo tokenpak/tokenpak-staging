@@ -1,0 +1,37 @@
+# Internal identity / private-path / credential / ticket-ID leak register for
+# the delta-style release-check leak gate. Mirrors the identity-language check
+# so one curated register can drive both. (Post-merge these two copies should
+# converge to a single shared register — a separate hygiene chore.)
+#
+# Each non-comment line is a Python regex (re.search, case-sensitive). Lines
+# starting with '#' and blank lines are ignored. Plaintext (.txt) on purpose:
+# neither the release-check leak gate nor the identity scan reads .txt, so the
+# register can name the very tokens it forbids without flagging itself.
+\bSue\b
+\bCali\b
+\bTrix\b
+\bSuki\b
+\bAya\b
+\bDee\b
+\bReiPo\b
+\bopenclaw\b
+\bfleet\b
+TSR-[0-9]
+TPS-[0-9]
+CCI-[0-9]
+MTC-[0-9]
+OAS-[0-9]
+TIP7-[0-9]
+TRIX-MTC
+WS-[0-9]
+CCG-[0-9]
+CCP-[0-9]
+VDS-[0-9]
+FIN-[0-9]
+TSG-[0-9]
+TIP-[0-9][0-9]
+\.claude/projects
+/home/sue/
+trixxie168
+\bStd 2[0-9]\b
+\bStd 3[0-9]\b
