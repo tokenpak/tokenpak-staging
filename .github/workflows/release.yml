@@ -1,10 +1,21 @@
 name: Release TokenPak
 
 on:
-  # Manual-dispatch entry point for pre-tag preflight runs against any branch
-  # (typically `main` immediately before pushing a tag). The dispatch uses the
-  # same test → build → dist-purity assert → checksum job graph as a real tag
-  # push; only the publish-to-PyPI job is skipped (see the publish job's `if:`).
+  # Manual-dispatch entry point. The dispatch behaves differently depending on
+  # the ref it is run against:
+  #
+  #   • Dispatch at a BRANCH ref (e.g. `--ref main`, the pre-tag preflight):
+  #     only the `test` and `release-gate-snapshots` jobs run. `build`,
+  #     `release`, and `publish` are all gated on `refs/tags/v*` and are
+  #     SKIPPED on a branch ref — so a branch dispatch does NOT exercise
+  #     build / twine / dist-purity / checksums. Treat a green branch dispatch
+  #     as test + snapshot validation only, not as build or dist verification.
+  #
+  #   • Dispatch at a TAG ref (`--ref vX.Y.Z`): `build` and `release` run and
+  #     the tag-ancestry gate is enforced (it runs on dispatch as well as
+  #     push), but `publish` never runs on a dispatch — the publish job
+  #     additionally requires the run to be a real tag `push` event. PyPI
+  #     publish happens only on a tag push that passes the ancestry gate.
   # Use:
   #   gh workflow run "Release TokenPak" --ref main
   # Then verify the run is green before `git push <tag>`.
@@ -213,11 +224,11 @@ jobs:
 
       # Tag-source ancestry validation: refuse to build a release from a v-tag
       # that is not reachable from origin/main. The job-level `if` already
-      # restricts to refs/tags/v*, so rehearsal-* tags never reach here; the
-      # step-level `if` additionally skips workflow_dispatch preflight (allowed
-      # on any branch by contract). Enforces the staging -> public promotion path.
+      # restricts to refs/tags/v*, so rehearsal-* tags never reach here and a
+      # branch dispatch never reaches this job at all. This step runs on BOTH a
+      # tag push and a dispatch-at-tag, so a manually dispatched v-tag is held
+      # to the same staging -> public promotion path as a pushed one.
       - name: Validate tag source on origin/main
-        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           git fetch origin main --depth=200
@@ -384,11 +395,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: release
     # Std 30 §8 hard guard + non-prerelease only: never publish on rehearsal-*
-    # tags, branch pushes, PRs, or rc/alpha/beta tags. Combined into a single
-    # condition — GitHub Actions rejects duplicate `if:` per job. (Run
+    # tags, branch pushes, PRs, manual dispatch runs, or rc/alpha/beta tags.
+    # The `github.event_name == 'push'` term is what keeps a dispatch-at-tag
+    # run from reaching PyPI: build/release gate only on the ref, so a manually
+    # dispatched v-tag would otherwise publish unpromoted code. Combined into a
+    # single condition — GitHub Actions rejects duplicate `if:` per job. (Run
     # https://github.com/tokenpak/tokenpak/actions/runs/25609451614 was the
     # canonical failure case.)
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') && !contains(github.ref, 'alpha') && !contains(github.ref, 'beta') }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') && !contains(github.ref, 'alpha') && !contains(github.ref, 'beta') }}
     environment: pypi
     permissions:
       id-token: write  # Required for Trusted Publisher (OIDC)
