@@ -953,6 +953,135 @@ def _run_guided_form(integration: Integration, proxy_url: str) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Permission tiers (claude-code / codex only)
+#
+# Persistent trust level (strict/standard/auto → client config) vs runtime
+# unattended bypass (fleet → TokenPak launcher state only). See
+# tokenpak/cli/commands/permissions.py for the canonical mapping + write
+# discipline. Tier handling only engages when the invoking argparse
+# namespace carries a ``tier`` attribute — the real CLI parser always sets
+# it; legacy programmatic callers without the attribute keep the exact
+# pre-tier behavior.
+# ---------------------------------------------------------------------------
+
+_TIER_CLIENTS: frozenset[str] = frozenset({"claude-code", "codex"})
+
+
+def _prompt_tier() -> Optional[str]:
+    """Interactive tier picker (TTY path). Returns None on cancel."""
+    from tokenpak.cli.commands.permissions import (
+        ALL_TIERS,
+        DEFAULT_TIER,
+        TIER_DESCRIPTIONS,
+    )
+
+    print()
+    print("  Permission tier:")
+    for i, t in enumerate(ALL_TIERS, 1):
+        marker = " (default)" if t == DEFAULT_TIER else ""
+        print(f"    {i}. {t:<8}{marker} — {TIER_DESCRIPTIONS[t]}")
+    sys.stdout.write(f"  Choose [1-{len(ALL_TIERS)}] (Enter = {DEFAULT_TIER}): ")
+    sys.stdout.flush()
+    try:
+        line = sys.stdin.readline().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not line:
+        return DEFAULT_TIER
+    if line in ALL_TIERS:
+        return line
+    if line.isdigit() and 1 <= int(line) <= len(ALL_TIERS):
+        return ALL_TIERS[int(line) - 1]
+    print(f"  Unrecognized choice {line!r} — cancelled, no tier applied.")
+    return None
+
+
+def _resolve_apply_tier(args: argparse.Namespace) -> Optional[str]:
+    """Resolve the tier for an --apply run. Returns None when aborted.
+
+    Flag wins; otherwise prompt on a TTY; otherwise silently default to
+    ``standard``. ``fleet`` always requires explicit confirmation (TTY
+    prompt or --yes) and prints a warning first.
+    """
+    tier = getattr(args, "tier", None)
+    interactive = _is_interactive() and not _is_no_tui()
+    if tier is None:
+        if interactive:
+            tier = _prompt_tier()
+            if tier is None:
+                return None
+        else:
+            tier = "standard"
+    if tier == "fleet":
+        from tokenpak.cli.commands.permissions import _FLEET_WARNING
+
+        print()
+        print(f"  ⚠  {_FLEET_WARNING}")
+        if getattr(args, "yes", False):
+            return "fleet"
+        if interactive:
+            if _tty_confirm("Enable fleet mode (launcher bypass flags)?", default=False):
+                return "fleet"
+            print("  Cancelled — fleet mode unchanged.")
+            return None
+        print(
+            "integrate: --tier fleet requires --yes in non-interactive mode "
+            "(explicit opt-in)."
+        )
+        return None
+    return tier
+
+
+def _render_tier_result(client_key: str, title: str, result) -> str:
+    """Compact display block for a tier apply outcome."""
+    lines: list[str] = [""]
+    lines.append(f"  Permission tier — {client_key}  ({title})")
+    lines.append("  " + "─" * 40)
+    badge = "✅ Applied" if result.ok else "✖ Failed"
+    lines.append(f"  {badge}: {result.summary}")
+    for c in result.changes:
+        lines.append(f"    • {c}")
+    if result.backup_path:
+        lines.append(f"  Backup    {result.backup_path}")
+    if result.rollback_cmd:
+        lines.append(f"  Rollback  {result.rollback_cmd}")
+    if result.error:
+        lines.append(f"  Error     {result.error}")
+    return "\n".join(lines)
+
+
+def _apply_tier_and_render(client_key: str, tier: str, backup: bool) -> int:
+    """Apply tier (or fleet launcher state) for one client + print outcome."""
+    from tokenpak.cli.commands import permissions as _perms
+
+    if tier == "fleet":
+        # Fleet never persists into client config. The persistent tier is
+        # left exactly as-is when one is already applied; on a fresh config
+        # the default tier is applied so the client has a defined baseline.
+        applied = _perms.applied_tier(client_key)
+        if applied is None:
+            result = _perms.apply_tier(client_key, _perms.DEFAULT_TIER, backup=backup)
+            print(_render_tier_result(client_key, f"persistent: {_perms.DEFAULT_TIER}", result))
+            if not result.ok:
+                return 1
+        else:
+            print(f"\n  Persistent tier unchanged ({applied}) — fleet never persists.")
+        _perms.set_fleet_mode(
+            True, f"tokenpak integrate {client_key} --apply --tier fleet"
+        )
+        print("  ✅ Launcher fleet mode: enabled (TokenPak-owned state only).")
+        print(
+            "     `tokenpak claude` / `tokenpak codex` will inject bypass flags "
+            "and print a banner."
+        )
+        return 0
+
+    result = _perms.apply_tier(client_key, tier, backup=backup)
+    print(_render_tier_result(client_key, f"tier: {tier}", result))
+    return 0 if result.ok else 1
+
+
 # Dynamic registry — add a new client by appending one Integration here.
 INTEGRATIONS: list[Integration] = [
     Integration(
@@ -1181,7 +1310,23 @@ def run_integrate(args: argparse.Namespace) -> int:
         return 2
 
     if apply_mode:
+        # Permission-tier handling (claude-code / codex only; engaged only
+        # when the namespace carries a `tier` attribute — see the tier
+        # section above for the back-compat contract).
+        tier_engaged = integration.key in _TIER_CLIENTS and hasattr(args, "tier")
+        tier: Optional[str] = None
+        if tier_engaged:
+            tier = _resolve_apply_tier(args)
+            if tier is None:
+                return 1
+
         if integration.applier is None:
+            if tier_engaged and tier is not None:
+                # No base-config applier (codex): apply the tier, then print
+                # the manual base-URL instructions.
+                rc = _apply_tier_and_render(integration.key, tier, backup=True)
+                print(_render_one(integration, proxy_url))
+                return rc
             # Graceful fallback — print instructions + a note that auto-apply
             # isn't available for this client yet.
             print(_render_one(integration, proxy_url))
@@ -1201,7 +1346,14 @@ def run_integrate(args: argparse.Namespace) -> int:
                 ok=False, summary="applier raised unexpectedly", error=str(exc),
             )
         print(_render_apply(integration, result))
-        return 0 if result.ok else 1
+        if not result.ok:
+            return 1
+        if tier_engaged and tier is not None:
+            # The base applier already backed up the pre-apply file state;
+            # a second backup here would overwrite that .bak with a
+            # post-apply copy, so the tier write reuses the existing one.
+            return _apply_tier_and_render(integration.key, tier, backup=False)
+        return 0
 
     # Default path — no flags.
     # TTY + not --no-tui → guided interactive form.
