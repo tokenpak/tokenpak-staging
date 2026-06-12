@@ -1,0 +1,29 @@
+# Forbidden marketing phrases — messaging & positioning policy, "Forbidden
+# Phrases" clause. Banned across all public surfaces; the audit flags any
+# occurrence as a High-severity messaging finding.
+#
+# Match semantics: case-insensitive literal substring, one phrase per line.
+# Lines starting with '#' and blank lines are ignored.
+#
+# NOTE: the bare style-guidance words from the source clause ("simply",
+# "just", "easily") are intentionally NOT encoded here — as substrings they
+# match inside ordinary words (justify, simplify) and would swamp the
+# advisory signal. They are deferred to a word-boundary-aware tier.
+revolutionary
+game-changing
+cutting-edge
+industry-leading
+next-gen
+best-in-class
+AI-powered
+unlimited savings
+up to 99%
+near-zero latency
+90%+ savings
+90% savings
+30-50% savings
+30–50% savings
+enterprise-grade
+fire and forget
+just works
+we're excited to announce
