@@ -53,6 +53,6 @@ The `88d3d9deb0` `_internal/` cleanup refactor stripped public-OSS adjacent code
 1. The `MetricsRecord` v1.1 schema fields (`active_profile`, `consumption_mode`, `SCHEMA_VERSION="1.1"`, SQLite migration)
 2. The `tokenpak.telemetry.anon_metrics.detect_consumption_mode()` function
 
-Both restorations are now complete. Std 25 §1.4 amendment proposal queued at `~/vault/02_COMMAND_CENTER/proposals/2026-05-08-std-25-boundary-refactor-safety-amendment.md` to formalize the refactor-safety rule that would have prevented these regressions.
+Both restorations are now complete. A refactor-safety amendment was queued to formalize the rule that would have prevented these regressions.
 
 **Future namespace-cleanup refactors must verify they do not strip ANY public-OSS surface — dataclasses, helper functions, migrations, or constants — adjacent to the closed-source code being deleted.**

@@ -47,6 +47,11 @@ class SessionGrant:
     # None → no dollar ceiling (TTL is the only bound). A float is a hard
     # ceiling that decrements per redemption (W4).
     max_cost_usd_remaining: Optional[float]
+    # None → no request-count ceiling. A positive int is a hard ceiling that
+    # decrements by 1 per redemption; the grant dies at zero (allow=N). Both
+    # this and the dollar ceiling may bind at once — whichever floor is hit
+    # first exhausts the grant.
+    remaining_count: Optional[int] = None
 
 
 # Status tokens returned by :meth:`GrantStore.redeem`.
@@ -80,10 +85,16 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             granted_by_pending_id TEXT NOT NULL DEFAULT '',
             grant_kind TEXT NOT NULL DEFAULT 'session',
             max_cost_usd_remaining REAL,
+            remaining_count INTEGER,
             PRIMARY KEY (session_id, fleet_id, agent_id)
         )
         """
     )
+    # Migration: add ``remaining_count`` to a table created before count grants
+    # existed (the CREATE above is a no-op for pre-existing tables).
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(session_grants)")}
+    if "remaining_count" not in cols:
+        conn.execute("ALTER TABLE session_grants ADD COLUMN remaining_count INTEGER")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_grants_expiry ON session_grants(expires_at)"
     )
@@ -92,6 +103,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 def _row_to_grant(row: sqlite3.Row) -> SessionGrant:
     rem = row["max_cost_usd_remaining"]
+    try:
+        cnt = row["remaining_count"]
+    except (IndexError, KeyError):
+        cnt = None
     return SessionGrant(
         session_id=row["session_id"],
         fleet_id=row["fleet_id"],
@@ -101,6 +116,7 @@ def _row_to_grant(row: sqlite3.Row) -> SessionGrant:
         granted_by_pending_id=row["granted_by_pending_id"],
         grant_kind=row["grant_kind"],
         max_cost_usd_remaining=(None if rem is None else float(rem)),
+        remaining_count=(None if cnt is None else int(cnt)),
     )
 
 
@@ -125,26 +141,33 @@ class GrantStore:
         granted_by_pending_id: str = "",
         grant_kind: str = "session",
         max_cost_usd: Optional[float] = None,
+        remaining_count: Optional[int] = None,
         now: Optional[float] = None,
     ) -> SessionGrant:
         """Insert (or replace) a grant for the composite key. Returns it.
 
         Re-approving an active session refreshes the TTL and budget by
         replacing the row (INSERT OR REPLACE on the composite PK).
+
+        ``remaining_count`` (allow=N) is a request-count ceiling that decrements
+        per redemption alongside any ``max_cost_usd`` dollar ceiling; whichever
+        floor is hit first exhausts the grant.
         """
         ts = time.time() if now is None else now
         expires_at = ts + max(1, int(ttl_seconds))
         rem = None if max_cost_usd is None else float(max_cost_usd)
+        cnt = None if remaining_count is None else int(remaining_count)
         conn = _connect(self.path)
         try:
             _ensure_schema(conn)
             conn.execute(
                 """INSERT OR REPLACE INTO session_grants
                        (session_id, fleet_id, agent_id, granted_at, expires_at,
-                        granted_by_pending_id, grant_kind, max_cost_usd_remaining)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        granted_by_pending_id, grant_kind, max_cost_usd_remaining,
+                        remaining_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, fleet_id, agent_id, ts, expires_at,
-                 granted_by_pending_id, grant_kind, rem),
+                 granted_by_pending_id, grant_kind, rem, cnt),
             )
             conn.commit()
         finally:
@@ -158,6 +181,7 @@ class GrantStore:
             granted_by_pending_id=granted_by_pending_id,
             grant_kind=grant_kind,
             max_cost_usd_remaining=rem,
+            remaining_count=cnt,
         )
 
     # -- read --------------------------------------------------------------
@@ -242,35 +266,60 @@ class GrantStore:
                 return (EXPIRED, grant)
 
             rem = grant.max_cost_usd_remaining
-            if rem is not None:
-                cost = max(0.0, float(projected_cost_usd))
-                if cost > rem:
-                    # Cannot fully cover → spend out without over-running.
-                    conn.execute(
-                        """DELETE FROM session_grants
-                           WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
-                        (session_id, fleet_id, agent_id),
-                    )
-                    conn.commit()
-                    return (EXHAUSTED, grant)
-                new_rem = rem - cost
-                if new_rem <= 0:
-                    conn.execute(
-                        """DELETE FROM session_grants
-                           WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
-                        (session_id, fleet_id, agent_id),
-                    )
-                else:
-                    conn.execute(
-                        """UPDATE session_grants SET max_cost_usd_remaining = ?
-                           WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
-                        (new_rem, session_id, fleet_id, agent_id),
-                    )
+            count = grant.remaining_count
+            cost = max(0.0, float(projected_cost_usd))
+
+            # Count axis (allow=N): a grant already drained is exhausted. The
+            # row is normally deleted the moment it reaches zero, so this is a
+            # defensive guard against a stale zero/negative row.
+            if count is not None and count <= 0:
+                conn.execute(
+                    """DELETE FROM session_grants
+                       WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
+                    (session_id, fleet_id, agent_id),
+                )
                 conn.commit()
-                grant.max_cost_usd_remaining = new_rem
+                return (EXHAUSTED, grant)
+
+            # Dollar axis (W4): a request that cannot be fully covered spends
+            # the grant out without over-running.
+            if rem is not None and cost > rem:
+                conn.execute(
+                    """DELETE FROM session_grants
+                       WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
+                    (session_id, fleet_id, agent_id),
+                )
+                conn.commit()
+                return (EXHAUSTED, grant)
+
+            # No ceiling set → TTL is the only bound; nothing to decrement.
+            if rem is None and count is None:
                 return (REDEEMED, grant)
 
-            # Unbounded budget — TTL is the only bound.
+            # Decrement every configured axis. Whichever floor is hit first
+            # exhausts the grant (row deleted so the NEXT request re-prompts).
+            new_rem = None if rem is None else (rem - cost)
+            new_count = None if count is None else (count - 1)
+            spent_out = (
+                (new_rem is not None and new_rem <= 0)
+                or (new_count is not None and new_count <= 0)
+            )
+            if spent_out:
+                conn.execute(
+                    """DELETE FROM session_grants
+                       WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
+                    (session_id, fleet_id, agent_id),
+                )
+            else:
+                conn.execute(
+                    """UPDATE session_grants
+                       SET max_cost_usd_remaining = ?, remaining_count = ?
+                       WHERE session_id = ? AND fleet_id = ? AND agent_id = ?""",
+                    (new_rem, new_count, session_id, fleet_id, agent_id),
+                )
+            conn.commit()
+            grant.max_cost_usd_remaining = new_rem
+            grant.remaining_count = new_count
             return (REDEEMED, grant)
         finally:
             conn.close()

@@ -31,14 +31,14 @@ def test_default_config_path_uses_env_override(tmp_path, monkeypatch):
 
 
 def test_default_index_path_uses_env_override(tmp_path, monkeypatch):
-    """TOKENPAK_VAULT_INDEX_PATH overrides the default ~/vault/.tokenpak."""
+    """TOKENPAK_VAULT_INDEX_PATH overrides the default ~/.tokenpak."""
     custom = tmp_path / "vault-out"
     monkeypatch.setenv("TOKENPAK_VAULT_INDEX_PATH", str(custom))
     assert vault_config.default_index_path() == custom
 
 
 def test_default_index_path_proxy_compatible_when_unset(monkeypatch):
-    """Default falls back to ~/vault/.tokenpak (proxy-compatible per spec)."""
+    """Default falls back to the proxy-compatible default (per spec)."""
     monkeypatch.delenv("TOKENPAK_VAULT_INDEX_PATH", raising=False)
     assert vault_config.default_index_path() == Path.home() / "vault" / ".tokenpak"
 

@@ -21,6 +21,74 @@ from typing import Optional, Tuple
 from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
 from tokenpak._formatting import symbols as FS
 
+# ── --no-tui global escape ────────────────────
+# Set true when --no-tui is present anywhere on the command line. Stripped
+# from sys.argv early in main() so per-subcommand parsers don't need to
+# know about it. Honored at every TTY entry point: bare `tokenpak`, `tokenpak
+# setup`, and `tokenpak integrate <X>` without `--apply`.
+_NO_TUI_FLAG = False
+
+
+def _no_tui() -> bool:
+    return _NO_TUI_FLAG
+
+
+def _interactive_menu_allowed() -> bool:
+    """Whether bare ``tokenpak`` may launch the interactive menu (spec F1/F2).
+
+    The menu runs ONLY when both streams are a TTY, ``--no-tui`` is absent,
+    ``TOKENPAK_NONINTERACTIVE`` is unset, CI is not detected, and ``TERM`` is
+    not ``dumb``. Every other case falls through to deterministic, exit-0
+    non-interactive output.
+    """
+    if _no_tui():
+        return False
+    if os.environ.get("TOKENPAK_NONINTERACTIVE"):
+        return False
+    if os.environ.get("CI"):
+        return False
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _emit_bare_json() -> None:
+    """Emit deterministic, schema-versioned bare-invocation JSON (spec F3).
+
+    Cheap and stable: cached/unknown status only (no slow probe), a sorted
+    command catalog, and stable field names. Never blocks; never fabricates a
+    savings figure (unknown -> null).
+    """
+    import json as _json
+
+    try:
+        from tokenpak.cli.commands import menu_status
+
+        status = menu_status.json_snapshot()
+    except Exception:
+        status = {
+            "schema_version": 1,
+            "proxy": "unknown",
+            "cost_today": None,
+            "saved_today": None,
+        }
+    try:
+        from tokenpak import __version__ as _ver
+    except Exception:
+        _ver = None
+    try:
+        commands = sorted(_core_command_names())
+    except Exception:
+        commands = []
+    payload = {
+        "schema_version": 1,
+        "tokenpak_version": _ver,
+        "status": status,
+        "commands": commands,
+    }
+    print(_json.dumps(payload, indent=2, sort_keys=True))
+
+
 # ── Monitor DB Access ────────────────────────────────────────────────────────
 
 
@@ -152,6 +220,7 @@ _COMMAND_GROUPS = {
         ("goals", "Track savings goals"),
         ("config", "View and edit config"),
         ("explain", "Explain workflow profiles"),
+        ("permissions", "Permission tiers (strict/standard/auto) + launcher fleet mode"),
     ],
     "Versioning": [
         ("version", "Show current version"),
@@ -181,6 +250,7 @@ _COMMAND_GROUPS = {
         ("codex", "Launch with Codex"),
         ("creds", "Discover credentials + doctor"),
         ("pak", "Inspect/export/import Paks (MultiPak Pro Phase 1)"),
+        ("cards", "Author, validate, compile Markdown cards (TIP/PAK)"),
         ("test", "Interactive A/B test"),
         ("prove", "A/B value proof"),
     ],
@@ -617,11 +687,12 @@ def cmd_setup(args):
 
     config_dir = Path.home() / ".tokenpak"
     config_file = config_dir / "config.yaml"
+    is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
     if config_file.exists():
         print(f"Configuration already exists at {config_file}")
-        if not sys.stdin.isatty():
+        if not is_tty:
             print("Non-interactive mode: skipping reconfigure.")
             return
         try:
@@ -2154,11 +2225,35 @@ def cmd_codex(args):
     if forwarded and forwarded[0] == "statusline":
         from .companion.codex.statusline_config import main as statusline_main
         sys.exit(statusline_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "clean":
+        sys.exit(_codex_clean(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     _maybe_update_nudge()
     from .companion.codex import launch
     launch(args=forwarded)
+
+
+def _codex_clean(argv):
+    """`tokenpak codex clean [--workspace] [--all]` — reclaim codex homes.
+
+    Removes orphaned isolated session homes by default.  ``--workspace``
+    also reclaims orphaned per-project homes; ``--all`` additionally
+    removes homes with a live session (destructive — used to clear a
+    wedged home).
+    """
+    from .companion.codex.session_home import clean
+
+    include_workspaces = "--workspace" in argv or "--all" in argv
+    force = "--all" in argv
+    removed = clean(include_workspaces=include_workspaces, force=force)
+    if not removed:
+        print("tokenpak codex clean: no reclaimable codex homes")
+        return 0
+    for path in removed:
+        print(f"removed {path}")
+    print(f"tokenpak codex clean: removed {len(removed)} codex home(s)")
+    return 0
 
 
 def cmd_companion(args):
@@ -2387,6 +2482,9 @@ def _build_codex_parser(sub):
             "  tokenpak codex doctor            # verify installation\n"
             "  tokenpak codex uninstall         # reverse installation\n"
             "  tokenpak codex statusline        # enable native status modules (additive)\n"
+            "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
@@ -2428,7 +2526,7 @@ def _build_creds_parser(sub):
         description=(
             "Inspect, manage, and dry-run-route credentials tokenpak can see from\n"
             "all registered providers (Codex CLI, Claude CLI, env vars,\n"
-            "~/.tokenpak/credentials.toml, OpenClaw agent profiles).\n\n"
+            "~/.tokenpak/credentials.toml, external agent profiles).\n\n"
             "Proxy fast-path integration still deferred — `creds route` is a\n"
             "dry-run (what would I pick) with no side effects.\n\n"
             "Examples:\n"
@@ -2644,7 +2742,21 @@ def _build_stub_parsers(sub):
     )
     p_integrate.add_argument(
         "--apply", action="store_true",
-        help="(reserved) auto-write config files — not yet implemented, prints safe instructions instead",
+        help="Auto-write config files for the given client (headless / scripted path)",
+    )
+    p_integrate.add_argument(
+        "--revert", action="store_true",
+        help="Restore the most recent backup for the given client (undoes --apply)",
+    )
+    p_integrate.add_argument(
+        "--tier", choices=["strict", "standard", "auto", "fleet"], default=None,
+        help="Permission tier to apply with --apply (claude-code / codex only; "
+             "default: standard). 'fleet' is launcher-scoped and never persists "
+             "into client config — see `tokenpak permissions --help`.",
+    )
+    p_integrate.add_argument(
+        "--yes", action="store_true",
+        help="Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)",
     )
 
     def _integrate_dispatch(args):
@@ -2652,6 +2764,59 @@ def _build_stub_parsers(sub):
         return run_integrate(args)
 
     p_integrate.set_defaults(func=_integrate_dispatch)
+
+    # ── `permissions` — persistent tiers + launcher fleet mode ───────────────
+    p_permissions = sub.add_parser(
+        "permissions",
+        help="View or set permission tiers (strict/standard/auto) and launcher fleet mode",
+        description=(
+            "Manage the TokenPak permission tier system.\n\n"
+            "Persistent tiers (strict/standard/auto) are written into the client's\n"
+            "own config (Claude Code settings.json / Codex config.toml). Fleet mode\n"
+            "is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject\n"
+            "bypass flags at launch and print a banner — client configs are never\n"
+            "modified by fleet mode.\n\n"
+            "Examples:\n"
+            "  tokenpak permissions show                      # current tiers + fleet mode\n"
+            "  tokenpak permissions set auto                  # both clients\n"
+            "  tokenpak permissions set strict --client codex # one client\n"
+            "  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)\n"
+            "  tokenpak permissions reset                     # scoped reset + fleet off"
+        ),
+    )
+    perm_sub = p_permissions.add_subparsers(dest="permissions_cmd")
+    perm_sub.add_parser(
+        "show", help="Show per-client persistent tier + launcher fleet status"
+    )
+    pp_set = perm_sub.add_parser(
+        "set", help="Set a permission tier (strict|standard|auto) or enable fleet mode"
+    )
+    pp_set.add_argument(
+        "tier", choices=["strict", "standard", "auto", "fleet"],
+        help="Tier to apply ('fleet' sets launcher state only)",
+    )
+    pp_set.add_argument(
+        "--client", choices=["claude-code", "codex", "both"], default="both",
+        help="Which client to configure (default: both)",
+    )
+    pp_set.add_argument(
+        "--yes", action="store_true",
+        help="Skip the fleet-mode confirmation prompt (explicit opt-in)",
+    )
+    pp_reset = perm_sub.add_parser(
+        "reset",
+        help="Scoped reset: remove only TokenPak-managed tier keys + disable fleet mode",
+    )
+    pp_reset.add_argument(
+        "--client", choices=["claude-code", "codex", "both"], default="both",
+        help="Which client to reset (default: both)",
+    )
+
+    def _permissions_dispatch(args):
+        from tokenpak.cli.commands.permissions import run_permissions
+        return run_permissions(args)
+
+    p_permissions.set_defaults(func=_permissions_dispatch)
 
     # ── OpenClaw adapter sync subcommand ─────────────────────────
     p_openclaw = sub.add_parser(
@@ -3114,6 +3279,7 @@ def build_parser():
     _build_codex_parser(sub)
     _build_creds_parser(sub)
     _build_pak_parser(sub)
+    _build_cards_parser(sub)
     _build_tip_parser(sub)
     _build_features_parser(sub)
     _build_pakplan_parser(sub)
@@ -4027,6 +4193,21 @@ def _save_lock(lock: dict):
     _LOCK_FILE.write_text(json.dumps(lock, indent=2) + "\n")
 
 
+def _maybe_write_env_stub(*, force: bool) -> None:
+    """Write a placeholders-only .env.example under the resolved TokenPak home.
+
+    Scaffold-only: never writes a real .env and never writes credential values.
+    """
+    from tokenpak import _paths
+    from tokenpak.cli.commands.config_env import write_env_stub
+
+    created, target = write_env_stub(_paths.home(), force=force)
+    if created:
+        print(f"Created env template: {target} (placeholders only)")
+    else:
+        print(f"Env template already exists: {target} (use --force to overwrite)")
+
+
 def cmd_config(args):
     """Config management: show, init, edit."""
     from tokenpak.core.config_loader import CONFIG_PATH, generate_default_yaml, get_all
@@ -4061,10 +4242,14 @@ def cmd_config(args):
         if CONFIG_PATH.exists() and not getattr(args, "force", False):
             print(f"Config already exists: {CONFIG_PATH}")
             print("Use --force to overwrite.")
+            if getattr(args, "with_env_stub", False):
+                _maybe_write_env_stub(force=getattr(args, "force", False))
             return
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(generate_default_yaml())
         print(f"Created: {CONFIG_PATH}")
+        if getattr(args, "with_env_stub", False):
+            _maybe_write_env_stub(force=getattr(args, "force", False))
 
     elif subcmd == "path":
         print(str(CONFIG_PATH))
@@ -4214,6 +4399,69 @@ def _maybe_update_nudge(stream=None) -> None:
         return
 
 
+def _tokenpak_is_user_install() -> bool:
+    """True when the running tokenpak package lives in the per-user site (``~/.local``)."""
+    try:
+        import site
+
+        import tokenpak as _tp
+
+        base = (site.getuserbase() or "").replace(os.sep, "/")
+        loc = (os.path.dirname(os.path.abspath(_tp.__file__)) or "").replace(os.sep, "/")
+        return bool(base) and loc.startswith(base)
+    except Exception:
+        return False
+
+
+def _pip_upgrade_tokenpak(verbose: bool = True) -> Tuple[bool, str, str]:
+    """Upgrade the running ``tokenpak`` package, tolerant of PEP 668.
+
+    Installs into whichever interpreter is currently executing (``sys.executable``).
+    On an externally-managed interpreter (e.g. a distro system Python — PEP 668) a
+    plain ``pip install`` is refused; we retry into the per-user site with
+    ``--break-system-packages``, which writes only to the user site (``~/.local``)
+    and never touches system/distro-managed packages. pipx-managed installs are
+    detected and reported so the caller can advise ``pipx upgrade`` instead of
+    running pip inside the pipx venv.
+
+    Returns ``(ok, method, detail)`` where ``method`` is ``pip`` / ``pip-bsp`` /
+    ``pipx`` and ``detail`` carries trimmed stderr on failure.
+    """
+    import subprocess as _sp
+
+    # pipx-managed: running pip inside the pipx venv is the wrong tool.
+    if "/pipx/venvs/" in (sys.prefix or "").replace(os.sep, "/"):
+        return False, "pipx", ""
+
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    # Match where the package currently lives so we upgrade it in place.
+    scope = [] if in_venv else (["--user"] if _tokenpak_is_user_install() else [])
+
+    def _run(extra):
+        return _sp.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", *extra, "tokenpak"],
+            capture_output=True,
+            text=True,
+        )
+
+    result = _run(scope)
+    if result.returncode == 0:
+        return True, "pip", ""
+
+    blob = ((result.stderr or "") + (result.stdout or "")).lower()
+    if "externally-managed-environment" in blob or "externally managed" in blob:
+        if verbose:
+            print(
+                "  ⚠ Externally-managed environment (PEP 668); retrying into the "
+                "user site with --break-system-packages (writes only to ~/.local)…"
+            )
+        result = _run(scope + ["--break-system-packages"])
+        if result.returncode == 0:
+            return True, "pip-bsp", ""
+
+    return False, "pip", (result.stderr or result.stdout or "")[:400]
+
+
 def cmd_update(args):
     """Update TokenPak proxy and CLI to latest."""
     import subprocess as _sp
@@ -4257,6 +4505,10 @@ def cmd_update(args):
 
     if dry_run:
         print("\nWould run: pip install --upgrade tokenpak")
+        print(
+            "  (retries into the user site with --break-system-packages on "
+            "externally-managed / PEP 668 environments)"
+        )
         print("Would restart proxy if running.")
         return
 
@@ -4265,15 +4517,24 @@ def cmd_update(args):
     proxy_running = "error" not in proxy_info
 
     print("\nUpdating TokenPak...")
-    result = _sp.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "tokenpak"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        print("  ✓ tokenpak updated")
+    ok, method, detail = _pip_upgrade_tokenpak()
+    if ok:
+        if method == "pip-bsp":
+            print("  ✓ tokenpak updated (user site, --break-system-packages)")
+        else:
+            print("  ✓ tokenpak updated")
+    elif method == "pipx":
+        print("  ✗ tokenpak is managed by pipx — upgrade with:\n      pipx upgrade tokenpak")
+        return
     else:
-        print(f"  ✗ pip install failed:\n{result.stderr[:400]}")
+        print(f"  ✗ pip install failed:\n{detail}")
+        print(
+            "\n  Manual upgrade options:\n"
+            "    • inside a virtualenv:  pip install --upgrade tokenpak\n"
+            f"    • user site (PEP 668):  {sys.executable} -m pip install "
+            "--user --upgrade --break-system-packages tokenpak\n"
+            "    • pipx install:         pipx upgrade tokenpak"
+        )
         return
 
     # Restart proxy if it was running
@@ -4627,7 +4888,37 @@ def _build_config_mgmt_parser(sub):
     # init — create default config.yaml
     p_init = csub.add_parser("init", help="Create default config.yaml")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing config")
+    p_init.add_argument(
+        "--with-env-stub",
+        action="store_true",
+        dest="with_env_stub",
+        help="Also drop a placeholders-only .env.example under the TokenPak home",
+    )
     p_init.set_defaults(func=cmd_config)
+
+    # doctor — read-only config-subsystem diagnostics
+    p_doctor = csub.add_parser(
+        "doctor",
+        help="Read-only config diagnostics (home, precedence, env vars, .env hygiene)",
+    )
+    p_doctor.add_argument("--json", action="store_true", help="Output as JSON")
+    p_doctor.add_argument("--quiet", action="store_true", help="Print only the worst finding")
+    p_doctor.add_argument("--verbose", "-v", action="store_true", help="Include per-check detail")
+    p_doctor.set_defaults(func=_config_doctor_dispatch)
+
+    # env — loaded env vars + provenance (masked by default)
+    p_env = csub.add_parser(
+        "env",
+        help="Show loaded env vars + provenance (secret values masked by default)",
+    )
+    p_env.add_argument("--json", action="store_true", help="Output as JSON")
+    p_env.add_argument(
+        "--no-mask",
+        action="store_false",
+        dest="mask",
+        help="Show low-class values unmasked (secret-class values are still masked)",
+    )
+    p_env.set_defaults(func=_config_env_dispatch, mask=True)
 
     # path — print config file path
     p_path = csub.add_parser("path", help="Print config file path")
@@ -4654,9 +4945,19 @@ def _build_config_mgmt_parser(sub):
     p_migrate.set_defaults(func=cmd_config_migrate)
     p.set_defaults(func=_bare_help(
         "config", "Manage configuration files",
-        ["sync", "pull", "validate", "show", "init", "path", "migrate"],
+        ["sync", "pull", "validate", "show", "init", "doctor", "env", "path", "migrate"],
         exit_nonzero=True,
     ))
+
+
+def _config_doctor_dispatch(args):
+    from tokenpak.cli.commands.config_env import cmd_config_doctor
+    return cmd_config_doctor(args)
+
+
+def _config_env_dispatch(args):
+    from tokenpak.cli.commands.config_env import cmd_config_env
+    return cmd_config_env(args)
 
 
 # ── End Version Control Commands ──────────────────────────────────────────────
@@ -4673,6 +4974,13 @@ def _bare_help(name, description, subs, exit_nonzero=False):
 
 
 def main():
+    global _NO_TUI_FLAG
+    # Strip --no-tui from argv before any other parsing so per-subcommand
+    # parsers don't need to know about it.
+    if "--no-tui" in sys.argv:
+        _NO_TUI_FLAG = True
+        sys.argv = [a for a in sys.argv if a != "--no-tui"]
+
     parser = build_parser()
 
     # ── Intercept --version / -V ──────────────────────────────────────────────
@@ -4682,9 +4990,18 @@ def main():
         print(f"tokenpak {_ver}")
         sys.exit(0)
 
+    # ── Intercept bare `tokenpak --json`: deterministic machine-readable output ─
+    # Cheap, schema-versioned status + command catalog; no slow probe (spec F3).
+    if len(sys.argv) == 2 and sys.argv[1] == "--json":
+        _emit_bare_json()
+        sys.exit(0)
+
     # ── Intercept bare invocation: launch interactive menu on TTY ──────────────
+    # The menu runs only when fully interactive (TTY both ends, no --no-tui, not
+    # CI, TOKENPAK_NONINTERACTIVE unset, TERM != dumb; spec F1/F2). Every other
+    # case prints deterministic non-interactive output and exits 0.
     if len(sys.argv) == 1:
-        if sys.stdin.isatty() and sys.stdout.isatty():
+        if _interactive_menu_allowed():
             try:
                 from tokenpak.cli.commands.menu import run_menu
                 run_menu()
@@ -4761,7 +5078,7 @@ def main():
     # For 'claude' subcommand, manually split argv so *all* arguments after
     # tokenpak's own flags pass through verbatim to the claude binary.
     # parse_args()/parse_known_args() would mishandle flags like
-    # --dangerously-skip-permissions or split --model <value> pairs.
+    # permission-bypass flags or split --model <value> pairs.
     if raw_cmd == "claude":
         claude_idx = sys.argv.index("claude")
         claude_tail = sys.argv[claude_idx + 1:]
@@ -6122,6 +6439,20 @@ def _build_pak_parser(sub):
     from tokenpak.cli.commands.pak import build_pak_parser
 
     build_pak_parser(sub)
+
+
+def _build_cards_parser(sub):
+    """Register the ``tokenpak cards`` subcommand (Cards authoring layer, Std 54).
+
+    One new top-level verb for the ``.tip.md`` / ``.pak.md`` authoring
+    layer. NOT an alias of ``tokenpak pak`` — cards are authoring
+    sources; ``pak`` operates on runtime Pak objects (Std 54 invariant
+    13). Implementation lives in :mod:`tokenpak.cli.commands.cards`;
+    lazy import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.cards import build_cards_parser
+
+    build_cards_parser(sub)
 
 
 def _build_tip_parser(sub):

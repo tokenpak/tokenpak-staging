@@ -64,7 +64,7 @@ class TestValidConfigDict:
             "features": {"skeleton": True},
             "budget": {"total_tokens": 12000},
             "capsule": {"min_chars": 400},
-            "vault": {"index_path": "~/vault/.tokenpak"},
+            "vault": {"index_path": "~/.tokenpak"},
             "term_resolver": {"top_k": 3},
             "upstream": {"timeout": 300},
             "rate_limit_rpm": 60,
@@ -320,7 +320,7 @@ class TestRealWorldConfigs:
                 "validation_gate_cap": 120000,
             },
             "vault": {
-                "index_path": "~/vault/.tokenpak",
+                "index_path": "~/.tokenpak",
                 "inject_budget": 4000,
                 "inject_top_k": 5,
             },

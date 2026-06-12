@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from .hooks import TOKENPAK_HOOK_MARKER
-from .mcp_config import SERVER_NAME
+from .mcp_config import SERVER_NAME, codex_home
 from .mcp_config import unregister as mcp_unregister
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .skills_installer import uninstall_skills
@@ -82,7 +82,7 @@ def clean_agents_md(path: Path | None = None) -> "tuple[bool, str]":
     Uses the same section-boundary logic as :func:`agents_md._merge_agents`:
     everything from the marker heading up to the next top-level ``# `` heading.
     """
-    path = path or (Path.home() / ".codex" / "AGENTS.md")
+    path = path or (codex_home() / "AGENTS.md")
     if not path.exists():
         return False, "AGENTS.md absent"
 
