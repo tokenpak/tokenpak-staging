@@ -142,11 +142,13 @@ HTTP100_KEEPALIVE_ENABLED: bool = _cfg("features.http100_keepalive", False, "TOK
 #
 # SKELETON_ENABLED above is an *intent* flag only. The skeleton feature is
 # functional solely when the extractor module (tokenpak.skeleton_extractor)
-# can actually be imported. That module is optional and may be absent — in
-# which case chunk_shaping falls back to a no-op. The capability surface
-# (doctor / status / health) must therefore report from a *real probe*, not
-# from the intent flag; otherwise the feature reports "active" while doing
-# nothing. Report via skeleton_active(), not SKELETON_ENABLED.
+# can actually be imported. The extractor ships with the package (Phase 2,
+# p2-skeleton-extractor-implementation), so on a healthy install the probe
+# reports available — but the capability surface (doctor / status / health)
+# must still report from this *real probe*, not from the intent flag, so a
+# broken or partial install can never report "active" while chunk_shaping
+# falls back to its no-op path. Report via skeleton_active(), not
+# SKELETON_ENABLED.
 # ---------------------------------------------------------------------------
 def skeleton_available() -> bool:
     """Real capability probe: True iff the skeleton extractor is importable."""
