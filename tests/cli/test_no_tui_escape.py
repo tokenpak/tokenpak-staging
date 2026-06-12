@@ -74,10 +74,20 @@ def test_main_bare_with_no_tui_skips_run_menu(monkeypatch, capsys):
 
 
 def test_main_bare_without_no_tui_uses_run_menu(monkeypatch):
-    """Sanity: without --no-tui on a TTY, bare invocation DOES call run_menu."""
+    """Sanity: without --no-tui on a fully-interactive TTY, bare invocation DOES
+    call run_menu.
+
+    "Fully interactive" means both streams are a TTY AND none of the
+    non-interactive opt-outs are set (CI / TOKENPAK_NONINTERACTIVE / TERM=dumb).
+    The suite itself runs under CI, so those opt-outs are cleared here to model
+    a real interactive terminal.
+    """
     monkeypatch.setattr(sys, "argv", ["tokenpak"])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("TOKENPAK_NONINTERACTIVE", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setattr(_cli_core, "_fetch_proxy_uptime", lambda: "down")
 
     calls = []
