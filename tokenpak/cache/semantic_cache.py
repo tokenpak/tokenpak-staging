@@ -45,6 +45,13 @@ Wire-format rules:
   - Cross-format lookups always return a cache miss — never serve JSON bytes
     to an SSE parser or vice versa.
 
+Deterministic eval mode (``[TIP: deterministic=on]`` — TIP versioning standard):
+  - ``lookup(..., deterministic=True)`` is a forced miss
+    (``match_strategy="deterministic_bypass"``) — semantic response
+    substitution is disabled for reproducible eval traffic.
+  - ``store(..., deterministic=True)`` is a no-op (returns ``None``) — eval
+    traffic does not populate the cache either.
+
 Hit/miss details are returned as ``SemanticCacheLookup``; attach to trace
 metadata for observability.
 
@@ -182,7 +189,13 @@ class SemanticCache:
     # Public API
     # ------------------------------------------------------------------
 
-    def lookup(self, query: str, *, expected_format: str = "json") -> SemanticCacheLookup:
+    def lookup(
+        self,
+        query: str,
+        *,
+        expected_format: str = "json",
+        deterministic: bool = False,
+    ) -> SemanticCacheLookup:
         """
         Look up *query* in the cache, returning only entries matching *expected_format*.
 
@@ -194,9 +207,21 @@ class SemanticCache:
         and SSE entries for the same query can coexist without overwriting each
         other (``key_features`` dimension).
 
+        ``deterministic=True`` (``[TIP: deterministic=on]`` reproducible eval
+        mode — TIP versioning standard) disables semantic response
+        substitution entirely: the lookup is a forced miss with
+        ``match_strategy="deterministic_bypass"``, regardless of cache
+        contents. Hit/miss statistics are NOT updated — the bypass is a mode,
+        not a miss.
+
         Returns a ``SemanticCacheLookup`` with ``hit=True`` and the cached
         ``entry`` when a match is found, otherwise ``hit=False``.
         """
+        if deterministic:
+            # Deterministic eval mode: response substitution disabled — the
+            # upstream call MUST happen so the response is reproducibly the
+            # provider's, never a near-duplicate replay.
+            return SemanticCacheLookup(hit=False, match_strategy="deterministic_bypass")
         if not self._cfg.enabled:
             return SemanticCacheLookup(hit=False, match_strategy="disabled")
 
@@ -281,7 +306,9 @@ class SemanticCache:
         response_bytes: bytes,
         content_type: str = "application/json",
         wire_format: str = "json",
-    ) -> SemanticCacheEntry:
+        *,
+        deterministic: bool = False,
+    ) -> Optional[SemanticCacheEntry]:
         """
         Store *response_bytes* for *query*.
 
@@ -291,8 +318,16 @@ class SemanticCache:
         The internal store key is composite (``query_hash:wire_format``) so
         JSON and SSE entries for the same query can coexist.
 
-        Returns the new ``SemanticCacheEntry``.
+        ``deterministic=True`` (reproducible eval mode): the store
+        is a no-op and returns ``None``. Deterministic eval traffic neither
+        consumes nor populates the substitution cache, keeping eval runs
+        isolated from (and invisible to) normal traffic.
+
+        Returns the new ``SemanticCacheEntry`` (or ``None`` in deterministic
+        mode).
         """
+        if deterministic:
+            return None
         normalised = _normalise(query)
         query_hash = _hash(normalised)
         # Composite key — wire_format is a key dimension so JSON and SSE

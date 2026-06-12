@@ -101,7 +101,7 @@ def _make_state(tmp_path: Path, session_id: str = "") -> CompanionState:
 # ---------------------------------------------------------------------------
 
 
-def test_tools_registry_has_seven_entries():
+def test_tools_registry_has_nine_entries():
     names = {t.name for t in TOOLS}
     assert names == {
         "estimate_tokens",
@@ -111,6 +111,8 @@ def test_tools_registry_has_seven_entries():
         "journal_read",
         "journal_write",
         "session_info",
+        "vault_search",
+        "vault_retrieve",
     }
 
 

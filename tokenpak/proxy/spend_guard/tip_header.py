@@ -107,6 +107,23 @@ def _set_reason(d: TIPDirective, v: Optional[str]) -> None:
         d.reason = v
 
 
+def _set_deterministic(d: TIPDirective, v: Optional[str]) -> None:
+    """``[TIP: deterministic=on]`` — reproducible eval mode.
+
+    Bare ``deterministic`` / on-values enable the mode; off-values are an
+    explicit no-op. Any OTHER value is recorded on
+    ``deterministic_invalid_value`` so the caller can fail loudly — per the
+    reproducible-eval contract, unsupported deterministic fields are NEVER
+    silently stripped.
+    """
+    if v is None or v in ("on", "true", "1", "yes"):
+        d.deterministic = True
+    elif v in ("off", "false", "0", "no"):
+        d.deterministic = False
+    else:
+        d.deterministic_invalid_value = v
+
+
 DIRECTIVE_REGISTRY: dict = {
     "allow":    (_set_allow,    "Authorize the held request: once / 15m / session / <N> (pre-approve next N sends)."),
     "bypass":   (_set_bypass,   "Skip Yes/No prompt; still subject to hard-block."),
@@ -115,7 +132,61 @@ DIRECTIVE_REGISTRY: dict = {
     "estimate": (_set_estimate, "Return RiskEstimate JSON, no provider call."),
     "cancel":   (_set_cancel,   "Discard any pending request for this session."),
     "reason":   (_set_reason,   "Free-text annotation for audit log."),
+    "deterministic": (_set_deterministic,
+                      "Reproducible eval mode: disable upstream retries, semantic "
+                      "response substitution, and prompt mutation; emit request "
+                      "fingerprint + reproducibility metadata headers. Not a spend bypass."),
 }
+
+
+# ---------------------------------------------------------------------------
+# Request fingerprint (deterministic eval mode)
+# ---------------------------------------------------------------------------
+
+# Exact strip-list for fingerprint canonicalization. TOP-LEVEL request-body
+# keys (case-insensitive) removed before hashing because they are volatile
+# or transport-/telemetry-scoped, not part of the semantic request:
+#
+#   metadata        — client telemetry (e.g. Anthropic ``metadata.user_id``)
+#   stream          — transport choice; same logical request streamed or not
+#   nonce           — volatile anti-replay value
+#   timestamp       — volatile clock value
+#   request_id      — volatile correlation id
+#   idempotency_key — volatile retry-safety token
+#
+# Auth never appears in the request body (it travels in HTTP headers, which
+# are not hashed), so credentials are excluded by construction.
+FINGERPRINT_STRIP_FIELDS: frozenset = frozenset({
+    "metadata",
+    "stream",
+    "nonce",
+    "timestamp",
+    "request_id",
+    "idempotency_key",
+})
+
+
+def canonicalize_request_for_fingerprint(body: bytes) -> bytes:
+    """Canonicalize a request body for fingerprinting.
+
+    JSON bodies: parse → drop the top-level :data:`FINGERPRINT_STRIP_FIELDS`
+    keys → re-serialize with sorted keys and compact separators (UTF-8, no
+    ASCII escaping). Non-JSON bodies are hashed as raw bytes (best-effort —
+    deterministic eval traffic is JSON in practice).
+    """
+    try:
+        obj = json.loads(body.decode("utf-8", errors="replace"))
+    except Exception:
+        return body
+    if isinstance(obj, dict):
+        obj = {k: v for k, v in obj.items() if k.lower() not in FINGERPRINT_STRIP_FIELDS}
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def compute_request_fingerprint(body: bytes) -> str:
+    """SHA-256 over the canonicalized request body → ``sha256:<hex>``."""
+    import hashlib
+    return "sha256:" + hashlib.sha256(canonicalize_request_for_fingerprint(body)).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +300,9 @@ def strip_tip_header(text: str) -> str:
 
 __all__ = [
     "DIRECTIVE_REGISTRY",
+    "FINGERPRINT_STRIP_FIELDS",
+    "canonicalize_request_for_fingerprint",
+    "compute_request_fingerprint",
     "parse_tip_header",
     "parse_and_strip_tip_header",
     "strip_tip_header",
