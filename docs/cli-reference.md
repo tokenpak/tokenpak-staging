@@ -1286,6 +1286,11 @@ TIP is the protocol layer that adapter providers and platform integrations decla
 - `scaffold-adapter`
   - `NAME` — Adapter name (e.g. 'my-platform')
   - `--output`, `-o` — Output file path (default: ./<name>_adapter.py)
+- `sources`
+  - `--json` — Emit JSON instead of text
+- `observe`
+  - `--tool` — Only run the adapter for this tool slug
+  - `--json` — Emit JSON instead of text
 
 ### `tokenpak usage`
 
