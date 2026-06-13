@@ -163,3 +163,7 @@ release-gate-snapshots: api-snapshot workflow-steps-snapshot telemetry-snapshot 
 
 release-gate-check: api-snapshot-check workflow-steps-check telemetry-check taxonomy-check  ## Validate ALL release-gate snapshots
 	@echo "✅  All release-gate checks passed"
+
+.PHONY: release-check
+release-check:  ## Tier-1 baseline — run the always-on deterministic release gates
+	$(PYTHON) scripts/release_check/release_check.py
