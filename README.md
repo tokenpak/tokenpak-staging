@@ -5,7 +5,9 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 ![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)
 
-TokenPak is a local-first proxy that applies **Prompt Packing** to your LLM context before it reaches the provider — fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+> **The open logistics layer for AI context.**
+
+TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
 
 **Status:** Beta — APIs and CLI may change between releases.
 
