@@ -161,7 +161,7 @@ class TestConfigDoctor:
         assert payload["home"]["rule"] == "legacy"
         d1 = _check(payload, "D1")
         assert d1["status"] == "warn"
-        assert "config migrate" in d1["detail"]
+        assert "home migrate" in d1["detail"]  # cli-dx F1: relocation verb
 
     def test_masks_planted_secret(self, tpk_home, fake_home, monkeypatch, capsys):
         """TC-D-05: planted fake secret value must NEVER appear in output."""
@@ -196,7 +196,7 @@ class TestConfigDoctor:
         d4 = _check(payload, "D4", "env_vars")
         assert d4["status"] == "warn"
         assert "TOKENPAK_BOGUS" in d4["message"]
-        assert "unknown" in d4["message"].lower()
+        assert "not in the documented schema" in d4["message"]  # cli-dx F3
 
     def test_attach_state_local_proxy(self, tpk_home, fake_home, capsys):
         """TC-D-07: client settings → local proxy URL → D5 ok; no write."""
@@ -361,7 +361,7 @@ class TestManifestHelpers:
         assert secret_class("ANTHROPIC_API_KEY") == "high"
         assert secret_class("TOKENPAK_TELEGRAM_BOT_TOKEN") == "high"
         assert secret_class("TOKENPAK_SLACK_WEBHOOK") == "high"
-        assert secret_class("ANTHROPIC_BASE_URL") == "medium"
+        assert secret_class("ANTHROPIC_BASE_URL") == "low"  # cli-dx F6: *_URL endpoint, not a credential
         assert secret_class("TOKENPAK_PORT") == "low"
 
 

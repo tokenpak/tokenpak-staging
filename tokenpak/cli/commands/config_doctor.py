@@ -186,8 +186,11 @@ _HIGH_SECRET_RE = re.compile(
     r"(API_KEY|OAUTH_TOKEN|BOT_TOKEN|AUTH_TOKEN|PROXY_KEY|ALLOWED_KEYS"
     r"|CAPTURE_KEY|SMTP_PASS|SLACK_WEBHOOK|GITHUB_TOKEN|NOTION_API_TOKEN)"
 )
+# *_URL endpoints (BASE_URL/WEBHOOK_URL) are intentionally excluded: an
+# endpoint is an address, not a credential, so the "masked secret" label
+# over-warned (cli-dx F6). Values are never printed for ANY var regardless.
 _MEDIUM_SECRET_RE = re.compile(
-    r"(BASE_URL|WEBHOOK_URL|OTEL_ENDPOINT|OTLP_ENDPOINT|CHAT_ID|EMAIL_TO"
+    r"(OTEL_ENDPOINT|OTLP_ENDPOINT|CHAT_ID|EMAIL_TO"
     r"|CORS_ORIGINS|LICENSE_FILE|RBAC_DB_PATH|SMTP_HOST|SMTP_USER)"
 )
 
@@ -240,7 +243,10 @@ class _Colors:
 
     @staticmethod
     def info(text: str) -> str:
-        return f"{_Colors.CYAN}ℹ️{_Colors.RESET}   {text}"
+        # Std 03 §4.1: info state is carried by cyan, not a glyph (no ℹ️).
+        # A 4-space indent aligns text under the ok/warn/fail glyph column
+        # without the brittle VS16 trailing-space width hack.
+        return f"{_Colors.CYAN}    {text}{_Colors.RESET}"
 
 
 def secret_class(name: str) -> str:
@@ -364,8 +370,9 @@ def run_config_doctor(
             f"home resolved (legacy)  {home}",
             detail=(
                 "Resolution fell back to legacy ~/.tokenpak/ — canonical "
-                "~/.tpk/ is absent. Run `tokenpak config migrate` to move "
-                "to ~/.tpk/ (Std 33 §8)."
+                "~/.tpk/ is absent. Run `tokenpak home migrate` to relocate "
+                "to ~/.tpk/ (Std 33 §8). See `tokenpak home explain` for "
+                "resolution detail."
             ),
         )
     else:
@@ -484,10 +491,12 @@ def run_config_doctor(
     if unknown:
         record(
             "D4", "env_vars", "warn",
-            f"unknown TOKENPAK_* name(s): {', '.join(unknown)} (possible typo)",
+            f"TOKENPAK_* name(s) not in the documented schema "
+            f"(honored as-is): {', '.join(unknown)}",
             detail=(
                 "Unknown names are honored as pass-through values (always-"
-                "dynamic, spec §3.4) — reported here, never failed."
+                "dynamic, spec §3.4) — reported here, never failed; each may "
+                "be a deliberate undocumented var or a possible typo."
             ),
         )
     else:
@@ -567,7 +576,8 @@ def run_config_doctor(
         d7_findings.append((
             "warn", "split-home: both ~/.tpk/ and ~/.tokenpak/ exist",
             f"canonical {_paths.canonical_home()} wins; reconcile then remove "
-            f"the legacy tree (Std 33 §8)",
+            f"the legacy tree (Std 33 §8). Run `tokenpak home migrate --force` "
+            f"to merge, or `tokenpak home explain` to inspect.",
         ))
     # Loader-drift (§0.2): the live loaders hardcode ~/.tokenpak/ while the
     # canonical resolver is _paths.home(). Re-derive their effective targets
