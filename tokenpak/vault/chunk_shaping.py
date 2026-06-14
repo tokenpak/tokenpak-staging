@@ -408,7 +408,8 @@ def reshape_chunks(
 
 # ---------------------------------------------------------------------------
 # Skeleton extraction — strips function bodies from code blocks before injection
-# Reduces code-heavy vault blocks by 70-90% (signatures + docstrings only)
+# (signatures + docstrings + structure preserved; bodies elided). Savings are
+# measured, not asserted — see tests/test_skeleton_extractor.py benchmark.
 # (A2b transfer from monolith)
 # ---------------------------------------------------------------------------
 
@@ -463,6 +464,14 @@ def _inject_skeleton_into_blocks(blocks_text: str) -> str:
         ext = ext_map.get(lang_hint, "")
         code = m.group(2)
         skeletonized = _skeletonize_block(code, ext) if ext else code
-        return f"```{m.group(1)}\n{skeletonized}\n```"
+        if skeletonized == code:
+            # No-op extraction (unsupported language, fail-safe fallback, or
+            # nothing to elide): pass the fence through byte-identical instead
+            # of re-assembling it (the historical re-assembly added a stray
+            # trailing newline before the closing fence).
+            return m.group(0)
+        if not skeletonized.endswith("\n"):
+            skeletonized += "\n"
+        return f"```{m.group(1)}\n{skeletonized}```"
 
     return re.sub(r"```([^\n]*)\n(.*?)```", _replace_fence, blocks_text, flags=re.DOTALL)
