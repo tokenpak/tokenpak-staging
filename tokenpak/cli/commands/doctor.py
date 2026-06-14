@@ -988,6 +988,53 @@ def run_doctor(
             "Env var conflicts   none detected",
         )
 
+    # === Check 11: Credential exposure (parity with `creds doctor`) =============
+    # d3 spec gap #5 (v2.0-d3-credential-security §7.6, §10 #6): surface the
+    # credential-hazard checks on the primary `tokenpak doctor` verb, not only
+    # the `creds doctor` sub-verb. Reuses the same creds.doctor.run() engine so
+    # the two surfaces can never drift. Never let a credential probe crash the
+    # wider doctor run — degrade to a warn (Std 47 security-posture, Std 60
+    # credential-lifecycle).
+    try:
+        from tokenpak.creds import doctor as _creds_doctor
+
+        cred_issues = _creds_doctor.run()
+        cred_errors = [i for i in cred_issues if i.severity == "error"]
+        cred_warns = [i for i in cred_issues if i.severity == "warn"]
+        _cred_detail = "\n".join(
+            f"[{i.severity.upper()}] {i.subject}: {i.detail}" for i in cred_issues
+        )
+        if cred_errors:
+            _record(
+                "credential_exposure",
+                "fail",
+                f"Credential health   {len(cred_errors)} error(s), "
+                f"{len(cred_warns)} warning(s) — run `tokenpak creds doctor`",
+                detail=_cred_detail,
+            )
+        elif cred_warns:
+            _record(
+                "credential_exposure",
+                "warn",
+                f"Credential health   {len(cred_warns)} warning(s) — "
+                "run `tokenpak creds doctor`",
+                detail=_cred_detail,
+            )
+        else:
+            _record(
+                "credential_exposure",
+                "pass",
+                "Credential health   no credential hazards detected",
+            )
+    except Exception as _cred_e:  # a probe failure must not fail unrelated checks
+        _record(
+            "credential_exposure",
+            "warn",
+            "Credential health   could not run credential checks: "
+            f"{type(_cred_e).__name__}",
+            detail=str(_cred_e),
+        )
+
     # === Legacy checks (kept for compatibility) =================================
 
     # Python version
