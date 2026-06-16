@@ -19,6 +19,11 @@ PROVIDER_NAME = "codex-cli"
 
 
 def _codex_home() -> Path:
+    # Honors $CODEX_HOME, which is what isolated/workspace session homes set.
+    # In those homes ``auth.json`` is a *symlink* back to the canonical
+    # ~/.codex/auth.json (never a copy — avoids refresh-token divergence), so
+    # the ``Path.exists()`` / ``read_text()`` below resolve the live token
+    # transparently through the link.
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 

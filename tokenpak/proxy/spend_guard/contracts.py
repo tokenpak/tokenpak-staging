@@ -99,6 +99,17 @@ class TIPDirective:
     estimate_only: bool = False
     cancel: bool = False
     reason: Optional[str] = None
+    # [TIP: deterministic=on] — reproducible eval mode (governed by the TIP
+    # versioning standard). Disables output-changing proxy behaviors (upstream
+    # retries, semantic response substitution, prompt mutation) and emits
+    # reproducibility metadata. NOT a spend bypass: policy bands fire
+    # exactly as without the directive.
+    deterministic: bool = False
+    # Fail-loud marker: an unsupported value (e.g. ``deterministic=maybe``)
+    # is recorded here so the caller can REJECT the request with a
+    # structured error. Per the reproducible-eval contract, unsupported
+    # deterministic fields fail loudly — they are never silently stripped.
+    deterministic_invalid_value: Optional[str] = None
     unknown_keys: list = field(default_factory=list)  # for warning audit
 
 
@@ -137,6 +148,10 @@ class GuardOutcome:
     decision: Optional[PreflightDecision] = None
     pending_id: Optional[str] = None
     audit_event: Optional[str] = None         # event_type for audit row
+    # Active budget-reservation hold for this forward (Standard 29 §15). The
+    # proxy response path settles it via reservation.settle_reservation();
+    # unsettled holds expire at their TTL.
+    reservation_id: Optional[str] = None
 
     @classmethod
     def passthrough(cls, body: bytes) -> "GuardOutcome":

@@ -211,6 +211,79 @@ def test_parse_hooks_maturity_returns_none_when_missing():
 
 
 # ---------------------------------------------------------------------------
+# check_linux_sandbox — bounded Codex sandbox smoke
+# ---------------------------------------------------------------------------
+
+def test_check_linux_sandbox_passes_when_codex_sandbox_succeeds(monkeypatch):
+    class FakeCompleted:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    def fake_run(cmd, *args, **kwargs):
+        assert cmd == ["codex", "sandbox", "true"]
+        assert kwargs["timeout"] == doctor.SANDBOX_TIMEOUT_SECONDS
+        return FakeCompleted()
+
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+
+    status, detail = doctor.check_linux_sandbox()
+
+    assert status == "PASS"
+    assert "OK" in detail
+
+
+def test_check_linux_sandbox_warns_on_bubblewrap_failure(monkeypatch):
+    class FakeCompleted:
+        stdout = ""
+        stderr = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n"
+        returncode = 1
+
+    def fake_run(cmd, *args, **kwargs):
+        assert cmd == ["codex", "sandbox", "true"]
+        return FakeCompleted()
+
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+
+    status, detail = doctor.check_linux_sandbox()
+
+    assert status == "WARN"
+    assert "bwrap: loopback" in detail
+    assert "AppArmor" in detail
+    assert doctor.SANDBOX_HELP_ANCHOR in detail
+
+
+def test_check_linux_sandbox_warns_on_timeout(monkeypatch):
+    def fake_run(cmd, *args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+
+    status, detail = doctor.check_linux_sandbox()
+
+    assert status == "WARN"
+    assert f"{doctor.SANDBOX_TIMEOUT_SECONDS}s" in detail
+    assert doctor.SANDBOX_HELP_ANCHOR in detail
+
+
+def test_check_linux_sandbox_skips_on_non_linux(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("codex sandbox should not run on non-Linux")
+
+    monkeypatch.setattr(doctor.sys, "platform", "darwin")
+    monkeypatch.setattr(doctor.subprocess, "run", fail_run)
+
+    status, detail = doctor.check_linux_sandbox()
+
+    assert status == "PASS"
+    assert "not applicable" in detail
+    assert "darwin" in detail
+
+
+# ---------------------------------------------------------------------------
 # run() — exit code does not gate on WARN rows
 # ---------------------------------------------------------------------------
 

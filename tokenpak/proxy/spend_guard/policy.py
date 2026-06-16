@@ -238,6 +238,16 @@ class SpendGuardConfig:
     rolling_caps_per_fleet_max_tokens_total: int = 15_000_000
     rolling_caps_per_fleet_max_cache_read_tokens: int = 0
 
+    # ── Concurrent budget reservations (Standard 29 §15) ──
+    # Atomic admission control for in-flight requests against the SAME
+    # rolling-cap budget (settled + reserved + this request ≤ cap).
+    # Default OFF until the proxy response path settles holds
+    # (reservation.settle_reservation); until then every forward would
+    # hold its projection for the full TTL and over-block sustained
+    # traffic. The settle-wiring follow-up flips this default.
+    reservations_enabled: bool = False
+    reservation_ttl_seconds: int = 600
+
 
 # ---------------------------------------------------------------------------
 # Config loader — single source of truth for thresholds
@@ -342,6 +352,7 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         "pending_ttl_seconds",
         "yes_grant_ttl_seconds",
         "session_window_seconds",
+        "reservation_ttl_seconds",
         "rolling_caps_window_seconds",
         "rolling_caps_per_agent_max_tokens_total",
         "rolling_caps_per_agent_max_cache_read_tokens",
@@ -357,6 +368,10 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
     # Yes-grant — bool field
     if "yes_grant_covers_rolling_caps" in sg:
         cfg.yes_grant_covers_rolling_caps = _coerce_bool(sg["yes_grant_covers_rolling_caps"])
+
+    # Concurrent reservations — bool field (Standard 29 §15)
+    if "reservations_enabled" in sg:
+        cfg.reservations_enabled = _coerce_bool(sg["reservations_enabled"])
 
     # Rolling caps — bool + float fields
     if "rolling_caps_enabled" in sg:
@@ -460,6 +475,9 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         ("TOKENPAK_SPEND_GUARD_YES_GRANT_COVERS_ROLLING_CAPS", "yes_grant_covers_rolling_caps", _coerce_bool),
         ("TOKENPAK_SPEND_GUARD_SESSION_BLOCK_COST_USD", "session_block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_SESSION_WINDOW_SECONDS", "session_window_seconds", int),
+        # Concurrent reservations env overrides (Standard 29 §15)
+        ("TOKENPAK_SPEND_GUARD_RESERVATIONS_ENABLED", "reservations_enabled", _coerce_bool),
+        ("TOKENPAK_SPEND_GUARD_RESERVATION_TTL", "reservation_ttl_seconds", int),
         # Rolling caps env overrides
         ("TOKENPAK_SPEND_GUARD_ROLLING_CAPS_ENABLED", "rolling_caps_enabled", _coerce_bool),
         ("TOKENPAK_SPEND_GUARD_ROLLING_WINDOW_SECONDS", "rolling_caps_window_seconds", int),
@@ -528,6 +546,54 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
 
 
 # ---------------------------------------------------------------------------
+# Deterministic-directive precedence (reproducible-eval mode; TIP versioning standard)
+# ---------------------------------------------------------------------------
+
+def deterministic_precedence(tip: Optional[TIPDirective]) -> Optional[str]:
+    """Precedence contract for ``[TIP: deterministic=on]`` vs existing directives.
+
+    Pure function. Returns ``None`` when the directive combination is
+    compatible, or a conflict token (``deterministic_conflict:<key>``) when it
+    is INCOMPATIBLE — in which case the caller MUST fail loudly (reject the
+    request with a structured error before any provider send). Neither side of
+    an incompatible combination is ever silently stripped.
+
+    Final precedence behavior (documented per the reproducible-eval contract):
+
+    - ``deterministic=on + estimate=on`` → **compatible**. Estimate is
+      side-effect-free (returns RiskEstimate JSON, no provider call), so it
+      cannot violate any deterministic guarantee.
+    - ``deterministic=on + allow=once`` (or ``allow=15m`` / ``allow=session``
+      / ``allow=<N>``) → **incompatible**. Allow semantics release/replay a
+      previously HELD request — the replayed body is not the one carrying the
+      deterministic directive, and the approval round-trip is interactive
+      multi-turn state, both of which break the reproducibility contract.
+    - ``deterministic=on + bypass=on`` → **incompatible**. Bypass overrides
+      soft spend bands; deterministic mode is explicitly NOT a spend-band
+      override and must not be combinable with one.
+    - ``deterministic=on + max=... / ttl=...`` (without allow/bypass) →
+      compatible-inert: those keys only act alongside allow/bypass.
+    - ``deterministic=on + cancel`` → compatible: cancel never reaches a
+      provider (it discards pending state and acknowledges).
+    - Spend-guard precedence is unchanged in BOTH directions: deterministic
+      never relaxes any threshold (``hard_block``/``block`` bands fire
+      exactly as without the directive), and a spend block does not disable
+      deterministic semantics — the held request is simply not sent.
+    """
+    if tip is None or not getattr(tip, "deterministic", False):
+        return None
+    if getattr(tip, "bypass", False):
+        return "deterministic_conflict:bypass"
+    allow_scope = getattr(tip, "allow_scope", None)
+    if allow_scope:
+        return f"deterministic_conflict:allow={allow_scope}"
+    allow_count = getattr(tip, "allow_count", None)
+    if allow_count:
+        return f"deterministic_conflict:allow={allow_count}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Decision engine
 # ---------------------------------------------------------------------------
 
@@ -564,6 +630,11 @@ def decide(
 
     The canonical default basis is context-window utilisation %. Dollar
     bands stay reachable as an opt-in profile override per Standard 29 §5.1.
+
+    ``[TIP: deterministic=on]`` is NOT a spend directive: a deterministic-only
+    directive sets none of the bypass/allow/ceiling fields, so every band in
+    this function fires exactly as it would with ``tip=None`` (see
+    :func:`deterministic_precedence` for the full precedence contract).
     """
     if cfg is None:
         cfg = load_config()
