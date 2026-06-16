@@ -45,6 +45,9 @@ EVENT_TYPES = frozenset({
     "yes_grant_expired",     # grant past expires_at → fell back to block band
     "yes_grant_read_error",  # grant-table read failed → fail-closed to block band
     "yes_grant_discarded",   # NEGATIVE intent / [TIP: cancel] discarded an active grant
+    "reservation_block",       # concurrent admission denied (Standard 29 §15)
+    "reservation_tip_bypass",  # TIP-approved send recorded as a forced hold
+    "reservation_settled",     # hold released after provider settlement
 })
 
 

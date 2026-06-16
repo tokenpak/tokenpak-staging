@@ -11,6 +11,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Permission tier system for `tokenpak integrate` (strict/standard/auto/fleet)
   with a new `tokenpak permissions` verb, doctor rows, and launcher fleet
   mode — see `tokenpak permissions --help`.
+- TokenPak Dispatch (v0.1-alpha, **preview**) — scoped, station-based,
+  resumable work packages with a Decision Inbox and delivery receipts.
+  Available on the main branch only; **not yet included in a released
+  `pip install tokenpak` package**. See `tokenpak dispatch --help`.
 
 ### Internal
 
