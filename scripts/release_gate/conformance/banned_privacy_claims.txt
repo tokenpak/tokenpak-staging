@@ -1,0 +1,20 @@
+# Banned absolute privacy claims — privacy & data-handling policy, hard-rule
+# clause: no public privacy claim may ship without a defined technical
+# boundary AND an evidence path. The phrases below have no precise boundary
+# (or over-claim a best-effort control) and are therefore not allowed.
+#
+# Match semantics: case-insensitive literal substring, one phrase per line.
+# Lines starting with '#' and blank lines are ignored.
+#
+# NOTE: "encrypted at rest" is deliberately omitted — it is a permitted Pro
+# claim (encrypted recall store) and only an over-claim for OSS stores;
+# distinguishing the two needs surrounding context, handled in a later tier.
+privacy-first
+zero-data
+fully private
+100% local
+all secrets redacted
+all secrets removed
+zero-knowledge
+completely private
+totally private
