@@ -24,8 +24,41 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Tuple
+
+_log = logging.getLogger("tokenpak.skeleton")
+
+# Diagnostic state: flipped True the first time skeleton extraction is requested
+# (SKELETON_ENABLED) but the extractor module cannot be imported. A missing
+# extractor must NOT be swallowed silently — it is surfaced here and via
+# skeleton_runtime_status() so doctor/status/tests can observe the no-op.
+_SKELETON_EXTRACTOR_MISSING = False
+
+
+def _mark_skeleton_extractor_missing(exc: object = None) -> None:
+    """Record + log (once) that skeleton was enabled but the extractor is absent."""
+    global _SKELETON_EXTRACTOR_MISSING
+    if not _SKELETON_EXTRACTOR_MISSING:
+        _SKELETON_EXTRACTOR_MISSING = True
+        _log.warning(
+            "skeleton enabled but extractor unavailable "
+            "(tokenpak.skeleton_extractor.extract_skeleton not importable) — "
+            "code injection is a no-op; reporting skeleton as inactive (%s)",
+            exc,
+        )
+
+
+def skeleton_runtime_status() -> Dict[str, Any]:
+    """Diagnostic snapshot of skeleton runtime state (testable status field)."""
+    from tokenpak.proxy.config import SKELETON_ENABLED, skeleton_available
+
+    return {
+        "enabled": bool(SKELETON_ENABLED),
+        "available": skeleton_available(),
+        "extractor_missing_observed": _SKELETON_EXTRACTOR_MISSING,
+    }
 
 # ---------------------------------------------------------------------------
 # Shape Registry
@@ -375,7 +408,8 @@ def reshape_chunks(
 
 # ---------------------------------------------------------------------------
 # Skeleton extraction — strips function bodies from code blocks before injection
-# Reduces code-heavy vault blocks by 70-90% (signatures + docstrings only)
+# (signatures + docstrings + structure preserved; bodies elided). Savings are
+# measured, not asserted — see tests/test_skeleton_extractor.py benchmark.
 # (A2b transfer from monolith)
 # ---------------------------------------------------------------------------
 
@@ -400,7 +434,11 @@ def _skeletonize_block(content: str, file_ext: str) -> str:
         from tokenpak.skeleton_extractor import extract_skeleton
 
         return extract_skeleton(content, lang)
-    except Exception:
+    except Exception as exc:
+        # Fail-safe: return the block unchanged (no corruption), but emit a
+        # diagnostic signal so a missing/broken extractor is never swallowed
+        # silently and the feature is not reported as active. See truth-patch.
+        _mark_skeleton_extractor_missing(exc)
         return content
 
 
@@ -426,6 +464,14 @@ def _inject_skeleton_into_blocks(blocks_text: str) -> str:
         ext = ext_map.get(lang_hint, "")
         code = m.group(2)
         skeletonized = _skeletonize_block(code, ext) if ext else code
-        return f"```{m.group(1)}\n{skeletonized}\n```"
+        if skeletonized == code:
+            # No-op extraction (unsupported language, fail-safe fallback, or
+            # nothing to elide): pass the fence through byte-identical instead
+            # of re-assembling it (the historical re-assembly added a stray
+            # trailing newline before the closing fence).
+            return m.group(0)
+        if not skeletonized.endswith("\n"):
+            skeletonized += "\n"
+        return f"```{m.group(1)}\n{skeletonized}```"
 
     return re.sub(r"```([^\n]*)\n(.*?)```", _replace_fence, blocks_text, flags=re.DOTALL)

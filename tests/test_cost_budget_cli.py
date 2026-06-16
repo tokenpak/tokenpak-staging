@@ -78,7 +78,10 @@ def budget_mod(temp_db, tmp_path):
     import tokenpak.cli.commands.budget as budget
     importlib.reload(budget)
     cfg_path = tmp_path / "budget_config.yaml"
-    with patch.object(budget, "_MONITOR_DB", temp_db), \
+    # budget resolves monitor.db at call time via the canonical resolver;
+    # patch the resolution function (the module-level _MONITOR_DB constant
+    # was removed with the resolver rewire).
+    with patch.object(budget, "_monitor_db_path", lambda: str(temp_db)), \
          patch.object(budget, "_BUDGET_CONFIG", cfg_path):
         yield budget, cfg_path
 
@@ -105,7 +108,14 @@ class TestQuerySummary:
 
     def test_month_includes_all_rows(self, cost_mod):
         result = cost_mod.query_summary("month")
-        assert result["requests"] == 4
+        # Fixture: 3 rows dated today + 1 dated yesterday. On a month boundary
+        # (today is the 1st) yesterday falls in the previous month, so the
+        # "month" window correctly contains 3 rows, not 4. Derive the expected
+        # count from actual month membership so the test is boundary-safe.
+        this_month = date.today().strftime("%Y-%m")
+        yest_month = (date.today() - timedelta(days=1)).strftime("%Y-%m")
+        expected = 3 + (1 if yest_month == this_month else 0)
+        assert result["requests"] == expected
 
     def test_empty_db_returns_zeros(self, tmp_path):
         import tokenpak.cli.commands.cost as cost

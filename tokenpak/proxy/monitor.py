@@ -83,8 +83,13 @@ def _db_writer_worker():
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
                             would_have_saved,cache_origin,user_id,
                             cache_creation_ephemeral_1h_tokens,cache_creation_ephemeral_5m_tokens,ttl_attribution,
-                            session_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            session_id,agent_id,cycle_id,
+                            ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
+                            ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
+                            ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
+                            ssrm_progress_signal,ssrm_signals_json,skip_reason,
+                            dispatch_job_id,dispatch_station_id)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -151,7 +156,11 @@ class Monitor:
                 cache_creation_tokens INTEGER DEFAULT 0,
                 would_have_saved INTEGER DEFAULT 0,
                 user_id TEXT DEFAULT '',
-                session_id TEXT DEFAULT ''
+                session_id TEXT DEFAULT '',
+                agent_id TEXT DEFAULT '',
+                cycle_id TEXT DEFAULT '',
+                dispatch_job_id TEXT DEFAULT '',
+                dispatch_station_id TEXT DEFAULT ''
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -178,6 +187,14 @@ class Monitor:
             pass
         try:
             conn.execute("ALTER TABLE requests ADD COLUMN cache_origin TEXT DEFAULT 'unknown'")
+        except sqlite3.OperationalError:
+            pass
+        # Per-request optimization drop/skip reason (e.g. 'route-unknown',
+        # 'flag-off', 'capability-missing'). Additive + idempotent; legacy rows
+        # keep ''. Populated when a caller threads the in-flight stage reason
+        # (see Monitor.log ``skip_reason``); read by ``tokenpak status --explain``.
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN skip_reason TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
         # Anthropic prompt-cache TTL attribution (additive, backward-compatible).
@@ -230,6 +247,50 @@ class Monitor:
                 conn.execute(_alter)
             except sqlite3.OperationalError:
                 pass
+        # D5 (finishes Fix A): agent/cycle attribution columns on requests.
+        # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
+        # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
+        # 'unknown', never fabricated). Idempotent — columns may pre-exist
+        # from a peer migration. Telemetry contract: '' sentinel, not NULL.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(_alter)
+            except sqlite3.OperationalError:
+                pass
+        # SSRM Phase 1 — 9 new advisory-only columns. All nullable /
+        # defaulted so old client INSERT statements still work. No
+        # behavior change; columns are populated only when ssrm.enabled=true.
+        for _col_sql in (
+            "ALTER TABLE requests ADD COLUMN ssrm_decision TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN ssrm_effective_context_tokens INTEGER",
+            "ALTER TABLE requests ADD COLUMN ssrm_effective_context_pct REAL",
+            "ALTER TABLE requests ADD COLUMN ssrm_cache_read_ratio REAL",
+            "ALTER TABLE requests ADD COLUMN ssrm_projected_next_context_pct REAL",
+            "ALTER TABLE requests ADD COLUMN ssrm_fingerprint_repeat_count INTEGER DEFAULT 0",
+            "ALTER TABLE requests ADD COLUMN ssrm_session_age_turns INTEGER DEFAULT 0",
+            "ALTER TABLE requests ADD COLUMN ssrm_progress_signal TEXT",
+            "ALTER TABLE requests ADD COLUMN ssrm_signals_json TEXT",
+        ):
+            try:
+                conn.execute(_col_sql)
+            except sqlite3.OperationalError:
+                pass
+        # Dispatch correlation columns (P-TELEMETRY-01). dispatch_job_id <-
+        # X-Tokenpak-Dispatch-Job-Id header; dispatch_station_id <-
+        # X-Tokenpak-Dispatch-Station-Id. Additive + idempotent — columns may
+        # pre-exist from a peer migration. Telemetry contract: '' sentinel for
+        # legacy/unattributed rows, never NULL, never fabricated.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN dispatch_job_id TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN dispatch_station_id TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(_alter)
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS budget_alerts (
@@ -252,6 +313,20 @@ class Monitor:
             conn.commit()
         except Exception as e:
             print(f"⚠️  schema migration error (non-fatal): {e}")
+
+        # Index session_id AFTER the column is guaranteed (fresh schema has it;
+        # legacy pre-phase1 DBs get it from ensure_schema above). Lets the SSRM
+        # lookup (signals._monitor_recent_for_session: WHERE session_id=? ORDER
+        # BY id DESC LIMIT N) seek instead of full-scanning the requests table
+        # under live-writer load. Additive + idempotent; guarded for any DB
+        # still missing the column.
+        try:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id)"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
         # Run migrations to bring DB schema up to current version
         try:
@@ -292,6 +367,20 @@ class Monitor:
         cache_creation_ephemeral_5m_tokens=0,
         ttl_attribution=None,
         session_id="",
+        agent_id="",
+        cycle_id="",
+        ssrm_decision="",
+        ssrm_effective_context_tokens=None,
+        ssrm_effective_context_pct=None,
+        ssrm_cache_read_ratio=None,
+        ssrm_projected_next_context_pct=None,
+        ssrm_fingerprint_repeat_count=0,
+        ssrm_session_age_turns=0,
+        ssrm_progress_signal=None,
+        ssrm_signals_json=None,
+        skip_reason="",
+        dispatch_job_id="",
+        dispatch_station_id="",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -303,6 +392,9 @@ class Monitor:
         # "" for localhost / pre-A6 callers. The raw token MUST never be passed
         # in — callers always use ``proxy_auth.hash_token(...)`` first.
         # Enqueue write instead of writing directly (async, <0.1ms return)
+        # SSRM Phase 1: 9 trailing ssrm_* params are advisory-only telemetry.
+        # Populated only when ssrm.enabled=true; otherwise the column values
+        # are empty/NULL and reading them is a no-op.
         insert_params = (
             datetime.now().isoformat(),
             model,
@@ -327,6 +419,20 @@ class Monitor:
             int(cache_creation_ephemeral_5m_tokens or 0),
             ttl_attribution,
             session_id or "",
+            agent_id or "",
+            cycle_id or "",
+            ssrm_decision or "",
+            ssrm_effective_context_tokens,
+            ssrm_effective_context_pct,
+            ssrm_cache_read_ratio,
+            ssrm_projected_next_context_pct,
+            int(ssrm_fingerprint_repeat_count or 0),
+            int(ssrm_session_age_turns or 0),
+            ssrm_progress_signal,
+            ssrm_signals_json,
+            skip_reason or "",
+            dispatch_job_id or "",
+            dispatch_station_id or "",
         )
         _queued = False
         try:
@@ -340,8 +446,14 @@ class Monitor:
                 "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
                 "would_have_saved, cache_origin, user_id, "
                 "cache_creation_ephemeral_1h_tokens, cache_creation_ephemeral_5m_tokens, ttl_attribution, "
-                "session_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "session_id, agent_id, cycle_id, "
+                "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
+                "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
+                "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
+                "ssrm_progress_signal, ssrm_signals_json, skip_reason, "
+                "dispatch_job_id, dispatch_station_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 insert_params,
             )
             _conn.commit()

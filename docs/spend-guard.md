@@ -17,7 +17,7 @@ When a client sends a request to the TokenPak proxy:
 2. Before forwarding upstream, the **estimator** projects total tokens and cost (using `tokenpak.models.get_rates(model)` as the single source of truth for pricing).
 3. The **policy engine** compares the projection against four thresholds (warn / block / hard-block) and, separately, against your **session-cumulative running cost** for the last hour.
 4. If the request is in the block band, the proxy returns an HTTP **402 Payment Required** with a structured JSON body. **Zero outbound bytes hit the provider.**
-5. You release the held request by replying `yes` (or `no` to cancel), or by re-sending the request with a leading `[TIP: allow=once max=$X]` directive.
+5. You release the held request by replying `yes` (approve one), `no` (cancel), or a number like `20` (pre-approve the next 20 sends) — or by re-sending with a leading `[TIP: allow=once|15m|session|<N> max=$X]` directive.
 6. Hard-block exceeds an immutable ceiling (default 1M tokens / $50) and **cannot** be bypassed.
 
 ---
@@ -101,7 +101,7 @@ The default ratio 0.80 is published as `tokenpak.proxy.spend_guard.DEFAULT_BLOCK
 {
  "error": {
  "type": "tokenpak_spend_guard_blocked",
- "message": "TIP Spend Guard blocked this request before provider send. Reply 'yes' to proceed, 'no' to cancel, or prepend '[TIP: allow=once]' to bypass.",
+ "message": "TIP Spend Guard blocked this request before provider send. Reply 'yes' to approve this one, 'no' to cancel, or a number like '20' to pre-approve the next 20 sends. TIP directives: [TIP: allow=once] / [TIP: allow=15m] / [TIP: allow=session] (this session only) / [TIP: allow=N]. Hard-block ceilings and rolling caps always still apply.",
  "reason": "session_cumulative_cost_exceeded",
  "threshold_hit": "session_block_cost_usd>=10.0 running=9.85",
  "projected_input_tokens": 78000,
@@ -149,12 +149,48 @@ Prefix any provider-bound prompt with `[TIP: ...]` at the very front of the firs
 
 | Directive | Values | Effect |
 |---|---|---|
-| `allow` | `once` / `15m` / `session` | Authorize replay of any held pending request. |
+| `allow` | `once` / `15m` / `session` / `<N>` | Authorize a held pending request. `once` is single-request; `session` opens a turn-scoped **Yes-grant** (see below); `<N>` (a positive integer) pre-approves the next **N** blocked sends, behaving exactly like answering `yes` N times. |
 | `bypass` | `on` (default if bare) / `off` | Skip Yes/No prompt; still subject to hard-block. |
-| `max` | `$N` (cost USD) / `Nk_tokens` / `Nm_tokens` | Per-request ceiling the directive authorizes. Unspecified dimensions are treated as user-authorized. |
+| `max` | `$N` (cost USD) / `Nk_tokens` / `Nm_tokens` | Per-request ceiling the directive authorizes. With `allow=session` the `$N` form becomes the grant's cumulative dollar budget. |
+| `ttl` | `<sec>` / `<n>m` | Yes-grant window length (default `cfg.yes_grant_ttl_seconds`, 300s). Pairs with `allow=session`. |
 | `estimate` | `on` (default if bare) | Return RiskEstimate JSON, no provider call. |
-| `cancel` | `on` (default if bare) | Discard any pending request for this session. |
+| `cancel` | `on` (default if bare) | Discard any pending request for this session (and tear down any active Yes-grant). |
 | `reason` | `"free text"` | Annotation written to the audit log. |
+
+#### Session-scoped Yes-grants
+
+A single `yes` (POSITIVE intent) **or** `[TIP: allow=session ttl=<sec> max=$<usd>]`
+opens a **Yes-grant** that covers the rest of the agentic turn — so the operator
+isn't re-prompted on every held request inside the TTL window. Semantics:
+
+- **Scope (W1).** Grants are keyed by `(session_id, fleet_id, principal/agent_id)`
+ (the `X-Tokenpak-Fleet` / `X-Tokenpak-Agent` request headers). A leaked or
+ replayed `session_id` from a different principal cannot redeem the grant.
+- **TTL (W7).** The grant is dead the instant `now >= expires_at`. Default window
+ is `cfg.yes_grant_ttl_seconds` (300s); override with `ttl=`.
+- **Dollar budget (W4).** `[TIP: allow=session max=$5]` attaches a cumulative
+ ceiling that decrements per redeemed request; once it can't cover a request the
+ grant is spent out and that request falls back to the block prompt.
+- **Non-bypass (W5).** A grant only removes the interactive prompt — it is **not**
+ a spend exemption. The hard-block band and rolling fleet caps remain
+ non-bypassable unless `cfg.yes_grant_covers_rolling_caps` is explicitly enabled.
+- **Count budget (allow=N).** A bare integer reply (`20`) or `[TIP: allow=20]`
+ opens a **count grant** that pre-approves the next N blocked sends — exactly like
+ answering `yes` N times. This works **both** as a reply to a 402 **and** prepended
+ to a fresh request: the request being approved (the held 402 send, or the fresh
+ request carrying the directive) is send #1, so the grant carries `remaining_count
+ = N-1`, decrementing once per redemption and re-prompting at zero. A count grant is still TTL-bounded, and `max=$N` may be attached too —
+ whichever ceiling (count, dollars, or TTL) is hit first ends the grant. `allow=1`
+ is therefore a single approval, identical to `allow=once`. `0`, negatives, and
+ non-integers are ignored (normal prompting). "Bypass" is always **session-scoped
+ at most** — there is no global/forever bypass.
+- **Cancel.** A `no` (NEGATIVE intent) or `[TIP: cancel]` tears the grant down.
+- **Backwards-compat.** `[TIP: allow=once]` keeps its single-request semantics and
+ opens no grant.
+
+Audit rows: `yes_grant_created` at the approval turn, `yes_grant_bypass` on each
+redemption, and `yes_grant_expired` / `yes_grant_exhausted` / `yes_grant_discarded`
+when the grant ends.
 
 Mid-sentence `[TIP: ...]` is **not** a directive — it's content the model sees verbatim. Only the leading position is parsed.
 
@@ -177,6 +213,10 @@ Refactor the auth flow.
 # Token-based ceiling
 [TIP: allow=once max=500k_tokens]
 <long prompt>
+
+# Turn-scoped grant: one approval covers the next 5 minutes / $5
+[TIP: allow=session ttl=300 max=$5 reason="multi-step refactor"]
+<first prompt of the turn>
 ```
 
 ---
@@ -197,7 +237,7 @@ Background agents (cron jobs, scheduled cycles, automated pipelines) have no hum
  ```
 3. **Tolerate clean-exit on block.** Receive the structured 402, log it, terminate. **Never retry-loop** — the proxy enforces 30s anti-loop dedup, but a well-behaved agent shouldn't need that protection.
 
-A reference cron-prompt example lives at `~/vault/06_RUNTIME/cron-prompts/spend-guard-pre-declaration-example.md`.
+A reference cron-prompt example ships with the spend-guard recipes.
 
 ---
 
@@ -273,4 +313,4 @@ The session window reads from `~/.tokenpak/monitor.db`, which is the proxy's wir
 - **Standard 29:** [`29-spend-guard-agent-contract.md`](https://github.com/tokenpak/docs/blob/main/standards/29-spend-guard-agent-contract.md) — wire contract.
 - **Reference implementation:** `tokenpak/proxy/spend_guard/`
 - **Tests:** `tokenpak/tests/test_spend_guard_*.py` (149 tests including the canonical 2026-05-07 spike-replay).
-- **Initiative record:** `~/vault/01_PROJECTS/tokenpak/initiatives/2026-05-07-tip-spend-guard-oss/_index.md`
+- **Design:** the TIP spend-guard initiative (project history).

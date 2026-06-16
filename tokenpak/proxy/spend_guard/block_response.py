@@ -21,6 +21,7 @@ ERR_PENDING_WAITING = "tokenpak_spend_guard_pending"
 ERR_CANCELLED = "tokenpak_spend_guard_cancelled"
 ERR_REPROMPT = "tokenpak_spend_guard_reprompt"
 ERR_ROLLING_CAP_BLOCKED = "tokenpak_spend_guard_rolling_cap_blocked"
+ERR_RESERVATION_BLOCKED = "tokenpak_spend_guard_reservation_blocked"
 INFO_ESTIMATE = "tokenpak_spend_guard_estimate"
 
 # HTTP status — 402 Payment Required best-fits "request requires
@@ -43,8 +44,12 @@ def block(decision: PreflightDecision, pending: PendingRequest) -> bytes:
             "type": ERR_BLOCKED,
             "message": (
                 "TIP Spend Guard blocked this request before provider send. "
-                "Reply 'yes' to proceed, 'no' to cancel, or prepend "
-                "'[TIP: allow=once]' to bypass."
+                "Reply 'yes' to approve this one, 'no' to cancel, or a number "
+                "like '20' to pre-approve the next 20 sends. TIP directives: "
+                "[TIP: allow=once] (this one), [TIP: allow=15m] (15-minute "
+                "window), [TIP: allow=session] (rest of THIS session only), "
+                "[TIP: allow=N] (next N sends). Hard-block ceilings and rolling "
+                "caps always still apply."
             ),
             "reason": decision.reason,
             "threshold_hit": decision.threshold_hit,
@@ -55,7 +60,19 @@ def block(decision: PreflightDecision, pending: PendingRequest) -> bytes:
             "model": risk.model if risk else None,
             "pending_id": pending.pending_id,
             "expires_at": pending.expires_at,
-            "approval_prompt": "Proceed? Yes / No",
+            "approval_prompt": "Proceed? yes / no / <N> (approve next N sends)",
+            # Structured options so clients can render the menu without parsing
+            # the message string. Session scope is bounded to this session — it
+            # is never a global/forever bypass.
+            "approval_options": [
+                {"reply": "yes", "effect": "approve this request only"},
+                {"reply": "no", "effect": "cancel this request"},
+                {"reply": "<N>", "effect": "approve the next N blocked sends"},
+                {"directive": "[TIP: allow=once]", "effect": "approve this request only"},
+                {"directive": "[TIP: allow=15m]", "effect": "approve for a 15-minute window"},
+                {"directive": "[TIP: allow=session]", "effect": "approve for the rest of this session"},
+                {"directive": "[TIP: allow=N]", "effect": "approve the next N blocked sends"},
+            ],
             "retryable": True,        # client may retry after approval
             "recovery_status": "user_action_required",
         }
@@ -94,7 +111,8 @@ def pending_waiting(pending: PendingRequest) -> bytes:
             "message": (
                 "A previous request from this session is held by the Spend "
                 "Guard awaiting approval. Reply 'yes' to proceed, 'no' to "
-                "cancel, or '[TIP: cancel]' to discard."
+                "cancel, a number like '20' to pre-approve the next 20 sends, "
+                "or '[TIP: cancel]' to discard."
             ),
             "pending_id": pending.pending_id,
             "expires_at": pending.expires_at,
@@ -153,27 +171,109 @@ def build_rolling_cap_block(breach) -> bytes:
     `breach` is a :class:`rolling_caps.CapBreach` dataclass instance.
     Returns the structured 402 body bytes; the caller wraps the HTTP
     status and headers.
+
+    Attribution clarity: for **per_fleet** breaches, ``agent_id`` is the
+    *triggering caller* (the request that tripped the cap), and ``used`` is the
+    **fleet-wide aggregate** across all tagged callers in the window — NOT the
+    triggering caller's own spend. The legacy ``(agent=X, used=$)`` wording was
+    routinely misread as "caller X spent $" and cost diagnostic time. The
+    message + body below are dimension-aware so an operator reads it correctly
+    once: ``triggered_by`` always names the caller; ``fleet_used``/``fleet_cap``
+    carry the aggregate for fleet-wide breaches. Legacy fields (``agent_id``,
+    ``used``, ``cap``, ``projected_add``) are retained unchanged for backward
+    compatibility.
     """
+    is_fleet = str(breach.cap_dimension).startswith("per_fleet")
+    scope = "fleet" if is_fleet else "agent"
+    if is_fleet:
+        attribution = (
+            f"triggered_by={breach.agent_id} (this caller tripped the cap; it is "
+            f"NOT necessarily the biggest spender). fleet_used={breach.used:.4g}, "
+            f"fleet_cap={breach.cap:.4g}, would_add={breach.projected_add:.4g}, "
+            f"window={breach.window_seconds}s. fleet_used is the SUM of all tagged "
+            f"agents in the window, not {breach.agent_id} alone."
+        )
+    else:
+        attribution = (
+            f"agent={breach.agent_id} used={breach.used:.4g} of its own cap="
+            f"{breach.cap:.4g} (this IS {breach.agent_id}'s rolling usage), "
+            f"would_add={breach.projected_add:.4g}, window={breach.window_seconds}s."
+        )
+    message = (
+        f"TIP Spend Guard rolling cap exceeded: {breach.cap_dimension} [{scope}]. "
+        f"{attribution} "
+        "Reply 'yes' or prepend '[TIP: allow=once]' to bypass; "
+        "wait ~30 min for usage to age out, or operator may raise "
+        "the cap in spend_guard.rolling_caps."
+    )
     payload = {
         "error": {
             "type": ERR_ROLLING_CAP_BLOCKED,
-            "message": (
-                "TIP Spend Guard rolling cap exceeded: "
-                f"{breach.cap_dimension} (agent={breach.agent_id}, "
-                f"window={breach.window_seconds}s, used={breach.used:.4g}, "
-                f"cap={breach.cap:.4g}, would_add={breach.projected_add:.4g}). "
-                "Reply 'yes' or prepend '[TIP: allow=once]' to bypass; "
-                "wait ~30 min for usage to age out, or operator may raise "
-                "the cap in spend_guard.rolling_caps."
-            ),
+            "message": message,
+            # --- attribution-clear fields ---
+            "scope": scope,                       # "fleet" | "agent"
+            "triggered_by": breach.agent_id,      # the caller that tripped the cap
+            "fleet_used": breach.used if is_fleet else None,
+            "fleet_cap": breach.cap if is_fleet else None,
+            "window_seconds": breach.window_seconds,
+            # --- backward-compatible legacy fields (DO NOT remove) ---
             "cap_dimension": breach.cap_dimension,
             "agent_id": breach.agent_id,
-            "window_seconds": breach.window_seconds,
             "used": breach.used,
             "cap": breach.cap,
             "projected_add": breach.projected_add,
             "retry_after_seconds": breach.retry_after_seconds,
             "bypass_directive": "[TIP: allow=once]",
+        }
+    }
+    # Optional per-agent breakdown — included only when the breach carries it
+    # (top-N by spend in the window). Full population is a separate slice.
+    contributing = getattr(breach, "contributing_agents", None)
+    if contributing:
+        payload["error"]["contributing_agents"] = contributing
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
+def build_reservation_block(breach) -> bytes:
+    """Build the JSON response body for a concurrent-reservation denial.
+
+    `breach` is a :class:`reservation.ReservationBreach` — a
+    :class:`rolling_caps.CapBreach` carrying the settled/reserved split.
+    Unlike a rolling-cap breach (settled usage already spent, ~window to
+    age out), a reservation denial is usually transient: in-flight holds
+    drain at settlement or TTL, so retry guidance is in seconds.
+    """
+    is_fleet = str(breach.cap_dimension).startswith("per_fleet")
+    scope = "fleet" if is_fleet else "agent"
+    settled = float(getattr(breach, "settled_used", 0.0))
+    reserved = float(getattr(breach, "reserved_active", 0.0))
+    message = (
+        f"TIP Spend Guard concurrent-reservation denial: {breach.cap_dimension} "
+        f"[{scope}]. Admitting this request would commit "
+        f"{(breach.used + breach.projected_add):.4g} against cap={breach.cap:.4g} "
+        f"(settled={settled:.4g} + in-flight reserved={reserved:.4g} + "
+        f"this request={breach.projected_add:.4g}, window={breach.window_seconds}s). "
+        "In-flight holds release at settlement or expiry — retry shortly, "
+        "reply 'yes', or prepend '[TIP: allow=once]' to bypass."
+    )
+    payload = {
+        "error": {
+            "type": ERR_RESERVATION_BLOCKED,
+            "message": message,
+            "scope": scope,
+            "triggered_by": breach.agent_id,
+            "window_seconds": breach.window_seconds,
+            "cap_dimension": breach.cap_dimension,
+            "agent_id": breach.agent_id,
+            "used": breach.used,
+            "settled_used": settled,
+            "reserved_active": reserved,
+            "cap": breach.cap,
+            "projected_add": breach.projected_add,
+            "retry_after_seconds": breach.retry_after_seconds,
+            "bypass_directive": "[TIP: allow=once]",
+            "retryable": True,
+            "recovery_status": "user_action_required",
         }
     }
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")

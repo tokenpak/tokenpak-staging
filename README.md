@@ -1,11 +1,15 @@
-# TokenPak — Cut your LLM token spend by 30–50%, zero config
+# TokenPak — Cut your LLM token spend — zero config
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
-<!-- CI badge: pending repo transfer to tokenpak/tokenpak — add after transfer is confirmed -->
+![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)
 
-TokenPak is a local proxy that compresses your LLM context before it hits the API — fewer tokens, lower cost, same results. No code changes, no cloud, no credentials stored.
+> **The open logistics layer for AI context.**
+
+TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+
+**Status:** Beta — APIs and CLI may change between releases.
 
 ---
 
@@ -21,35 +25,33 @@ tokenpak integrate claude-code --apply  # wire Claude Code to the proxy
 ✅ Applied: Updated ~/.claude/settings.json (2 changes).
 ```
 
-Then verify it's working:
+Then see it work on your own machine:
 
 ```bash
 tokenpak demo
 ```
 
-```
-┌──────────────────────────────────────────────────────┐
-│  TokenPak — Live Compression Demo                    │
-├──────────────────────────────────────────────────────┤
-│  Scenario              DevOps agent (config + logs)  │
-│  Savings drivers                      dedup + alias  │
-├──────────────────────────────────────────────────────┤
-│  Original                                747 tokens  │
-│  Compressed                              502 tokens  │
-│  Saved                          245 tokens  (32.8%)  │
-│  Cost saved (est.)                $0.00073 per call  │
-├──────────────────────────────────────────────────────┤
-│  Stages: dedup, alias, segmentize, directives        │
-└──────────────────────────────────────────────────────┘
-```
+Run the local demo to inspect the Prompt Packing stages and a sample savings estimate on your machine.
 
 ---
 
 ## Works with
 
-**Claude Code** · **Cursor** · **Cline** · **Continue.dev** · **Aider** · **OpenAI SDK** · **Anthropic SDK** · **LiteLLM** · **Codex**
+TokenPak speaks the OpenAI and Anthropic HTTP APIs, so any client that targets those endpoints can route through it. The table below reflects what is verified in the repo's [adapter compatibility matrix](docs/adapter-compatibility-matrix.md) versus what is not yet verified.
 
-Run `tokenpak integrate` to see the full client list with setup guides for each.
+| Client / SDK | Status |
+|--------------|--------|
+| Claude Code | ✅ Supported — `tokenpak integrate claude-code` |
+| OpenAI SDK | ✅ Supported — tested |
+| Anthropic SDK | ✅ Supported — tested |
+| LiteLLM | ✅ Supported — tested |
+| Cursor | ⚠️ Experimental — verify before relying on it |
+| Cline | ⚠️ Experimental — verify before relying on it |
+| Continue.dev | ⚠️ Experimental — verify before relying on it |
+| Aider | ⚠️ Experimental — verify before relying on it |
+| Codex | ⚠️ Experimental — verify before relying on it |
+
+Run `tokenpak integrate` to see the current client list with setup guides for each.
 
 ---
 
@@ -57,6 +59,15 @@ Run `tokenpak integrate` to see the full client list with setup guides for each.
 
 ```bash
 pip install tokenpak
+```
+
+To upgrade an existing install (a plain `pip install tokenpak` will **not**
+upgrade an already-installed version):
+
+```bash
+pip install -U tokenpak
+# or
+tokenpak update
 ```
 
 See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
@@ -69,43 +80,37 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 ---
 
-## What's included (Free)
+## What's included (OSS)
 
-- **Context compression** — 30–50% token reduction on real agent workloads, <50ms latency
-  Reproduce: `make benchmark-headline`
-- **Client integration** — one command wires Claude Code, Cursor, Aider, and 6 other clients
+- **Prompt Packing** — fewer tokens on real agent workloads.
+  Reproduce on your own workload: `make benchmark-headline`
+- **Client integration** — one command wires Claude Code and other clients to the proxy
 - **Model routing** — send requests to the right model automatically, with fallback rules
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
 - **TIP Spend Guard** — pre-send circuit breaker; blocks runaway requests before provider call. Yes/No release or `[TIP: allow=once max=$X]` directive. Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative tracking. See [docs/spend-guard.md](docs/spend-guard.md).
 - **Vault indexing + semantic search** — index your codebase; search without an LLM call
-- **MultiPak Pro Phase 1 OSS surface** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. Full MultiPak (capture pipeline, recall ranking, Handoff Paks, anchor hydration) requires `tokenpak-paid` (Pro). See [docs/multipak.md](docs/multipak.md).
+- **MultiPak (OSS surface)** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. See [docs/multipak.md](docs/multipak.md).
 - **CLI + proxy server** — `tokenpak serve`, `tokenpak cost`, `tokenpak savings`
-- **A/B testing and replay/debug** — compare compression configs, replay past requests
+- **A/B testing and replay/debug** — compare Prompt Packing configs, replay past requests
 - **50 built-in compression recipes** — YAML, customizable
 
-80%+ of operations cost zero tokens. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
+Repeated context is reused from cache instead of re-sent on every call. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
 
 ---
 
-## Pricing
+## Open source & editions
 
-| | Free | Pro | Team |
-|--|:--:|:--:|:--:|
-| Context compression | ✅ | ✅ | ✅ |
-| Client integration (all 9) | ✅ | ✅ | ✅ |
-| Model routing | ✅ | ✅ | ✅ |
-| Cost tracking | ✅ | ✅ | ✅ |
-| Vault indexing + search | ✅ | ✅ | ✅ |
-| CLI + proxy | ✅ | ✅ | ✅ |
-| Advanced compression recipes | — | ✅ | ✅ |
-| Budget enforcement + alerts | — | ✅ | ✅ |
-| Priority support | — | ✅ | ✅ |
-| Multi-agent coordination | — | — | ✅ |
-| Shared vault (team) | — | — | ✅ |
-| RBAC + audit logs | — | — | ✅ |
-| **Price** | **Free** | **$99/mo** | **$299/mo** |
+TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are proprietary. Commercial packaging is not published yet.
 
-See [tokenpak.ai/pricing](https://tokenpak.ai/pricing) for full tier details and enterprise options.
+---
+
+## License
+
+The TokenPak open-source core is licensed under the Apache License 2.0 — see [LICENSE](LICENSE). TokenPak Pro and hosted services are proprietary.
+
+### Trademark
+
+"TokenPak", the TokenPak name, logo, and brand assets are trademarks of TokenPak and are **not** licensed under Apache-2.0 (Apache-2.0 §6 grants no trademark rights). Nominative and reference use — for example "works with TokenPak" or "a plugin for TokenPak" — is fine. Using the name or logo in a way that implies endorsement, sponsorship, or affiliation, or naming a fork, product, or service "TokenPak" (or something confusingly similar), is not.
 
 ---
 

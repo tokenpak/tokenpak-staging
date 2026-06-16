@@ -136,6 +136,39 @@ BUDGET_TOTAL_TOKENS: int = _cfg("budget.total_tokens", 12000, "TOKENPAK_BUDGET_T
 CHAT_FOOTER_ENABLED: bool = _cfg("features.chat_footer", False, "TOKENPAK_CHAT_FOOTER", bool)
 HTTP100_KEEPALIVE_ENABLED: bool = _cfg("features.http100_keepalive", False, "TOKENPAK_HTTP100_KEEPALIVE", bool)
 
+
+# ---------------------------------------------------------------------------
+# Skeleton capability probe
+#
+# SKELETON_ENABLED above is an *intent* flag only. The skeleton feature is
+# functional solely when the extractor module (tokenpak.skeleton_extractor)
+# can actually be imported. The extractor ships with the package (Phase 2,
+# p2-skeleton-extractor-implementation), so on a healthy install the probe
+# reports available — but the capability surface (doctor / status / health)
+# must still report from this *real probe*, not from the intent flag, so a
+# broken or partial install can never report "active" while chunk_shaping
+# falls back to its no-op path. Report via skeleton_active(), not
+# SKELETON_ENABLED.
+# ---------------------------------------------------------------------------
+def skeleton_available() -> bool:
+    """Real capability probe: True iff the skeleton extractor is importable."""
+    try:
+        from tokenpak.skeleton_extractor import extract_skeleton  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def skeleton_active() -> bool:
+    """True iff skeleton is enabled (intent) AND available (capability).
+
+    The only state in which skeleton extraction actually runs, and the value
+    the capability surface (doctor / status / health) must report.
+    """
+    return bool(SKELETON_ENABLED) and skeleton_available()
+
+
 # ---------------------------------------------------------------------------
 # TIP Spend Guard (proxy-side pre-send circuit breaker)
 # ---------------------------------------------------------------------------

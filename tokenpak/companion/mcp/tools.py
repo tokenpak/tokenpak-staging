@@ -12,6 +12,7 @@ goes through CompanionState methods so it's centralized and testable.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -22,6 +23,24 @@ from ..config import CompanionConfig
 # Matches pre_send.py's fallback (sonnet input rate). Kept local rather than
 # imported so tools.py has no cross-module coupling with the hook.
 _COMPANION_DEFAULT_INPUT_RATE_USD_PER_MTOK = 3.0
+
+
+def current_session_id() -> str:
+    """Read the live session id from the run-dir marker written by the
+    pre_send hook (session binding). The MCP server is a separate process
+    from the hook, so this file is the only channel by which it learns the
+    active session id. Returns "" if no marker exists yet."""
+    try:
+        run_dir = Path(os.environ.get(
+            "TOKENPAK_COMPANION_JOURNAL_DIR",
+            str(Path.home() / ".tokenpak" / "companion"),
+        )) / "run"
+        marker = run_dir / "current-session"
+        if marker.exists():
+            return marker.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return ""
 
 
 @dataclass
@@ -139,6 +158,20 @@ def _handle_check_budget(state: CompanionState, args: dict[str, Any]) -> str:
         })
     if status >= 400:
         return json.dumps(body)
+    # Honest-reporting (split-brain trust fix): the proxy only accounts for
+    # traffic actually routed through the TokenPak value plane. A client routed
+    # natively (e.g. provider-native caching, no TokenPak proxy in path) is NOT
+    # counted here — so a low/zero figure must never be read as authoritative
+    # total spend. Always attach an explicit scope note; never return a bare 0.
+    if isinstance(body, dict):
+        body = dict(body)
+        body["_tokenpak_scope"] = (
+            "Reflects ONLY traffic routed through the TokenPak value plane "
+            "(proxy/companion). Natively-routed client traffic is NOT counted "
+            "here; a low or zero figure does not mean low total spend. If this "
+            "client is not routed through TokenPak, treat TokenPak accounting "
+            "as unavailable for it."
+        )
     return json.dumps(body, indent=2)
 
 
@@ -262,8 +295,17 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
             "budget_daily_usd": state.config.budget_daily_usd,
             "hooks_enabled": state.config.hooks_enabled,
             "prune_threshold": state.config.prune_threshold,
+            "memory_dirs": [str(p) for p in getattr(state.config, "memory_dirs", [])],
         },
     }
+    # Make "no lessons" self-explaining: report whether a memory source is
+    # configured at all (TOKENPAK_COMPANION_MEMORY_DIRS / vault), so a
+    # fresh user knows why ingestion may be empty and how to point it at notes.
+    if not local["config"]["memory_dirs"]:
+        local["config"]["memory_source_hint"] = (
+            "no memory dirs configured — set TOKENPAK_COMPANION_MEMORY_DIRS "
+            "or pass --memory-dir to ingest your own Markdown notes"
+        )
     status, proxy_info = _proxy_get("/tpk/v1/session/info")
     if status == 200:
         local["proxy"] = proxy_info

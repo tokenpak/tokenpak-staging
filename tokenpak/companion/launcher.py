@@ -14,7 +14,8 @@ Config files are written to the fixed location ~/.tokenpak/companion/run/
 What the user sees:
     $ tokenpak claude
 
-      📦 TokenPak Companion
+      📦 TokenPak Claude Companion
+         TokenPak v1.8.0
          Ready • Mode: Balanced • Budget: Unlimited
          Proxy active → http://localhost:8766
 
@@ -32,6 +33,53 @@ import sys
 from pathlib import Path
 
 from .config import CompanionConfig
+
+# ---------------------------------------------------------------------------
+# Fleet mode (runtime unattended bypass)
+#
+# Launcher-scoped permission bypass driven by TokenPak-owned state
+# (~/.config/tokenpak/permissions.toml, written by `tokenpak permissions
+# set fleet`). DISTINCT from the bare-mode injection in main(): bare mode
+# strips the companion layers because an external gateway owns them and
+# always bypasses; fleet mode is the user-facing unattended-run opt-in and
+# leaves every other companion layer active. Neither path ever writes the
+# flag into ~/.claude/settings.json — the persistent trust level (tier)
+# lives there and is managed solely by `tokenpak permissions` /
+# `tokenpak integrate`.
+# ---------------------------------------------------------------------------
+
+_FLEET_BYPASS_FLAG = "--dangerously-skip-permissions"
+
+
+def _fleet_mode_enabled() -> bool:
+    """True when launcher fleet mode is enabled. Never raises."""
+    try:
+        from tokenpak.cli.commands.permissions import fleet_mode_enabled
+
+        return fleet_mode_enabled()
+    except Exception:
+        return False
+
+
+def _apply_fleet_mode(claude_args: list[str], fleet: bool, stream=None) -> list[str]:
+    """Inject the bypass flag + print the mandatory banner when fleet is on.
+
+    Returns a new list (never mutates the input). The stderr banner is the
+    canonical user-visible guardrail for fleet launches — do not remove or
+    soften it. No duplicate flag is added when one is already present
+    (e.g. bare mode or a user-passed flag).
+    """
+    out = list(claude_args)
+    if not fleet:
+        return out
+    if _FLEET_BYPASS_FLAG not in out:
+        out.append(_FLEET_BYPASS_FLAG)
+    print(
+        f"tokenpak: fleet mode — bypass flags injected ({_FLEET_BYPASS_FLAG})",
+        file=stream if stream is not None else sys.stderr,
+    )
+    return out
+
 
 # System prompt fragment injected via --append-system-prompt-file
 _SYSTEM_PROMPT = """\
@@ -100,12 +148,14 @@ def main(args: list[str] | None = None) -> int:
         env["ANTHROPIC_BASE_URL"] = proxy_url
 
     # Print styled startup banner
-    from tokenpak.cli.commands.status import MEME_LINES
+    from tokenpak.cli.commands.status import MEME_LINES, _get_version
     meme = random.choice(MEME_LINES)
+    version = _get_version()  # dynamic, e.g. "v1.8.0" (single source: tokenpak.__version__)
 
     print(file=sys.stderr)
     bare_tag = " \u2022 Bare: ON" if config.bare else ""
-    print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Companion", file=sys.stderr)
+    print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Claude Companion", file=sys.stderr)
+    print(f"     {_DIM}TokenPak {version}{_RESET}", file=sys.stderr)
     print(f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{bare_tag}{_RESET}", file=sys.stderr)
     if proxy_url:
         print(f"     {_DIM}Proxy active \u2192 {proxy_url}{_RESET}", file=sys.stderr)
@@ -134,6 +184,10 @@ def main(args: list[str] | None = None) -> int:
 
     # Pass through any user-provided args
     claude_args.extend(args)
+
+    # Fleet mode (runtime unattended bypass) — launcher state only; see the
+    # fleet section near the top of this module for the bare-mode contrast.
+    claude_args = _apply_fleet_mode(claude_args, _fleet_mode_enabled())
 
     # Exec into claude — replaces this process. The session title is owned by
     # Claude Code natively: the branded launch name is passed via ``--name``
@@ -207,7 +261,11 @@ def _write_mcp_config(config: CompanionConfig) -> str:
             "tokenpak-companion": {
                 "type": "stdio",
                 "command": sys.executable,
-                "args": ["-m", "tokenpak.companion.mcp.server"],
+                # -P keeps the launch directory off sys.path so a ``tokenpak``
+                # dir/symlink in the cwd can't shadow the installed package
+                # (which would resolve it as a namespace package and drop
+                # ``__version__``, crashing the server on import).
+                "args": ["-P", "-m", "tokenpak.companion.mcp.server"],
             }
         }
     }
@@ -314,14 +372,16 @@ def _write_settings(config: CompanionConfig) -> str:
     # vault checkout or any operator-state directory, and every session
     # trips the sandbox. Only adds dirs that actually exist on this host
     # — no phantom paths. Operators who need additional candidate dirs
-    # beyond ``~/vault`` can list them (colon-separated; absolute paths
-    # or names relative to ``$HOME``) in the
-    # ``TOKENPAK_COMPANION_EXTRA_DIRS`` environment variable.
+    # beyond ``~/vault`` can list them (absolute paths or names relative to
+    # ``$HOME``) in the ``TOKENPAK_COMPANION_EXTRA_DIRS`` environment variable.
+    # Entries are separated by the platform path separator (``:`` on POSIX,
+    # ``;`` on Windows), matching the convention used by ``$PATH``.
     add_dirs = permissions.setdefault("additionalDirectories", [])
     candidates: list[Path] = [Path.home() / "vault"]
     extra = os.environ.get("TOKENPAK_COMPANION_EXTRA_DIRS", "")
-    for entry in (s.strip() for s in extra.split(":") if s.strip()):
-        candidates.append(Path(entry) if entry.startswith("/") else Path.home() / entry)
+    for entry in (s.strip() for s in extra.split(os.pathsep) if s.strip()):
+        path = Path(entry)
+        candidates.append(path if path.is_absolute() else Path.home() / entry)
     for candidate in candidates:
         if candidate.is_dir():
             candidate_str = str(candidate)

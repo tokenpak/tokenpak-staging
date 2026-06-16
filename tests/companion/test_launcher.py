@@ -84,7 +84,23 @@ def test_write_mcp_config_structure(tmp_path):
     server = mcp_data["mcpServers"]["tokenpak-companion"]
     assert server["type"] == "stdio"
     assert server["command"] == sys.executable
-    assert server["args"] == ["-m", "tokenpak.companion.mcp.server"]
+    assert server["args"] == ["-P", "-m", "tokenpak.companion.mcp.server"]
+
+
+def test_write_mcp_config_uses_safe_python_path(tmp_path):
+    """MCP server is launched with -P so a ``tokenpak`` entry in the launch
+    cwd cannot shadow the installed package (cwd-shadow regression guard)."""
+    cfg = CompanionConfig(journal_dir=tmp_path / "journal")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
+        launcher._write_mcp_config(cfg)
+    server = json.loads((run_dir / "mcp.json").read_text())["mcpServers"][
+        "tokenpak-companion"
+    ]
+    assert "-P" in server["args"]
+    # -P must precede -m to take effect for the module launch.
+    assert server["args"].index("-P") < server["args"].index("-m")
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +307,11 @@ def test_prefix_session_name_does_not_mutate_input():
 # main() — proxy detection exception path
 # ---------------------------------------------------------------------------
 
-def test_main_proxy_detection_exception_path(tmp_path):
+def test_main_proxy_detection_exception_path(tmp_path, monkeypatch):
     """When httpx raises, proxy detection falls through without setting ANTHROPIC_BASE_URL."""
+    # An ANTHROPIC_BASE_URL inherited from the invoking shell would leak
+    # into the captured exec env and shadow what the launcher itself does.
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     run_dir = tmp_path / "run"
     journal_dir = tmp_path / "journal"
 

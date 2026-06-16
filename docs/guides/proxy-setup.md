@@ -222,10 +222,8 @@ Override any config value with env vars:
 Run TokenPak as a system service:
 
 ```bash
-# Install the service unit
-tokenpak service install
-
-# Start and enable
+# Generate the service unit and enable it
+tokenpak doctor --fix
 systemctl --user enable tokenpak
 systemctl --user start tokenpak
 
@@ -263,6 +261,6 @@ tokenpak config set proxy.mode strict
 tokenpak debug on --requests 1
 # Make a request, then:
 tokenpak debug off
-tokenpak trace --last
+tokenpak debug list
 # Check that Authorization header was forwarded unchanged
 ```

@@ -46,11 +46,262 @@ def _proxy_get(path: str, port: int | None = None, timeout: int = 3) -> dict | N
         return None
 
 
+# Canonical proxy URL the routed Claude Code config is expected to point at.
+# Mirrors install.PROXY_URL so the route check compares against the same value
+# `tokenpak setup` writes. Overridable via TOKENPAK_PROXY_URL for non-default ports.
+CANONICAL_PROXY_URL = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+
+
+def _claude_settings_path() -> Path:
+    """Path to Claude Code's settings.json (~/.claude/settings.json)."""
+    return Path.home() / ".claude" / "settings.json"
+
+
+def _route_state() -> tuple[str, str | None]:
+    """Resolve Claude Code → TokenPak proxy routing state, honestly.
+
+    Reads ``~/.claude/settings.json`` ``env.ANTHROPIC_BASE_URL`` and compares it
+    to the canonical proxy URL. Returns ``(state, base_url)`` where ``state`` is:
+
+    - ``"active"``      — base URL points at the canonical TokenPak proxy.
+    - ``"other"``       — base URL is set but points elsewhere (a non-TokenPak gateway).
+    - ``"not routed"``  — no settings file / no ANTHROPIC_BASE_URL key.
+    - ``"unknown"``     — settings file present but unreadable (never fabricate).
+
+    Never raises. A corrupt/unreadable settings file yields ``"unknown"`` rather
+    than a made-up state (truth-over-polish).
+    """
+    settings = _claude_settings_path()
+    if not settings.exists():
+        return ("not routed", None)
+    try:
+        data = json.loads(settings.read_text())
+    except Exception:
+        # File exists but is unreadable/corrupt — honest "unknown", not "not routed".
+        return ("unknown", None)
+    base_url = ""
+    if isinstance(data, dict):
+        env = data.get("env")
+        if isinstance(env, dict):
+            base_url = str(env.get("ANTHROPIC_BASE_URL", "") or "").strip()
+    if not base_url:
+        return ("not routed", None)
+
+    def _norm(u: str) -> str:
+        # Treat the loopback aliases as one host: a proxy at localhost:8766 and
+        # 127.0.0.1:8766 is the same TokenPak proxy, so don't report a textual
+        # mismatch as "other gateway".
+        u = u.rstrip("/").lower()
+        return u.replace("://localhost", "://127.0.0.1")
+
+    if _norm(base_url) == _norm(CANONICAL_PROXY_URL):
+        return ("active", base_url)
+    return ("other", base_url)
+
+
+def _update_state() -> tuple[str, str | None]:
+    """Resolve "is an update available?" from the CACHED L1 check only.
+
+    Reuses the L1 update-check cache (``_cli_core._read_update_cache``) — it does
+    NOT issue a fresh blocking network probe (truth-over-polish + zero added
+    latency in doctor). Returns ``(state, latest)`` where ``state`` is:
+
+    - ``"available"`` — cached PyPI version is newer than the running version.
+    - ``"current"``   — cached version is <= running version (up to date).
+    - ``"unknown"``   — no usable cache (never checked yet, opted out, or the
+                        cache is stale/empty); doctor reports ``Unknown`` rather
+                        than forcing a network call.
+
+    Never raises.
+    """
+    try:
+        from tokenpak import _cli_core
+
+        if _cli_core._update_nudge_opted_out():
+            return ("unknown", None)
+        _checked_at, cached_latest = _cli_core._read_update_cache()
+        if not cached_latest:
+            # No cached value (never run a launcher, or last check failed).
+            return ("unknown", None)
+        from packaging.version import Version as _PV
+
+        from tokenpak import __version__ as current_ver
+
+        if _PV(cached_latest) > _PV(current_ver):
+            return ("available", cached_latest)
+        return ("current", cached_latest)
+    except Exception:
+        return ("unknown", None)
+
+
+def _proxy_state() -> str:
+    """Resolve proxy run-state honestly, reusing the scope#1 cached status source.
+
+    Delegates to ``menu_status.snapshot()`` — the cached, non-blocking,
+    backoff-protected probe introduced by the menu-renderer foundation — so
+    doctor and the interactive menu agree on proxy state and neither fabricates.
+    Returns one of ``running`` / ``stopped`` / ``starting`` / ``unknown``.
+    Falls back to ``unknown`` if that module is unavailable.
+    """
+    try:
+        from tokenpak.cli.commands import menu_status
+
+        return menu_status.snapshot(probe=True).state
+    except Exception:
+        return "unknown"
+
+
+# Lifecycle-summary glyphs (within the doctor 5-emoji allow-list: ✅ ⚠️ ❌).
+_GLYPH = {"green": "✅", "yellow": "⚠️ ", "red": "❌"}
+
+# stdlib box-drawing (no Rich/new deps) — matches the menu receipt-card charset.
+_BOX = {
+    "tl": "┌", "tr": "┐", "bl": "└", "br": "┘",
+    "h": "─", "v": "│", "ml": "├", "mr": "┤",
+}
+
+
+def build_lifecycle_summary(
+    *,
+    version: str,
+    setup_present: bool,
+    route_state: str,
+    proxy_state: str,
+    update_state: str,
+    update_latest: str | None = None,
+) -> str:
+    """Build the compact lifecycle panel as a plain string (snapshot-testable).
+
+    Pure string builder — takes already-resolved, honest values and renders a
+    stdlib box-drawing panel. Each row carries a green/yellow/red glyph plus a
+    single next-step hint. Unknown probes render ``Unknown`` (never fabricated).
+
+    The five rows model the install → setup → route → proxy → update lifecycle:
+      Installed · Setup · Routed · Proxy · Update
+    """
+    # (label, color, value, hint) — value/hint already honest.
+    rows: list[tuple[str, str, str, str]] = []
+
+    # Installed — the package is importable, so always green with the version.
+    rows.append(("Installed", "green", f"v{version}", ""))
+
+    # Setup — config.json present under the resolved home?
+    if setup_present:
+        rows.append(("Setup", "green", "config present", ""))
+    else:
+        rows.append(("Setup", "yellow", "no config", "Run: tokenpak setup"))
+
+    # Routed — Claude Code → TokenPak proxy.
+    if route_state == "active":
+        rows.append(("Routed", "green", "active", ""))
+    elif route_state == "other":
+        rows.append(("Routed", "yellow", "other gateway", "Run: tokenpak setup"))
+    elif route_state == "not routed":
+        rows.append(("Routed", "yellow", "not routed", "Run: tokenpak setup"))
+    else:  # unknown
+        rows.append(("Routed", "yellow", "Unknown", "Check ~/.claude/settings.json"))
+
+    # Proxy — running / stopped / starting / unknown.
+    if proxy_state == "running":
+        rows.append(("Proxy", "green", "running", ""))
+    elif proxy_state == "starting":
+        rows.append(("Proxy", "yellow", "starting", "wait for boot to finish"))
+    elif proxy_state == "stopped":
+        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak proxy restart"))
+    else:  # unknown
+        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak proxy restart"))
+
+    # Update — from the cached L1 check only.
+    if update_state == "available":
+        rows.append((
+            "Update",
+            "yellow",
+            f"{update_latest} available" if update_latest else "available",
+            "Run: tokenpak update",
+        ))
+    elif update_state == "current":
+        rows.append(("Update", "green", "up to date", ""))
+    else:  # unknown
+        rows.append(("Update", "green", "Unknown", ""))
+
+    # --- render ---------------------------------------------------------------
+    # The status glyphs (✅/⚠️/❌) and the arrow (→) occupy 2 terminal columns
+    # each while ``len()`` counts them as 1. Measure *display* width so the right
+    # border lines up regardless of how many wide glyphs a row carries.
+    _wide = set(_GLYPH.values()) | {"✅", "⚠️", "⚠️ ", "❌", "→"}
+
+    def _disp_width(text: str) -> int:
+        w = 0
+        for ch in text:
+            o = ord(ch)
+            if o == 0xFE0F:
+                # VARIATION SELECTOR-16: zero-width on its own; it promotes the
+                # preceding base symbol to emoji (already counted as 2 below).
+                continue
+            if (
+                0x1F300 <= o <= 0x1FAFF  # emoji blocks (✅ ❌ etc.)
+                or 0x2600 <= o <= 0x27BF  # misc symbols + dingbats (⚠ ✅)
+                or o == 0x2192  # → rightwards arrow renders 2-wide in most terms
+            ):
+                w += 2
+            else:
+                w += 1
+        return w
+
+    title = "TokenPak lifecycle"
+    body_texts: list[str] = []
+    for label, color, value, hint in rows:
+        glyph = _GLYPH[color]
+        text = f" {glyph} {label:<10} {value}"
+        if hint:
+            text += f"  →  {hint}"
+        body_texts.append(text)
+
+    widest = max([_disp_width(title) + 1] + [_disp_width(t) for t in body_texts])
+    inner = max(widest + 2, 40)
+
+    def _line(text: str) -> str:
+        pad = inner - _disp_width(text)
+        if pad < 0:
+            pad = 0
+        return f"{_BOX['v']}{text}{' ' * pad}{_BOX['v']}"
+
+    out: list[str] = []
+    out.append(f"{_BOX['tl']}{_BOX['h'] * inner}{_BOX['tr']}")
+    out.append(_line(f" {title}"))
+    out.append(f"{_BOX['ml']}{_BOX['h'] * inner}{_BOX['mr']}")
+    for text in body_texts:
+        out.append(_line(text))
+    out.append(f"{_BOX['bl']}{_BOX['h'] * inner}{_BOX['br']}")
+    return "\n".join(out)
+
+
+def verify_integration_target(key: str, proxy_url: str) -> tuple[bool, str]:
+    """Lightweight post-apply check for a named integration target.
+
+    Called from ``tokenpak integrate`` guided form after --apply succeeds.
+    Returns (ok, human_message). Does NOT run the full doctor suite.
+    Unknown keys return (True, "no verify available") rather than raising.
+    """
+    from tokenpak.cli.commands.integrate import _find as _integrate_find
+
+    integration = _integrate_find(key)
+    if integration is None:
+        return (True, f"no verify available for unknown key {key!r}")
+    if integration.verify_fn is None:
+        return (True, "no verify available — run tokenpak status to confirm")
+    try:
+        return integration.verify_fn(proxy_url)
+    except Exception as exc:
+        return (False, f"verify raised: {exc}")
+
+
 def run_doctor(
     fix: bool = False,
     output_json: bool = False,
     verbose: bool = False,
     claude_code: bool = False,
+    lifecycle: bool = False,
 ) -> int:
     """Run all diagnostic checks. Returns exit code (0=pass, 1=warn, 2=errors).
 
@@ -59,20 +310,50 @@ def run_doctor(
         output_json: Output results as machine-readable JSON instead of human text.
         verbose: Show extra detail for each check.
         claude_code: Run Claude Code integration checks (ENABLE_TOOL_SEARCH, mode, IDE).
+        lifecycle: Render only the compact lifecycle summary panel and exit.
     """
+    from tokenpak import _paths
+
+    # Resolve through _paths so doctor reports the canonical home (~/.tpk/) when
+    # present, and surfaces the legacy fallback when the user hasn't migrated.
+    tokenpak_dir = _paths.home()
+
+    # --- Lifecycle summary (default-visible; --lifecycle = only this) ---------
+    # Built from honest, already-resolved probes: route state, the cached L1
+    # update check (no fresh network call), the scope#1 cached proxy probe, and
+    # config presence. Unknown probes render "Unknown", never a fabricated state.
+    def _lifecycle_panel() -> str:
+        from tokenpak import __version__ as _ver
+
+        route_st, _ = _route_state()
+        upd_st, upd_latest = _update_state()
+        return build_lifecycle_summary(
+            version=_ver,
+            setup_present=(tokenpak_dir / "config.json").exists(),
+            route_state=route_st,
+            proxy_state=_proxy_state(),
+            update_state=upd_st,
+            update_latest=upd_latest,
+        )
+
+    if lifecycle and not output_json:
+        # --lifecycle: render the panel alone and exit (no full check suite).
+        print()
+        print(_lifecycle_panel())
+        print()
+        return 0
+
     if not output_json:
         print("\nTOKENPAK  |  Doctor")
         print("──────────────────────────────\n")
+        # Default doctor run leads with the lifecycle summary so the operator
+        # sees the install→setup→route→proxy→update story up front.
+        print(_lifecycle_panel())
+        print()
 
     counts = {"pass": 0, "warn": 0, "fail": 0}
     fixes: list[tuple[str, Path]] = []
     checks: list[dict] = []
-    # Resolve through _paths so doctor reports the canonical
-    # home (~/.tpk/) when present, and surfaces the legacy fallback
-    # when the user hasn't run `tokenpak home migrate` yet.
-    from tokenpak import _paths
-
-    tokenpak_dir = _paths.home()
 
     def _record(
         name: str,
@@ -186,8 +467,52 @@ def run_doctor(
                 f"Proxy not reachable port {proxy_port} — check failed",
             )
 
+    # === Check 1b: Routing state (Claude Code → TokenPak proxy) ==================
+    # Promoted into the DEFAULT run (previously only surfaced under --claude-code).
+    # Derived from ~/.claude/settings.json env.ANTHROPIC_BASE_URL vs the canonical
+    # proxy URL. Honest: a corrupt/unreadable settings file reports "unknown",
+    # never a fabricated routed/not-routed verdict.
+    _route_st, _route_url = _route_state()
+    if _route_st == "active":
+        _record(
+            "routing",
+            "pass",
+            f"Routing             Claude Code → TokenPak proxy (active) — {_route_url}",
+            detail=f"ANTHROPIC_BASE_URL={_route_url} matches canonical {CANONICAL_PROXY_URL}",
+        )
+    elif _route_st == "other":
+        _record(
+            "routing",
+            "warn",
+            f"Routing             Claude Code → other gateway (not TokenPak) — {_route_url}\n"
+            "                    Fix: tokenpak setup",
+            detail=f"ANTHROPIC_BASE_URL={_route_url} (not the canonical {CANONICAL_PROXY_URL})",
+        )
+    elif _route_st == "not routed":
+        _record(
+            "routing",
+            "warn",
+            "Routing             Claude Code → TokenPak proxy (not routed) — run: tokenpak setup",
+            detail="No ANTHROPIC_BASE_URL in ~/.claude/settings.json (or file absent)",
+        )
+    else:  # unknown
+        _record(
+            "routing",
+            "warn",
+            "Routing             Unknown — ~/.claude/settings.json present but unreadable",
+            detail="settings.json exists but could not be parsed; not fabricating a route verdict",
+        )
+
     # === Check 2: DB path and row count =========================================
-    db_path = tokenpak_dir / "monitor.db"
+    # D5 (feed normalization): resolve via the canonical candidate chain
+    # (_paths.monitor_db) instead of home()/monitor.db, so doctor reads the SAME
+    # DB as status, _cli_core, and the proxy writer. home() alone bypasses the
+    # chain — once ~/.tpk/ exists without a monitor.db, home() points there and
+    # doctor would report "not found" while the proxy writes ~/.tokenpak/ or
+    # ~/tokenpak/ (the latent split-brain). Falls back to home()/monitor.db only
+    # if the resolver finds nothing (preserves the prior "not found" path).
+    _resolved_db = _paths.monitor_db(mode="read")
+    db_path = _resolved_db if _resolved_db is not None else (tokenpak_dir / "monitor.db")
     if db_path.exists():
         try:
             conn = sqlite3.connect(str(db_path))
@@ -569,48 +894,55 @@ def run_doctor(
             "Recent error rate   monitor.db not found",
         )
 
-    # === Check 9: Token savings summary from last 100 requests ==================
+    # === Check 9: Token savings summary (honest, attribution-aware) =============
+    # Route through the same savings engine that ``tokenpak status`` uses so the
+    # doctor figure equals the status figure for the same window. That engine is
+    # cache-origin-aware: it credits only proxy-caused compression and cache
+    # reads, and never conflates client-placed (passthrough) cache with savings.
+    # The old path here did a raw SUM(input_tokens - compressed_tokens) over the
+    # last 100 rows with no origin filter, which over-claimed against an
+    # input-equals-100% denominator.
     if db_path.exists():
         try:
-            conn = sqlite3.connect(str(db_path))
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT "
-                "  COUNT(*) as total, "
-                "  SUM(input_tokens) as total_input, "
-                "  SUM(compressed_tokens) as total_sent, "
-                "  SUM(input_tokens - compressed_tokens) as tokens_saved, "
-                "  SUM(estimated_cost) as total_cost "
-                "FROM ("
-                "  SELECT input_tokens, compressed_tokens, estimated_cost "
-                "  FROM requests "
-                "  WHERE compressed_tokens IS NOT NULL AND input_tokens > 0 "
-                "  ORDER BY id DESC LIMIT 100"
-                ")"
-            )
-            row = cur.fetchone()
-            conn.close()
-            if row and row[0] and row[0] > 0:
-                total, total_input, total_sent, tokens_saved, total_cost = row
-                tokens_saved = tokens_saved or 0
-                total_input = total_input or 0
-                pct_saved = (tokens_saved / total_input * 100) if total_input > 0 else 0
-                cost_str = f"${total_cost:.4f}" if total_cost else "$0.0000"
-                _record(
-                    "token_savings",
-                    "pass",
-                    f"Token savings       {tokens_saved:,} saved ({pct_saved:.1f}%) "
-                    f"— {total} reqs, cost {cost_str}",
-                    detail=(
-                        f"total_input={total_input:,} sent={total_sent:,} "
-                        f"saved={tokens_saved:,} ({pct_saved:.1f}%) cost={cost_str}"
-                    ),
-                )
-            else:
+            from tokenpak.cli.commands.status import _calculate_fleet_savings
+
+            # Match the status default window ("today", user-local day) so the
+            # two surfaces report the same number.
+            report = _calculate_fleet_savings(db_path=str(db_path), period="today")
+            err = report.get("error")
+            if err in ("no_data", "db_not_found"):
                 _record(
                     "token_savings",
                     "warn",
-                    "Token savings       no compressed request data yet",
+                    "Token savings       no request data yet (today)",
+                )
+            elif err:
+                _record(
+                    "token_savings",
+                    "warn",
+                    f"Token savings       could not compute: {err}",
+                )
+            else:
+                totals = report["totals"]
+                models = report["models"]
+                saved_cost = totals["saved"]
+                pct_saved = totals["savings_pct"]
+                req_count = totals["requests"]
+                compressed_tok = sum(m["compressed_tokens"] for m in models)
+                with_cost = totals["with_cost"]
+                cost_str = f"${with_cost:.4f}"
+                _record(
+                    "token_savings",
+                    "pass",
+                    f"Token savings       ${saved_cost:.4f} saved ({pct_saved:.1f}%) "
+                    f"— {req_count} reqs today, cost {cost_str}",
+                    detail=(
+                        f"saved=${saved_cost:.4f} ({pct_saved:.1f}%) "
+                        f"compressed_tokens={compressed_tok:,} "
+                        f"cache_savings=${totals['cache_savings']:.4f} "
+                        f"compression_savings=${totals['compression_savings']:.4f} "
+                        f"cost={cost_str} window=today"
+                    ),
                 )
         except Exception as exc:
             _record(
@@ -778,12 +1110,31 @@ def run_doctor(
             f"API keys            {', '.join(found_keys)} — env vars set",
         )
     else:
-        _record(
-            "api_keys",
-            "warn",
-            "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "or GOOGLE_API_KEY",
-        )
+        # No direct key env var set. A direct ANTHROPIC_API_KEY is only
+        # genuinely needed when no OAuth / proxy / session-auth path covers
+        # Anthropic; warning otherwise is a false alarm. Reuse the canonical
+        # credential discovery to decide.
+        try:
+            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+
+            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+        except Exception:
+            anthropic_via_oauth = False
+
+        if anthropic_via_oauth:
+            _record(
+                "api_keys",
+                "pass",
+                "API keys            Anthropic authenticated via OAuth/session "
+                "(no direct API key needed)",
+            )
+        else:
+            _record(
+                "api_keys",
+                "warn",
+                "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+                "or GOOGLE_API_KEY",
+            )
 
     # Proxy degradation check
     try:
@@ -906,6 +1257,37 @@ def run_doctor(
                     print(f"  ✓ Created {d}")
     else:
         _record("required_dirs", "pass", "Required dirs       all present")
+
+    # === Permission tiers (persistent tier vs launcher fleet mode) ==============
+    # Three-row display. The persistent-tier rows can only ever read
+    # strict/standard/auto/custom — never "fleet" (fleet is the separate
+    # launcher boolean row). External modification of a managed key is an
+    # error: doctor exits non-zero with a guidance line.
+    try:
+        from tokenpak.cli.commands.permissions import doctor_rows as _perm_rows
+
+        _tier_rows, _tier_drift = _perm_rows()
+        _drift_guidance = (
+            "\n         → A client config was modified outside TokenPak. Run "
+            "`tokenpak permissions set <tier>` to re-apply or "
+            "`tokenpak permissions reset` to clear the managed keys."
+        )
+        for _row in _tier_rows:
+            _row_drift = _row.startswith(
+                ("Claude Code persistent tier", "Codex persistent tier")
+            ) and "custom" in _row
+            _record(
+                "permission_tier",
+                "fail" if _row_drift else "pass",
+                _row + (_drift_guidance if _row_drift else ""),
+            )
+    except Exception as _pt_e:  # pragma: no cover — display must never crash doctor
+        _record(
+            "permission_tier",
+            "warn",
+            f"Permission tiers    could not read tier state: {type(_pt_e).__name__}",
+            detail=str(_pt_e),
+        )
 
     # === Claude Code integration checks (--claude-code) =========================
     if claude_code:
@@ -1053,10 +1435,11 @@ def run_doctor(
                 detail="TMUX env var not set; no concurrent-access advisory needed.",
             )
 
-        # === 8-point Claude Code operational health checks ======================
+        # === Claude Code operational health checks ==============================
         if not output_json:
             print()
             print("── Claude Code operational checks ─────")
+        from .doctor_claude_code import NUM_CHECKS as _CC_NUM_CHECKS
         from .doctor_claude_code import run_claude_code_checks
         cc_fail_count, cc_results = run_claude_code_checks(output_json=output_json, verbose=verbose)
         for result in cc_results:
@@ -1081,7 +1464,7 @@ def run_doctor(
                 })
         if not output_json:
             print()
-            print(f"{cc_fail_count} of 8 checks failed.")
+            print(f"{cc_fail_count} of {_CC_NUM_CHECKS} checks failed.")
 
     # === JSON output ============================================================
     if output_json:
@@ -1123,6 +1506,43 @@ def run_doctor(
     return 0
 
 
+def run_stream_check(output_json: bool = False) -> int:
+    """Exercise the companion truncated-stream guard. Returns exit code.
+
+    Drives the defensive stream reader over a fake provider that closes the
+    connection mid-chunk (no terminal ``message_stop``). Exits 0 when the
+    guard flags the truncation with the stable ``TPK_STREAM_TRUNCATED`` code
+    and writes the structured ``provider.error`` telemetry event.
+    """
+    from tokenpak.companion import stream as _stream
+
+    result = _stream.self_check()
+    passed = bool(result.get("passed"))
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return 0 if passed else 2
+
+    print("\nTOKENPAK  |  Doctor — stream guard")
+    print("──────────────────────────────\n")
+    if passed:
+        print(Colors.ok(
+            f"Stream guard        truncation flagged ({result.get('code')}); "
+            f"provider.error event written"
+        ))
+        print("\n──────────────────────────────")
+        print("0 errors, 0 warnings.")
+        return 0
+    print(Colors.fail(
+        "Stream guard        FAILED to flag truncated stream — "
+        f"flagged={result.get('flagged')} code={result.get('code')} "
+        f"event_written={result.get('event_written')}"
+    ))
+    print("\n──────────────────────────────")
+    print("1 error, 0 warnings.")
+    return 2
+
+
 try:
     import click
 
@@ -1142,6 +1562,14 @@ try:
         "--claude-code", "claude_code", is_flag=True,
         help="Run Claude Code integration checks (ENABLE_TOOL_SEARCH, mode, IDE detection)",
     )
+    @click.option(
+        "--stream", "stream", is_flag=True,
+        help="Exercise the truncated-stream guard via a fake provider that closes mid-chunk",
+    )
+    @click.option(
+        "--lifecycle", "lifecycle", is_flag=True,
+        help="Show only the compact lifecycle summary (installed/setup/routed/proxy/update)",
+    )
     def doctor_cmd(
         fix: bool,
         fleet: bool,
@@ -1149,6 +1577,8 @@ try:
         verbose: bool,
         output_json: bool,
         claude_code: bool,
+        stream: bool,
+        lifecycle: bool,
     ) -> None:
         """Run diagnostics on your TokenPak installation.
 
@@ -1172,10 +1602,18 @@ try:
           tokenpak doctor --fleet --fix     # check + fix all agents
           tokenpak doctor --fleet --deploy  # push latest doctor to all agents first
         """
-        if fleet:
+        if stream:
+            rc = run_stream_check(output_json=output_json)
+        elif fleet:
             rc = run_fleet_doctor(fix=fix, deploy=deploy)
         else:
-            rc = run_doctor(fix=fix, output_json=output_json, verbose=verbose, claude_code=claude_code)
+            rc = run_doctor(
+                fix=fix,
+                output_json=output_json,
+                verbose=verbose,
+                claude_code=claude_code,
+                lifecycle=lifecycle,
+            )
         sys.exit(rc)
 
 except ImportError:

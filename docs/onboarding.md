@@ -112,7 +112,7 @@ This shows your cumulative savings since install: total tokens saved, estimated 
 
 ### What to Look For
 
-A healthy setup saves 20–50% tokens on typical mixed workloads. If you're seeing less than 15%, check these:
+A healthy setup measurably reduces tokens on typical mixed workloads — check your own with `tokenpak savings`. If you're seeing little or no reduction, check these:
 
 - Is compression set to `balanced` or `aggressive` mode? (Check `~/.tokenpak/config.json`, key `compression.level`)
 - Are your requests using long system prompts or repetitive context? Those compress best.
@@ -354,20 +354,13 @@ For longer-term monitoring, the `/metrics` endpoint exposes Prometheus-compatibl
 Every request is logged locally. Query recent activity:
 
 ```bash
-tokenpak trace --last 50
+tokenpak debug list
 ```
 
-Filter by model or cost:
+Export a specific request trace for analysis:
 
 ```bash
-tokenpak trace --last 50 --model claude-3-5-sonnet
-tokenpak trace --last 50 --min-cost 0.01
-```
-
-Export the full log for analysis:
-
-```bash
-tokenpak trace --export --format json > audit.json
+tokenpak debug export <trace_id> --json > trace.json
 ```
 
 ### Production Checklist
@@ -377,7 +370,7 @@ tokenpak trace --export --format json > audit.json
 - [ ] `curl http://localhost:8766/health` returns `"status": "ok"`
 - [ ] Monthly budget is set
 - [ ] At least one alert channel is configured
-- [ ] `tokenpak trace --last 50` returns recent request data
+- [ ] `tokenpak debug list` returns recent request data
 - [ ] You know how to query the audit log
 
 ---

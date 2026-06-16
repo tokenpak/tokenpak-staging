@@ -24,7 +24,7 @@ All options live in ``SemanticCacheConfig``::
     )
     sc = SemanticCache(cfg)
 
-Integration (CCG-15: wire-format-aware)
+Integration (wire-format-aware)
 -----------
 Call ``lookup`` BEFORE the upstream LLM call, passing the expected response
 format.  Call ``store`` AFTER you receive the upstream response, passing the
@@ -45,11 +45,18 @@ Wire-format rules:
   - Cross-format lookups always return a cache miss — never serve JSON bytes
     to an SSE parser or vice versa.
 
+Deterministic eval mode (``[TIP: deterministic=on]`` — TIP versioning standard):
+  - ``lookup(..., deterministic=True)`` is a forced miss
+    (``match_strategy="deterministic_bypass"``) — semantic response
+    substitution is disabled for reproducible eval traffic.
+  - ``store(..., deterministic=True)`` is a no-op (returns ``None``) — eval
+    traffic does not populate the cache either.
+
 Hit/miss details are returned as ``SemanticCacheLookup``; attach to trace
 metadata for observability.
 
-Schema migration note (CCG-15):
-  Pre-CCG-15 entries stored ``response`` as ``dict``.  On first call to
+Schema migration note (wire-format migration):
+  Legacy (pre wire-format-migration) entries stored ``response`` as ``dict``.  On first call to
   ``_evict_expired`` (triggered by any ``lookup``), old-schema entries are
   detected and removed with a warning.  The cache then rebuilds from live
   upstream traffic.
@@ -91,7 +98,7 @@ _FILLER_RE = re.compile(
 class SemanticCacheEntry:
     """A single cached query/response pair.
 
-    CCG-15: response is stored as raw bytes with an explicit wire_format and
+    Response is stored as raw bytes with an explicit wire_format and
     content_type so the proxy can serve the entry back to the client with the
     correct HTTP Content-Type header without any re-serialization.
     """
@@ -155,7 +162,7 @@ class SemanticCache:
 
     Thread-safe.  Uses an OrderedDict (LRU eviction by insertion order).
 
-    CCG-15: wire-format-aware — lookup requires ``expected_format`` and only
+    Wire-format-aware — lookup requires ``expected_format`` and only
     returns entries whose ``wire_format`` matches.  Store requires raw bytes +
     content_type + wire_format.
 
@@ -182,7 +189,13 @@ class SemanticCache:
     # Public API
     # ------------------------------------------------------------------
 
-    def lookup(self, query: str, *, expected_format: str = "json") -> SemanticCacheLookup:
+    def lookup(
+        self,
+        query: str,
+        *,
+        expected_format: str = "json",
+        deterministic: bool = False,
+    ) -> SemanticCacheLookup:
         """
         Look up *query* in the cache, returning only entries matching *expected_format*.
 
@@ -194,9 +207,21 @@ class SemanticCache:
         and SSE entries for the same query can coexist without overwriting each
         other (``key_features`` dimension).
 
+        ``deterministic=True`` (``[TIP: deterministic=on]`` reproducible eval
+        mode — TIP versioning standard) disables semantic response
+        substitution entirely: the lookup is a forced miss with
+        ``match_strategy="deterministic_bypass"``, regardless of cache
+        contents. Hit/miss statistics are NOT updated — the bypass is a mode,
+        not a miss.
+
         Returns a ``SemanticCacheLookup`` with ``hit=True`` and the cached
         ``entry`` when a match is found, otherwise ``hit=False``.
         """
+        if deterministic:
+            # Deterministic eval mode: response substitution disabled — the
+            # upstream call MUST happen so the response is reproducibly the
+            # provider's, never a near-duplicate replay.
+            return SemanticCacheLookup(hit=False, match_strategy="deterministic_bypass")
         if not self._cfg.enabled:
             return SemanticCacheLookup(hit=False, match_strategy="disabled")
 
@@ -206,7 +231,7 @@ class SemanticCache:
         query_hash = _hash(normalised)
 
         with self._lock:
-            # CCG-15: only consider entries matching the requested wire format.
+            # Only consider entries matching the requested wire format.
             # Store keys are composite (hash:wire_format) so this filter is O(n)
             # but n is small (bounded by max_entries).
             entries = [
@@ -281,21 +306,31 @@ class SemanticCache:
         response_bytes: bytes,
         content_type: str = "application/json",
         wire_format: str = "json",
-    ) -> SemanticCacheEntry:
+        *,
+        deterministic: bool = False,
+    ) -> Optional[SemanticCacheEntry]:
         """
         Store *response_bytes* for *query*.
 
-        CCG-15: accepts raw bytes + content_type + wire_format.  No JSON
+        Accepts raw bytes + content_type + wire_format.  No JSON
         parsing is performed.  Evicts the oldest entry when at capacity.
 
         The internal store key is composite (``query_hash:wire_format``) so
         JSON and SSE entries for the same query can coexist.
 
-        Returns the new ``SemanticCacheEntry``.
+        ``deterministic=True`` (reproducible eval mode): the store
+        is a no-op and returns ``None``. Deterministic eval traffic neither
+        consumes nor populates the substitution cache, keeping eval runs
+        isolated from (and invisible to) normal traffic.
+
+        Returns the new ``SemanticCacheEntry`` (or ``None`` in deterministic
+        mode).
         """
+        if deterministic:
+            return None
         normalised = _normalise(query)
         query_hash = _hash(normalised)
-        # CCG-15: composite key — wire_format is a key dimension so JSON and SSE
+        # Composite key — wire_format is a key dimension so JSON and SSE
         # entries for the same query can coexist without overwriting each other.
         _store_key = f"{query_hash}:{wire_format}"
 
@@ -348,7 +383,7 @@ class SemanticCache:
         normalised = _normalise(query)
         query_hash = _hash(normalised)
         with self._lock:
-            # CCG-15: composite keys — remove all formats for this query
+            # Composite keys — remove all formats for this query
             removed_keys = [k for k in self._store if k.startswith(f"{query_hash}:")]
             for k in removed_keys:
                 del self._store[k]
@@ -359,9 +394,9 @@ class SemanticCache:
     # ------------------------------------------------------------------
 
     def _evict_expired(self) -> int:
-        """Remove expired entries and old-schema (pre-CCG-15) entries.
+        """Remove expired entries and old-schema (pre wire-format-migration) entries.
 
-        CCG-15 migration: entries with ``response: dict`` (old schema) are
+        Wire-format migration: entries with ``response: dict`` (old schema) are
         deleted and logged as warnings.  The cache rebuilds from fresh traffic.
         Returns count of removed entries.
         """
@@ -369,11 +404,11 @@ class SemanticCache:
             expired = [k for k, e in self._store.items() if e.is_expired()]
             for k in expired:
                 del self._store[k]
-            # CCG-15: clean break — evict any entry whose response is not bytes
+            # Clean break — evict any entry whose response is not bytes
             old_schema = [k for k, e in self._store.items() if not isinstance(e.response, bytes)]
             for k in old_schema:
                 logger.warning(
-                    "[SemanticCache] CCG-15: evicting old-schema entry %s "
+                    "[SemanticCache] evicting old-schema entry %s "
                     "(response was dict, now requires bytes) — cache will rebuild",
                     k[:8],
                 )

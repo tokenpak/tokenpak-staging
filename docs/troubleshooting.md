@@ -25,6 +25,7 @@ Find your problem fast. Every section follows **Problem → Cause → Fix** with
 17. [Performance Profiling](#17-performance-profiling)
 18. [Cloud Deployments](#18-cloud-deployments)
 19. [Quick Triage Runbook](#19-quick-triage-runbook)
+20. [Codex Linux Sandbox Warning](#20-codex-linux-sandbox-warning)
 21. [Getting More Help](#getting-more-help)
 
 ---
@@ -1038,9 +1039,69 @@ az container show --resource-group <rg> --name tokenpak --query "instanceView.ev
 
 ---
 
+## 20. Codex Linux Sandbox Warning
+
+### Problem
+
+`tokenpak codex doctor` reports a WARN row for the Linux sandbox, or `tokenpak codex`
+previously printed a raw Codex warning about bubblewrap, AppArmor, or user
+namespaces.
+
+### Diagnose
+
+Run Codex's sandbox smoke test directly:
+
+```bash
+codex sandbox true
+```
+
+If the command exits nonzero, TokenPak reports it as a WARN because the companion
+can still install hooks, skills, and MCP configuration. The warning means Codex's
+own Linux sandbox may not be usable on this host until the OS configuration is
+fixed.
+
+### Cause
+
+Codex's Linux sandbox uses bubblewrap. On Ubuntu 24.04 and other
+AppArmor-restricted hosts, unprivileged user namespaces can be globally
+restricted unless the `bwrap-userns-restrict` AppArmor profile is installed and
+loaded. Common failure text includes `bwrap`, `AppArmor`, `user namespace`, or
+`Operation not permitted`.
+
+### Fix
+
+TokenPak does not install packages, run `apt` or `dpkg`, or modify `/etc`
+automatically. A host administrator can apply the OS-side fix manually:
+
+```bash
+sudo apt update
+sudo apt install bubblewrap
+sudo apt install apparmor-profiles apparmor-utils
+sudo install -m 0644 \
+  /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+  /etc/apparmor.d/bwrap-userns-restrict
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+This profile-based approach allows bubblewrap while leaving the global AppArmor
+user-namespace restriction enabled. Avoid disabling the global restriction unless
+that is an explicit host administration decision.
+
+### Verify
+
+```bash
+codex sandbox true
+tokenpak codex doctor
+```
+
+The direct Codex smoke test should exit 0. `tokenpak codex doctor` should report
+the Linux sandbox check as PASS.
+
+---
+
 # Backup broken package and restore from main repo
-mv ~/vault/Projects/tokenpak/packages/pypi/tokenpak ~/vault/Projects/tokenpak/packages/pypi/tokenpak.broken
-cp -r ~/tokenpak ~/vault/Projects/tokenpak/packages/pypi/tokenpak
+mv <your-vault>/packages/pypi/tokenpak <your-vault>/packages/pypi/tokenpak.broken
+cp -r ~/tokenpak <your-vault>/packages/pypi/tokenpak
 python3 -c "from tokenpak.agent.proxy import server; print('✅ Import works')"
 ```
 
@@ -1060,14 +1121,14 @@ python3 -c "from tokenpak.agent.semantic.term_card_resolver import TermCardResol
 
 ### 20.4 Case sensitivity collision in queue directories
 
-**Symptoms:** Tasks in lowercase queue dirs (`~/vault/Agents/trix/queue/`) never execute; active tasks are in uppercase dirs.
+**Symptoms:** Tasks in lowercase queue dirs (`<your-vault>/agents/<agent>/queue/`) never execute; active tasks are in uppercase dirs.
 
 **Fix:**
 ```bash
 # Identify orphaned tasks first
-find ~/vault/Agents/{trix,cali}/queue -name "*.md" 2>/dev/null
+find <your-vault>/agents/*/queue -name "*.md" 2>/dev/null
 # Then remove orphaned lowercase dirs
-rm -rf ~/vault/Agents/trix/queue ~/vault/Agents/cali/queue
+rm -rf <your-vault>/agents/*/queue
 ```
 
 ---

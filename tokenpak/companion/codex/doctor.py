@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from ..config import CompanionConfig
-from .mcp_config import SERVER_NAME
+from .mcp_config import SERVER_NAME, codex_config_path, codex_home, verify_policy
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .rates_snapshot import count as rates_count
 from .skills_installer import (
@@ -37,6 +37,8 @@ CheckFn = Callable[[], "tuple[Status, str]"]
 # climbs above 80% so users can shed content before truncation kicks in.
 _AGENTS_MD_MAX_BYTES_DEFAULT = 32 * 1024
 _AGENTS_MD_WARN_FRACTION = 0.80
+SANDBOX_TIMEOUT_SECONDS = 5
+SANDBOX_HELP_ANCHOR = "docs/troubleshooting.md#20-codex-linux-sandbox-warning"
 
 
 # ── Individual checks ────────────────────────────────────────────────
@@ -56,8 +58,52 @@ def check_codex_binary() -> "tuple[Status, str]":
     return "PASS", result.stdout.strip() or result.stderr.strip()
 
 
+def check_linux_sandbox() -> "tuple[Status, str]":
+    """Smoke-test Codex's Linux sandbox without mutating the host."""
+    if not sys.platform.startswith("linux"):
+        return "PASS", f"not applicable on {sys.platform}"
+
+    try:
+        result = subprocess.run(
+            ["codex", "sandbox", "true"],
+            capture_output=True,
+            text=True,
+            timeout=SANDBOX_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        return "WARN", "codex sandbox smoke skipped: codex not on PATH"
+    except subprocess.TimeoutExpired:
+        return (
+            "WARN",
+            "codex sandbox smoke timed out after "
+            f"{SANDBOX_TIMEOUT_SECONDS}s; see {SANDBOX_HELP_ANCHOR}",
+        )
+
+    if result.returncode == 0:
+        return "PASS", "codex sandbox smoke OK"
+
+    detail = _first_nonempty_line(result.stderr, result.stdout)
+    if not detail:
+        detail = f"codex sandbox true exited {result.returncode}"
+    return (
+        "WARN",
+        "codex sandbox smoke failed: "
+        f"{detail}; on restricted Linux hosts install bubblewrap and load the "
+        f"bwrap AppArmor profile; see {SANDBOX_HELP_ANCHOR}",
+    )
+
+
+def _first_nonempty_line(*chunks: str) -> str:
+    for chunk in chunks:
+        for line in chunk.splitlines():
+            stripped = line.strip()
+            if stripped:
+                return stripped
+    return ""
+
+
 def check_hooks_feature() -> "tuple[Status, str]":
-    """Surface codex_hooks maturity as WARN — Codex labels it "under development".
+    """Surface the ``hooks`` feature maturity, WARN while marked unstable.
 
     The companion still installs hooks (the launcher needs them), but we
     refuse to tell the user "all green" while Codex itself marks the
@@ -71,26 +117,26 @@ def check_hooks_feature() -> "tuple[Status, str]":
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         return "FAIL", f"codex features list failed: {exc}"
 
-    maturity = _parse_codex_hooks_maturity(result.stdout)
+    maturity = _parse_hooks_maturity(result.stdout)
     if maturity is None:
-        return "FAIL", "codex_hooks feature not found in `codex features list`"
+        return "FAIL", "hooks feature not found in `codex features list`"
 
     label, enabled = maturity
     if label == "under development":
         return (
             "WARN",
-            f"codex_hooks={label} (enabled={enabled}) — Codex may break this; "
+            f"hooks={label} (enabled={enabled}) — Codex may break this; "
             "consider unpinning hooks plane if encountering failures",
         )
     # Once Codex bumps the label to experimental/beta/stable, treat
     # enabled=true as PASS, enabled=false as FAIL (companion needs it on).
     if enabled:
-        return "PASS", f"codex_hooks={label} (enabled=true)"
-    return "FAIL", f"codex_hooks={label} (enabled=false)"
+        return "PASS", f"hooks={label} (enabled=true)"
+    return "FAIL", f"hooks={label} (enabled=false)"
 
 
-def _parse_codex_hooks_maturity(stdout: str) -> "tuple[str, bool] | None":
-    """Parse ``codex features list`` output for the codex_hooks row.
+def _parse_hooks_maturity(stdout: str) -> "tuple[str, bool] | None":
+    """Parse ``codex features list`` output for the ``hooks`` row.
 
     Returns ``(maturity_label, enabled)`` or ``None`` if the row is
     absent.  Maturity labels can be multi-word ("under development"), so
@@ -102,7 +148,7 @@ def _parse_codex_hooks_maturity(stdout: str) -> "tuple[str, bool] | None":
         if not stripped or stripped.startswith("#"):
             continue
         parts = stripped.split()
-        if not parts or parts[0] != "codex_hooks":
+        if not parts or parts[0] != "hooks":
             continue
         if len(parts) < 3:
             return None
@@ -160,12 +206,13 @@ def check_hooks_json() -> "tuple[Status, str]":
 
 
 def check_agents_md() -> "tuple[Status, str]":
-    path = Path.home() / ".codex" / "AGENTS.md"
+    """Report whether the TokenPak section is installed in the resolved Codex home."""
+    path = codex_home() / "AGENTS.md"
     if not path.exists():
         return "FAIL", f"{path} missing"
     content = path.read_text()
     if "# TokenPak Companion" not in content:
-        return "FAIL", "TokenPak section missing from AGENTS.md"
+        return "FAIL", f"TokenPak section missing from {path}"
     return "PASS", f"{path} ({len(content)} bytes)"
 
 
@@ -179,7 +226,7 @@ def check_agents_md_size(
     when guidance stops landing.  Surfacing the size early lets them
     shed content before they hit it.
     """
-    path = Path.home() / ".codex" / "AGENTS.md"
+    path = codex_home() / "AGENTS.md"
     if not path.exists():
         # A missing AGENTS.md is already flagged by check_agents_md;
         # don't double-fail. Treat as PASS for the size check.
@@ -317,19 +364,213 @@ def _parse_initialize_reply(stdout: str) -> "tuple[Status, str]":
     return "FAIL", "no JSON-RPC response from MCP server"
 
 
+def _read_codex_config() -> "tuple[dict | None, Path]":
+    """Parse the resolved Codex ``config.toml`` (honors ``CODEX_HOME``).
+
+    Returns ``(data, path)`` where ``data`` is the parsed table, or
+    ``(None, path)`` when the file is absent, unparseable, or no TOML
+    reader is available.  Honors ``CODEX_HOME`` for the config location.
+    """
+    path = codex_home() / "config.toml"
+    if not path.exists():
+        return None, path
+    try:
+        import tomllib as _toml  # 3.11+
+    except ModuleNotFoundError:  # 3.10
+        try:
+            import tomli as _toml  # type: ignore
+        except ModuleNotFoundError:  # pragma: no cover - graceful degrade
+            return None, path
+    try:
+        return _toml.loads(path.read_text(encoding="utf-8")), path
+    except Exception:
+        return None, path
+
+
+def check_codex_homes_orphaned() -> "tuple[Status, str]":
+    """Surface provisioned Codex homes with no live session (orphans).
+
+    Isolated/workspace homes are created by
+    ``TOKENPAK_CODEX_SESSION_MODE``.  Ephemeral isolated homes with no live
+    Codex process are reclaimable by ``tokenpak codex clean``; WARN (not
+    FAIL) so the doctor stays informative without gating the exit code.
+    """
+    from .session_home import MODE_ISOLATED, list_homes
+
+    homes = list_homes(include_workspaces=True)
+    if not homes:
+        return "PASS", "no provisioned codex homes"
+    orphaned_isolated = [h for h in homes if h.mode == MODE_ISOLATED and not h.alive]
+    live = [h for h in homes if h.alive]
+    if orphaned_isolated:
+        names = ", ".join(h.path.name for h in orphaned_isolated[:5])
+        more = "" if len(orphaned_isolated) <= 5 else f" (+{len(orphaned_isolated) - 5} more)"
+        return (
+            "WARN",
+            f"{len(orphaned_isolated)} orphaned isolated home(s): {names}{more} — "
+            "reclaim with `tokenpak codex clean`",
+        )
+    return "PASS", f"{len(homes)} home(s), {len(live)} with a live session"
+
+
+def check_codex_homes_disk_usage() -> "tuple[Status, str]":
+    """WARN when provisioned isolated homes exceed the retention size cap."""
+    from .session_home import (
+        MODE_ISOLATED,
+        RETENTION_MAX_TOTAL_BYTES,
+        list_homes,
+    )
+
+    homes = [h for h in list_homes(include_workspaces=False) if h.mode == MODE_ISOLATED]
+    total = sum(h.size_bytes for h in homes)
+    cap_mb = RETENTION_MAX_TOTAL_BYTES // (1024 * 1024)
+    used_mb = total / (1024 * 1024)
+    if total > RETENTION_MAX_TOTAL_BYTES:
+        return (
+            "WARN",
+            f"isolated codex homes use {used_mb:.0f} MB (> {cap_mb} MB cap) — "
+            "run `tokenpak codex clean`",
+        )
+    return "PASS", f"isolated codex homes use {used_mb:.0f}/{cap_mb} MB"
+
+
+def check_proxy_routing() -> "tuple[Status, str]":
+    """§4 value-plane invariant — WARN (never FAIL) when Codex is not
+    routed through the TokenPak proxy.
+
+    ``tokenpak codex`` is observability-first by default: the companion
+    records prompt-side journal/budget data, but model traffic does NOT
+    pass through the TokenPak proxy unless the user has explicitly
+    configured a TokenPak ``model_provider``.  In that observability-only
+    mode any cache the user sees is *provider-native* (OpenAI/Codex),
+    TokenPak proxy-routed savings are *unavailable*, and the companion
+    must not claim TokenPak savings.
+
+    Not-routed is the *supported default*, so this is a WARN — the doctor
+    states the value-plane truthfully rather than gating the exit code with
+    a FAIL that would punish the current default path.  When (and if) proxy
+    routing becomes the default, this can be promoted to a hard invariant.
+    """
+    data, path = _read_codex_config()
+    if not data:
+        return (
+            "WARN",
+            f"Codex is not proxy-routed (no readable TokenPak provider in {path}) — "
+            "companion is observability-only: cache shown is provider-native, "
+            "TokenPak proxy-routed savings attribution is unavailable. "
+            "TokenPak does not claim savings for non-proxy-routed Codex sessions.",
+        )
+    model_provider = data.get("model_provider")
+    providers = data.get("model_providers")
+    providers = providers if isinstance(providers, dict) else {}
+    # Routed only when an explicit TokenPak provider is selected AND defined.
+    routed = (
+        isinstance(model_provider, str)
+        and model_provider.startswith("tokenpak")
+        and model_provider in providers
+    )
+    if routed:
+        return (
+            "PASS",
+            f"Codex is proxy-routed via model_provider='{model_provider}' — "
+            "TokenPak proxy-routed attribution active for this session.",
+        )
+    mp_label = (
+        f"model_provider='{model_provider}'" if model_provider else "model_provider unset"
+    )
+    return (
+        "WARN",
+        f"Codex is not proxy-routed ({mp_label}) — companion is observability-only: "
+        "cache shown is provider-native (not TokenPak proxy cache), and TokenPak "
+        "savings attribution is unavailable. Opt in by defining a "
+        "[model_providers.tokenpak-*] block and setting model_provider to it; "
+        "until then TokenPak does not claim savings for these sessions.",
+    )
+
+
+def check_agents_override() -> "tuple[Status, str]":
+    """WARN when ``AGENTS.override.md`` shadows the TokenPak guidance.
+
+    Codex versions that honor ``AGENTS.override.md`` load it *instead of*
+    ``AGENTS.md`` — an override file without the TokenPak section silently
+    drops every companion behavior rule.  AGENTS guidance is advisory
+    (critical behavior is enforced by config/hooks/MCP), so this is a WARN,
+    but the user should know the guidance is not landing.
+    """
+    override = codex_home() / "AGENTS.override.md"
+    if not override.exists():
+        return "PASS", "no AGENTS.override.md shadowing"
+    try:
+        content = override.read_text(encoding="utf-8")
+    except OSError as exc:
+        return "WARN", f"{override} present but unreadable ({exc}) — may shadow TokenPak guidance"
+    if "# TokenPak Companion" in content:
+        return "PASS", f"{override} present and includes the TokenPak section"
+    return (
+        "WARN",
+        f"{override} shadows AGENTS.md and lacks the TokenPak section — "
+        "companion guidance will not load; merge the TokenPak section into "
+        "the override or remove the override file",
+    )
+
+
+def check_mcp_policy() -> "tuple[Status, str]":
+    """Verify the explicit MCP policy block in Codex ``config.toml``.
+
+    A registered companion server must carry startup/tool timeouts, the
+    registry-derived tool allowlist, and approval modes for mutating
+    tools.  Registered-without-policy is a FAIL (rerun
+    ``tokenpak codex install`` to apply); an unregistered server is the
+    MCP-registration check's job, so this check skips rather than
+    double-failing.
+    """
+    path = codex_config_path()
+    if not path.exists():
+        return (
+            "PASS",
+            f"{path} missing (policy check skipped — MCP registration check covers setup)",
+        )
+    data, _ = _read_codex_config()
+    if data is None:
+        return "WARN", f"{path} unreadable — cannot verify MCP policy"
+    servers = data.get("mcp_servers")
+    if not isinstance(servers, dict) or SERVER_NAME not in servers:
+        return (
+            "PASS",
+            f"{SERVER_NAME} not in config.toml (policy check skipped — "
+            "MCP registration check covers setup)",
+        )
+    ok, problems = verify_policy(path)
+    if ok:
+        return (
+            "PASS",
+            "startup/tool timeouts + tool allowlist + mutating-tool approval policy verified",
+        )
+    return (
+        "FAIL",
+        "; ".join(problems) + " — run `tokenpak codex install` to apply the policy block",
+    )
+
+
 # ── Runner ──────────────────────────────────────────────────────────
 
 CHECKS: list["tuple[str, CheckFn]"] = [
     ("codex binary", check_codex_binary),
-    ("codex_hooks feature", check_hooks_feature),
+    ("linux sandbox", check_linux_sandbox),
+    ("proxy routing (value plane)", check_proxy_routing),
+    ("hooks feature", check_hooks_feature),
     ("MCP registration", check_mcp_registered),
+    ("MCP config policy", check_mcp_policy),
     ("hooks.json schema", check_hooks_json),
     ("AGENTS.md", check_agents_md),
     ("AGENTS.md size", check_agents_md_size),
+    ("AGENTS.override shadowing", check_agents_override),
     ("skills installed", check_skills_installed),
     ("skills legacy orphans", check_skills_legacy_orphans),
     ("storage dbs", check_databases),
     ("rates snapshot", check_rates_snapshot),
+    ("codex homes (orphans)", check_codex_homes_orphaned),
+    ("codex homes (disk usage)", check_codex_homes_disk_usage),
     ("MCP import", check_mcp_import),
     ("MCP initialize ping", check_mcp_ping),
 ]

@@ -1,6 +1,7 @@
 [build-system]
 requires = [
-    "setuptools>=61.0",
+    # >=64 for modern PEP 660 editable installs (editable_wheel backend).
+    "setuptools>=64",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -8,14 +9,14 @@ build-backend = "setuptools.build_meta"
 name = "tokenpak"
 dynamic = ["version"]
 # version sourced from tokenpak/__init__.py via [tool.setuptools.dynamic]
-description = "Slash LLM costs with intelligent context compression, smart routing, and cost tracking"
+description = "Cut LLM costs with deterministic context compression, smart routing, and cost tracking"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Kevin Yang", email = "hello@tokenpak.ai" },
+    { name = "TokenPak", email = "hello@tokenpak.ai" },
 ]
 maintainers = [
-    { name = "Kevin Yang", email = "hello@tokenpak.ai" },
+    { name = "TokenPak", email = "hello@tokenpak.ai" },
 ]
 keywords = [
     "llm",
@@ -109,11 +110,20 @@ integrations-litellm = [
     # tokenpak/integrations/litellm/{proxy,middleware,__init__}.py.
     "litellm>=1.0.0",
 ]
+dispatch = [
+    # The Dispatch orchestration subsystem (tokenpak/orchestration/dispatch/**)
+    # is pydantic-native: every record model subclasses pydantic.BaseModel, and
+    # JSON Schema build/parse round-trips use jsonschema. Both are opt-in so the
+    # slim core stays free of pydantic. The dispatch runtime is unbuilt as of
+    # v0.1-alpha, so nothing in the slim install imports these yet.
+    "pydantic>=2.0.0",
+    "jsonschema>=4.0.0",
+]
 # Convenience meta-extra — `pip install tokenpak[full]` restores the legacy
 # "everything bundled" install behavior for callers who don't want to pick
 # extras individually.
 full = [
-    "tokenpak[retrieval,code-compression,intelligence,data,compression,integrations-litellm]",
+    "tokenpak[retrieval,code-compression,intelligence,data,compression,integrations-litellm,dispatch]",
 ]
 dev = [
     "pytest>=7.0",
@@ -123,6 +133,10 @@ dev = [
     "pytest-mock>=3.12.0",
     "black>=24.0.0",
     "ruff>=0.2.0",
+    # Subsystem test deps: the dispatch test suite imports pydantic/jsonschema.
+    # Pulled via the [dispatch] extra so the standard `.[dev]` CI job collects
+    # and runs those tests instead of erroring at import time.
+    "tokenpak[dispatch]",
 ]
 tokens = [
     "tiktoken>=0.5.0",
@@ -151,6 +165,10 @@ serve = [
     "starlette>=0.36.0",
     "pydantic>=2.0.0",
     "fastapi>=0.100.0",
+    # Optional WebSocket proxy endpoint (tokenpak/proxy/websocket.py). The
+    # import is guarded (try/except ImportError) and the WS server is simply
+    # disabled when absent, so this is serve-only, not a core dependency.
+    "websockets>=12.0",
 ]
 telemetry = [
     "pydantic>=2.0.0",
@@ -190,6 +208,10 @@ tokenpak = [
     "dashboard/templates/**/*",
     "telemetry/dashboard/static/**/*",
     "telemetry/dashboard/templates/**/*",
+    "orchestration/dispatch/registry/*.yaml",
+    "orchestration/dispatch/registry/routes/*.yaml",
+    "orchestration/dispatch/registry/overlays/*.yaml",
+    "orchestration/dispatch/schemas/*.json",
 ]
 
 [tool.setuptools.dynamic]

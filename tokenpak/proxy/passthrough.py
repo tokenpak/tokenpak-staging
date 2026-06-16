@@ -33,13 +33,20 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set, Tuple
 
+# Back-compat re-export: the canonical CLAUDE_CODE_HEADER_ALLOWLIST now lives in
+# tokenpak.proxy.headers (frozenset). It is re-exported here so the historical
+# import path `from tokenpak.proxy.passthrough import CLAUDE_CODE_HEADER_ALLOWLIST`
+# keeps working unchanged (v1.7.1 compatibility alias).
+from tokenpak.proxy.headers import CLAUDE_CODE_HEADER_ALLOWLIST  # noqa: F401
+
 # ---------------------------------------------------------------------------
-# CCG-04: Per-route HTTP header forwarding allowlists
+# Per-route HTTP header forwarding allowlists
 # ---------------------------------------------------------------------------
 # These mirror the WS-path allowlist tuple onto the HTTP path as a per-route
-# allowlist.  LEGACY_HEADER_ALLOWLIST must never gain new entries — legacy
+# allowlist. LEGACY_HEADER_ALLOWLIST must never gain new entries — legacy
 # traffic must produce exactly the same forwarded headers as today (bit-for-bit).
-# CLAUDE_CODE_HEADER_ALLOWLIST extends it with Claude Code-specific headers.
+# CLAUDE_CODE_HEADER_ALLOWLIST lives in tokenpak.proxy.headers (canonical
+# frozenset); do not redeclare it here.
 
 LEGACY_HEADER_ALLOWLIST: tuple = (
     "x-api-key",
@@ -48,23 +55,13 @@ LEGACY_HEADER_ALLOWLIST: tuple = (
     "anthropic-beta",
 )
 
-CLAUDE_CODE_HEADER_ALLOWLIST: tuple = (
-    "x-api-key",
-    "authorization",
-    "anthropic-version",
-    "anthropic-beta",
-    "anthropic-dangerous-direct-browser-access",
-    "x-claude-code-session-id",
-    "user-agent",
-)
-
 
 def _classify_route(path: str, headers) -> str:
     """Classify an incoming HTTP request as 'claude-code' or 'tokenpak'.
 
     Inspects headers only — no DB access, no network round-trips.
     Claude Code wins when both X-Claude-Code-Session-Id and X-TokenPak-Session
-    are present (matching CCG-03's resolver priority order).
+    are present (matching the resolver priority order).
 
     Returns:
         "claude-code"  if X-Claude-Code-Session-Id is present (case-insensitive)

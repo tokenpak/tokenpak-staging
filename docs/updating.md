@@ -15,6 +15,15 @@ tokenpak update
 tokenpak update --dry-run
 ```
 
+## Update Availability Notice
+
+When you run `tokenpak claude` or `tokenpak codex`, TokenPak prints a one-line notice if a newer release is available on PyPI (for example, `TokenPak X.Y.Z available — run tokenpak update`). This check:
+
+- runs only on the `tokenpak claude` / `tokenpak codex` launchers,
+- is cached to at most once per day,
+- is fail-open and offline-safe — network errors never delay or block the launcher, and
+- can be disabled by setting `TOKENPAK_NO_UPDATE_CHECK=1`.
+
 ## What Gets Updated
 
 | Component | Update Source | User Files Touched? |
@@ -39,7 +48,7 @@ tokenpak update --core-only # Skip config merge
 1. Check PyPI for latest `tokenpak` version
 2. Download and install via `pip install --upgrade tokenpak`
 3. If proxy was running → restart it
-4. Update `~/vault/System/tokenpak.lock.json` with new version/hash
+4. Update `~/.tokenpak/tokenpak.lock.json` with new version/hash
 
 ## Multi-Agent Environments
 
@@ -51,7 +60,7 @@ tokenpak update
 tokenpak version # verify all match
 ```
 
-The lock file at `~/vault/System/tokenpak.lock.json` acts as the canonical version pin. Any agent with drift will warn on startup.
+The lock file at `~/.tokenpak/tokenpak.lock.json` acts as the canonical version pin. Any agent with drift will warn on startup.
 
 ## Config Sync
 
@@ -75,6 +84,6 @@ Future: `tokenpak rollback <version>`
 
 ## Troubleshooting
 
-See `~/vault/System/TROUBLESHOOTING.md` for common issues.
+See the troubleshooting guide for common issues.
 
 Run `tokenpak doctor` for a full diagnostics report.

@@ -1,6 +1,6 @@
 """Per-route HTTP header forwarding for the tokenpak proxy pipeline.
 
-Extracted from proxy.py lines ~2200-2362 (CCG-04).
+Extracted from proxy.py.
 
 Each route classification maps to a header-forwarding strategy:
 - ``forward_all``: relay every client header (Claude Code client-auth pass-through)
@@ -14,7 +14,7 @@ from typing import Dict
 from tokenpak.proxy.request import ROUTE_CLAUDE_CODE, ROUTE_OPENCLAW
 
 # ---------------------------------------------------------------------------
-# Header allowlists — mirrors proxy.py CCG-04
+# Header allowlists — mirrors proxy.py
 # ---------------------------------------------------------------------------
 
 # OPENCLAW_HEADER_ALLOWLIST must never gain new entries — OpenClaw traffic
@@ -47,6 +47,10 @@ CLAUDE_CODE_HEADER_ALLOWLIST: frozenset = frozenset((
     "x-stainless-runtime",
     "x-stainless-runtime-version",
     "x-stainless-timeout",
+    # Dispatch correlation headers — forwarded so dispatch job/station
+    # attribution can be threaded onto monitor.db rows. Additive only.
+    "x-tokenpak-dispatch-job-id",
+    "x-tokenpak-dispatch-station-id",
 ))
 
 # Headers that should never be forwarded (hop-by-hop + proxy internals).

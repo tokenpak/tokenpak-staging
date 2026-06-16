@@ -3,7 +3,7 @@
     "tokenpak-probe": {
       "type": "stdio",
       "command": "python3",
-      "args": ["/home/sue/tokenpak/tests/companion_probe/mcp_probe_server.py"]
+      "args": ["<tokenpak-repo>/tests/companion_probe/mcp_probe_server.py"]
     }
   }
 }

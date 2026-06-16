@@ -191,12 +191,12 @@ tokenpak replay abc123 --diff
 Capture detailed traces for a set of requests:
 
 ```bash
-tokenpak debug on --requests 5
-# Make 5 requests through your LLM client...
+tokenpak debug on
+# Make requests through your LLM client...
 tokenpak debug off
 
-# Inspect a trace
-tokenpak trace --last
+# Inspect captured traces
+tokenpak debug list
 ```
 
 A trace shows:

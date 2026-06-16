@@ -21,45 +21,93 @@ from typing import Optional, Tuple
 from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
 from tokenpak._formatting import symbols as FS
 
+# ── --no-tui global escape ────────────────────
+# Set true when --no-tui is present anywhere on the command line. Stripped
+# from sys.argv early in main() so per-subcommand parsers don't need to
+# know about it. Honored at every TTY entry point: bare `tokenpak`, `tokenpak
+# setup`, and `tokenpak integrate <X>` without `--apply`.
+_NO_TUI_FLAG = False
+
+
+def _no_tui() -> bool:
+    return _NO_TUI_FLAG
+
+
+def _interactive_menu_allowed() -> bool:
+    """Whether bare ``tokenpak`` may launch the interactive menu (spec F1/F2).
+
+    The menu runs ONLY when both streams are a TTY, ``--no-tui`` is absent,
+    ``TOKENPAK_NONINTERACTIVE`` is unset, CI is not detected, and ``TERM`` is
+    not ``dumb``. Every other case falls through to deterministic, exit-0
+    non-interactive output.
+    """
+    if _no_tui():
+        return False
+    if os.environ.get("TOKENPAK_NONINTERACTIVE"):
+        return False
+    if os.environ.get("CI"):
+        return False
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _emit_bare_json() -> None:
+    """Emit deterministic, schema-versioned bare-invocation JSON (spec F3).
+
+    Cheap and stable: cached/unknown status only (no slow probe), a sorted
+    command catalog, and stable field names. Never blocks; never fabricates a
+    savings figure (unknown -> null).
+    """
+    import json as _json
+
+    try:
+        from tokenpak.cli.commands import menu_status
+
+        status = menu_status.json_snapshot()
+    except Exception:
+        status = {
+            "schema_version": 1,
+            "proxy": "unknown",
+            "cost_today": None,
+            "saved_today": None,
+        }
+    try:
+        from tokenpak import __version__ as _ver
+    except Exception:
+        _ver = None
+    try:
+        commands = sorted(_core_command_names())
+    except Exception:
+        commands = []
+    payload = {
+        "schema_version": 1,
+        "tokenpak_version": _ver,
+        "status": status,
+        "commands": commands,
+    }
+    print(_json.dumps(payload, indent=2, sort_keys=True))
+
+
 # ── Monitor DB Access ────────────────────────────────────────────────────────
 
 
 def _get_monitor_db_path() -> Optional[Path]:
-    """Return path to proxy monitor.db, checking TOKENPAK_DB env var first.
+    """Return the canonical proxy monitor.db path.
 
-    Resolution order:
-    1. $TOKENPAK_DB env var
-    2. ~/tokenpak/monitor.db  (standard proxy install location)
-    3. ~/.tokenpak/monitor.db (legacy / symlink location)
-    Returns None if no DB with actual data is found.
+    D5 (feed normalization): delegate to ``tokenpak._paths.monitor_db()`` so
+    this legacy-core reader, the CLI ``status`` reader, ``doctor``, and the
+    proxy writer all resolve the SAME DB through one candidate chain
+    (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` -> ``~/tokenpak``).
+    The previous hand-rolled list omitted ``~/.tpk`` (the canonical TPK home),
+    which is the latent split-brain this removes. Returns None when no valid
+    monitor DB exists.
     """
-    import sqlite3
-
-    candidates: list[Path] = []
-
-    env_db = os.environ.get("TOKENPAK_DB")
-    if env_db:
-        candidates.append(Path(env_db).expanduser())
-
-    candidates.extend([
-        Path.home() / "tokenpak" / "monitor.db",
-        Path.home() / ".tokenpak" / "monitor.db",
-    ])
-
-    for p in candidates:
-        if p.exists() and not p.is_symlink() or (p.is_symlink() and p.resolve().exists()):
-            try:
-                conn = sqlite3.connect(str(p.resolve()), timeout=2)
-                cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM requests")
-                count = cur.fetchone()[0]
-                conn.close()
-                if count > 0:
-                    return p.resolve()
-            except Exception:
-                pass
-
-    return None
+    try:
+        from tokenpak import _paths
+        return _paths.monitor_db(mode="read")
+    except Exception:
+        return None
 
 
 def _monitor_db_cost(period: str = "daily") -> float:
@@ -91,54 +139,6 @@ def _monitor_db_cost(period: str = "daily") -> float:
         return total
     except Exception:
         return 0.0
-
-
-def _monitor_db_savings(days: int = 30) -> dict:
-    """Return savings summary from monitor.db."""
-    import sqlite3
-    from datetime import date, timedelta
-
-    db = _get_monitor_db_path()
-    if db is None:
-        return {}
-
-    since = (date.today() - timedelta(days=days)).isoformat()
-    try:
-        conn = sqlite3.connect(str(db), timeout=2)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT
-                COALESCE(SUM(estimated_cost), 0)      AS actual_cost,
-                COALESCE(SUM(input_tokens), 0)         AS total_input,
-                COALESCE(SUM(output_tokens), 0)        AS total_output,
-                COALESCE(SUM(cache_read_tokens), 0)    AS cache_read,
-                COALESCE(SUM(cache_creation_tokens), 0) AS cache_created,
-                COALESCE(SUM(compressed_tokens), 0)    AS compressed,
-                COALESCE(SUM(protected_tokens), 0)     AS protected
-            FROM requests WHERE timestamp >= ? AND status_code < 400""",
-            (since,),
-        )
-        row = dict(cur.fetchone())
-        conn.close()
-
-        actual = row["actual_cost"]
-        cache_read = row["cache_read"]
-        total_in = row["total_input"] + cache_read
-
-        # Rough baseline: what it would cost without cache/compression
-        raw_input = row["total_input"] + row["compressed"]
-        return {
-            "actual_cost": actual,
-            "cache_read": cache_read,
-            "cache_hit_rate": cache_read / total_in if total_in else 0,
-            "compressed_tokens": row["compressed"],
-            "raw_input_tokens": raw_input,
-            "total_input": row["total_input"],
-            "total_output": row["total_output"],
-        }
-    except Exception:
-        return {}
 
 
 def _monitor_db_models(days: int = 30) -> list:
@@ -194,7 +194,7 @@ def _proxy_get(path: str, port: Optional[int] = None) -> "dict | None":
 _FIRST_RUN_FLAG = Path.home() / ".tokenpak" / ".seen_intro"
 
 # Commands shown in quick --help (beginner view)
-_QUICK_COMMANDS = ["start", "demo", "cost", "status"]
+_QUICK_COMMANDS = ["start", "demo", "cost", "status", "metrics"]
 
 # All commands grouped for `tokenpak help`
 _COMMAND_GROUPS = {
@@ -220,10 +220,12 @@ _COMMAND_GROUPS = {
         ("goals", "Track savings goals"),
         ("config", "View and edit config"),
         ("explain", "Explain workflow profiles"),
+        ("permissions", "Permission tiers (strict/standard/auto) + launcher fleet mode"),
     ],
     "Versioning": [
         ("version", "Show current version"),
         ("update", "Update tokenpak"),
+        ("uninstall", "Un-route (--soft) or purge state + remove package (--hard)"),
     ],
     "Operations": [
         ("benchmark", "Run benchmarks"),
@@ -242,12 +244,14 @@ _COMMAND_GROUPS = {
         ("fleet", "Fleet status"),
         ("aggregate", "Aggregate ledger"),
         ("requests", "Live request explorer"),
+        ("dispatch", "Workflow control (v0.1-alpha preview): run, decide, deliver"),
     ],
     "Companion": [
         ("claude", "Launch with Claude Code"),
         ("codex", "Launch with Codex"),
         ("creds", "Discover credentials + doctor"),
         ("pak", "Inspect/export/import Paks (MultiPak Pro Phase 1)"),
+        ("cards", "Author, validate, compile Markdown cards (TIP/PAK)"),
         ("test", "Interactive A/B test"),
         ("prove", "A/B value proof"),
     ],
@@ -272,6 +276,185 @@ _COMMAND_GROUPS = {
 
 # All known command names (for typo detection)
 _ALL_COMMANDS = [cmd for group in _COMMAND_GROUPS.values() for cmd, _ in group]
+
+# Built-in verbs that are registered via argparse / stubs but are NOT part of
+# the grouped ``_COMMAND_GROUPS`` table. Kept here (module level) so plugin
+# discovery and the dispatcher share one authoritative core-name set — a plugin
+# must never be able to shadow any of these.
+_EXTRA_KNOWN_COMMANDS = frozenset({
+    "help",
+    "companion",
+    "start",
+    "stop",
+    "restart",
+    "logs",
+    "version",
+    "update",
+    "config",
+    "setup",
+    "compare",
+    "leaderboard",
+    "report",
+    "check-alerts",
+    "alerts",
+    "watch",
+    "integrate",
+    "openclaw",
+    "savings",
+    "recommendations",
+    "usage",
+    "preview",
+    "aggregate",
+    "requests",
+    "validate-config",
+    "vault",
+    "vault-health",
+    "compress",
+    "optimize",
+    "last",
+    "prune",
+    "retrieval",
+    "menu",
+    # Stub commands (advertised in help/registry, not yet implemented)
+    "license",
+    "plan",
+    "activate",
+    "deactivate",
+    "init",
+    "monitor",
+    # Beta 1 verb families (TIP, features, PAKPlan preview, home)
+    "tip",
+    "features",
+    "pakplan",
+    "home",
+    # Dispatch v0.1-alpha (workflow-control layer)
+    "dispatch",
+})
+
+
+def _core_command_names() -> set:
+    """Return the authoritative set of all built-in CLI verb names.
+
+    This is the union of the grouped commands and the argparse/stub commands.
+    Plugin discovery excludes every name in this set so a plugin can never
+    shadow a built-in verb.
+    """
+    return set(_ALL_COMMANDS) | set(_EXTRA_KNOWN_COMMANDS)
+
+
+def registered_command_names(parser=None) -> set:
+    """Enumerate every verb the built CLI parser will actually accept.
+
+    This is the authoritative *invokable* command set, read live from the
+    argparse sub-parsers rather than any hand-maintained list. The help
+    catalog (and the count it advertises) is validated against this so it can
+    never drift back into advertising commands the parser won't dispatch — see
+    ``tests/test_help_parser_parity.py``.
+    """
+    import argparse
+
+    if parser is None:
+        parser = build_parser()
+    names: set = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            names.update(action.choices.keys())
+    return names
+
+
+# ── Plugin command discovery (tokenpak.commands entry-point group) ────────────
+#
+# Installed plugins (e.g. the premium tier) register additional CLI verbs under
+# the ``tokenpak.commands`` setuptools entry-point group. Each entry point
+# resolves to a callable that takes the remaining argv list and returns an int
+# exit code; that callable is the plugin's own gated wrapper, so entitlement
+# enforcement lives entirely inside the plugin — the core CLI only routes to it.
+#
+# Built-in verbs always win on a name collision: a plugin can never shadow a
+# command that ships in the core CLI. Discovery is lazy (only walked when an
+# unknown verb is seen or full help is rendered) and cached for the process.
+#
+# Discovery is on by default. Set ``TOKENPAK_ENABLE_PLUGINS=0`` to disable it
+# (e.g. for a fully hermetic core-only invocation).
+
+_plugin_commands_cache: Optional[dict] = None
+
+
+def _plugins_enabled() -> bool:
+    """Return False only when discovery is explicitly disabled via env."""
+    val = os.environ.get("TOKENPAK_ENABLE_PLUGINS")
+    if val is None:
+        return True
+    return val.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _discover_plugin_commands(force: bool = False) -> dict:
+    """Discover CLI verbs registered under the ``tokenpak.commands`` group.
+
+    Returns a mapping of ``verb name -> entry point``, excluding any verb whose
+    name collides with a built-in command (built-ins always win). The result is
+    cached for the lifetime of the process. Returns an empty dict when discovery
+    is disabled or no plugins are installed. Never raises — a broken plugin
+    environment must not break the core CLI.
+    """
+    global _plugin_commands_cache
+    if _plugin_commands_cache is not None and not force:
+        return _plugin_commands_cache
+
+    discovered: dict = {}
+    if not _plugins_enabled():
+        _plugin_commands_cache = discovered
+        return discovered
+
+    core_names = _core_command_names()
+    try:
+        from importlib.metadata import entry_points
+
+        eps = entry_points()
+        # Python 3.12+ exposes .select(); older returns a dict-like mapping.
+        if hasattr(eps, "select"):
+            command_eps = eps.select(group="tokenpak.commands")
+        else:  # pragma: no cover - legacy importlib.metadata
+            command_eps = eps.get("tokenpak.commands", [])
+
+        for ep in command_eps:
+            # Built-in verbs win on collision: never let a plugin shadow core.
+            if ep.name in core_names or ep.name in discovered:
+                continue
+            discovered[ep.name] = ep
+    except Exception:
+        # Any failure to read entry points leaves the core CLI fully functional.
+        discovered = {}
+
+    _plugin_commands_cache = discovered
+    return discovered
+
+
+def _dispatch_plugin_command(verb: str, argv: list) -> int:
+    """Invoke a discovered plugin verb's callable with the remaining argv.
+
+    ``argv`` is everything after the verb itself. The loaded callable is the
+    plugin's own gated wrapper: an unentitled invocation returns the plugin's
+    upgrade stub exit code, while an entitled one runs the real command. The
+    core CLI does not inspect or alter that gating — it only routes.
+
+    Returns the plugin callable's int exit code (defaulting to 0 when the
+    callable returns ``None``), or a non-zero code if the plugin fails to load.
+    """
+    plugins = _discover_plugin_commands()
+    ep = plugins.get(verb)
+    if ep is None:
+        return 1
+    try:
+        func = ep.load()
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"❌ Failed to load plugin command '{verb}': {exc}",
+            file=sys.stderr,
+        )
+        return 3
+    rc = func(argv)
+    return rc if isinstance(rc, int) else 0
 
 
 def _suggest_command(unknown: str) -> Optional[str]:
@@ -362,6 +545,12 @@ def _print_full_help():
             print(f"  {group_name}:")
             for cmd, desc in commands:
                 print(f"    {cmd:<14} {desc}")
+            print()
+        _plugin_cmds = _discover_plugin_commands()
+        if _plugin_cmds:
+            print("  Pro / plugins:")
+            for name in sorted(_plugin_cmds):
+                print(f"    {name:<14} Provided by an installed plugin")
             print()
         print("Run `tokenpak <command> --help` for command details.")
 
@@ -519,11 +708,12 @@ def cmd_setup(args):
 
     config_dir = Path.home() / ".tokenpak"
     config_file = config_dir / "config.yaml"
+    is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
     if config_file.exists():
         print(f"Configuration already exists at {config_file}")
-        if not sys.stdin.isatty():
+        if not is_tty:
             print("Non-interactive mode: skipping reconfigure.")
             return
         try:
@@ -552,9 +742,48 @@ def cmd_setup(args):
         api_keys["google"] = os.environ["GOOGLE_API_KEY"]
 
     if not api_keys:
+        # A direct ANTHROPIC_API_KEY is only genuinely needed when no OAuth /
+        # proxy / session-auth path covers Anthropic. Suppress the false-alarm
+        # warning when OAuth/session auth is already available.
+        try:
+            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+
+            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+        except Exception:
+            anthropic_via_oauth = False
+
+        if anthropic_via_oauth:
+            # OAuth/session auth covers Anthropic, so no direct API key is
+            # needed. Rather than dead-ending, complete onboarding: if a
+            # Claude Code login is present, point it at the local proxy so
+            # the no-key path actually finishes setup.
+            print("ℹ️  Anthropic is authenticated via OAuth/session "
+                  "(no direct API key needed).")
+            try:
+                from tokenpak.cli.commands.setup import (
+                    configure_claude_code,
+                    detect_claude_code,
+                )
+
+                if detect_claude_code():
+                    configure_claude_code()
+                    print("✅ Configured Claude Code to use the TokenPak proxy "
+                          "(ANTHROPIC_BASE_URL).")
+            except Exception as _e:
+                print(f"   (Claude Code auto-config skipped: {_e})")
+            print("   Set OPENAI_API_KEY or GOOGLE_API_KEY to proxy those providers.")
+            return
+
         print("⚠️  No API keys detected in environment variables.")
-        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
-        print("   Example: export ANTHROPIC_API_KEY='sk-...'")
+        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY,")
+        print("   or sign in with Claude Code (OAuth) — no API key required.")
+        print("   Example (set ANTHROPIC_API_KEY for your shell):")
+        try:
+            from tokenpak.cli.commands.setup import env_var_help
+
+            print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
+        except Exception:
+            print("    export ANTHROPIC_API_KEY='sk-...'")
         return
 
     # Auto-detect primary provider
@@ -576,9 +805,9 @@ def cmd_setup(args):
 
     # Ask for profile
     print("\nChoose a compression profile:")
-    print("  [1] minimal    — compression only (safest, ~5% savings)")
-    print("  [2] balanced   — compression + caching + routing (recommended, ~30% savings)")
-    print("  [3] aggressive — all modules enabled (maximum savings, ~40%+)")
+    print("  [1] minimal    — compression only (safest, lowest overhead)")
+    print("  [2] balanced   — compression + caching + routing (recommended)")
+    print("  [3] aggressive — all modules enabled (maximum optimization)")
 
     profile_input = input("\nProfile [2]: ").strip()
     profile_map = {"1": "minimal", "2": "balanced", "3": "aggressive"}
@@ -1804,28 +2033,22 @@ def cmd_preview(args):
         print("Usage: tokenpak preview <text> [--file FILE] [--json|--raw|--verbose]")
         sys.exit(1)
 
-    # Simulate compression dry-run
-    # In the real implementation, this would call the compressor pipeline
-    input_tokens = len(text.split())  # Rough estimate
-    output_tokens = max(int(input_tokens * 0.65), 10)  # Approx 35% reduction
-    saved_tokens = input_tokens - output_tokens
+    # Pre-send preview: nothing is sent and no compressor runs here, so there
+    # is no receipt-backed savings figure to report. Show only what is honest
+    # at preview time (the input size) and a neutral unavailable state for
+    # savings. Actual savings are recorded after the request runs and can be
+    # reviewed via `tokenpak savings`.
+    input_tokens = len(text.split())  # Rough word-count estimate
+
+    savings_note = "Savings are available after the request runs (see `tokenpak savings`)."
 
     result = {
         "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "saved_tokens": saved_tokens,
-        "compression_ratio": 1.0 - (output_tokens / max(input_tokens, 1)),
-        "retained_blocks": [
-            {"type": "system_prompt", "tokens": int(output_tokens * 0.3)},
-            {"type": "user_context", "tokens": int(output_tokens * 0.4)},
-        ],
-        "removed_blocks": [
-            {"type": "debug_logs", "tokens": int(saved_tokens * 0.5)},
-            {"type": "duplicate_text", "tokens": int(saved_tokens * 0.5)},
-        ],
-        "flags": ["skeleton_enabled", "cache_ready"],
-        "mode": "hybrid",
-        "duration_ms": 2.3,
+        "output_tokens": None,
+        "saved_tokens": None,
+        "compression_ratio": None,
+        "savings_available": False,
+        "note": savings_note,
     }
 
     # Output
@@ -1833,18 +2056,8 @@ def cmd_preview(args):
         print(json.dumps(result, indent=2))
     elif args.raw:
         print(f"Input:     {result['input_tokens']:,} tokens")
-        print(f"Output:    {result['output_tokens']:,} tokens")
-        print(
-            f"Saved:     {result['saved_tokens']:,} tokens ({result['compression_ratio']*100:.1f}%)"
-        )
-        print()
-        print("Retained blocks:")
-        for block in result["retained_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
-        print()
-        print("Removed blocks:")
-        for block in result["removed_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
+        print("Savings:   not available at preview")
+        print(savings_note)
     else:
         # Pretty format (default)
         mode = resolve_mode(args)
@@ -1853,27 +2066,9 @@ def cmd_preview(args):
         print()
 
         print(f"  Input:          {result['input_tokens']:,} tokens")
-        print(f"  → Compressed:   {result['output_tokens']:,} tokens")
-        print(
-            f"  Savings:        {result['saved_tokens']:,} tokens ({result['compression_ratio']*100:.1f}% reduction)"
-        )
+        print("  Savings:        not available at preview")
         print()
-
-        print(f"  Retained blocks ({len(result['retained_blocks'])}):")
-        for block in result["retained_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Removed blocks ({len(result['removed_blocks'])}):")
-        for block in result["removed_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Mode: {result['mode']} | Duration: {result['duration_ms']:.1f}ms")
-
-        if args.verbose:
-            print()
-            print(f"  Flags: {', '.join(result['flags'])}")
+        print(f"  {savings_note}")
 
 
 def cmd_dashboard(args):
@@ -2006,6 +2201,7 @@ def cmd_doctor(args):
         output_json=getattr(args, "json_output", False) is True,
         verbose=getattr(args, "verbose", False),
         claude_code=getattr(args, "claude_code", False),
+        lifecycle=getattr(args, "lifecycle", False),
     )
     # rc: 0=all pass/warnings only, 2=errors  (1 mapped to 0 for CLI compat)
     # Translate: 0/1→no exit, 2→exit(1) to preserve legacy callers expecting exit(1) on fail
@@ -2026,6 +2222,7 @@ def cmd_claude(args):
     import os
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
+    _maybe_update_nudge()
     from .companion import launch
     launch(args=list(args.args))
 
@@ -2047,10 +2244,86 @@ def cmd_codex(args):
     if forwarded and forwarded[0] == "uninstall":
         from .companion.codex.uninstall import main as uninstall_main
         sys.exit(uninstall_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "statusline":
+        from .companion.codex.statusline_config import main as statusline_main
+        sys.exit(statusline_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "clean":
+        sys.exit(_codex_clean(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
+    _maybe_update_nudge()
     from .companion.codex import launch
     launch(args=forwarded)
+
+
+def _codex_clean(argv):
+    """`tokenpak codex clean [--workspace] [--all]` — reclaim codex homes.
+
+    Removes orphaned isolated session homes by default.  ``--workspace``
+    also reclaims orphaned per-project homes; ``--all`` additionally
+    removes homes with a live session (destructive — used to clear a
+    wedged home).
+    """
+    from .companion.codex.session_home import clean
+
+    include_workspaces = "--workspace" in argv or "--all" in argv
+    force = "--all" in argv
+    removed = clean(include_workspaces=include_workspaces, force=force)
+    if not removed:
+        print("tokenpak codex clean: no reclaimable codex homes")
+        return 0
+    for path in removed:
+        print(f"removed {path}")
+    print(f"tokenpak codex clean: removed {len(removed)} codex home(s)")
+    return 0
+
+
+def cmd_companion(args):
+    """`tokenpak companion ingest|status` — manage companion memory sources.
+
+    ``ingest`` points the companion at your own Markdown notes ("bring your
+    own knowledge base") — no special vault layout required. ``status`` shows
+    the configured memory source(s).
+    """
+    import json as _json
+
+    from .companion.config import CompanionConfig
+    from .companion.memory.decision_memory import DecisionMemoryDB
+    from .companion.memory.lesson_ingest import ingest_sources
+
+    action = getattr(args, "companion_action", None)
+    cfg = CompanionConfig.from_env()
+
+    # CLI --memory-dir overrides the env var when provided.
+    cli_dirs = [Path(os.path.expanduser(d)) for d in (getattr(args, "memory_dir", None) or [])]
+    memory_dirs = cli_dirs or cfg.memory_dirs
+
+    if action == "status":
+        print("tokenpak companion — memory sources")
+        if memory_dirs:
+            for d in memory_dirs:
+                exists = "ok" if os.path.isdir(os.path.expanduser(str(d))) else "MISSING"
+                print(f"  memory-dir: {d}  [{exists}]")
+        else:
+            print("  (no memory dirs configured)")
+            print("  set TOKENPAK_COMPANION_MEMORY_DIRS=~/notes  or")
+            print("  run: tokenpak companion ingest --memory-dir ~/notes")
+        return 0
+
+    # default action: ingest
+    if not memory_dirs:
+        print("No memory directory given. Use --memory-dir <path> (repeatable) "
+              "or set TOKENPAK_COMPANION_MEMORY_DIRS.")
+        return 1
+    db = DecisionMemoryDB()
+    result = ingest_sources(db, memory_dirs=memory_dirs)
+    for src in result["sources"]:
+        print(f"  {src['kind'] or '-'}: {src['path']}  "
+              f"ingested={src['ingested']}  ({src['reason']})")
+    print(f"Total lessons ingested: {result['total']}")
+    if getattr(args, "json", False):
+        print(_json.dumps(result, indent=2))
+    return 0
 
 
 def cmd_test(args):
@@ -2230,6 +2503,10 @@ def _build_codex_parser(sub):
             "  tokenpak codex --install-only    # set up without launching Codex\n"
             "  tokenpak codex doctor            # verify installation\n"
             "  tokenpak codex uninstall         # reverse installation\n"
+            "  tokenpak codex statusline        # enable native status modules (additive)\n"
+            "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
@@ -2271,7 +2548,7 @@ def _build_creds_parser(sub):
         description=(
             "Inspect, manage, and dry-run-route credentials tokenpak can see from\n"
             "all registered providers (Codex CLI, Claude CLI, env vars,\n"
-            "~/.tokenpak/credentials.toml, OpenClaw agent profiles).\n\n"
+            "~/.tokenpak/credentials.toml, external agent profiles).\n\n"
             "Proxy fast-path integration still deferred — `creds route` is a\n"
             "dry-run (what would I pick) with no side effects.\n\n"
             "Examples:\n"
@@ -2367,6 +2644,38 @@ def _build_test_parser(sub):
     p.set_defaults(func=cmd_test)
 
 
+def _build_companion_parser(sub):
+    p = sub.add_parser(
+        "companion",
+        help="Manage the companion's memory sources (bring your own knowledge base)",
+        description=(
+            "Point the tokenpak companion at your own Markdown notes/knowledge\n"
+            "base — no special vault layout required.\n\n"
+            "Examples:\n"
+            "  tokenpak companion ingest --memory-dir ~/notes\n"
+            "  tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal\n"
+            "  TOKENPAK_COMPANION_MEMORY_DIRS=~/notes tokenpak companion ingest\n"
+            "  tokenpak companion status"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    comp_sub = p.add_subparsers(dest="companion_action")
+
+    p_ing = comp_sub.add_parser(
+        "ingest", help="Ingest lessons from your Markdown notes directory(ies)")
+    p_ing.add_argument("--memory-dir", action="append", dest="memory_dir",
+                       metavar="PATH",
+                       help="Directory of Markdown notes to ingest (repeatable). "
+                            "Falls back to TOKENPAK_COMPANION_MEMORY_DIRS if omitted.")
+    p_ing.add_argument("--json", action="store_true", help="Also print a JSON result")
+    p_ing.set_defaults(func=cmd_companion)
+
+    p_st = comp_sub.add_parser("status", help="Show configured memory source(s)")
+    p_st.set_defaults(func=cmd_companion)
+
+    p.set_defaults(func=cmd_companion, companion_action="status")
+
+
 def _build_stub_parsers(sub):
     """Register stub parsers for commands advertised in help/registry but not yet implemented.
 
@@ -2374,8 +2683,8 @@ def _build_stub_parsers(sub):
     instead of a traceback.
     """
     _STUBS = {
-        "audit": "Enterprise audit log management (not yet implemented)",
-        "compliance": "Generate compliance reports (not yet implemented)",
+        "audit": "Enterprise audit log management (available in TokenPak Pro)",
+        "compliance": "Generate compliance reports (available in TokenPak Pro)",
         "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
     }
 
@@ -2455,7 +2764,21 @@ def _build_stub_parsers(sub):
     )
     p_integrate.add_argument(
         "--apply", action="store_true",
-        help="(reserved) auto-write config files — not yet implemented, prints safe instructions instead",
+        help="Auto-write config files for the given client (headless / scripted path)",
+    )
+    p_integrate.add_argument(
+        "--revert", action="store_true",
+        help="Restore the most recent backup for the given client (undoes --apply)",
+    )
+    p_integrate.add_argument(
+        "--tier", choices=["strict", "standard", "auto", "fleet"], default=None,
+        help="Permission tier to apply with --apply (claude-code / codex only; "
+             "default: standard). 'fleet' is launcher-scoped and never persists "
+             "into client config — see `tokenpak permissions --help`.",
+    )
+    p_integrate.add_argument(
+        "--yes", action="store_true",
+        help="Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)",
     )
 
     def _integrate_dispatch(args):
@@ -2463,6 +2786,59 @@ def _build_stub_parsers(sub):
         return run_integrate(args)
 
     p_integrate.set_defaults(func=_integrate_dispatch)
+
+    # ── `permissions` — persistent tiers + launcher fleet mode ───────────────
+    p_permissions = sub.add_parser(
+        "permissions",
+        help="View or set permission tiers (strict/standard/auto) and launcher fleet mode",
+        description=(
+            "Manage the TokenPak permission tier system.\n\n"
+            "Persistent tiers (strict/standard/auto) are written into the client's\n"
+            "own config (Claude Code settings.json / Codex config.toml). Fleet mode\n"
+            "is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject\n"
+            "bypass flags at launch and print a banner — client configs are never\n"
+            "modified by fleet mode.\n\n"
+            "Examples:\n"
+            "  tokenpak permissions show                      # current tiers + fleet mode\n"
+            "  tokenpak permissions set auto                  # both clients\n"
+            "  tokenpak permissions set strict --client codex # one client\n"
+            "  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)\n"
+            "  tokenpak permissions reset                     # scoped reset + fleet off"
+        ),
+    )
+    perm_sub = p_permissions.add_subparsers(dest="permissions_cmd")
+    perm_sub.add_parser(
+        "show", help="Show per-client persistent tier + launcher fleet status"
+    )
+    pp_set = perm_sub.add_parser(
+        "set", help="Set a permission tier (strict|standard|auto) or enable fleet mode"
+    )
+    pp_set.add_argument(
+        "tier", choices=["strict", "standard", "auto", "fleet"],
+        help="Tier to apply ('fleet' sets launcher state only)",
+    )
+    pp_set.add_argument(
+        "--client", choices=["claude-code", "codex", "both"], default="both",
+        help="Which client to configure (default: both)",
+    )
+    pp_set.add_argument(
+        "--yes", action="store_true",
+        help="Skip the fleet-mode confirmation prompt (explicit opt-in)",
+    )
+    pp_reset = perm_sub.add_parser(
+        "reset",
+        help="Scoped reset: remove only TokenPak-managed tier keys + disable fleet mode",
+    )
+    pp_reset.add_argument(
+        "--client", choices=["claude-code", "codex", "both"], default="both",
+        help="Which client to reset (default: both)",
+    )
+
+    def _permissions_dispatch(args):
+        from tokenpak.cli.commands.permissions import run_permissions
+        return run_permissions(args)
+
+    p_permissions.set_defaults(func=_permissions_dispatch)
 
     # ── OpenClaw adapter sync subcommand ─────────────────────────
     p_openclaw = sub.add_parser(
@@ -2810,6 +3186,12 @@ def build_parser():
         action="store_true",
         help="Run TIP self-conformance checks (alias for `tokenpak tip conformance`)",
     )
+    p_doctor.add_argument(
+        "--lifecycle",
+        dest="lifecycle",
+        action="store_true",
+        help="Show only the compact lifecycle summary (installed/setup/routed/proxy/update)",
+    )
     p_doctor.set_defaults(func=cmd_doctor)
 
     p_diagnose = sub.add_parser("diagnose", help="Health check — config, vault, cache, proxy, disk")
@@ -2914,6 +3296,7 @@ def build_parser():
     _build_user_template_parser(sub)
     _build_version_parser(sub)
     _build_update_parser(sub)
+    _build_uninstall_parser(sub)
     _build_config_mgmt_parser(sub)
     _build_fleet_parser(sub)
     _build_compress_parser(sub)
@@ -2925,12 +3308,15 @@ def build_parser():
     _build_codex_parser(sub)
     _build_creds_parser(sub)
     _build_pak_parser(sub)
+    _build_cards_parser(sub)
     _build_tip_parser(sub)
     _build_features_parser(sub)
     _build_pakplan_parser(sub)
+    _build_dispatch_parser(sub)
     _build_home_parser(sub)
     _build_prove_parser(sub)
     _build_test_parser(sub)
+    _build_companion_parser(sub)
     _build_telemetry_parser(sub)
 
     # --- Stub parsers for commands advertised in help/registry but not yet wired ---
@@ -3199,6 +3585,12 @@ def _cmd_status_legacy(args):
 
 def cmd_status(args):
     """Show savings-first status (default) with optional drill-down views."""
+    # --explain dispatch (unified flag, RULED 2026-05-31): with a request id ->
+    # per-request savings/skip explanation; with no id -> value-tier notes.
+    _explain = getattr(args, "explain", None)
+    if _explain is not None:
+        from tokenpak.cli.commands.explain import run_explain
+        return run_explain(_explain)
     is_full = getattr(args, "full", False)
     is_json = getattr(args, "as_json", False)
     is_minimal = getattr(args, "minimal", False)
@@ -3226,6 +3618,8 @@ def cmd_status(args):
             hours=getattr(args, "hours", 0),
             fleet=getattr(args, "fleet", False),
             since=getattr(args, "since", None),
+            window=getattr(args, "window", None),
+            all_time=getattr(args, "all_time", False),
         )
     except Exception as e:
         print(f"⚠️  Savings-first status failed ({e}), falling back to legacy output...")
@@ -3278,46 +3672,10 @@ def cmd_savings(args):
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Try monitor.db first (proxy's live data source)
-    monitor_data = _monitor_db_savings(days=days)
-
-    if monitor_data and monitor_data.get("actual_cost", 0) > 0:
-        actual = monitor_data["actual_cost"]
-        cache_hit_rate = monitor_data["cache_hit_rate"]
-        compressed = monitor_data["compressed_tokens"]
-        cache_read = monitor_data["cache_read"]
-
-        total_input = monitor_data["total_input"] + monitor_data.get("total_output", 0)
-        avg_rate = actual / total_input if total_input > 0 else 0
-        savings_amount = (cache_read + compressed) * avg_rate
-        estimated_without = actual + savings_amount
-        savings_pct = (savings_amount / estimated_without * 100) if estimated_without > 0 else 0
-
-        if mode == OutputMode.RAW:
-            print(json.dumps({
-                "section": "savings", "days": days,
-                "actual_cost": actual, "savings_amount": savings_amount,
-                "savings_pct": savings_pct, "cache_hit_rate": cache_hit_rate,
-                "estimated_without_compression": estimated_without,
-            }))
-            return
-
-        if fmt.minimal:
-            print(fmt.minimal_line([f"{savings_pct:.1f}%", f"${savings_amount:.2f}", f"{days}d"]))
-            return
-
-        print(fmt.header())
-        print()
-        print(fmt.kv([
-            ("Actual Cost", f"${actual:.2f}"),
-            ("Est. Baseline", f"${estimated_without:.2f}"),
-            ("Est. Savings", f"${savings_amount:.2f} ({savings_pct:.1f}%)"),
-            ("Cache Hit Rate", f"{cache_hit_rate * 100:.1f}%"),
-            ("Compressed Tokens", f"{compressed:,}"),
-        ]))
-        return
-
-    # Fallback to telemetry.db
+    # Savings are read only from the receipt-backed telemetry engine, which
+    # counts proxy-attributable savings from real cost records. There is no
+    # estimated/derived path: when no receipt-backed data exists, a neutral
+    # "no data yet" state is shown rather than an invented figure.
     from .telemetry.query import get_savings_report
     report = get_savings_report(days=days)
 
@@ -3384,9 +3742,14 @@ def cmd_savings(args):
 
 
 def cmd_compare(args):
-    """Show before/after cost comparison for last N requests."""
+    """Show recorded cost for the last N requests.
 
-    from .telemetry.pricing_rates import calculate_request_cost, calculate_request_cost_baseline
+    Reports the actual recorded cost per request. Per-request cache/savings
+    attribution is not available from the receipt-backed event store, so it is
+    shown as a neutral unavailable state rather than estimated from a fabricated
+    cache-hit assumption.
+    """
+
     from .telemetry.query import get_recent_events
 
     limit = getattr(args, "last", 1)
@@ -3396,101 +3759,68 @@ def cmd_compare(args):
         print("No recent requests found.")
         return
 
-    # Show comparison for each request
+    # Show recorded cost for each request.
     for idx, evt in enumerate(recent[:limit], 1):
         model = evt.get("model", "unknown")
         input_tokens = evt.get("input_tokens", 0) or 0
         output_tokens = evt.get("output_tokens", 0) or 0
+        cost = evt.get("cost")
 
-        # For this demo, assume cache_read is 30% of input (adjust per actual data)
-        # In production, we'd fetch actual cache_read from tp_usage table
-        cache_read = int(input_tokens * 0.30)
-        sent_input = input_tokens - cache_read
-
-        without_cache = calculate_request_cost_baseline(model, input_tokens, output_tokens)
-        with_cache = calculate_request_cost(model, sent_input, cache_read, output_tokens)
-        saved = without_cache - with_cache
-        pct_saved = (saved / without_cache * 100) if without_cache > 0 else 0
-
-        duration_s = getattr(args, "duration_s", 5.1)
-
-        print(f"Request #{idx}: {model} ({duration_s:.1f}s)")
-        print(
-            f"  Without TokenPak: ${without_cache:.2f} ({input_tokens:,} input tokens × ${15/1e6:.2e})"
-        )
-        print(
-            f"  With TokenPak:    ${with_cache:.2f} ({sent_input:,} sent + {cache_read:,} cached)"
-        )
-        print(f"  💰 Saved: ${saved:.2f} ({pct_saved:.0f}% cheaper)")
+        print(f"Request #{idx}: {model}")
+        print(f"  Tokens:  {input_tokens:,} in / {output_tokens:,} out")
+        if cost is not None:
+            print(f"  Cost:    ${cost:.4f} (recorded)")
+        else:
+            print("  Cost:    cost data unavailable for this request")
+        # Per-request savings attribution is not tracked in the event store.
+        print("  Savings: per-request savings data unavailable "
+              "(see `tokenpak savings` for the receipt-backed total)")
         print()
 
 
 def cmd_leaderboard(args):
-    """Show per-model efficiency ranking."""
-    from .telemetry.query import get_model_usage, get_savings_report
+    """Show per-model efficiency ranking from receipt-backed telemetry."""
+    from .telemetry.query import get_model_compression_breakdown
 
     days = getattr(args, "days", 1)
-    usage = get_model_usage(days=days)
-    savings = get_savings_report(days=days)
+    # Receipt-backed per-model breakdown: request counts, tokens saved, real
+    # compression ratio, and USD savings — all derived from recorded cost/usage.
+    # No per-model figure is estimated or assigned by model name.
+    rows = get_model_compression_breakdown(days=days)
 
-    if not usage:
+    if not rows:
         print("No model usage data available.")
         print("Run requests through the proxy to gather metrics.")
         return
 
-    # Calculate per-model stats
-    model_stats = []
-    for u in usage:
-        model = u.model or "unknown"
-        cost = (u.total_input_tokens / 1_000_000) * 15 + (u.total_output_tokens / 1_000_000) * 75
-        # Estimate savings (assume 30% cache + 5% compression for demo)
-        estimated_saved = cost * 0.35
-        cache_pct = 96 if "opus" in model.lower() else 94 if "sonnet" in model.lower() else 98
-        compress_pct = 5.1 if "opus" in model.lower() else 8.2 if "sonnet" in model.lower() else 3.2
-
-        model_stats.append(
-            {
-                "model": model,
-                "requests": u.request_count,
-                "cost": cost,
-                "saved": estimated_saved,
-                "cache_pct": cache_pct,
-                "compress_pct": compress_pct,
-            }
-        )
-
-    # Sort by cost (highest spender first)
-    model_stats.sort(key=lambda x: x["cost"], reverse=True)
+    # Sort by savings (highest first), falling back to request volume.
+    rows = sorted(rows, key=lambda r: (r.savings_amount, r.request_count), reverse=True)
 
     print("TokenPak Model Leaderboard")
     print("──────────────────────────")
     print()
 
-    if model_stats:
-        # Show top 3 insights
-        most_efficient = max(model_stats, key=lambda x: x["cache_pct"])
-        biggest_spender = max(model_stats, key=lambda x: x["cost"])
-        best_compression = max(model_stats, key=lambda x: x["compress_pct"])
-
+    # Top insight: only show a savings leader when receipt-backed savings exist.
+    leader = max(rows, key=lambda r: r.savings_amount)
+    if leader.savings_amount > 0:
         print(
-            f"🏆 Most Efficient:   {most_efficient['model']}  ({most_efficient['cache_pct']}% cached, ${most_efficient['saved']/most_efficient['requests']:.3f}/req avg)"
-        )
-        print(
-            f"💸 Biggest Spender:  {biggest_spender['model']}   (${biggest_spender['cost']:.2f} today, but ${biggest_spender['saved']:.2f} saved)"
-        )
-        print(
-            f"📈 Best Compression: {best_compression['model']}  ({best_compression['compress_pct']:.1f}% rate)"
+            f"🏆 Top Saver: {leader.model}  "
+            f"(${leader.savings_amount:.2f} saved across {leader.request_count} requests)"
         )
         print()
 
-    # Table of all models
+    # Table of all models. compression_ratio < 1.0 means input was compressed;
+    # reduction% = (1 - ratio) * 100. Savings shown only as receipt-backed USD.
     print(
-        f"{'Model':<20} {'Requests':>10} {'Cost':>10} {'Saved':>10} {'Cache%':>8} {'Compress%':>10}"
+        f"{'Model':<24} {'Requests':>10} {'Tokens Saved':>14} {'Reduction':>11} {'Saved':>10}"
     )
-    print("-" * 70)
-    for stat in model_stats:
+    print("-" * 72)
+    for r in rows:
+        reduction_pct = (1.0 - r.avg_compression_ratio) * 100 if r.avg_compression_ratio else 0.0
+        reduction = f"{reduction_pct:.1f}%" if reduction_pct > 0 else "—"
+        saved = f"${r.savings_amount:.2f}" if r.savings_amount > 0 else "—"
         print(
-            f"{stat['model']:<20} {stat['requests']:>10} ${stat['cost']:>9.2f} ${stat['saved']:>9.2f} {stat['cache_pct']:>7}% {stat['compress_pct']:>9.1f}%"
+            f"{r.model:<24} {r.request_count:>10} {r.tokens_saved:>14,} {reduction:>11} {saved:>10}"
         )
 
 
@@ -3535,6 +3865,20 @@ def cmd_check_alerts(args):
     sys.exit(1)
 
 
+def _validate_status_window(value):
+    """argparse type for ``--window`` — reuses the canonical status parser regex."""
+    import argparse as _ap
+
+    from tokenpak.cli.commands.status import _WINDOW_RE
+
+    token = (value or "").strip().lower()
+    if not _WINDOW_RE.match(token):
+        raise _ap.ArgumentTypeError(
+            f"invalid window {value!r}; use <N>m, <N>h, <N>d, or <N>mo (e.g. 30m, 4h, 7d, 2mo)"
+        )
+    return token
+
+
 def _build_status_parser(sub):
     p_status = sub.add_parser("status", help="Show savings report (default) or full system status")
     p_status.add_argument("--limit", type=int, default=20, help="Max retry events to show")
@@ -3546,8 +3890,14 @@ def _build_status_parser(sub):
     p_status.add_argument("--no-meme", dest="no_meme", action="store_true", help="Suppress tagline")
     p_status.add_argument("--days", type=int, default=0, help="Filter to last N days (combinable with --hours)")
     p_status.add_argument("--hours", type=int, default=0, help="Filter to last N hours (combinable with --days)")
+    p_status.add_argument("--window", default=None, type=_validate_status_window, help="Time window: <N>m|<N>h|<N>d|<N>mo (e.g. 30m, 4h, 7d, 2mo)")
+    p_status.add_argument("--all", dest="all_time", action="store_true", help="Show full persistent history (all time)")
     p_status.add_argument("--fleet", action="store_true", help="Fleet rollup view — reads rollup_daily")
     p_status.add_argument("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
+    p_status.add_argument(
+        "--explain", nargs="?", const="__NOARG__", default=None, metavar="REQ_ID",
+        help="Explain a request's savings/skip reasons by id; with no id, show value-tier notes",
+    )
     p_status.set_defaults(func=cmd_status)
 
 
@@ -3872,6 +4222,21 @@ def _save_lock(lock: dict):
     _LOCK_FILE.write_text(json.dumps(lock, indent=2) + "\n")
 
 
+def _maybe_write_env_stub(*, force: bool) -> None:
+    """Write a placeholders-only .env.example under the resolved TokenPak home.
+
+    Scaffold-only: never writes a real .env and never writes credential values.
+    """
+    from tokenpak import _paths
+    from tokenpak.cli.commands.config_env import write_env_stub
+
+    created, target = write_env_stub(_paths.home(), force=force)
+    if created:
+        print(f"Created env template: {target} (placeholders only)")
+    else:
+        print(f"Env template already exists: {target} (use --force to overwrite)")
+
+
 def cmd_config(args):
     """Config management: show, init, edit."""
     from tokenpak.core.config_loader import CONFIG_PATH, generate_default_yaml, get_all
@@ -3906,10 +4271,14 @@ def cmd_config(args):
         if CONFIG_PATH.exists() and not getattr(args, "force", False):
             print(f"Config already exists: {CONFIG_PATH}")
             print("Use --force to overwrite.")
+            if getattr(args, "with_env_stub", False):
+                _maybe_write_env_stub(force=getattr(args, "force", False))
             return
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(generate_default_yaml())
         print(f"Created: {CONFIG_PATH}")
+        if getattr(args, "with_env_stub", False):
+            _maybe_write_env_stub(force=getattr(args, "force", False))
 
     elif subcmd == "path":
         print(str(CONFIG_PATH))
@@ -3969,6 +4338,159 @@ def cmd_version(args):
         print(f"\n  Lock file not found at {_LOCK_FILE}")
 
 
+# ── Update check (shared by `update` and the claude/codex launcher nudge) ──────
+
+_UPDATE_CHECK_TTL = 24 * 60 * 60  # cache the result for <=1 day
+_UPDATE_NUDGE_OPTOUT_ENV = "TOKENPAK_NO_UPDATE_CHECK"
+
+
+def _fetch_latest_pypi_version(timeout: float = 5.0) -> str:
+    """Return the latest tokenpak version string from PyPI.
+
+    Raises on any network/parse error — callers decide how to handle failure
+    (``cmd_update`` surfaces it; the launcher nudge swallows it, fail-open).
+    """
+    import urllib.request as _ur
+
+    with _ur.urlopen("https://pypi.org/pypi/tokenpak/json", timeout=timeout) as resp:
+        data = json.loads(resp.read())
+        return data["info"]["version"]
+
+
+def _read_update_cache() -> Tuple[float, Optional[str]]:
+    """Return (checked_at_epoch, cached_latest_version). (0.0, None) on any failure."""
+    try:
+        from tokenpak import _paths
+
+        data = json.loads(_paths.update_check_cache().read_text())
+        return float(data.get("checked_at", 0.0)), data.get("latest")
+    except Exception:
+        return 0.0, None
+
+
+def _write_update_cache(latest: Optional[str]) -> None:
+    """Persist last-checked timestamp + latest version. Best-effort (never raises)."""
+    try:
+        from tokenpak import _paths
+
+        _paths.ensure_home()
+        _paths.update_check_cache().write_text(
+            json.dumps({"checked_at": time.time(), "latest": latest})
+        )
+    except Exception:
+        pass
+
+
+def _update_nudge_opted_out() -> bool:
+    """True when TOKENPAK_NO_UPDATE_CHECK is set to a truthy value."""
+    return os.environ.get(_UPDATE_NUDGE_OPTOUT_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _maybe_update_nudge(stream=None) -> None:
+    """Print a one-line 'update available' nudge if a newer PyPI version exists.
+
+    Called ONLY from the ``claude`` / ``codex`` launchers. Cached <=1/day,
+    fully fail-open (never raises into the launcher), and opt-out via
+    ``TOKENPAK_NO_UPDATE_CHECK=1``. The daily refresh uses a short (2s) timeout
+    so it cannot meaningfully stall the launch; the cached path does no network.
+    """
+    out = stream if stream is not None else sys.stderr
+    try:
+        if _update_nudge_opted_out():
+            return
+
+        checked_at, cached_latest = _read_update_cache()
+        if time.time() - checked_at < _UPDATE_CHECK_TTL:
+            latest = cached_latest  # fresh cache → no network call
+        else:
+            try:
+                latest = _fetch_latest_pypi_version(timeout=2.0)
+            except Exception:
+                latest = None
+            _write_update_cache(latest)
+
+        if not latest:
+            return
+
+        from packaging.version import Version as _PV
+
+        from tokenpak import __version__ as current_ver
+
+        if _PV(latest) > _PV(current_ver):
+            print(f"TokenPak {latest} available — run `tokenpak update`", file=out)
+    except Exception:
+        # Fail-open: a broken update check must never disturb the launcher.
+        return
+
+
+def _tokenpak_is_user_install() -> bool:
+    """True when the running tokenpak package lives in the per-user site (``~/.local``)."""
+    try:
+        import site
+
+        import tokenpak as _tp
+
+        base = (site.getuserbase() or "").replace(os.sep, "/")
+        loc = (os.path.dirname(os.path.abspath(_tp.__file__)) or "").replace(os.sep, "/")
+        return bool(base) and loc.startswith(base)
+    except Exception:
+        return False
+
+
+def _pip_upgrade_tokenpak(verbose: bool = True) -> Tuple[bool, str, str]:
+    """Upgrade the running ``tokenpak`` package, tolerant of PEP 668.
+
+    Installs into whichever interpreter is currently executing (``sys.executable``).
+    On an externally-managed interpreter (e.g. a distro system Python — PEP 668) a
+    plain ``pip install`` is refused; we retry into the per-user site with
+    ``--break-system-packages``, which writes only to the user site (``~/.local``)
+    and never touches system/distro-managed packages. pipx-managed installs are
+    detected and reported so the caller can advise ``pipx upgrade`` instead of
+    running pip inside the pipx venv.
+
+    Returns ``(ok, method, detail)`` where ``method`` is ``pip`` / ``pip-bsp`` /
+    ``pipx`` and ``detail`` carries trimmed stderr on failure.
+    """
+    import subprocess as _sp
+
+    # pipx-managed: running pip inside the pipx venv is the wrong tool.
+    if "/pipx/venvs/" in (sys.prefix or "").replace(os.sep, "/"):
+        return False, "pipx", ""
+
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    # Match where the package currently lives so we upgrade it in place.
+    scope = [] if in_venv else (["--user"] if _tokenpak_is_user_install() else [])
+
+    def _run(extra):
+        return _sp.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", *extra, "tokenpak"],
+            capture_output=True,
+            text=True,
+        )
+
+    result = _run(scope)
+    if result.returncode == 0:
+        return True, "pip", ""
+
+    blob = ((result.stderr or "") + (result.stdout or "")).lower()
+    if "externally-managed-environment" in blob or "externally managed" in blob:
+        if verbose:
+            print(
+                "  ⚠ Externally-managed environment (PEP 668); retrying into the "
+                "user site with --break-system-packages (writes only to ~/.local)…"
+            )
+        result = _run(scope + ["--break-system-packages"])
+        if result.returncode == 0:
+            return True, "pip-bsp", ""
+
+    return False, "pip", (result.stderr or result.stdout or "")[:400]
+
+
 def cmd_update(args):
     """Update TokenPak proxy and CLI to latest."""
     import subprocess as _sp
@@ -3984,11 +4506,7 @@ def cmd_update(args):
     # Check latest version from PyPI
     print("Checking for updates...")
     try:
-        import urllib.request as _ur
-
-        with _ur.urlopen("https://pypi.org/pypi/tokenpak/json", timeout=5) as resp:
-            data = json.loads(resp.read())
-            latest = data["info"]["version"]
+        latest = _fetch_latest_pypi_version()
     except Exception as e:
         print(f"  ✗ Could not reach PyPI: {e}")
         latest = None
@@ -4016,6 +4534,10 @@ def cmd_update(args):
 
     if dry_run:
         print("\nWould run: pip install --upgrade tokenpak")
+        print(
+            "  (retries into the user site with --break-system-packages on "
+            "externally-managed / PEP 668 environments)"
+        )
         print("Would restart proxy if running.")
         return
 
@@ -4024,15 +4546,24 @@ def cmd_update(args):
     proxy_running = "error" not in proxy_info
 
     print("\nUpdating TokenPak...")
-    result = _sp.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "tokenpak"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        print("  ✓ tokenpak updated")
+    ok, method, detail = _pip_upgrade_tokenpak()
+    if ok:
+        if method == "pip-bsp":
+            print("  ✓ tokenpak updated (user site, --break-system-packages)")
+        else:
+            print("  ✓ tokenpak updated")
+    elif method == "pipx":
+        print("  ✗ tokenpak is managed by pipx — upgrade with:\n      pipx upgrade tokenpak")
+        return
     else:
-        print(f"  ✗ pip install failed:\n{result.stderr[:400]}")
+        print(f"  ✗ pip install failed:\n{detail}")
+        print(
+            "\n  Manual upgrade options:\n"
+            "    • inside a virtualenv:  pip install --upgrade tokenpak\n"
+            f"    • user site (PEP 668):  {sys.executable} -m pip install "
+            "--user --upgrade --break-system-packages tokenpak\n"
+            "    • pipx install:         pipx upgrade tokenpak"
+        )
         return
 
     # Restart proxy if it was running
@@ -4066,6 +4597,20 @@ def cmd_update(args):
         print(f"  ⚠ Could not update lock file: {e}")
 
     print("\n✓ Update complete.")
+
+
+def cmd_uninstall(args):
+    """Un-route (``--soft``) or purge + offer package removal (``--hard``)."""
+    from .cli.commands.uninstall import run_uninstall
+
+    return run_uninstall(
+        soft=getattr(args, "soft", False),
+        hard=getattr(args, "hard", False),
+        dry_run=getattr(args, "dry_run", False),
+        yes=getattr(args, "yes", False),
+        keep_data=getattr(args, "keep_data", False),
+        output_json=getattr(args, "json", False),
+    )
 
 
 def cmd_config_sync(args):
@@ -4345,6 +4890,46 @@ def _build_update_parser(sub):
     p.set_defaults(func=cmd_update)
 
 
+def _build_uninstall_parser(sub):
+    p = sub.add_parser(
+        "uninstall",
+        help="Un-route (--soft) or purge state + remove package (--hard)",
+    )
+    p.add_argument(
+        "--soft",
+        action="store_true",
+        help="Un-route only (reversible via `tokenpak setup`); keep config/state/package",
+    )
+    p.add_argument(
+        "--hard",
+        action="store_true",
+        help="Soft + purge state (keeps journal/budget/capsules) + offer package removal",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Show the exact operations that would run, change nothing",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation (required for --hard in non-interactive use)",
+    )
+    p.add_argument(
+        "--keep-data",
+        action="store_true",
+        dest="keep_data",
+        help="Under --hard, also retain all ~/.tpk user data (config + dbs)",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable receipt",
+    )
+    p.set_defaults(func=cmd_uninstall)
+
+
 def _build_config_mgmt_parser(sub):
     p = sub.add_parser("config", help="Config management (sync, pull, validate)")
     csub = p.add_subparsers(dest="config_cmd", required=False)
@@ -4386,7 +4971,37 @@ def _build_config_mgmt_parser(sub):
     # init — create default config.yaml
     p_init = csub.add_parser("init", help="Create default config.yaml")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing config")
+    p_init.add_argument(
+        "--with-env-stub",
+        action="store_true",
+        dest="with_env_stub",
+        help="Also drop a placeholders-only .env.example under the TokenPak home",
+    )
     p_init.set_defaults(func=cmd_config)
+
+    # doctor — read-only config-subsystem diagnostics
+    p_doctor = csub.add_parser(
+        "doctor",
+        help="Read-only config diagnostics (home, precedence, env vars, .env hygiene)",
+    )
+    p_doctor.add_argument("--json", action="store_true", help="Output as JSON")
+    p_doctor.add_argument("--quiet", action="store_true", help="Print only the worst finding")
+    p_doctor.add_argument("--verbose", "-v", action="store_true", help="Include per-check detail")
+    p_doctor.set_defaults(func=_config_doctor_dispatch)
+
+    # env — loaded env vars + provenance (masked by default)
+    p_env = csub.add_parser(
+        "env",
+        help="Show loaded env vars + provenance (secret values masked by default)",
+    )
+    p_env.add_argument("--json", action="store_true", help="Output as JSON")
+    p_env.add_argument(
+        "--no-mask",
+        action="store_false",
+        dest="mask",
+        help="Show low-class values unmasked (secret-class values are still masked)",
+    )
+    p_env.set_defaults(func=_config_env_dispatch, mask=True)
 
     # path — print config file path
     p_path = csub.add_parser("path", help="Print config file path")
@@ -4413,9 +5028,19 @@ def _build_config_mgmt_parser(sub):
     p_migrate.set_defaults(func=cmd_config_migrate)
     p.set_defaults(func=_bare_help(
         "config", "Manage configuration files",
-        ["sync", "pull", "validate", "show", "init", "path", "migrate"],
+        ["sync", "pull", "validate", "show", "init", "doctor", "env", "path", "migrate"],
         exit_nonzero=True,
     ))
+
+
+def _config_doctor_dispatch(args):
+    from tokenpak.cli.commands.config_env import cmd_config_doctor
+    return cmd_config_doctor(args)
+
+
+def _config_env_dispatch(args):
+    from tokenpak.cli.commands.config_env import cmd_config_env
+    return cmd_config_env(args)
 
 
 # ── End Version Control Commands ──────────────────────────────────────────────
@@ -4432,6 +5057,13 @@ def _bare_help(name, description, subs, exit_nonzero=False):
 
 
 def main():
+    global _NO_TUI_FLAG
+    # Strip --no-tui from argv before any other parsing so per-subcommand
+    # parsers don't need to know about it.
+    if "--no-tui" in sys.argv:
+        _NO_TUI_FLAG = True
+        sys.argv = [a for a in sys.argv if a != "--no-tui"]
+
     parser = build_parser()
 
     # ── Intercept --version / -V ──────────────────────────────────────────────
@@ -4441,9 +5073,18 @@ def main():
         print(f"tokenpak {_ver}")
         sys.exit(0)
 
+    # ── Intercept bare `tokenpak --json`: deterministic machine-readable output ─
+    # Cheap, schema-versioned status + command catalog; no slow probe (spec F3).
+    if len(sys.argv) == 2 and sys.argv[1] == "--json":
+        _emit_bare_json()
+        sys.exit(0)
+
     # ── Intercept bare invocation: launch interactive menu on TTY ──────────────
+    # The menu runs only when fully interactive (TTY both ends, no --no-tui, not
+    # CI, TOKENPAK_NONINTERACTIVE unset, TERM != dumb; spec F1/F2). Every other
+    # case prints deterministic non-interactive output and exits 0.
     if len(sys.argv) == 1:
-        if sys.stdin.isatty() and sys.stdout.isatty():
+        if _interactive_menu_allowed():
             try:
                 from tokenpak.cli.commands.menu import run_menu
                 run_menu()
@@ -4462,53 +5103,24 @@ def main():
 
     # ── Intercept unknown commands for typo suggestions ───────────────────────
     raw_cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    known_cmds = set(_ALL_COMMANDS) | {
-        # also include argparse-registered commands not in groups
-        "help",
-        "start",
-        "stop",
-        "restart",
-        "logs",
-        "version",
-        "update",
-        "config",
-        "setup",
-        "compare",
-        "leaderboard",
-        "report",
-        "check-alerts",
-        "alerts",
-        "watch",
-        "integrate",
-        "openclaw",
-        "savings",
-        "recommendations",
-        "usage",
-        "preview",
-        "aggregate",
-        "requests",
-        "validate-config",
-        "vault",
-        "vault-health",
-        "compress",
-        "optimize",
-        "last",
-        "prune",
-        "retrieval",
-        "menu",
-        # Stub commands (advertised in help/registry, not yet implemented)
-        "license",
-        "plan",
-        "activate",
-        "deactivate",
-        "init",
-        "monitor",
-        # Beta 1 verb families (TIP, features, PAKPlan preview, home)
-        "tip",
-        "features",
-        "pakplan",
-        "home",
-    }
+    # Authoritative built-in verb set (grouped + argparse/stub commands). Plugin
+    # verbs are dispatched only when raw_cmd is NOT in this set, so built-ins
+    # always win on a name collision.
+    known_cmds = _core_command_names()
+    # ── Plugin verbs (tokenpak.commands entry-point group) ────────────────────
+    # A verb that is not a built-in but is registered by an installed plugin is
+    # routed straight to the plugin's own (already gated) callable. Built-ins win
+    # on collision because this branch only runs for verbs not in known_cmds, and
+    # discovery itself excludes any name that shadows a core command. Everything
+    # after the verb is forwarded verbatim so the plugin owns its own flags
+    # (including its own --help). Entitlement gating is the plugin's job.
+    if raw_cmd and not raw_cmd.startswith("-") and raw_cmd not in known_cmds:
+        _plugin_cmds = _discover_plugin_commands()
+        if raw_cmd in _plugin_cmds:
+            _verb_idx = sys.argv.index(raw_cmd)
+            _rc = _dispatch_plugin_command(raw_cmd, sys.argv[_verb_idx + 1:])
+            sys.exit(_rc)
+
     # If user asks --help on an unrecognised command, just show that command's usage + exit 0
     if (
         raw_cmd
@@ -4549,7 +5161,7 @@ def main():
     # For 'claude' subcommand, manually split argv so *all* arguments after
     # tokenpak's own flags pass through verbatim to the claude binary.
     # parse_args()/parse_known_args() would mishandle flags like
-    # --dangerously-skip-permissions or split --model <value> pairs.
+    # permission-bypass flags or split --model <value> pairs.
     if raw_cmd == "claude":
         claude_idx = sys.argv.index("claude")
         claude_tail = sys.argv[claude_idx + 1:]
@@ -4606,17 +5218,19 @@ def main():
             req_count = len(recent) if recent else 0
             cache_hit = report.cache_hit_rate * 100 if report.cache_hit_rate else 0
 
-            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | 5.6% compression")
+            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | compression active")
 
             # Top model savings
             from .telemetry.query import get_model_usage
 
             usage = get_model_usage(days=1)
             if usage:
+                # Show the busiest model by request count (receipt-backed).
+                # Per-model savings attribution is not tracked, so no dollar
+                # figure is invented here.
                 top = usage[0]
-                top_saved = report.savings_amount * 0.95  # Estimate top model saved ~95% of total
                 print(
-                    f"🔥 Top: {top.model} saved ${top_saved:.0f} across {top.request_count} requests"
+                    f"🔥 Top model: {top.model} ({top.request_count} requests)"
                 )
 
             print()
@@ -5910,6 +6524,20 @@ def _build_pak_parser(sub):
     build_pak_parser(sub)
 
 
+def _build_cards_parser(sub):
+    """Register the ``tokenpak cards`` subcommand (Cards authoring layer, Std 54).
+
+    One new top-level verb for the ``.tip.md`` / ``.pak.md`` authoring
+    layer. NOT an alias of ``tokenpak pak`` — cards are authoring
+    sources; ``pak`` operates on runtime Pak objects (Std 54 invariant
+    13). Implementation lives in :mod:`tokenpak.cli.commands.cards`;
+    lazy import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.cards import build_cards_parser
+
+    build_cards_parser(sub)
+
+
 def _build_tip_parser(sub):
     """Register the ``tokenpak tip`` subcommand (Beta 1 regression recovery).
 
@@ -5939,6 +6567,20 @@ def _build_pakplan_parser(sub):
     from tokenpak.cli.commands.pakplan import build_pakplan_parser
 
     build_pakplan_parser(sub)
+
+
+def _build_dispatch_parser(sub):
+    """Register the ``tokenpak dispatch`` command group (Dispatch v0.1-alpha).
+
+    TokenPak Dispatch is the OSS workflow-control layer (Standards Delta v0):
+    Decision Inbox + ``run|status|inspect|decisions|approve|reject|pause|resume|
+    cancel|discard-late|delivery|receipt`` verbs over the Run Ledger.
+    Implementation lives in :mod:`tokenpak.cli.commands.dispatch_cmd`; lazy
+    import keeps ``tokenpak --help`` fast.
+    """
+    from tokenpak.cli.commands.dispatch_cmd import build_dispatch_parser
+
+    build_dispatch_parser(sub)
 
 
 def _build_home_parser(sub):
@@ -8269,7 +8911,7 @@ def cmd_retrieval_test(args):
     """Test a query through all enabled retrievers."""
     import asyncio
 
-    from .vault.retrieval.base import HybridSearchConfig, RetrievalQuery
+    from .vault.retrieval.base import HybridSearchConfig
     from .vault.retrieval.hybrid import HybridRetriever
 
     cfg = HybridSearchConfig.from_env()
@@ -8280,8 +8922,13 @@ def cmd_retrieval_test(args):
     retriever = HybridRetriever(cfg)
 
     async def _run():
-        q = RetrievalQuery(text=query_text, top_k=top_k)
-        return await retriever.search(q)
+        # search() expects the query string + top_k directly. Passing a
+        # RetrievalQuery here double-wrapped it (search() re-wraps query_text
+        # into its own RetrievalQuery), so BM25 tokenization received a
+        # dataclass instead of a str and crashed: _tokenize is lru_cache'd and
+        # RetrievalQuery is not frozen -> "TypeError: unhashable type". It also
+        # silently dropped top_k. Pass the string and top_k through.
+        return await retriever.search(query_text, top_k=top_k)
 
     import time
     t0 = time.perf_counter()

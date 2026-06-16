@@ -15,7 +15,7 @@ LLM APIs charge per token. Most conversations are bloated with repetitive contex
 
 | Metric | Value |
 |--------|-------|
-| Average token reduction | **43–84%** |
+| Average token reduction | **measure with `tokenpak savings`** |
 | Zero-token operations | **80%+** |
 | Cold start overhead | **< 100ms** |
 | Indexing throughput | **2,700+ files/sec** |
@@ -137,11 +137,11 @@ tokenpak savings # Token savings
 # Compression
 tokenpak compress # Dry-run compression
 tokenpak demo # Live demo
-tokenpak trace # Debug pipeline
+tokenpak debug list # View recent request traces
 
 # Vault
 tokenpak index # Index directory
-tokenpak vault search # Semantic search
+tokenpak vault repair # Check and repair vault index
 tokenpak calibrate # Auto-tune performance
 
 # Routing
@@ -190,7 +190,7 @@ pytest
 
 | Metric | Value |
 |--------|-------|
-| Average token reduction | **43–84%** |
+| Average token reduction | **measure with `tokenpak savings`** |
 | Zero-token operations | **80%+** |
 | Indexing throughput | **2,700+ files/sec** |
 | Search latency | **~23ms** |
