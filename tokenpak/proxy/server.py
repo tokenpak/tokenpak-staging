@@ -1086,7 +1086,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Request ID: honour X-Request-ID from client, else generate UUID
         _req_id = _new_request_id(dict(self.headers))
         ps = self.server.proxy_server  # type: ignore[attr-defined]
-        # Per-request reset of the concurrent-reservation carrier (Std 29 §15):
+        # Per-request reset of the concurrent-reservation carrier:
         # a hold created at this request's admission (only when reservations are
         # enabled) is settled/released on the response path below. Reset here so
         # a reused keep-alive handler never settles a stale id from a prior
@@ -1251,7 +1251,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
                         body = _sg_outcome.body
-                    # Carry any concurrent-reservation hold (Std 29 §15) to the
+                    # Carry any concurrent-reservation hold to the
                     # response path so it is settled on success / released on
                     # failure. None unless reservations are enabled at admission.
                     self._tokenpak_reservation_id = _sg_outcome.reservation_id
@@ -2248,7 +2248,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass  # DB errors must never break the request
 
-                # ── Reservation settlement (Std 29 §15 completion) ────────────
+                # ── Reservation settlement (completion) ──────────────────────
                 # A forward that carried a concurrent-budget reservation (only
                 # when reservations are enabled at admission) converts its hold
                 # HERE — after the settled-usage row above is written — so there
@@ -2505,7 +2505,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _cb_registry is not None and _cb_provider is not None:
                 _cb_registry.record_failure(_cb_provider)
 
-            # Reservation release on forward failure (Std 29 §15): a hold from an
+            # Reservation release on forward failure: a hold from an
             # enabled admission must not survive a provider connect/timeout/
             # protocol error — free it so a retry can admit. Best-effort,
             # idempotent, never re-raises on the error path.
