@@ -252,7 +252,7 @@ class TestRedactionAtSink:
         ``[REDACTED]`` even though the caller never scrubbed it."""
         logger, handler, buf = _logger_with_capture("tpk.test.sink1")
         install_log_redaction(handler)
-        secret = "sk-livesecretABCDEF1234567890"
+        secret = "sk-livesecretABCDEF1234567890"  # gitleaks:allow (synthetic test fixture, not a real key)
         # Caller does NOT pre-scrub — redaction must be structural at the sink.
         logger.warning("upstream call Authorization: Bearer %s", secret)
         out = buf.getvalue()
@@ -264,9 +264,9 @@ class TestRedactionAtSink:
         because the filter redacts the fully-rendered record."""
         logger, handler, buf = _logger_with_capture("tpk.test.sink2")
         install_log_redaction(handler)
-        logger.info("token=%s", "sk-anotherSECRET0987654321")
+        logger.info("token=%s", "sk-anotherSECRET0987654321")  # gitleaks:allow (synthetic test fixture, not a real key)
         out = buf.getvalue()
-        assert "sk-anotherSECRET0987654321" not in out
+        assert "sk-anotherSECRET0987654321" not in out  # gitleaks:allow (synthetic test fixture, not a real key)
         assert "[REDACTED-SK]" in out
 
     def test_safe_message_passes_through_unchanged(self):
