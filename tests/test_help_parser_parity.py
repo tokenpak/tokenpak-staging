@@ -56,6 +56,14 @@ def _registry_commands():
     return [c["command"] for c in data.get("commands", [])]
 
 
+def _registry_entry(command: str):
+    data = json.loads(REGISTRY_PATH.read_text())
+    for entry in data.get("commands", []):
+        if entry.get("command") == command:
+            return entry
+    raise AssertionError(f"command missing from registry: {command}")
+
+
 def test_no_phantom_commands():
     """Every advertised command must be invokable (no ``Unknown command``)."""
     invokable = registered_command_names(build_parser())
@@ -110,3 +118,13 @@ def test_advertised_count_is_derived_not_hardcoded():
     from tokenpak.cli.commands.help import _load_registry
 
     assert len(_load_registry()) == len(_registry_commands())
+
+
+def test_activate_registry_copy_matches_fail_closed_activation():
+    """Activation help must not promise immediate Pro unlock."""
+    detail = _registry_entry("activate")["detail"]
+
+    assert "pending_validation" in detail
+    assert "Pro daemon verifies" in detail
+    assert "not immediately" in detail
+    assert "Enables features for your tier immediately" not in detail

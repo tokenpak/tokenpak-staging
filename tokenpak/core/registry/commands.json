@@ -158,7 +158,7 @@
       "description": "Activate a Pro/Team/Enterprise license key",
       "aliases": [],
       "usage": "/tokenpak activate <key>",
-      "detail": "Validates and stores a license key. Enables features for your tier immediately.",
+      "detail": "Validates and stores a license key with status pending_validation. Pro features unlock only after the Pro daemon verifies the key — not immediately.",
       "related": ["deactivate", "plan", "license"]
     },
     {
