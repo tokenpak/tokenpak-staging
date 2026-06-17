@@ -43,7 +43,7 @@ The proxy is a transparent passthrough — it only reads/modifies the request bo
 
 ### Does TokenPak send my data anywhere?
 
-No. TokenPak runs entirely locally. Your prompts, responses, API keys, and metadata never leave your machine. The proxy intercepts requests between your client and the provider, compresses them locally, and forwards them. There's no TokenPak cloud service involved.
+Nothing leaves by default. Your prompts, responses, and API keys never leave your machine to any TokenPak service — the proxy compresses requests locally and forwards them straight to your provider, with no TokenPak cloud service in the path. The one exception is opt-in: if you set `TOKENPAK_METRICS_ENABLED=1`, TokenPak sends anonymous usage metrics such as TokenPak, OS, and Python versions, model names, and compression-ratio distributions — never prompt or response content. It's off unless you enable it; see `telemetry.md` for the full list and opt-out details.
 
 ### How does TokenPak affect my API key?
 
