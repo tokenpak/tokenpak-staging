@@ -92,9 +92,7 @@ def build_cards_parser(sub: Any) -> None:
     )
     csub = p_cards.add_subparsers(dest="cards_action", required=False)
 
-    p_discover = csub.add_parser(
-        "discover", help="Find card source files in the current project"
-    )
+    p_discover = csub.add_parser("discover", help="Find card source files in the current project")
     _add_type_flag(p_discover)
     _add_mode_flags(p_discover, strict=False)
     _add_json_flag(p_discover)
@@ -131,6 +129,7 @@ def build_cards_parser(sub: Any) -> None:
     p_install.add_argument("path", nargs="?", help="Card file to install (default: all)")
     _add_type_flag(p_install)
     _add_mode_flags(p_install)
+    _add_json_flag(p_install)
     p_install.set_defaults(func=cmd_cards_install)
 
     p_list = csub.add_parser("list", help="List discovered + installed cards")
@@ -191,6 +190,7 @@ def build_cards_parser(sub: Any) -> None:
         help="tip_kind for tip cards (Phase 1: provider_adapter)",
     )
     p_scaffold.add_argument("--name", required=True, help="Card name (lowercase slug)")
+    _add_json_flag(p_scaffold)
     p_scaffold.set_defaults(func=cmd_cards_scaffold)
 
     p_doctor = csub.add_parser("doctor", help="Cards authoring-layer diagnostics")
@@ -215,8 +215,7 @@ def _err(msg: str) -> int:
 def _reject_worker_type(args: Any) -> Optional[int]:
     if getattr(args, "card_type", None) == "worker":
         return _err(
-            "--type worker is Phase 2 — WorkerProfile has no canonical "
-            "contract yet (Std 54 §B)"
+            "--type worker is Phase 2 — WorkerProfile has no canonical contract yet (Std 54 §B)"
         )
     return None
 
@@ -266,7 +265,10 @@ def _resolve_by_name(name: str, args: Any, root: Path):
             continue
         if card.name == name:
             return card
-    raise CardError(f"no card named {name!r} found in {root}")
+    raise CardError(
+        f"no card named {name!r} found in {root}. "
+        "Run `tokenpak cards list` to see available card names."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,10 +302,7 @@ def cmd_cards_discover(args: Any) -> int:
                 {
                     "project_root": str(root),
                     "project_index_present": index_present,
-                    "cards": [
-                        {"path": str(p), "card_kind": card_kind_for_path(p)}
-                        for p in paths
-                    ],
+                    "cards": [{"path": str(p), "card_kind": card_kind_for_path(p)} for p in paths],
                 },
                 indent=2,
             )
@@ -339,7 +338,11 @@ def cmd_cards_validate(args: Any) -> int:
     except CardError as exc:
         return _err(str(exc))
     if not paths:
-        return _err("no cards found to validate")
+        return _err(
+            "no cards found to validate. Run `tokenpak cards scaffold "
+            "--type tip --name <name>` to create one, or "
+            "`tokenpak cards discover` to see what's present."
+        )
 
     reports = []
     failed = 0
@@ -386,7 +389,11 @@ def cmd_cards_compile(args: Any) -> int:
     except CardError as exc:
         return _err(str(exc))
     if not paths:
-        return _err("no cards found to compile")
+        return _err(
+            "no cards found to compile. Run `tokenpak cards scaffold "
+            "--type tip --name <name>` to create one, or "
+            "`tokenpak cards discover` to see what's present."
+        )
 
     out_dir = compiled_dir(root)
     written: list[dict[str, str]] = []
@@ -426,9 +433,14 @@ def cmd_cards_install(args: Any) -> int:
     except CardError as exc:
         return _err(str(exc))
     if not paths:
-        return _err("no cards found to install")
+        return _err(
+            "no cards found to install. Run `tokenpak cards scaffold "
+            "--type tip --name <name>` to create one, or "
+            "`tokenpak cards discover` to see what's present."
+        )
 
     out_dir = compiled_dir(root)
+    installed: list[dict[str, str]] = []
     for path in paths:
         try:
             card = parse_card_file(path)
@@ -444,7 +456,27 @@ def cmd_cards_install(args: Any) -> int:
             )
         except CardError as exc:
             return _err(f"{path}: {exc}")
-        print(f"✅ Installed {manifest['name']} ({manifest['card_kind']}) → {out}")
+        installed.append(
+            {
+                "name": str(manifest["name"]),
+                "kind": str(manifest["card_kind"]),
+                "manifest": str(out),
+            }
+        )
+
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "installed": installed,
+                    "manifest": str(installed_manifest_path(root)),
+                },
+                indent=2,
+            )
+        )
+        return 0
+    for item in installed:
+        print(f"✅ Installed {item['name']} ({item['kind']}) → {item['manifest']}")
     print(f"   recorded in {installed_manifest_path(root)}")
     return 0
 
@@ -480,8 +512,7 @@ def cmd_cards_list(args: Any) -> int:
                 {
                     "mode": args.mode,
                     "discovered": [
-                        {"path": str(p), "card_kind": card_kind_for_path(p)}
-                        for p in discovered
+                        {"path": str(p), "card_kind": card_kind_for_path(p)} for p in discovered
                     ],
                     "installed": installed,
                     "user_global_installed": sorted(global_cards),
@@ -499,9 +530,11 @@ def cmd_cards_list(args: Any) -> int:
         print(f"  Discovered ({len(discovered)}):")
         for p in discovered:
             kind = card_kind_for_path(p) or "?"
-            mark = " [installed]" if any(
-                e.get("source_path") == str(p) for e in installed.values()
-            ) else ""
+            mark = (
+                " [installed]"
+                if any(e.get("source_path") == str(p) for e in installed.values())
+                else ""
+            )
             print(f"    [{kind}] {p.relative_to(root)}{mark}")
     print(f"  Installed ({len(installed)}):")
     for name, entry in sorted(installed.items()):
@@ -576,8 +609,10 @@ def cmd_cards_inspect(args: Any) -> int:
     if payload["category_tags"]:
         print(f"  category_tags   : {', '.join(payload['category_tags'])}")
     if payload["advisory_risk_flags"]:
-        print(f"  advisory_risk_flags (no runtime effect): "
-              f"{', '.join(payload['advisory_risk_flags'])}")
+        print(
+            f"  advisory_risk_flags (no runtime effect): "
+            f"{', '.join(payload['advisory_risk_flags'])}"
+        )
     if payload["env_references"]:
         print(f"  env references  : {', '.join(payload['env_references'])}")
     for e in payload["errors"]:
@@ -665,7 +700,7 @@ def cmd_cards_preview(args: Any) -> int:
     for k, v in payload["declared_scope"].items():
         print(f"  {k:<12} : {v}")
     for note in payload["notes"]:
-        print(f"  ℹ️  {note}")
+        print(f"  note: {note}")
     return 0
 
 
@@ -683,6 +718,14 @@ def cmd_cards_scaffold(args: Any) -> int:
         )
     except CardError as exc:
         return _err(str(exc))
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {"scaffolded": [str(p.relative_to(root)) for p in created]},
+                indent=2,
+            )
+        )
+        return 0
     print(f"✅ Scaffolded {args.card_type} card {args.name!r}:")
     for p in created:
         print(f"   {p.relative_to(root)}")
@@ -710,8 +753,9 @@ def cmd_cards_doctor(args: Any) -> int:
         (
             "PASS" if index_ok else "WARN",
             "project-index",
-            ".tokenpak.md present" if index_ok else
-            ".tokenpak.md missing — dev discovery will not load cards (Std 54 §G)",
+            ".tokenpak.md present"
+            if index_ok
+            else ".tokenpak.md missing — dev discovery will not load cards (Std 54 §G)",
         )
     )
 
@@ -747,13 +791,9 @@ def cmd_cards_doctor(args: Any) -> int:
             if not Path(entry.get("source_path", "")).is_file()
         ]
         if stale:
-            checks.append(
-                ("WARN", "installed", f"installed cards with missing sources: {stale}")
-            )
+            checks.append(("WARN", "installed", f"installed cards with missing sources: {stale}"))
         else:
-            checks.append(
-                ("PASS", "installed", f"{len(store['cards'])} card(s) installed")
-            )
+            checks.append(("PASS", "installed", f"{len(store['cards'])} card(s) installed"))
     except CardError as exc:
         checks.append(("FAIL", "installed", str(exc)))
 
@@ -763,9 +803,7 @@ def cmd_cards_doctor(args: Any) -> int:
 
     gdir = user_global_cards_dir()
     if gdir is not None:
-        checks.append(
-            ("PASS", "user-global", f"user-global cards home resolves to {gdir}")
-        )
+        checks.append(("PASS", "user-global", f"user-global cards home resolves to {gdir}"))
 
     has_fail = any(s == "FAIL" for s, _, _ in checks)
     if getattr(args, "json", False):
@@ -773,9 +811,7 @@ def cmd_cards_doctor(args: Any) -> int:
             json.dumps(
                 {
                     "ok": not has_fail,
-                    "checks": [
-                        {"status": s, "name": n, "detail": d} for s, n, d in checks
-                    ],
+                    "checks": [{"status": s, "name": n, "detail": d} for s, n, d in checks],
                 },
                 indent=2,
             )

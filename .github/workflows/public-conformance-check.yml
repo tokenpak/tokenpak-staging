@@ -1,0 +1,55 @@
+name: Public conformance check
+
+# Public-surface conformance gate (delta mode, ADVISORY). Scans pull-request
+# deltas for forbidden marketing phrases, banned absolute privacy claims, and
+# internal-identity / private-path / credential / task-ID leaks, plus a
+# pyproject author/maintainer leak check. Pattern registers are curated
+# plaintext under scripts/release_gate/conformance/.
+#
+# Rollout phase: ADVISORY (continue-on-error: true). A hit prints ::warning
+# annotations in the PR UI but does not fail the workflow. The enforce flip is
+# a separate governed decision after a zero-false-positive soak window, and is
+# applied one check class at a time.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  public-conformance:
+    name: Public conformance (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Compute changed files
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only --diff-filter=AM "$base" "$head" \
+            > changed-files.txt || true
+          echo "Changed files:"; sed 's/^/  /' changed-files.txt
+
+      - name: Run public-conformance scan (advisory)
+        # Advisory phase: findings print ::warning annotations but do not fail
+        # the workflow. Flip continue-on-error to false at the governed enforce
+        # decision (and pass --enforce to the script).
+        continue-on-error: true
+        run: |
+          python3 scripts/release_gate/check_public_conformance.py \
+            --mode delta --changed-files-from changed-files.txt

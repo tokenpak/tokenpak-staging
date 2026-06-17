@@ -147,10 +147,10 @@ tokenpak config set compression.mode strict
 Your API key isn't reaching the provider. Debug:
 
 ```bash
-tokenpak debug on --requests 1
+tokenpak debug on
 # Make a request...
 tokenpak debug off
-tokenpak trace --last
+tokenpak debug list
 # Check that Authorization header is present and unchanged
 ```
 
@@ -161,7 +161,7 @@ The cost calculation is based on a built-in pricing catalog (`tokenpak/telemetry
 Check which model is being detected:
 
 ```bash
-tokenpak trace --last
+tokenpak debug list
 # Look for "model" field in the output
 ```
 
@@ -204,17 +204,11 @@ tokenpak config set compression.threshold_tokens 2000
 Check which recipe is firing:
 
 ```bash
-tokenpak trace --last
+tokenpak debug list
 # Shows: recipe: python-strip-comments, stages: [...]
 ```
 
-If you're seeing unwanted changes, you can disable specific recipes:
-
-```bash
-tokenpak recipe remove python-strip-comments
-```
-
-Or disable compression for specific request patterns:
+If you're seeing unwanted changes, disable compression for specific request patterns:
 
 ```json
 {
@@ -285,7 +279,7 @@ tokenpak index ~/vault --force
 ### Index is using too much disk space
 
 ```bash
-tokenpak vault blocks --stale
+tokenpak vault repair
 tokenpak prune --older-than 30d
 ```
 

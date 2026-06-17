@@ -563,7 +563,7 @@ Live request explorer
 
 ### `tokenpak dispatch`
 
-TokenPak Dispatch — scoped, station-based, resumable, gated work packages with a Decision Inbox and delivery receipts (OSS, v0.1-alpha; CLI-first).
+TokenPak Dispatch — scoped, station-based, resumable, gated work packages with a Decision Inbox and delivery receipts (OSS, v0.1-alpha preview — not yet in a released pip package; available on the project main branch; CLI-first).
 
 **Subcommands:**
 
@@ -739,6 +739,7 @@ TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into ca
   - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
   - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--strict` — Require exact card == adapter capability equality
+  - `--json` — Emit JSON instead of text
 - `list`
   - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
   - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
@@ -758,6 +759,7 @@ TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into ca
   - `--type` — Card type to scaffold (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
   - `--kind` — tip_kind for tip cards (Phase 1: provider_adapter) (default: provider_adapter)
   - `--name` — Card name (lowercase slug)
+  - `--json` — Emit JSON instead of text
 - `doctor`
   - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--json` — Emit JSON instead of text
