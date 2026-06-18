@@ -1,17 +1,17 @@
 # TokenPak Quick Start Guide
 
-Get from zero to savings in 5 minutes. Pick your path:
+Get from install to a measured local receipt in 5 minutes. Pick your path:
 
 | Path | Best for |
 |------|----------|
-| [**Proxy Path**](#proxy-path-zero-config-optimization) | Existing apps — drop-in optimization, no code changes |
+| [**Proxy Path**](#proxy-path-local-first-receipt) | Existing apps — route one real request through the local proxy |
 | [**SDK Path**](#sdk-path-protocol-first) | New projects or when you want protocol-level control |
 
 ---
 
-## Proxy Path: Zero-Config Optimization
+## Proxy Path: Local-First Receipt
 
-**You already write prompts. TokenPak compresses them before they hit the API.**
+**You already write prompts. TokenPak records what the local proxy measured.**
 
 ### Minute 1: Install
 
@@ -26,7 +26,36 @@ tokenpak start
 # → ✅ Proxy running on http://localhost:8766
 ```
 
-### Minute 3: Point your app at the proxy
+### Minute 3: Send one eligible request through the proxy
+
+This example uses Anthropic's Messages API shape. It costs one provider request
+and requires `ANTHROPIC_API_KEY` in your shell.
+
+```bash
+curl -sS http://localhost:8766/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":64,"messages":[{"role":"user","content":"Summarize this recurring project context and keep the answer short."}]}'
+```
+
+TokenPak forwards your credential to the provider and does not store it.
+
+### Minute 4: Find the receipt
+
+```bash
+tokenpak status --json
+```
+
+The durable receipt artifact is `~/.tpk/monitor.db`, table `requests`. It records
+the request timestamp, model, tokens, estimated cost, cache-origin attribution,
+and savings fields where TokenPak can measure them. If no savings are
+attributable, the receipt reports zero instead of inventing a number.
+
+See [first-receipt.md](first-receipt.md) for the evidence boundary and
+deterministic regression fixture.
+
+### Optional: Point your app at the proxy
 
 Run the one-shot configurator for your tool:
 
@@ -40,16 +69,6 @@ tokenpak integrate aider --apply # writes ~/.aider.conf.yml
 
 Every `--apply` backs up the existing config and prints a rollback command.
 For clients without auto-apply (Cline, SDKs), `tokenpak integrate <client>` prints the exact snippet to paste.
-
-### Minute 4: See your savings
-
-```bash
-tokenpak demo # see compression in action on a sample prompt
-tokenpak cost # view today's spend and tokens saved
-tokenpak status # live snapshot: requests, cache hit rate, models used
-```
-
-That's it. Every request is now routed through tokenpak.
 
 ---
 
@@ -163,7 +182,7 @@ TokenPak is a passthrough proxy — it never stores or modifies your credentials
 
 ```bash
 tokenpak cost --week # check a longer time window
-tokenpak demo # verify compression is working
+tokenpak demo # offline compression illustration
 ```
 
 Short prompts compress less. Savings show up most on long conversations and large document contexts.
@@ -213,4 +232,4 @@ All tools call the proxy's REST API (`/tpk/v1/*`) so your data lives in exactly 
 
 ---
 
-> **Tip:** Run `tokenpak demo` at any time to see live compression on a sample prompt — no proxy needed.
+> **Tip:** Run `tokenpak demo` at any time for an offline compression illustration on a sample prompt — no proxy needed.

@@ -11,40 +11,31 @@ TokenPak starts as a local proxy that **packs AI requests** before they ship —
 
 ---
 
-## 30-second demo
+## First measured receipt
 
 ```bash
 pip install tokenpak
-tokenpak serve                          # start proxy at localhost:8766
-tokenpak integrate claude-code --apply  # wire Claude Code to the proxy
+tokenpak start
+curl -sS http://localhost:8766/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":64,"messages":[{"role":"user","content":"Summarize this recurring project context and keep the answer short."}]}'
 ```
 
-```
-✅ Applied: Updated ~/.claude/settings.json (2 changes).
-```
-
-Then verify it's working:
+That third command sends one real provider request through the local proxy. The
+local receipt artifact is written to `~/.tpk/monitor.db` in the `requests`
+table, with model, token, cost, cache-origin, and attribution fields. Inspect the
+rollup with:
 
 ```bash
-tokenpak demo
+tokenpak status --json
 ```
 
-```
-┌──────────────────────────────────────────────────────┐
-│  TokenPak — Live Compression Demo (illustrative)     │
-├──────────────────────────────────────────────────────┤
-│  Scenario              DevOps agent (config + logs)  │
-│  Savings drivers                      dedup + alias  │
-├──────────────────────────────────────────────────────┤
-│  Original                                747 tokens  │
-│  Compressed                              502 tokens  │
-│  Fewer tokens                            245 tokens  │
-├──────────────────────────────────────────────────────┤
-│  Stages: dedup, alias, segmentize, directives        │
-└──────────────────────────────────────────────────────┘
-```
-
-> Illustrative fixture — token counts vary by workload. Measure your own with `tokenpak savings`; receipt-backed ranges publish once the benchmark lane lands.
+Receipt values are measured from local proxy telemetry and provider usage data.
+If a request has no attributable compression or cache savings, TokenPak reports
+zero instead of inventing a number. See [docs/first-receipt.md](docs/first-receipt.md)
+for the evidence boundary and deterministic regression fixture.
 
 ---
 
