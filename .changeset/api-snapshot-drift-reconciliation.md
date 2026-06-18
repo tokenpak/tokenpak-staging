@@ -23,6 +23,17 @@ drift signal. Two compounding causes, both fixed here:
    external-tool/gstack sources, etc.). Net: **+364 symbols, −3** (4310 → 4671 symbols
    excluding the generated_at timestamp).
 
+3. **§3 internal-but-authored `__all__` curation (Sue ruling 2026-06-17, §2).** The
+   `__module__`-based third-party sweep above cannot distinguish *TokenPak-authored-but-
+   internal* symbols from *intended-public* ones, so a handful of internal helpers and
+   cross-module re-exports were captured. They are scoped out **before** the contract is
+   blessed (avoiding bless-then-remove churn) by declaring an explicit `__all__` on each
+   owning module — environment-independent and correct regardless of regen host. Net for
+   this step: **−12 symbols (4671 → 4659)**. Each removed symbol either remains public
+   under its genuine owning module (cross-module re-export) or was never an intended public
+   entrypoint (internal helper / env constant); see the `removes-public-symbol:` lines
+   below.
+
 removes-public-symbol: tokenpak.cli.commands.status.DB_DEFAULT — intentional; removed in
 `a552a58c81` (legacy monitor.db migration: readers now route through the canonical path
 resolver rather than this constant).
@@ -31,6 +42,43 @@ third-party re-export (websockets library), never TokenPak-owned API; snapshot l
 correction via the re-export denylist.
 removes-public-symbol: tokenpak.vault.retrieval.vector_local.faiss — third-party re-export
 (faiss library), never TokenPak-owned API; snapshot leak correction via the re-export denylist.
+
+# §3 internal-but-authored `__all__` curation (Sue ruling 2026-06-17 §2), 12 scope-outs:
+removes-public-symbol: tokenpak.cli.commands.alerts.error — internal-but-authored; re-import
+of `tokenpak.cli._messages.error` (a private CLI message-helper module already excluded from
+the snapshot), never an intended public entrypoint.
+removes-public-symbol: tokenpak.cli.commands.menu_status.json_snapshot — internal-but-authored;
+internal JSON status helper consumed only by the internal `tokenpak._cli_core` via direct
+attribute access (unaffected by `__all__`), never an intended public entrypoint.
+removes-public-symbol: tokenpak.cli.commands.menu_status.snapshot — internal-but-authored;
+internal convenience wrapper over `StatusCache.snapshot`, never an intended public entrypoint.
+removes-public-symbol: tokenpak.creds.auth_mode.KIND_API_KEY — internal-but-authored;
+re-import from owning module `tokenpak.creds.model` (remains public there), never an intended
+public entrypoint here.
+removes-public-symbol: tokenpak.proxy.ssrm.drift.canonicalize_user_turn — internal-but-authored;
+re-import from owning module `tokenpak.proxy.ssrm.fingerprint` (remains public there), never an
+intended public entrypoint here.
+removes-public-symbol: tokenpak.proxy.ssrm.signals.Signals — internal-but-authored; re-import
+from owning module `tokenpak.proxy.ssrm.contracts` (remains public there), never an intended
+public entrypoint here.
+removes-public-symbol: tokenpak.proxy.ssrm.signals.canonicalize_user_turn — internal-but-authored;
+re-import from owning module `tokenpak.proxy.ssrm.fingerprint` (remains public there), never an
+intended public entrypoint here.
+removes-public-symbol: tokenpak.proxy.ssrm.signals.drift_score — internal-but-authored; re-import
+from owning module `tokenpak.proxy.ssrm.drift` (remains public there), never an intended public
+entrypoint here.
+removes-public-symbol: tokenpak.proxy.ssrm.signals.open_state_db — internal-but-authored;
+re-import from owning module `tokenpak.proxy.ssrm.state` (remains public there), never an
+intended public entrypoint here.
+removes-public-symbol: tokenpak.proxy.ssrm.signals.record_and_count — internal-but-authored;
+re-import from owning module `tokenpak.proxy.ssrm.fingerprint` (remains public there), never an
+intended public entrypoint here.
+removes-public-symbol: tokenpak.telemetry.operational.rbac_auth.SNAPSHOT_GEN_ENV —
+internal-but-authored; env-var-name constant read by release-gate snapshot generators, never an
+intended public entrypoint.
+removes-public-symbol: tokenpak.vault.chunk_shaping.skeleton_runtime_status — internal-but-authored;
+internal diagnostic helper with no consumers anywhere in the package, never an intended public
+entrypoint.
 
 No version impact: release-gate snapshot + generator hygiene only — no runtime or packaged
 public API behavior change. Re-establishes the drift signal so future real public-API

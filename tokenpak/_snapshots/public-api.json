@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-17T05:55:14Z",
+  "generated_at": "2026-06-18T06:22:50Z",
   "package_version": "1.7.1",
   "symbols": [
     {
@@ -856,10 +856,6 @@
       "name": "cmd_alerts_test"
     },
     {
-      "module": "tokenpak.cli.commands.alerts",
-      "name": "error"
-    },
-    {
       "module": "tokenpak.cli.commands.budget",
       "name": "SEP"
     },
@@ -1445,15 +1441,7 @@
     },
     {
       "module": "tokenpak.cli.commands.menu_status",
-      "name": "json_snapshot"
-    },
-    {
-      "module": "tokenpak.cli.commands.menu_status",
       "name": "reset_cache"
-    },
-    {
-      "module": "tokenpak.cli.commands.menu_status",
-      "name": "snapshot"
     },
     {
       "module": "tokenpak.cli.commands.metrics",
@@ -5666,10 +5654,6 @@
     {
       "module": "tokenpak.creds",
       "name": "REFRESH_TOKENPAK"
-    },
-    {
-      "module": "tokenpak.creds.auth_mode",
-      "name": "KIND_API_KEY"
     },
     {
       "module": "tokenpak.creds.auth_mode",
@@ -11353,10 +11337,6 @@
     },
     {
       "module": "tokenpak.proxy.ssrm.drift",
-      "name": "canonicalize_user_turn"
-    },
-    {
-      "module": "tokenpak.proxy.ssrm.drift",
       "name": "drift_for_body"
     },
     {
@@ -11441,27 +11421,7 @@
     },
     {
       "module": "tokenpak.proxy.ssrm.signals",
-      "name": "Signals"
-    },
-    {
-      "module": "tokenpak.proxy.ssrm.signals",
-      "name": "canonicalize_user_turn"
-    },
-    {
-      "module": "tokenpak.proxy.ssrm.signals",
       "name": "compute_signals"
-    },
-    {
-      "module": "tokenpak.proxy.ssrm.signals",
-      "name": "drift_score"
-    },
-    {
-      "module": "tokenpak.proxy.ssrm.signals",
-      "name": "open_state_db"
-    },
-    {
-      "module": "tokenpak.proxy.ssrm.signals",
-      "name": "record_and_count"
     },
     {
       "module": "tokenpak.proxy.ssrm.state",
@@ -15285,10 +15245,6 @@
     },
     {
       "module": "tokenpak.telemetry.operational.rbac_auth",
-      "name": "SNAPSHOT_GEN_ENV"
-    },
-    {
-      "module": "tokenpak.telemetry.operational.rbac_auth",
       "name": "User"
     },
     {
@@ -17514,10 +17470,6 @@
     {
       "module": "tokenpak.vault.chunk_shaping",
       "name": "reshape_chunks"
-    },
-    {
-      "module": "tokenpak.vault.chunk_shaping",
-      "name": "skeleton_runtime_status"
     },
     {
       "module": "tokenpak.vault.config",
