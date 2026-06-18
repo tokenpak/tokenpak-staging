@@ -1,0 +1,315 @@
+{
+  "schema": "tokenpak-pro-value-receipt/v1",
+  "run_id": "pv-a87fcbd260b599d7",
+  "minted_at": "2026-06-18T22:47:37Z",
+  "phase": "quick",
+  "tokenpak_commit": "6b7fe41912cff2878491bedb94c69bce1cc5d367",
+  "suite_version": "pro-value-suite-v0.1.0",
+  "corpus_manifest_sha256": "670e9522a1d5141aaef53c03c9dda162b54dd25112048d99b5c300eba110cbff",
+  "pro_arm_source": "fixture",
+  "comparison_method": {
+    "baseline": "OSS manual Pak workflow over the same frozen scenarios",
+    "comparison": "Pro MultiPak-style capture, recall, packaging, hydration, and policy output",
+    "fixture_root": "/home/sue/workspace/tokenpak-dev/tests/benchmarks/pro_value"
+  },
+  "summary": {
+    "oss": {
+      "scenario_count": 6,
+      "time_to_ready_context_sec_avg": 781.67,
+      "manual_steps_to_resume_avg": 8.5,
+      "required_facts_covered_pct_avg": 30.56,
+      "irrelevant_context_pct_avg": 46.94,
+      "tokens_to_resume_avg": 554.33,
+      "sensitive_leak_count_total": 4,
+      "recall_at_3_pct_avg": 30.56,
+      "mrr_avg": 0.2847,
+      "handoff_success_rate_pct": 0.0
+    },
+    "pro": {
+      "scenario_count": 6,
+      "time_to_ready_context_sec_avg": 200.0,
+      "manual_steps_to_resume_avg": 2.5,
+      "required_facts_covered_pct_avg": 100.0,
+      "irrelevant_context_pct_avg": 0.0,
+      "tokens_to_resume_avg": 412.67,
+      "sensitive_leak_count_total": 0,
+      "recall_at_3_pct_avg": 79.17,
+      "mrr_avg": 0.5359,
+      "handoff_success_rate_pct": 100.0
+    },
+    "metric_ranges": {
+      "time_reduction_pct": {
+        "low": 71.79,
+        "high": 77.78,
+        "unit": "%"
+      },
+      "manual_steps_reduction_pct": {
+        "low": 66.67,
+        "high": 75.0,
+        "unit": "%"
+      },
+      "token_reduction_pct": {
+        "low": 7.42,
+        "high": 41.62,
+        "unit": "%"
+      },
+      "required_coverage_lift_pp": {
+        "low": 50.0,
+        "high": 75.0,
+        "unit": "pp"
+      },
+      "irrelevant_context_reduction_pp": {
+        "low": 25.0,
+        "high": 66.67,
+        "unit": "pp"
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "resume_bugfix_after_gap",
+      "title": "Resume a bugfix after a gap",
+      "oss": {
+        "scenario_id": "resume_bugfix_after_gap",
+        "arm": "oss",
+        "time_to_ready_context_sec": 840.0,
+        "manual_steps_to_resume": 9.0,
+        "required_facts_covered_pct": 25.0,
+        "irrelevant_context_pct": 40.0,
+        "tokens_to_resume": 668.0,
+        "sensitive_leak_count": 1,
+        "recall_at_3_pct": 25.0,
+        "mrr": 0.25,
+        "handoff_success": null
+      },
+      "pro": {
+        "scenario_id": "resume_bugfix_after_gap",
+        "arm": "pro",
+        "time_to_ready_context_sec": 210.0,
+        "manual_steps_to_resume": 3.0,
+        "required_facts_covered_pct": 100.0,
+        "irrelevant_context_pct": 0.0,
+        "tokens_to_resume": 390.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 75.0,
+        "mrr": 0.5208,
+        "handoff_success": null
+      },
+      "delta": {
+        "scenario_id": "resume_bugfix_after_gap",
+        "time_reduction_pct": 75.0,
+        "manual_steps_reduction_pct": 66.67,
+        "token_reduction_pct": 41.62,
+        "required_coverage_lift_pp": 75.0,
+        "irrelevant_context_reduction_pp": 40.0,
+        "sensitive_leak_reduction": 1,
+        "handoff_improved": null
+      }
+    },
+    {
+      "id": "cross_tool_continuation",
+      "title": "Continue the same task in another tool",
+      "oss": {
+        "scenario_id": "cross_tool_continuation",
+        "arm": "oss",
+        "time_to_ready_context_sec": 760.0,
+        "manual_steps_to_resume": 8.0,
+        "required_facts_covered_pct": 33.33,
+        "irrelevant_context_pct": 50.0,
+        "tokens_to_resume": 470.0,
+        "sensitive_leak_count": 1,
+        "recall_at_3_pct": 33.33,
+        "mrr": 0.3333,
+        "handoff_success": false
+      },
+      "pro": {
+        "scenario_id": "cross_tool_continuation",
+        "arm": "pro",
+        "time_to_ready_context_sec": 190.0,
+        "manual_steps_to_resume": 2.0,
+        "required_facts_covered_pct": 100.0,
+        "irrelevant_context_pct": 0.0,
+        "tokens_to_resume": 338.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 100.0,
+        "mrr": 0.6111,
+        "handoff_success": true
+      },
+      "delta": {
+        "scenario_id": "cross_tool_continuation",
+        "time_reduction_pct": 75.0,
+        "manual_steps_reduction_pct": 75.0,
+        "token_reduction_pct": 28.09,
+        "required_coverage_lift_pp": 66.67,
+        "irrelevant_context_reduction_pp": 50.0,
+        "sensitive_leak_reduction": 1,
+        "handoff_improved": true
+      }
+    },
+    {
+      "id": "ci_failure_repro",
+      "title": "Reproduce a CI failure using prior accepted context",
+      "oss": {
+        "scenario_id": "ci_failure_repro",
+        "arm": "oss",
+        "time_to_ready_context_sec": 690.0,
+        "manual_steps_to_resume": 7.0,
+        "required_facts_covered_pct": 25.0,
+        "irrelevant_context_pct": 66.67,
+        "tokens_to_resume": 632.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 25.0,
+        "mrr": 0.25,
+        "handoff_success": null
+      },
+      "pro": {
+        "scenario_id": "ci_failure_repro",
+        "arm": "pro",
+        "time_to_ready_context_sec": 180.0,
+        "manual_steps_to_resume": 2.0,
+        "required_facts_covered_pct": 100.0,
+        "irrelevant_context_pct": 0.0,
+        "tokens_to_resume": 436.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 75.0,
+        "mrr": 0.5208,
+        "handoff_success": null
+      },
+      "delta": {
+        "scenario_id": "ci_failure_repro",
+        "time_reduction_pct": 73.91,
+        "manual_steps_reduction_pct": 71.43,
+        "token_reduction_pct": 31.01,
+        "required_coverage_lift_pp": 75.0,
+        "irrelevant_context_reduction_pp": 66.67,
+        "sensitive_leak_reduction": 0,
+        "handoff_improved": null
+      }
+    },
+    {
+      "id": "api_migration",
+      "title": "Resume an API migration with compatibility constraints",
+      "oss": {
+        "scenario_id": "api_migration",
+        "arm": "oss",
+        "time_to_ready_context_sec": 900.0,
+        "manual_steps_to_resume": 10.0,
+        "required_facts_covered_pct": 25.0,
+        "irrelevant_context_pct": 33.33,
+        "tokens_to_resume": 512.0,
+        "sensitive_leak_count": 1,
+        "recall_at_3_pct": 25.0,
+        "mrr": 0.25,
+        "handoff_success": null
+      },
+      "pro": {
+        "scenario_id": "api_migration",
+        "arm": "pro",
+        "time_to_ready_context_sec": 240.0,
+        "manual_steps_to_resume": 3.0,
+        "required_facts_covered_pct": 100.0,
+        "irrelevant_context_pct": 0.0,
+        "tokens_to_resume": 474.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 75.0,
+        "mrr": 0.5208,
+        "handoff_success": null
+      },
+      "delta": {
+        "scenario_id": "api_migration",
+        "time_reduction_pct": 73.33,
+        "manual_steps_reduction_pct": 70.0,
+        "token_reduction_pct": 7.42,
+        "required_coverage_lift_pp": 75.0,
+        "irrelevant_context_reduction_pp": 33.33,
+        "sensitive_leak_reduction": 1,
+        "handoff_improved": null
+      }
+    },
+    {
+      "id": "sensitive_handoff",
+      "title": "Assemble context while excluding sensitive material",
+      "oss": {
+        "scenario_id": "sensitive_handoff",
+        "arm": "oss",
+        "time_to_ready_context_sec": 720.0,
+        "manual_steps_to_resume": 8.0,
+        "required_facts_covered_pct": 50.0,
+        "irrelevant_context_pct": 25.0,
+        "tokens_to_resume": 500.0,
+        "sensitive_leak_count": 1,
+        "recall_at_3_pct": 50.0,
+        "mrr": 0.375,
+        "handoff_success": false
+      },
+      "pro": {
+        "scenario_id": "sensitive_handoff",
+        "arm": "pro",
+        "time_to_ready_context_sec": 160.0,
+        "manual_steps_to_resume": 2.0,
+        "required_facts_covered_pct": 100.0,
+        "irrelevant_context_pct": 0.0,
+        "tokens_to_resume": 404.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 75.0,
+        "mrr": 0.5208,
+        "handoff_success": true
+      },
+      "delta": {
+        "scenario_id": "sensitive_handoff",
+        "time_reduction_pct": 77.78,
+        "manual_steps_reduction_pct": 75.0,
+        "token_reduction_pct": 19.2,
+        "required_coverage_lift_pp": 50.0,
+        "irrelevant_context_reduction_pp": 25.0,
+        "sensitive_leak_reduction": 1,
+        "handoff_improved": true
+      }
+    },
+    {
+      "id": "agent_handoff",
+      "title": "Handoff a partially completed task to another session",
+      "oss": {
+        "scenario_id": "agent_handoff",
+        "arm": "oss",
+        "time_to_ready_context_sec": 780.0,
+        "manual_steps_to_resume": 9.0,
+        "required_facts_covered_pct": 25.0,
+        "irrelevant_context_pct": 66.67,
+        "tokens_to_resume": 544.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 25.0,
+        "mrr": 0.25,
+        "handoff_success": false
+      },
+      "pro": {
+        "scenario_id": "agent_handoff",
+        "arm": "pro",
+        "time_to_ready_context_sec": 220.0,
+        "manual_steps_to_resume": 3.0,
+        "required_facts_covered_pct": 100.0,
+        "irrelevant_context_pct": 0.0,
+        "tokens_to_resume": 434.0,
+        "sensitive_leak_count": 0,
+        "recall_at_3_pct": 75.0,
+        "mrr": 0.5208,
+        "handoff_success": true
+      },
+      "delta": {
+        "scenario_id": "agent_handoff",
+        "time_reduction_pct": 71.79,
+        "manual_steps_reduction_pct": 66.67,
+        "token_reduction_pct": 20.22,
+        "required_coverage_lift_pp": 75.0,
+        "irrelevant_context_reduction_pp": 66.67,
+        "sensitive_leak_reduction": 0,
+        "handoff_improved": true
+      }
+    }
+  ],
+  "claim_boundary": {
+    "public_claim_allowed": false,
+    "reason": "Unsigned scaffold receipt. Public numeric Pro claims require live Pro evidence, two-run reproducibility, and benchmark signing."
+  },
+  "signature": null
+}
