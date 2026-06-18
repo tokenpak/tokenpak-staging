@@ -379,13 +379,71 @@ def registered_command_names(parser=None) -> set:
 
 _plugin_commands_cache: Optional[dict] = None
 
+_PRO_PLUGIN_COMMANDS = frozenset({
+    "budget",
+    "compliance",
+    "compression",
+    "daemon",
+    "debug",
+    "diff",
+    "fingerprint",
+    "handoff",
+    "maintenance",
+    "metrics",
+    "multipak",
+    "policy",
+    "retain",
+    "route",
+    "run",
+    "sla",
+    "trigger",
+    "workflow",
+})
+
+
+def _env_truthy(name: str) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return False
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
 
 def _plugins_enabled() -> bool:
     """Return False only when discovery is explicitly disabled via env."""
+    if _env_truthy("TOKENPAK_DISABLE_PRO"):
+        return False
     val = os.environ.get("TOKENPAK_ENABLE_PLUGINS")
     if val is None:
         return True
     return val.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _pro_routing_disabled(argv: Optional[list] = None) -> bool:
+    """Return True when this invocation must avoid all Pro/plugin routing."""
+    if _env_truthy("TOKENPAK_DISABLE_PRO"):
+        return True
+    return bool(argv and "--oss" in argv)
+
+
+def _print_pro_command_unavailable(verb: str, *, disabled: bool = False) -> None:
+    if disabled:
+        print(
+            f"⚠ tokenpak {verb} has no OSS implementation; Pro routing is disabled.",
+            file=sys.stderr,
+        )
+        print(
+            "  Remove --oss / TOKENPAK_DISABLE_PRO=1 to use the Pro package when installed.",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"⚠ tokenpak {verb} requires TokenPak Pro.",
+        file=sys.stderr,
+    )
+    print(
+        "  Install tokenpak-paid and activate a license that includes this feature.",
+        file=sys.stderr,
+    )
 
 
 def _discover_plugin_commands(force: bool = False) -> dict:
@@ -5063,6 +5121,10 @@ def main():
     if "--no-tui" in sys.argv:
         _NO_TUI_FLAG = True
         sys.argv = [a for a in sys.argv if a != "--no-tui"]
+    forced_oss_global = False
+    if len(sys.argv) >= 2 and sys.argv[1] == "--oss":
+        forced_oss_global = True
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
 
     parser = build_parser()
 
@@ -5115,11 +5177,15 @@ def main():
     # after the verb is forwarded verbatim so the plugin owns its own flags
     # (including its own --help). Entitlement gating is the plugin's job.
     if raw_cmd and not raw_cmd.startswith("-") and raw_cmd not in known_cmds:
-        _plugin_cmds = _discover_plugin_commands()
+        _pro_disabled = forced_oss_global or _pro_routing_disabled(sys.argv[2:])
+        _plugin_cmds = {} if _pro_disabled else _discover_plugin_commands()
         if raw_cmd in _plugin_cmds:
             _verb_idx = sys.argv.index(raw_cmd)
             _rc = _dispatch_plugin_command(raw_cmd, sys.argv[_verb_idx + 1:])
             sys.exit(_rc)
+        if raw_cmd in _PRO_PLUGIN_COMMANDS:
+            _print_pro_command_unavailable(raw_cmd, disabled=_pro_disabled)
+            sys.exit(2)
 
     # If user asks --help on an unrecognised command, just show that command's usage + exit 0
     if (
