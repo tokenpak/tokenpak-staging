@@ -268,7 +268,7 @@ _COMMAND_GROUPS = {
         ("goals", "Track savings goals"),
         ("config", "View and edit config"),
         ("explain", "Explain workflow profiles"),
-        ("permissions", "Permission tiers (strict/standard/auto) + launcher fleet mode"),
+        ("permissions", "Permission tiers (strict/standard/auto)"),
     ],
     "Versioning": [
         ("version", "Show current version"),
@@ -289,16 +289,14 @@ _COMMAND_GROUPS = {
         ("debug", "Toggle debug logging"),
         ("learn", "View learned patterns"),
         ("vault-health", "Vault index health"),
-        ("fleet", "Fleet status"),
         ("aggregate", "Aggregate ledger"),
         ("requests", "Live request explorer"),
-        ("dispatch", "Workflow control (v0.1-alpha preview): run, decide, deliver"),
     ],
     "Companion": [
         ("claude", "Launch with Claude Code"),
         ("codex", "Launch with Codex"),
         ("creds", "Discover credentials + doctor"),
-        ("pak", "Inspect/export/import Paks (MultiPak Pro Phase 1)"),
+        ("pak", "Inspect/export/import PAK files"),
         ("test", "Interactive A/B test"),
         ("prove", "A/B value proof"),
     ],
@@ -306,7 +304,6 @@ _COMMAND_GROUPS = {
         ("trigger", "Manage event triggers"),
         ("macro", "Manage macros"),
         ("fingerprint", "Fingerprint management"),
-        ("agent", "Agent coordination"),
         ("lock", "File lock management"),
         ("run", "Schedule macro runs"),
         ("replay", "Replay captured sessions"),
@@ -334,7 +331,7 @@ _EXTRA_KNOWN_COMMANDS = {
     "preview", "aggregate", "requests", "validate-config", "vault",
     "vault-health", "compress", "optimize", "last", "prune", "retrieval",
     "menu", "license", "plan", "activate", "deactivate", "init", "monitor",
-    "tip", "features", "pakplan", "home",
+    "tip", "features", "pakplan", "home", "fleet", "dispatch", "agent",
 }
 
 
@@ -2638,15 +2635,15 @@ def _build_stub_parsers(sub):
         "--revert", action="store_true",
         help="Restore the most recent backup for the given client (undoes --apply)",
     )
-    p_integrate.add_argument(
+    p_integrate_tier = p_integrate.add_argument(
         "--tier", choices=["strict", "standard", "auto", "fleet"], default=None,
-        help="Permission tier to apply with --apply (claude-code / codex only; "
-             "default: standard). 'fleet' is launcher-scoped and never persists "
-             "into client config — see `tokenpak permissions --help`.",
+        metavar="{strict,standard,auto}",
+        help="Permission tier to apply with --apply (claude-code / codex only; default: standard).",
     )
+    p_integrate_tier._tokenpak_public_choices = ("strict", "standard", "auto")
     p_integrate.add_argument(
         "--yes", action="store_true",
-        help="Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)",
+        help="Confirm advanced opt-in choices non-interactively",
     )
 
     def _integrate_dispatch(args):
@@ -2655,47 +2652,45 @@ def _build_stub_parsers(sub):
 
     p_integrate.set_defaults(func=_integrate_dispatch)
 
-    # ── `permissions` — persistent tiers + launcher fleet mode ───────────────
+    # ── `permissions` — persistent tiers + launcher mode ─────────────────────
     p_permissions = sub.add_parser(
         "permissions",
-        help="View or set permission tiers (strict/standard/auto) and launcher fleet mode",
+        help="View or set permission tiers (strict/standard/auto)",
         description=(
             "Manage the TokenPak permission tier system.\n\n"
             "Persistent tiers (strict/standard/auto) are written into the client's\n"
-            "own config (Claude Code settings.json / Codex config.toml). Fleet mode\n"
-            "is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject\n"
-            "bypass flags at launch and print a banner — client configs are never\n"
-            "modified by fleet mode.\n\n"
+            "own config (Claude Code settings.json / Codex config.toml).\n\n"
             "Examples:\n"
-            "  tokenpak permissions show                      # current tiers + fleet mode\n"
+            "  tokenpak permissions show                      # current tiers\n"
             "  tokenpak permissions set auto                  # both clients\n"
             "  tokenpak permissions set strict --client codex # one client\n"
-            "  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)\n"
-            "  tokenpak permissions reset                     # scoped reset + fleet off"
+            "  tokenpak permissions reset                     # scoped reset"
         ),
     )
     perm_sub = p_permissions.add_subparsers(dest="permissions_cmd")
     perm_sub.add_parser(
-        "show", help="Show per-client persistent tier + launcher fleet status"
+        "show", help="Show per-client persistent permission tiers"
     )
     pp_set = perm_sub.add_parser(
-        "set", help="Set a permission tier (strict|standard|auto) or enable fleet mode"
+        "set", help="Set a permission tier (strict|standard|auto)"
     )
-    pp_set.add_argument(
+    pp_set_tier = pp_set.add_argument(
         "tier", choices=["strict", "standard", "auto", "fleet"],
-        help="Tier to apply ('fleet' sets launcher state only)",
+        metavar="{strict,standard,auto}",
+        help="Persistent permission tier to apply",
     )
+    pp_set_tier._tokenpak_public_choices = ("strict", "standard", "auto")
     pp_set.add_argument(
         "--client", choices=["claude-code", "codex", "both"], default="both",
         help="Which client to configure (default: both)",
     )
     pp_set.add_argument(
         "--yes", action="store_true",
-        help="Skip the fleet-mode confirmation prompt (explicit opt-in)",
+        help="Skip confirmation prompts for advanced opt-in changes",
     )
     pp_reset = perm_sub.add_parser(
         "reset",
-        help="Scoped reset: remove only TokenPak-managed tier keys + disable fleet mode",
+        help="Scoped reset: remove only TokenPak-managed tier keys",
     )
     pp_reset.add_argument(
         "--client", choices=["claude-code", "codex", "both"], default="both",
@@ -3033,12 +3028,8 @@ def build_parser():
         action="store_true",
         help="Output results as machine-readable JSON",
     )
-    p_doctor.add_argument(
-        "--fleet", action="store_true", help="Check all agents in ~/.tokenpak/fleet.yaml"
-    )
-    p_doctor.add_argument(
-        "--deploy", action="store_true", help="Push latest doctor to all agents (use with --fleet)"
-    )
+    p_doctor.add_argument("--fleet", action="store_true", help=argparse.SUPPRESS)
+    p_doctor.add_argument("--deploy", action="store_true", help=argparse.SUPPRESS)
     p_doctor.add_argument(
         "--verbose", "-v", action="store_true", help="Show extra detail for each check"
     )
@@ -3070,7 +3061,7 @@ def build_parser():
     p_dashboard = sub.add_parser(
         "dashboard", help="Real-time health dashboard (TUI) or public web URL"
     )
-    p_dashboard.add_argument("--fleet", action="store_true", help="Show fleet-wide summary (TUI)")
+    p_dashboard.add_argument("--fleet", action="store_true", help=argparse.SUPPRESS)
     p_dashboard.add_argument(
         "--json",
         dest="json_export",
@@ -3798,8 +3789,8 @@ def _build_status_parser(sub):
     p_status.add_argument("--no-meme", dest="no_meme", action="store_true", help="Suppress tagline")
     p_status.add_argument("--days", type=int, default=0, help="Filter to last N days (combinable with --hours)")
     p_status.add_argument("--hours", type=int, default=0, help="Filter to last N hours (combinable with --days)")
-    p_status.add_argument("--fleet", action="store_true", help="Fleet rollup view — reads rollup_daily")
-    p_status.add_argument("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
+    p_status.add_argument("--fleet", action="store_true", help=argparse.SUPPRESS)
+    p_status.add_argument("--since", default=None, help=argparse.SUPPRESS)
     p_status.set_defaults(func=cmd_status)
 
 
@@ -6375,7 +6366,7 @@ def cmd_lock_renew(args):
 
 
 def _build_pak_parser(sub):
-    """Register the ``tokenpak pak`` subcommand (MultiPak Pro Phase 1).
+    """Register the ``tokenpak pak`` subcommand.
 
     Implementation lives in :mod:`tokenpak.cli.commands.pak` to keep the
     handler module isolated and grow naturally as Phase 2+ adds

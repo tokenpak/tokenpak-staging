@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Offline contract tests for ``tokenpak pak`` CLI (Std 32 §10).
+"""Offline contract tests for the ``tokenpak pak`` CLI.
 
 Tests use the in-process argparse builder + handler functions rather than
 ``subprocess`` — faster, exception-traceable, deterministic across CI.
@@ -105,7 +105,7 @@ def test_status_text_exits_0():
     args = SimpleNamespace(json=False)
     rc, out = _capture_stdout(cmd_pak_status, args)
     assert rc == 0
-    assert "MultiPak Pro Phase 1 status" in out
+    assert "PAK continuity status" in out
     assert "Daemon state" in out
 
 
@@ -124,8 +124,11 @@ def test_status_json_emits_canonical_payload():
         assert key in payload
 
 
-def test_status_daemon_state_unavailable_by_default():
-    """No daemon installed on this host."""
+def test_status_daemon_state_unavailable_by_default(monkeypatch):
+    """Daemon probe unavailable path is deterministic regardless of host state."""
+    import tokenpak.licensing.daemon_probe as daemon_probe
+
+    monkeypatch.setattr(daemon_probe, "detect_daemon_state", lambda: "unavailable")
     args = SimpleNamespace(json=True)
     rc, out = _capture_stdout(cmd_pak_status, args)
     payload = json.loads(out)

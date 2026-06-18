@@ -411,7 +411,10 @@ try:
 
     @click.command("dashboard")
     @click.option(
-        "--fleet", is_flag=True, help="Show fleet-wide summary from all registered agents"
+        "--fleet",
+        is_flag=True,
+        hidden=True,
+        help="Show fleet-wide summary from all registered agents",
     )
     @click.option(
         "--json",
@@ -429,7 +432,6 @@ try:
 
         \\b
           tokenpak dashboard            # local TUI
-          tokenpak dashboard --fleet    # fleet-wide summary
           tokenpak dashboard --json     # one-shot JSON export
         """
         run_dashboard(fleet=fleet, json_export=json_export)

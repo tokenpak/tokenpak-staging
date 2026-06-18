@@ -47,6 +47,7 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
         col_names = {r[1] for r in cur.execute("PRAGMA table_info(requests)").fetchall()}
         has_origin = "cache_origin" in col_names
         origin_expr = "COALESCE(cache_origin, 'unknown')" if has_origin else "'unknown'"
+        unknown_origin = f"{origin_expr} NOT IN ('client', 'proxy')"
 
         # Overall stats: cache reads are observed regardless of origin; savings
         # are attributed only to proxy-owned cache markers.  unknown → no
@@ -59,7 +60,10 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
                 COALESCE(SUM(cache_creation_tokens), 0) as total_cache_creation,
                 COALESCE(SUM(CASE WHEN {origin_expr} = 'client'  THEN cache_read_tokens ELSE 0 END), 0) as cache_read_client,
                 COALESCE(SUM(CASE WHEN {origin_expr} = 'proxy'   THEN cache_read_tokens ELSE 0 END), 0) as cache_read_proxy,
-                COALESCE(SUM(CASE WHEN {origin_expr} = 'unknown' THEN cache_read_tokens ELSE 0 END), 0) as cache_read_unknown
+                COALESCE(SUM(CASE WHEN {unknown_origin} THEN cache_read_tokens ELSE 0 END), 0) as cache_read_unknown,
+                COALESCE(SUM(CASE WHEN cache_read_tokens > 0 AND {origin_expr} = 'client' THEN 1 ELSE 0 END), 0) as cache_hits_client,
+                COALESCE(SUM(CASE WHEN cache_read_tokens > 0 AND {origin_expr} = 'proxy' THEN 1 ELSE 0 END), 0) as cache_hits_proxy,
+                COALESCE(SUM(CASE WHEN cache_read_tokens > 0 AND {unknown_origin} THEN 1 ELSE 0 END), 0) as cache_hits_unknown
             FROM requests
             WHERE timestamp >= ?
         """, (cutoff,))
@@ -81,6 +85,11 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
                 "proxy":   overall[5] or 0,
                 "unknown": overall[6] or 0,
             },
+            "cache_hits_by_origin": {
+                "client":  overall[7] or 0,
+                "proxy":   overall[8] or 0,
+                "unknown": overall[9] or 0,
+            },
             "per_provider": {},
         }
     except Exception as e:
@@ -92,6 +101,7 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
             "cache_read_tokens": 0,
             "cache_creation_tokens": 0,
             "cache_read_by_origin": {"client": 0, "proxy": 0, "unknown": 0},
+            "cache_hits_by_origin": {"client": 0, "proxy": 0, "unknown": 0},
             "per_provider": {},
             "error": str(e),
         }

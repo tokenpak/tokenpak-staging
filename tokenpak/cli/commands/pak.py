@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``tokenpak pak`` CLI subcommand (MultiPak Pro Phase 1, Beta 1).
+"""``tokenpak pak`` CLI subcommand (PAK continuity OSS surface).
 
 Subcommands:
     create  <dir> --output       Package a directory into a Pak file (OSS)
@@ -18,12 +18,11 @@ Exit codes:
     0  success
     1  user-facing error (missing file, daemon required for action, etc.)
     2  argparse usage error (handled by argparse itself)
-    4  config error (unused in Phase 1; reserved)
+    4  config error (reserved)
     5  internal error (uncaught exception in handler)
 
 JSON output: --json on inspect + status emits the exact same payload
-shapes as the corresponding /pak/v1/* HTTP endpoints — by design, so
-fleet automation and dashboards see one canonical shape.
+shapes as the corresponding /pak/v1/* HTTP endpoints.
 """
 
 from __future__ import annotations
@@ -50,11 +49,11 @@ def build_pak_parser(sub: Any) -> None:
     """
     p_pak = sub.add_parser(
         "pak",
-        help="Inspect, export, import Pak files (MultiPak Pro Phase 1)",
+        help="Create, inspect, export, and import local PAK files",
         description=(
-            "MultiPak Pro Phase 1 OSS surface. Read-only Vault Pak "
-            "operations work without Pro; other Pak subtypes require the "
-            "tokenpak-paid daemon."
+            "Local PAK continuity surface. Plain file PAK create/import/export "
+            "and read-only Vault Pak inspection work without Pro. Encrypted "
+            "subtypes and ranked recall require the tokenpak-paid daemon."
         ),
     )
     paksub = p_pak.add_subparsers(dest="pak_action", required=False)
@@ -132,7 +131,7 @@ def build_pak_parser(sub: Any) -> None:
     p_import.set_defaults(func=cmd_pak_import)
 
     p_status = paksub.add_parser(
-        "status", help="Show MultiPak Pro readiness diagnostics"
+        "status", help="Show local PAK readiness diagnostics"
     )
     p_status.add_argument(
         "--json", action="store_true", help="Emit JSON instead of text"
@@ -178,7 +177,7 @@ def cmd_pak_status(args: Any) -> int:
 
     # Text rendering — uses the same emoji conventions as `tokenpak doctor`
     # (✅ ready, ⚠️ partial, ❌ unavailable).
-    print("MultiPak Pro Phase 1 status")
+    print("PAK continuity status")
     print("───────────────────────────")
     daemon_icon = "✅" if state == "active" else "❌"
     print(f"{daemon_icon} Daemon state           : {state}")
@@ -201,7 +200,7 @@ def cmd_pak_inspect(args: Any) -> int:
     """Inspect a Pak by ID or file path.
 
     Vault Paks (``vault:<block-id>``) are served by the OSS adapter.
-    Other subtypes require the daemon — Phase 1 returns a clear error.
+    Other subtypes require the daemon; OSS returns a clear error.
     """
     pak_ref: str = args.pak_ref
     as_json: bool = getattr(args, "json", False)

@@ -1,7 +1,7 @@
 # CLI Reference
 
 _Auto-generated from `tokenpak/cli.py` — do not edit by hand._
-_To update: edit `tokenpak/cli.py` then run `python scripts/generate-cli-docs.py`._
+_To update: edit `tokenpak/cli.py` then run `python3 scripts/generate-cli-docs.py`._
 
 ---
 
@@ -79,8 +79,6 @@ Check proxy health
 - `--no-meme` — Suppress tagline
 - `--days` — Filter to last N days (combinable with --hours)
 - `--hours` — Filter to last N hours (combinable with --days)
-- `--fleet` — Fleet rollup view — reads rollup_daily
-- `--since` — With --fleet: window in days, e.g. '7d' (default: 7d)
 
 ### `tokenpak logs`
 
@@ -316,25 +314,21 @@ Explain workflow profiles
 Manage the TokenPak permission tier system.
 
 Persistent tiers (strict/standard/auto) are written into the client's
-own config (Claude Code settings.json / Codex config.toml). Fleet mode
-is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject
-bypass flags at launch and print a banner — client configs are never
-modified by fleet mode.
+own config (Claude Code settings.json / Codex config.toml).
 
 Examples:
-  tokenpak permissions show                      # current tiers + fleet mode
+  tokenpak permissions show                      # current tiers
   tokenpak permissions set auto                  # both clients
   tokenpak permissions set strict --client codex # one client
-  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)
-  tokenpak permissions reset                     # scoped reset + fleet off
+  tokenpak permissions reset                     # scoped reset
 
 **Subcommands:**
 
 - `show`
 - `set`
-  - `TIER` — Tier to apply ('fleet' sets launcher state only) — choices: `strict`, `standard`, `auto`, `fleet`
+  - `{strict,standard,auto}` — Persistent permission tier to apply — choices: `strict`, `standard`, `auto`
   - `--client` — Which client to configure (default: both) (default: both) — choices: `claude-code`, `codex`, `both`
-  - `--yes` — Skip the fleet-mode confirmation prompt (explicit opt-in)
+  - `--yes` — Skip confirmation prompts for advanced opt-in changes
 - `reset`
   - `--client` — Which client to reset (default: both) (default: both) — choices: `claude-code`, `codex`, `both`
 
@@ -406,8 +400,6 @@ Run diagnostics
 
 - `--fix` — Auto-fix issues where possible
 - `--json` — Output results as machine-readable JSON
-- `--fleet` — Check all agents in ~/.tokenpak/fleet.yaml
-- `--deploy` — Push latest doctor to all agents (use with --fleet)
 - `--verbose`, `-v` — Show extra detail for each check
 - `--claude-code` — Run Claude Code integration checks (ENABLE_TOOL_SEARCH, mode, IDE detection)
 - `--conformance` — Run TIP self-conformance checks (alias for `tokenpak tip conformance`)
@@ -428,7 +420,6 @@ Live dashboard
 
 **Flags:**
 
-- `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
 - `--public` — Show public URL with token (accessible from any machine)
 - `--show-token` — Display current dashboard token
@@ -525,19 +516,6 @@ Example:
 
 - `repair`
 
-### `tokenpak fleet`
-
-Fleet status
-
-**Flags:**
-
-- `--json` — Output as JSON
-- `--compact` — Compact one-line output
-
-**Subcommands:**
-
-- `init`
-
 ### `tokenpak aggregate`
 
 Aggregate ledger
@@ -557,56 +535,6 @@ Live request explorer
 - `REQUEST_ID` — Request id (for show)
 - `--limit`, `-n` — Number of rows to show (default: 10)
 - `--once` — Print once and exit
-
-### `tokenpak dispatch`
-
-TokenPak Dispatch — scoped, station-based, resumable, gated work packages with a Decision Inbox and delivery receipts (OSS, v0.1-alpha preview — not yet in a released pip package; available on the project main branch; CLI-first).
-
-**Subcommands:**
-
-- `run`
-  - `REQUEST` — The request text to dispatch
-  - `--route` — Force an explicit Route (e.g. code_task); overrides auto-routing
-  - `--autonomy` — Autonomy mode override (default depends on caller — §14.2) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
-  - `--ci` — CI/automation caller; default autonomy = auto_dispatch_limited
-  - `--dry-run` — Draft only; default autonomy = draft
-  - `--confirm` — Treat an approval-gated route as approved (record the bound route)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `status`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `inspect`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--late` — Include late results (post-cancellation TIP output)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `decisions`
-  - `--job` — Filter to one job id
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `approve`
-  - `DECISION_ID` — Decision id (decision_…)
-  - `--option` — Selected option id (default: the recommended option)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `reject`
-  - `DECISION_ID` — Decision id (decision_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `pause`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `resume`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `cancel`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `discard-late`
-  - `STATION_RUN_ID` — Station run id (stationrun_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `delivery`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
-- `receipt`
-  - `JOB_ID` — Dispatch job id (job_…)
-  - `--json` — Emit machine-readable JSON instead of human-readable output
 
 ---
 
@@ -678,7 +606,7 @@ Examples:
 
 ### `tokenpak pak`
 
-MultiPak Pro Phase 1 OSS surface. Read-only Vault Pak operations work without Pro; other Pak subtypes require the tokenpak-paid daemon.
+Local PAK continuity surface. Plain file PAK create/import/export and read-only Vault Pak inspection work without Pro. Encrypted subtypes and ranked recall require the tokenpak-paid daemon.
 
 **Subcommands:**
 
@@ -829,47 +757,6 @@ Fingerprint management
   - `--id` — Clear only this fingerprint ID (default: all)
   - `--yes`, `-y` — Skip confirmation prompt
 
-### `tokenpak agent`
-
-Agent coordination
-
-**Subcommands:**
-
-- `lock`
-  - `PATH` — File path to lock
-  - `--timeout` — Lock TTL in seconds (default 600) (default: 600)
-  - `--agent` — Agent id override
-- `unlock`
-  - `PATH` — File path to unlock
-  - `--agent` — Agent id override
-- `locks`
-  - `--agent` — Filter by agent id
-- `list`
-  - `--all` — Include stale agents
-  - `--json` — JSON output
-- `register`
-  - `NAME` — Agent name (e.g., agent-1, agent-2)
-  - `--hostname` — Hostname (default: auto-detect)
-  - `--gpu` — Has GPU
-  - `--memory` — Memory in GB (default: 4.0)
-  - `--specialties` — Specialties (e.g., code research) (default: [])
-  - `--providers` — Provider access (default: ['anthropic'])
-  - `--json` — JSON output
-- `deregister`
-  - `AGENT_ID` — Agent ID to remove
-- `heartbeat`
-  - `AGENT_ID` — Agent ID
-  - `--status` — Update status — choices: `active`, `busy`, `draining`
-  - `--task` — Current task name
-- `match`
-  - `--gpu` — Require GPU
-  - `--memory` — Minimum memory GB
-  - `--specialty` — Required specialties (default: [])
-  - `--provider` — Required providers (default: [])
-  - `--json` — JSON output
-- `prune`
-- `handoff`
-
 ### `tokenpak lock`
 
 File lock management
@@ -1012,6 +899,7 @@ Test search retrieval
 - `KEY` — Your license key (default: )
 - `--email` — Optional email for the license (default: )
 
+
 ### `tokenpak check-alerts`
 
 Evaluate alert rules and return exit code 1 if any fired.
@@ -1044,6 +932,7 @@ Example:
 
 ### `tokenpak deactivate`
 
+
 ### `tokenpak features`
 
 Show every feature TokenPak knows about and whether the current license entitles you to use it. Use `tokenpak features explain <feature>` for a single-feature breakdown.
@@ -1058,6 +947,7 @@ Show every feature TokenPak knows about and whether the current license entitles
 - `explain`
   - `FEATURE` — Feature key (e.g. T9_replay_system)
   - `--json` — Emit JSON
+
 
 ### `tokenpak help`
 
@@ -1109,8 +999,8 @@ Examples:
 - `--proxy-url` — Override the printed proxy URL (default: $TOKENPAK_PROXY_URL or http://localhost:8766)
 - `--apply` — Auto-write config files for the given client (headless / scripted path)
 - `--revert` — Restore the most recent backup for the given client (undoes --apply)
-- `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). 'fleet' is launcher-scoped and never persists into client config — see `tokenpak permissions --help`. — choices: `strict`, `standard`, `auto`, `fleet`
-- `--yes` — Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)
+- `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). — choices: `strict`, `standard`, `auto`
+- `--yes` — Confirm advanced opt-in choices non-interactively
 
 ### `tokenpak last`
 

@@ -1,6 +1,6 @@
-# MultiPak Pro — Phase 1 OSS surface
+# PAK Continuity — OSS Surface
 
-> **Phase 1 status**: scaffolding for the future Pro daemon. Read-only Vault Pak inspection works without Pro; everything else returns a clear "Pro daemon required" message until you install `tokenpak-paid` (Pro).
+> **OSS status**: local PAK create/import/export plus read-only Vault Pak inspection work without Pro. Encrypted subtypes, capture-pipeline ingest, ranked recall, and target-platform handoff packaging require `tokenpak-paid` (Pro).
 
 ## What MultiPak is
 
@@ -26,7 +26,7 @@ The full feature set is **Pro** (closed-source local Rust daemon, gated by the r
 
 ```bash
 $ tokenpak pak status
-MultiPak Pro Phase 1 status
+PAK continuity status
 ───────────────────────────
 ❌ Daemon state : unavailable
 ⚠️ multipak.enabled : False
@@ -56,7 +56,7 @@ MultiPak Pro Phase 1 status
 |---|---|---|
 | `tokenpak pak inspect <pak-id-or-file>` | Vault: ✅, others: ❌ | `--json` for machine output |
 | `tokenpak pak export <pak-id> -o <dir>` | Vault: ✅, others: ❌ | Vault Paks export to `pak.json` |
-| `tokenpak pak import <dir> -o <pak>` | ❌ Pro | Capture pipeline is Pro-only |
+| `tokenpak pak import <pak-file> [--force]` | ✅ OSS | Installs a plain Pak file into the local store with checksum verification; capture-pipeline ingest is Pro-only |
 | `tokenpak pak status` | ✅ always | Diagnostic; never errors |
 
 Exit codes follow the relevant standard: `0` success, `1` user-facing error (missing Pak, Pro required), `2` argparse usage error.

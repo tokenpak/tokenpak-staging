@@ -2,17 +2,17 @@
 """Auto-generate docs/cli-reference.md from tokenpak/cli.py argparse definitions.
 
 This file is auto-generated. Edit tokenpak/cli.py and re-run:
-    python scripts/generate-cli-docs.py
+    python3 scripts/generate-cli-docs.py
 
 Usage:
-    python scripts/generate-cli-docs.py            # writes docs/cli-reference.md
-    python scripts/generate-cli-docs.py --stdout   # print to stdout instead
+    python3 scripts/generate-cli-docs.py            # writes docs/cli-reference.md
+    python3 scripts/generate-cli-docs.py --stdout   # print to stdout instead
 """
 
 import argparse
+import os
 import sys
 import types
-import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -134,6 +134,8 @@ def _format_action(action: argparse.Action) -> Optional[str]:
     # Skip internal / positional-only noise
     if isinstance(action, (argparse._HelpAction, argparse._SubParsersAction)):
         return None
+    if action.help is argparse.SUPPRESS:
+        return None
 
     flags = ", ".join(f"`{f}`" for f in action.option_strings) if action.option_strings else None
     if flags is None:
@@ -147,7 +149,7 @@ def _format_action(action: argparse.Action) -> Optional[str]:
     if action.default not in (None, argparse.SUPPRESS, False, True):
         # Normalize host-specific paths so the generated docs are stable
         # across runners. argparse defaults that contain the runtime user's
-        # home directory (e.g. /home/sue, /home/runner) get rewritten to
+        # home directory (e.g. /home/user, /home/runner) get rewritten to
         # `~`. Without this, docs/cli-reference.md drifts every time it's
         # regenerated on a different machine and the CLI Docs CI gate
         # spuriously fails.
@@ -158,8 +160,9 @@ def _format_action(action: argparse.Action) -> Optional[str]:
         desc = f"{desc} (default: {default_str})" if desc else f"default: {default_str}"
 
     # Append choices
-    if action.choices:
-        choices_str = ", ".join(f"`{c}`" for c in action.choices)
+    public_choices = getattr(action, "_tokenpak_public_choices", action.choices)
+    if public_choices:
+        choices_str = ", ".join(f"`{c}`" for c in public_choices)
         desc = f"{desc} — choices: {choices_str}" if desc else f"choices: {choices_str}"
 
     return f"- {flags} — {desc}" if desc else f"- {flags}"
@@ -260,7 +263,7 @@ def generate(stdout_only: bool = False) -> str:
         "# CLI Reference",
         "",
         "_Auto-generated from `tokenpak/cli.py` — do not edit by hand._",
-        "_To update: edit `tokenpak/cli.py` then run `python scripts/generate-cli-docs.py`._",
+        "_To update: edit `tokenpak/cli.py` then run `python3 scripts/generate-cli-docs.py`._",
         "",
         "---",
         "",
@@ -362,7 +365,7 @@ def _load_cleanup_rules() -> dict:
 def _post_process_for_public_cli(output: str) -> str:
     """Strip / sanitize content the public CLI docs should not carry.
 
-    1. Parenthetical task IDs ((VDS-NN), (Std NN), (coming in CCI-NN))
+    1. Parenthetical implementation/task labels.
        pulled from argparse help strings.
     2. Subcommand sections whose names appear in the deferred list
        (registered in source for backward compatibility but not part of
@@ -376,7 +379,7 @@ def _post_process_for_public_cli(output: str) -> str:
     # 1. Strip parenthetical task IDs.
     output = re.sub(r"\s*\(VDS-\d+\)", "", output)
     output = re.sub(r"\s*\(Std\s+\d+(?:\s*§[\d.]+)?\)", "", output)
-    output = re.sub(r"\s*\(coming in CCI-\d+\)", "", output)
+    output = re.sub(r"\s*\(coming in [A-Z]+-\d+\)", "", output)
 
     rules = _load_cleanup_rules()
 

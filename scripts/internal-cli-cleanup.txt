@@ -18,6 +18,9 @@
 # removal; their `### \`tokenpak <name>\`` sections are stripped from
 # the rendered CLI reference.
 openclaw
+fleet
+dispatch
+agent
 
 
 [example_substitutions]

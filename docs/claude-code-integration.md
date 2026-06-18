@@ -1,8 +1,8 @@
 # Claude Code Integration Guide
 
-TokenPak sits transparently between Claude Code and the Anthropic API, injecting vault context, tracking spend, and routing to the right provider — with zero changes to how you use Claude Code. This guide covers all six consumption modes. Pick your mode and you'll be running in under five minutes.
+TokenPak sits transparently between Claude Code and the Anthropic API after local routing is configured, injecting vault context, tracking spend, and forwarding requests through your provider flow. This guide covers the supported local consumption modes.
 
-**Six modes covered:** [CLI](#cli-one-shot-scripts-batch) · [TUI](#tui-interactive-dev) · [tmux / multi-instance](#tmux-multi-instance-fleet) · [SDK / Agent SDK](#sdk-claude-agent-sdk) · [IDE](#ide-vscode-jetbrains-cursor-windsurf) · [Cron / CI / agent worker](#cron-ci-agent-worker)
+**Modes covered:** [CLI](#cli-one-shot-scripts-batch) · [TUI](#tui-interactive-dev) · [tmux / multi-session](#tmux-multi-session) · [SDK / Agent SDK](#sdk-claude-agent-sdk) · [IDE](#ide-vscode-jetbrains-cursor-windsurf) · [Cron / CI / scripted jobs](#cron-ci-scripted-jobs)
 
 ---
 
@@ -24,8 +24,8 @@ claude "summarize this file" < README.md
 
 TokenPak auto-detects your consumption mode and applies the right profile (`claude-code-cli`, `claude-code-tui`, etc.) based on your session headers. No manual profile selection required.
 
-!!! tip "One-command setup (coming soon)"
- `tokenpak install --claude-code` will automate proxy startup, shell-rc injection, and profile selection.
+!!! tip "Config-write setup"
+ `tokenpak integrate claude-code --apply` writes supported local routing config. Use `tokenpak integrate claude-code` first if you want to review the manual steps.
 
 ---
 
@@ -81,7 +81,7 @@ The inline savings line appears in stderr and is captured in the proxy log. It d
 | Problem | Fix |
 |---------|-----|
 | `ANTHROPIC_BASE_URL` not picked up by new shells | Add export to `~/.bashrc` (not just `.bash_profile`) and `source` it |
-| `Connection refused :8766` | Run `tokenpak serve --port 8766` or install as a service: `tokenpak install --service` |
+| `Connection refused :8766` | Run `tokenpak serve --port 8766`; use your process manager if you need it to stay running |
 | Vault blocks not appearing | Check `TOKENPAK_VAULT_INJECT` is not set to `0`; run `tokenpak status --vault` |
 | Wrong profile detected | Override: `TOKENPAK_PROFILE=claude-code-cli claude "..."` |
 | Slow first request | First vault query builds the index; subsequent calls are fast |
@@ -142,7 +142,7 @@ TokenPak detects interactive mode via the `X-Claude-Code-Interactive: 1` header 
 
 ---
 
-## tmux / Multi-Instance Fleet
+## tmux / Multi-Session
 
 **Profile: `claude-code-tmux`**
 
@@ -346,22 +346,21 @@ TokenPak detects IDE mode via the `User-Agent` header set by IDE extensions (e.g
 
 ---
 
-## Cron / CI / Agent Worker
+## Cron / CI / Scripted Jobs
 
 **Profile: `claude-code-cron`**
 
 ### Who it's for
 
-Scheduled jobs, CI pipelines, and agent worker scripts that invoke `claude --print` non-interactively — such as nightly summaries, automated PR reviews, or multi-agent orchestration workers.
+Scheduled jobs, CI pipelines, and scripts that invoke `claude --print` non-interactively — such as nightly summaries, automated PR reviews, or maintenance jobs.
 
 ### How to install
 
 ```bash
 pip install tokenpak
 
-# Start proxy as a persistent service
-tokenpak install --service
-# or manually: tokenpak serve --port 8766 &
+# Start the local proxy
+tokenpak serve --port 8766 &
 
 export ANTHROPIC_BASE_URL=http://localhost:8766
 ```
@@ -384,7 +383,7 @@ steps:
  run: claude --print "review this PR diff" < diff.txt
 ```
 
-TokenPak detects cron/worker mode via the `X-Claude-Code-NonInteractive: 1` header. The `agent-claude-worker.sh` script sets this header automatically via `ANTHROPIC_CUSTOM_HEADERS`.
+TokenPak detects non-interactive mode via the `X-Claude-Code-NonInteractive: 1` header. Set this header via `ANTHROPIC_CUSTOM_HEADERS` when your runner does not provide an interactive session.
 
 ### What you get
 
@@ -411,7 +410,7 @@ $ ANTHROPIC_BASE_URL=http://localhost:8766 claude --print "daily standup summary
 | Budget limit hit mid-run | Increase `TOKENPAK_BUDGET_DAILY_LIMIT_USD` or check for runaway loops |
 | CI proxy not reachable | Add `sleep 1` after starting proxy; CI runners start services asynchronously |
 | Vault injection in CI injects wrong context | Set `TOKENPAK_VAULT_INJECT=0` to disable vault in CI; re-enable for specific jobs |
-| `tokenpak install --service` not available | The installer is not yet released; use `tokenpak serve &` with a process manager instead |
+| Proxy stops after the shell exits | Use `tokenpak serve &` with your process manager or terminal multiplexer |
 
 ---
 
@@ -437,15 +436,15 @@ Vault injection is disabled for the `claude-code-sdk` profile.
 
 ### Cache Invalidation Alerts
 
-**Status: coming soon**
+**Status: planned**
 
 When a vault document changes and invalidates a cached context block, tokenpak will surface a warning. Currently, cache evictions are silent.
 
 ### Cost Forecasting
 
-**Status: coming soon**
+**Status: shipped**
 
-The `/forecast` endpoint will estimate cost for a pending request before it is sent. Currently, cost reporting is post-hoc only.
+`POST /v1/messages/forecast` estimates input tokens and projected cost locally before a request is sent. The CLI `tokenpak forecast` also reports burn-rate projections from local telemetry.
 
 ### Compliance Routing (Bedrock)
 
@@ -505,19 +504,18 @@ Unknown model IDs pass through unchanged (forward-compatible).
 
 ### Multi-Provider Failover
 
-**Status: coming soon**
+**Status: experimental module**
 
-Automatic failover to AWS Bedrock or local Ollama when Anthropic's API is unavailable or rate-limited. Currently, tokenpak routes all traffic to the single upstream configured in `ANTHROPIC_BASE_URL`.
+Provider failover configuration and validation modules exist, but automatic failover is not part of the default public Claude Code quickstart. Keep production routing explicit until you have tested your provider chain locally.
 
 ---
 
 ## Settings UI
 
-**Status: coming soon**
-
-A web UI at `http://localhost:8766/settings/claude-code` will provide point-and-click control over per-mode profiles, vault injection depth, budget caps, and provider routing.
-
-Until it ships, use environment variables or `tokenpak config set`:
+The canonical dashboard is read-only and does not expose settings writes. Use
+environment variables or `tokenpak config set` for configuration. If a local
+admin app is explicitly mounted for development, its settings route is separated
+under `/admin/settings/claude-code`.
 
 ```bash
 tokenpak config set claude-code.vault.top_k 3
@@ -529,11 +527,11 @@ tokenpak config get claude-code
 
 ## Doctor Command
 
-**Status: coming soon**
+**Status: shipped**
 
-`tokenpak doctor --claude-code` will run a health check specific to Claude Code integration: verify the proxy is reachable at `ANTHROPIC_BASE_URL`, confirm profile auto-detection is working, and flag misconfigured vault paths.
+`tokenpak doctor --claude-code` runs a health check specific to Claude Code integration: proxy reachability, profile auto-detection, and common local configuration issues.
 
-Until it ships, run the general doctor:
+General diagnostics are still available with:
 
 ```bash
 tokenpak doctor

@@ -49,6 +49,7 @@ _INTERMEDIATE_COMMANDS = {
 # ─────────────────────────────────────────────
 
 _REGISTRY_PATH = Path(__file__).parent.parent.parent / "core" / "registry" / "commands.json"
+_PUBLIC_ADOPTION_HIDDEN_COMMANDS = {"fleet", "agent", "dispatch"}
 
 
 def _load_registry() -> list[dict]:
@@ -56,7 +57,12 @@ def _load_registry() -> list[dict]:
     try:
         with open(_REGISTRY_PATH) as f:
             data = json.load(f)
-        return data.get("commands", [])
+        commands = data.get("commands", [])
+        return [
+            cmd
+            for cmd in commands
+            if cmd.get("command") not in _PUBLIC_ADOPTION_HIDDEN_COMMANDS
+        ]
     except Exception:
         return []
 

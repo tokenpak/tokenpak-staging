@@ -1169,8 +1169,13 @@ if HAS_CLICK:
     @click.option("--db", "db_path", default=None, help="Monitor DB path override")
     @click.option("--days", default=0, type=int, help="Filter to last N days (combinable with --hours)")
     @click.option("--hours", default=0, type=int, help="Filter to last N hours (combinable with --days)")
-    @click.option("--fleet", is_flag=True, help="Fleet rollup view — reads rollup_daily")
-    @click.option("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
+    @click.option("--fleet", is_flag=True, hidden=True, help="Fleet rollup view - reads rollup_daily")
+    @click.option(
+        "--since",
+        default=None,
+        hidden=True,
+        help="With --fleet: window in days, e.g. '7d' (default: 7d)",
+    )
     def status_cmd(
         proxy: str,
         full: bool,
@@ -1189,7 +1194,6 @@ if HAS_CLICK:
         Default output leads with dollar savings — the number that matters.
         Use --full for the legacy technical output.
         Use --days and --hours to filter to a specific time window.
-        Use --fleet to show the fleet rollup table (reads rollup_daily).
 
         Examples:
 
@@ -1201,9 +1205,6 @@ if HAS_CLICK:
           tokenpak status --full              # legacy technical output
           tokenpak status --minimal           # one-liner for scripts
           tokenpak status --json              # machine-readable
-          tokenpak status --fleet             # fleet rollup (last 7d)
-          tokenpak status --fleet --since 7d  # fleet rollup (last 7d)
-          tokenpak status --fleet --json      # fleet rollup as JSON
         """
         run(
             proxy_base=proxy,

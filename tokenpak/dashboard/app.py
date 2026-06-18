@@ -339,6 +339,7 @@ def _overview_data(query_date: str) -> dict:
 
 
 router = APIRouter(tags=["dashboard"])
+admin_router = APIRouter(prefix="/admin", tags=["dashboard-admin"])
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -560,7 +561,7 @@ def api_audit(
     return audit
 
 
-@router.get("/settings/claude-code", response_class=HTMLResponse)
+@admin_router.get("/settings/claude-code", response_class=HTMLResponse)
 def settings_claude_code(request: Request):
     """Settings UI page for Claude Code integration."""
     ctx = load_settings_context()
@@ -570,7 +571,7 @@ def settings_claude_code(request: Request):
     return templates.TemplateResponse(request, "settings_claude_code.html", ctx)
 
 
-@router.post("/settings/claude-code/htmx/profile", response_class=HTMLResponse)
+@admin_router.post("/settings/claude-code/htmx/profile", response_class=HTMLResponse)
 def htmx_settings_profile(
     request: Request,
     profile: str = Form(...),
@@ -592,7 +593,7 @@ def htmx_settings_profile(
     )
 
 
-@router.post("/settings/claude-code/htmx/vault", response_class=HTMLResponse)
+@admin_router.post("/settings/claude-code/htmx/vault", response_class=HTMLResponse)
 def htmx_settings_vault(
     request: Request,
     vault_inject_enabled: str = Form("0"),
@@ -625,7 +626,7 @@ def htmx_settings_vault(
     )
 
 
-@router.post("/settings/claude-code/htmx/budget", response_class=HTMLResponse)
+@admin_router.post("/settings/claude-code/htmx/budget", response_class=HTMLResponse)
 def htmx_settings_budget(
     request: Request,
     budget_controller_enabled: str = Form("0"),
@@ -653,7 +654,7 @@ def htmx_settings_budget(
     )
 
 
-@router.post("/settings/claude-code/htmx/alerts", response_class=HTMLResponse)
+@admin_router.post("/settings/claude-code/htmx/alerts", response_class=HTMLResponse)
 def htmx_settings_alerts(
     request: Request,
     cache_alert_webhook_enabled: str = Form("0"),
@@ -696,7 +697,7 @@ def htmx_settings_alerts(
     )
 
 
-@router.post("/settings/claude-code/htmx/local-first", response_class=HTMLResponse)
+@admin_router.post("/settings/claude-code/htmx/local-first", response_class=HTMLResponse)
 def htmx_settings_local_first(
     request: Request,
     local_first_routing_enabled: str = Form("0"),
@@ -720,7 +721,7 @@ def htmx_settings_local_first(
     )
 
 
-@router.post("/settings/claude-code/htmx/compliance", response_class=HTMLResponse)
+@admin_router.post("/settings/claude-code/htmx/compliance", response_class=HTMLResponse)
 def htmx_settings_compliance(
     request: Request,
     compliance_provider: str = Form(""),
@@ -744,7 +745,7 @@ def htmx_settings_compliance(
     )
 
 
-@router.get("/settings/claude-code/api/current", response_class=JSONResponse)
+@admin_router.get("/settings/claude-code/api/current", response_class=JSONResponse)
 def api_settings_current():
     """JSON: return current settings state (for testing/debugging)."""
     return load_settings_context()
@@ -757,6 +758,19 @@ def create_dashboard_app() -> FastAPI:
     @app.get("/health")
     def health():
         return {"status": "ok", "service": "tokenpak-dashboard"}
+
+    return app
+
+
+def create_admin_app() -> FastAPI:
+    """Local admin app for configuration writes, separate from the read-only dashboard."""
+    app = FastAPI(title="TokenPak Dashboard Admin", version="5.0.0")
+    app.include_router(router)
+    app.include_router(admin_router)
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "service": "tokenpak-dashboard-admin"}
 
     return app
 

@@ -107,6 +107,21 @@ class TestFullHelp:
         assert any(cmd in text for cmd in ["start", "stop", "status", "cost", "doctor"]), \
             "At least some key commands should be in --all output"
 
+    def test_all_hides_public_adoption_held_command_rows(self):
+        """tokenpak help --all should not foreground held operator surfaces."""
+        output = StringIO()
+        with redirect_stdout(output):
+            print_full_help()
+        rows = {
+            line.strip().split()[0]
+            for line in output.getvalue().splitlines()
+            if line.startswith("    ") and line.strip()
+        }
+
+        assert "fleet" not in rows
+        assert "dispatch" not in rows
+        assert "agent" not in rows
+
 
 class TestSpecificCommandHelp:
     """Test tokenpak help <command> works for any command."""
@@ -200,6 +215,45 @@ class TestRunDispatch:
 
 class TestCLIIntegration:
     """Test CLI integration (end-to-end with actual tokenpak command)."""
+
+    def test_quick_help_hides_operator_surfaces(self):
+        """Default CLI help should stay local-first for public adoption."""
+        result = subprocess.run(
+            ["python3", "-m", "tokenpak", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        assert result.returncode == 0
+        text = result.stdout.lower()
+        assert "fleet" not in text
+        assert "dispatch" not in text
+        assert "agent" not in text
+
+    def test_public_help_hides_legacy_fleet_flags(self):
+        """Default command help should not advertise held fleet/admin flags."""
+        for command in ("doctor", "dashboard", "status"):
+            result = subprocess.run(
+                ["python3", "-m", "tokenpak", command, "--help"],
+                capture_output=True,
+                text=True,
+                cwd=str(Path(__file__).parent.parent),
+            )
+            assert result.returncode == 0
+            assert "--fleet" not in result.stdout
+            assert "--deploy" not in result.stdout
+
+    def test_permission_help_hides_launcher_fleet_mode(self):
+        """Permission setup help should show public tiers only."""
+        for args in (["integrate", "--help"], ["permissions", "--help"]):
+            result = subprocess.run(
+                ["python3", "-m", "tokenpak", *args],
+                capture_output=True,
+                text=True,
+                cwd=str(Path(__file__).parent.parent),
+            )
+            assert result.returncode == 0
+            assert "fleet" not in result.stdout.lower()
 
     def test_help_default_via_cli(self):
         """tokenpak help should show essential commands."""

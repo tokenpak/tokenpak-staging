@@ -102,7 +102,7 @@
       <a href="/dashboard/agents">Agents</a>
       <a href="/dashboard/timeline">Timeline</a>
       <a href="/dashboard/audit">Audit</a>
-      <a href="/settings/claude-code" class="active">Settings</a>
+      <a href="/admin/settings/claude-code" class="active">Settings</a>
     </div>
   </nav>
 
@@ -128,7 +128,7 @@
     <div class="settings-card" id="card-profile">
       <h2>Active Profile</h2>
       <p class="card-desc">Determines which per-mode dashboard panel is shown and which cost-attribution bucket requests land in.</p>
-      <form action="/settings/claude-code/htmx/profile" method="post"
+      <form action="/admin/settings/claude-code/htmx/profile" method="post"
             onsubmit="return htmxSubmit(this, 'status-profile')">
         <div class="form-row">
           <div class="form-group">
@@ -153,7 +153,7 @@
     <div class="settings-card" id="card-vault">
       <h2>Vault Injection</h2>
       <p class="card-desc">Controls whether TokenPak injects relevant vault context blocks into each request, and the retrieval parameters.</p>
-      <form action="/settings/claude-code/htmx/vault" method="post"
+      <form action="/admin/settings/claude-code/htmx/vault" method="post"
             onsubmit="return htmxSubmit(this, 'status-vault')">
         <div class="toggle-row">
           <label class="toggle">
@@ -192,7 +192,7 @@
     <div class="settings-card" id="card-budget">
       <h2>Budget Enforcement</h2>
       <p class="card-desc">Enforces a monthly token budget. Requests that would exceed the limit are rejected with a 429 response.</p>
-      <form action="/settings/claude-code/htmx/budget" method="post"
+      <form action="/admin/settings/claude-code/htmx/budget" method="post"
             onsubmit="return htmxSubmit(this, 'status-budget')">
         <div class="toggle-row">
           <label class="toggle">
@@ -231,7 +231,7 @@
     <div class="settings-card" id="card-alerts">
       <h2>Cache Invalidation Alerts</h2>
       <p class="card-desc">Configure local cache alert behavior. Remote webhook URLs are not editable from this dashboard.</p>
-      <form action="/settings/claude-code/htmx/alerts" method="post"
+      <form action="/admin/settings/claude-code/htmx/alerts" method="post"
             onsubmit="return htmxSubmit(this, 'status-alerts')">
         <div class="toggle-row">
           <label class="toggle">
@@ -285,7 +285,7 @@
         If Ollama is not running, requests fall back to the cloud provider chain — but latency will spike.
         Only enable this if you have Ollama running locally.
       </div>
-      <form action="/settings/claude-code/htmx/local-first" method="post"
+      <form action="/admin/settings/claude-code/htmx/local-first" method="post"
             onsubmit="return htmxSubmit(this, 'status-local-first')">
         <div class="toggle-row">
           <label class="toggle">
@@ -312,7 +312,7 @@
     <div class="settings-card" id="card-compliance">
       <h2>Compliance Routing</h2>
       <p class="card-desc">Pin all requests to a specific provider endpoint for compliance or data-residency requirements.</p>
-      <form action="/settings/claude-code/htmx/compliance" method="post"
+      <form action="/admin/settings/claude-code/htmx/compliance" method="post"
             onsubmit="return htmxSubmit(this, 'status-compliance')">
         <div class="form-row">
           <div class="form-group">

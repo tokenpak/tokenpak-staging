@@ -1316,7 +1316,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         # Build forwarding headers (client-supplied auth forwarded unchanged)
         # For Anthropic routes apply a per-route allowlist (mirroring
-        # the WS-path tuple).  All other providers keep the existing blocklist
+        # the websocket path tuple).  All other providers keep the existing blocklist
         # path (forward_headers) — their forwarding behavior is unchanged.
         if provider_from_url(target_url) == "anthropic":
             _route = _classify_route(self.path, self.headers)
@@ -2376,10 +2376,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         Returns a JSON object with a `sessions` array of the top 20 sessions
         by request count. Each entry contains the columns documented in
-        Spec Component 11.
+        Spec Component 11. The `cache` object is DB-backed and origin-attributed;
+        unknown attribution remains explicit rather than credited to TokenPak.
         """
         import os
         import sqlite3 as _sqlite3
+
+        from tokenpak.proxy.cache_stats import _get_cache_stats_by_window
 
         ps = self.server.proxy_server
         db_path = (
@@ -2445,7 +2448,45 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 "metrics/dashboard sessions query failed: %s", exc
             )
 
-        self._send_json({"sessions": sessions})
+        cache_window = _get_cache_stats_by_window(hours=24, db_path=str(db_path))
+        total_requests = int(cache_window.get("total_requests") or 0)
+        hit_counts = dict(cache_window.get("cache_hits_by_origin") or {})
+        read_tokens = dict(cache_window.get("cache_read_by_origin") or {})
+
+        def _origin_metric(origin: str) -> dict:
+            hits = int(hit_counts.get(origin) or 0)
+            return {
+                "origin": origin,
+                "hits": hits,
+                "hit_rate": round((hits / total_requests), 4) if total_requests else 0.0,
+                "cache_read_tokens": int(read_tokens.get(origin) or 0),
+            }
+
+        cache_payload = {
+            "window_hours": 24,
+            "total_requests": total_requests,
+            "cache_hits": int(cache_window.get("cache_hits") or 0),
+            "hit_rate": cache_window.get("hit_rate") or 0.0,
+            "cache_read_tokens": int(cache_window.get("cache_read_tokens") or 0),
+            "cache_creation_tokens": int(cache_window.get("cache_creation_tokens") or 0),
+            "cache_hits_by_origin": {
+                "client": int(hit_counts.get("client") or 0),
+                "proxy": int(hit_counts.get("proxy") or 0),
+                "unknown": int(hit_counts.get("unknown") or 0),
+            },
+            "cache_read_by_origin": {
+                "client": int(read_tokens.get("client") or 0),
+                "proxy": int(read_tokens.get("proxy") or 0),
+                "unknown": int(read_tokens.get("unknown") or 0),
+            },
+            "tokenpak": _origin_metric("proxy"),
+            "provider_client": _origin_metric("client"),
+            "unknown": _origin_metric("unknown"),
+        }
+        if cache_window.get("error"):
+            cache_payload["error"] = str(cache_window["error"])
+
+        self._send_json({"sessions": sessions, "cache": cache_payload})
 
 
 # ---------------------------------------------------------------------------

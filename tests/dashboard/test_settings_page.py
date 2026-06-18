@@ -1,7 +1,8 @@
-"""Settings UI page (/settings/claude-code) — test suite.
+"""Settings admin page (/admin/settings/claude-code) — test suite.
 
 Covers:
-- Page renders at /settings/claude-code
+- Page renders in the local admin app at /admin/settings/claude-code
+- Canonical dashboard app exposes no settings mutation routes
 - Each settings section is present in the response
 - Each HTMX POST endpoint persists to a temp env file
 - Atomic-write safety (backup created, temp file cleaned up)
@@ -22,7 +23,7 @@ pytest.importorskip("fastapi", reason="fastapi not installed (optional dep — i
 from fastapi.testclient import TestClient
 
 try:
-    from tokenpak.dashboard.app import create_dashboard_app
+    from tokenpak.dashboard.app import create_admin_app, create_dashboard_app
     from tokenpak.dashboard.settings_persistence import (
         ENV_FILE_PATH,
         load_settings_context,
@@ -39,8 +40,15 @@ except ImportError as exc:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def client():
+def dashboard_client():
     app = create_dashboard_app()
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+
+@pytest.fixture(scope="module")
+def client():
+    app = create_admin_app()
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
@@ -52,56 +60,87 @@ def tmp_env_file(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 1. Page renders
+# 1. Canonical dashboard remains read-only
+# ---------------------------------------------------------------------------
+
+class TestDashboardReadOnlyBoundary:
+    def test_dashboard_app_has_no_settings_routes(self, dashboard_client):
+        paths = {
+            getattr(route, "path", "")
+            for route in dashboard_client.app.routes
+        }
+        assert not any(path.startswith("/settings/") for path in paths)
+        assert not any(path.startswith("/admin/settings/") for path in paths)
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/settings/claude-code",
+            "/settings/claude-code/api/current",
+            "/settings/claude-code/htmx/profile",
+            "/admin/settings/claude-code",
+            "/admin/settings/claude-code/api/current",
+            "/admin/settings/claude-code/htmx/profile",
+        ],
+    )
+    def test_dashboard_app_rejects_settings_surface(self, dashboard_client, path):
+        response = dashboard_client.post(path, data={"profile": "claude-code-cli"})
+        assert response.status_code == 404
+        response = dashboard_client.get(path)
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 2. Admin page renders
 # ---------------------------------------------------------------------------
 
 class TestSettingsPageRenders:
     def test_returns_200(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert r.status_code == 200
 
     def test_content_type_html(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "text/html" in r.headers.get("content-type", "")
 
     def test_page_title_present(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Claude Code Settings" in r.text
 
     def test_nav_link_present(self, client):
-        r = client.get("/settings/claude-code")
-        assert "/settings/claude-code" in r.text
+        r = client.get("/admin/settings/claude-code")
+        assert "/admin/settings/claude-code" in r.text
 
     def test_active_profile_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Active Profile" in r.text
 
     def test_vault_injection_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Vault Injection" in r.text
 
     def test_budget_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Budget Enforcement" in r.text
 
     def test_alerts_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Cache Invalidation Alerts" in r.text
 
     def test_routing_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Provider Routing" in r.text
 
     def test_local_first_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Local-First Routing" in r.text
 
     def test_compliance_section(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Compliance Routing" in r.text
 
     def test_safety_warning_present(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert "Safety warning" in r.text or "safety warning" in r.text.lower()
 
 
@@ -114,7 +153,7 @@ class TestProfilePersists:
         with patch("tokenpak.dashboard.app.write_settings") as mock_write:
             mock_write.return_value = (True, [])
             r = client.post(
-                "/settings/claude-code/htmx/profile",
+                "/admin/settings/claude-code/htmx/profile",
                 data={"profile": "claude-code-tui"},
             )
         assert r.status_code == 200
@@ -122,7 +161,7 @@ class TestProfilePersists:
 
     def test_invalid_profile_rejected(self, client):
         r = client.post(
-            "/settings/claude-code/htmx/profile",
+            "/admin/settings/claude-code/htmx/profile",
             data={"profile": "not-a-real-profile"},
         )
         assert r.status_code == 422
@@ -142,7 +181,7 @@ class TestVaultSettingsPersist:
         with patch("tokenpak.dashboard.app.write_settings") as mock_write:
             mock_write.return_value = (True, [])
             r = client.post(
-                "/settings/claude-code/htmx/vault",
+                "/admin/settings/claude-code/htmx/vault",
                 data={
                     "vault_inject_enabled": "1",
                     "inject_budget": "5000",
@@ -176,7 +215,7 @@ class TestBudgetSettingsPersist:
         with patch("tokenpak.dashboard.app.write_settings") as mock_write:
             mock_write.return_value = (True, [])
             r = client.post(
-                "/settings/claude-code/htmx/budget",
+                "/admin/settings/claude-code/htmx/budget",
                 data={"budget_controller_enabled": "1", "budget_total": "20000"},
             )
         assert r.status_code == 200
@@ -197,7 +236,7 @@ class TestAlertSettingsPersist:
         with patch("tokenpak.dashboard.app.write_settings") as mock_write:
             mock_write.return_value = (True, [])
             r = client.post(
-                "/settings/claude-code/htmx/alerts",
+                "/admin/settings/claude-code/htmx/alerts",
                 data={
                     "cache_alert_webhook_enabled": "1",
                     "cache_alert_threshold": "30",
@@ -207,7 +246,7 @@ class TestAlertSettingsPersist:
 
     def test_alerts_htmx_rejects_webhook_url_post(self, client):
         r = client.post(
-            "/settings/claude-code/htmx/alerts",
+            "/admin/settings/claude-code/htmx/alerts",
             data={
                 "cache_alert_webhook_enabled": "1",
                 "cache_alert_webhook_url": "https://example.com/hook",
@@ -219,7 +258,7 @@ class TestAlertSettingsPersist:
 
     def test_alerts_htmx_rejects_slack_destination_post(self, client):
         r = client.post(
-            "/settings/claude-code/htmx/alerts",
+            "/admin/settings/claude-code/htmx/alerts",
             data={
                 "cache_alert_webhook_enabled": "1",
                 "cache_alert_slack_channel": "#tokenpak-alerts",
@@ -230,7 +269,7 @@ class TestAlertSettingsPersist:
         assert "Slack destination cannot be saved here" in r.text
 
     def test_alerts_page_marks_slack_destination_read_only(self, client):
-        r = client.get("/settings/claude-code")
+        r = client.get("/admin/settings/claude-code")
         assert r.status_code == 200
         assert "Slack destinations are read-only here" in r.text
         assert 'name="cache_alert_slack_channel"' not in r.text
@@ -395,15 +434,15 @@ class TestInputValidation:
 
 class TestApiCurrentSettings:
     def test_returns_200(self, client):
-        r = client.get("/settings/claude-code/api/current")
+        r = client.get("/admin/settings/claude-code/api/current")
         assert r.status_code == 200
 
     def test_returns_json(self, client):
-        r = client.get("/settings/claude-code/api/current")
+        r = client.get("/admin/settings/claude-code/api/current")
         assert "application/json" in r.headers.get("content-type", "")
 
     def test_has_expected_keys(self, client):
-        r = client.get("/settings/claude-code/api/current")
+        r = client.get("/admin/settings/claude-code/api/current")
         data = r.json()
         for key in (
             "active_profile",

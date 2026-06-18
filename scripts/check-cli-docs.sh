@@ -12,7 +12,7 @@ cleanup() { rm -f "${GENERATED}"; }
 trap cleanup EXIT
 
 echo "Generating CLI reference from tokenpak/cli.py..."
-python "${SCRIPT_DIR}/generate-cli-docs.py" --stdout > "${GENERATED}"
+"${PYTHON:-python3}" "${SCRIPT_DIR}/generate-cli-docs.py" --stdout > "${GENERATED}"
 
 if diff -u "${COMMITTED}" "${GENERATED}"; then
     echo "OK: docs/cli-reference.md is up to date."
@@ -20,7 +20,7 @@ if diff -u "${COMMITTED}" "${GENERATED}"; then
 else
     echo ""
     echo "FAIL: docs/cli-reference.md is out of date."
-    echo "Re-run:  python scripts/generate-cli-docs.py"
+    echo "Re-run:  python3 scripts/generate-cli-docs.py"
     echo "Then commit the updated docs/cli-reference.md."
     exit 1
 fi

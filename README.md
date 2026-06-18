@@ -1,4 +1,4 @@
-# TokenPak — Cut your LLM token spend — zero config
+# TokenPak — Cut your LLM token spend — local first
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
@@ -7,7 +7,7 @@
 
 > **The open logistics layer for AI context.**
 
-TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and recording receipts for what changed. Fewer tokens, lower cost. No code changes to your app, no TokenPak cloud dependency, and provider credentials stay in your local client/provider environment.
 
 ---
 
@@ -50,9 +50,9 @@ tokenpak demo
 
 ## Works with
 
-**Claude Code** · **Cursor** · **Cline** · **Continue.dev** · **Aider** · **OpenAI SDK** · **Anthropic SDK** · **LiteLLM** · **Codex**
+Public setup guides cover **Claude Code**, **Cursor**, **Cline**, **Continue.dev**, **Aider**, **OpenAI SDK**, **Anthropic SDK**, **LiteLLM**, and **Codex**.
 
-Run `tokenpak integrate` to see the full client list with setup guides for each.
+Run `tokenpak integrate` to see the client list, detected local tools, and which clients support automatic config writes.
 
 ---
 
@@ -74,15 +74,15 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 ## What's included (Free)
 
-- **Context compression** — deterministic token reduction on real agent workloads, <50ms latency. Measure your own savings with `tokenpak savings` (reproduce the headline benchmark with `make benchmark-headline`)
-- **Client integration** — one command wires Claude Code, Cursor, Aider, and 6 other clients
-- **Model routing** — send requests to the right model automatically, with fallback rules
-- **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
+- **Context compression** — deterministic token reduction on real workloads. Measure your own savings with `tokenpak savings` (reproduce the headline benchmark with `make benchmark-headline`)
+- **Client integration** — guided setup for local clients and SDKs; automatic config writes where supported
+- **Local proxy routing** — run on `127.0.0.1`, forward to your configured provider, and keep advanced routing explicit
+- **Cost tracking** — per model and per request/session where available; local SQLite, zero cloud
 - **TIP Spend Guard** — pre-send circuit breaker; blocks runaway requests before provider call. Yes/No release or `[TIP: allow=once max=$X]` directive. Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative tracking. See [docs/spend-guard.md](docs/spend-guard.md).
 - **Vault indexing + semantic search** — index your codebase; search without an LLM call
-- **MultiPak Pro Phase 1 OSS surface** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. Full MultiPak (capture pipeline, recall ranking, Handoff Paks, anchor hydration) requires `tokenpak-paid` (Pro). See [docs/multipak.md](docs/multipak.md).
+- **PAK continuity surface** — read-only Vault Pak adapter, local `tokenpak pak create/inspect/export/import/status`, and `/pak/v1/*` proxy stubs. Ranked recall, capture pipelines, Handoff Paks, and anchor hydration are not part of the OSS Phase 0 path. See [docs/multipak.md](docs/multipak.md).
 - **CLI + proxy server** — `tokenpak serve`, `tokenpak cost`, `tokenpak savings`
-- **A/B testing and replay/debug** — compare compression configs, replay past requests
+- **A/B testing and local diagnostics** — compare compression configs and inspect recent local request data
 - **50 built-in compression recipes** — YAML, customizable
 
 Repeated context is reused from cache instead of re-sent on every call. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.

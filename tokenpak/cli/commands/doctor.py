@@ -1571,9 +1571,17 @@ try:
 
     @click.command("doctor")
     @click.option("--fix", is_flag=True, help="Auto-fix issues where possible")
-    @click.option("--fleet", is_flag=True, help="Check all agents listed in fleet.yaml under the resolved TokenPak home")
     @click.option(
-        "--deploy", is_flag=True, help="Push latest doctor to all agents (use with --fleet)"
+        "--fleet",
+        is_flag=True,
+        hidden=True,
+        help="Check all agents listed in fleet.yaml under the resolved TokenPak home",
+    )
+    @click.option(
+        "--deploy",
+        is_flag=True,
+        hidden=True,
+        help="Push latest doctor to all agents (use with --fleet)",
     )
     @click.option(
         "--verbose", "-v", is_flag=True, help="Show extra detail for each check"
@@ -1621,9 +1629,8 @@ try:
           tokenpak doctor --fix             # run checks and auto-fix where possible
           tokenpak doctor --json            # machine-readable JSON output
           tokenpak doctor --claude-code     # Claude Code integration checks
-          tokenpak doctor --fleet           # check all agents in fleet
-          tokenpak doctor --fleet --fix     # check + fix all agents
-          tokenpak doctor --fleet --deploy  # push latest doctor to all agents first
+          tokenpak doctor --json            # machine-readable diagnostics
+          tokenpak doctor --claude-code     # Claude Code integration checks
         """
         if stream:
             rc = run_stream_check(output_json=output_json)
