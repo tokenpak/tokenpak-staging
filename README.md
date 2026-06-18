@@ -1,4 +1,4 @@
-# TokenPak — Cut your LLM token spend — zero config
+# TokenPak — Cut your LLM token spend — guided setup
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
