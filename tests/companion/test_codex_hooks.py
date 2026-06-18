@@ -284,6 +284,14 @@ def test_session_start_hook_emits_banner_on_resume(tmp_path):
     assert "resume" in result.stderr.lower()
 
 
+def test_session_start_hook_writes_current_session(tmp_path):
+    result = _run_script(_SESSION_START_HOOK, "hook_session_start_startup.json", tmp_path)
+    assert result.returncode == 0
+    assert (
+        tmp_path / "run" / "current-session"
+    ).read_text().strip() == "fixture-session-start-startup"
+
+
 @_requires_sqlite3
 def test_session_start_hook_surfaces_prior_capsule(tmp_path):
     """If a prior session for this cwd has capsule_path, emit it via JSON."""

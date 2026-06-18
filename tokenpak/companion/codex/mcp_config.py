@@ -350,6 +350,10 @@ def get_env_vars(config: "CompanionConfig") -> dict[str, str]:
     """Build env vars to forward to the MCP server subprocess."""
 
     env: dict[str, str] = {}
+    if getattr(config, "session_id", "") and getattr(config, "session_id_source", "") == "env":
+        env["TOKENPAK_COMPANION_SESSION_ID"] = config.session_id
+    if getattr(config, "project_dir", ""):
+        env["TOKENPAK_COMPANION_PROJECT_DIR"] = config.project_dir
     if config.budget_daily_usd > 0:
         env["TOKENPAK_COMPANION_BUDGET"] = str(config.budget_daily_usd)
     if config.profile != "balanced":

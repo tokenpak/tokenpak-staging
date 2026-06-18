@@ -135,6 +135,45 @@ def test_env_prune_threshold():
     assert cfg.prune_threshold == 10_000
 
 
+def test_env_session_and_project_dir(tmp_path):
+    """Explicit env session/project identity is loaded for MCP tools."""
+    with patch.dict(os.environ, {
+        "TOKENPAK_COMPANION_JOURNAL_DIR": str(tmp_path),
+        "TOKENPAK_COMPANION_SESSION_ID": "sess-env",
+        "TOKENPAK_COMPANION_PROJECT_DIR": "/repo/project",
+    }, clear=True):
+        cfg = CompanionConfig.from_env()
+    assert cfg.session_id == "sess-env"
+    assert cfg.session_id_source == "env"
+    assert cfg.project_dir == "/repo/project"
+
+
+def test_current_session_file_fallback(tmp_path):
+    """When env session is absent, run/current-session seeds the config."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "current-session").write_text("sess-file\n")
+    with patch.dict(os.environ, {
+        "TOKENPAK_COMPANION_JOURNAL_DIR": str(tmp_path),
+    }, clear=True):
+        cfg = CompanionConfig.from_env()
+    assert cfg.session_id == "sess-file"
+    assert cfg.session_id_source == "file"
+
+
+def test_env_session_precedes_current_session_file(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "current-session").write_text("sess-file\n")
+    with patch.dict(os.environ, {
+        "TOKENPAK_COMPANION_JOURNAL_DIR": str(tmp_path),
+        "TOKENPAK_COMPANION_SESSION_ID": "sess-env",
+    }, clear=True):
+        cfg = CompanionConfig.from_env()
+    assert cfg.session_id == "sess-env"
+    assert cfg.session_id_source == "env"
+
+
 # ---------------------------------------------------------------------------
 # Profile overrides
 # ---------------------------------------------------------------------------
