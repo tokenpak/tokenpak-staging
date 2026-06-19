@@ -40,8 +40,8 @@ from tokenpak.tip.pak import (
 _PAK_PLATFORM = "tokenpak-vault"
 
 # Map vault block ``file_type`` strings to the canonical PakSourceType enum.
-# Per ``feedback_always_dynamic.md``: consult this table rather than hardcoding
-# the mapping at call sites. ``"data"`` falls back to FILE; future vault file
+# Consult this table rather than hardcoding the mapping at call sites
+# (discovery stays dynamic). ``"data"`` falls back to FILE; future vault file
 # types added here in lockstep with ``vault.indexer``.
 _FILE_TYPE_TO_SOURCE_TYPE = {
     "code": PakSourceType.CODE,

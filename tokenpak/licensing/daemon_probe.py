@@ -23,7 +23,7 @@ overwhelming case (Pro daemon is opt-in install).
 Per Std 25 §1.1 the OSS code never extends TIP capabilities in private
 or assumes daemon presence; this module is the canonical way to ask
 "is Pro available right now?" rather than scattering ``Path.exists()``
-checks across call sites (per ``feedback_always_dynamic.md``).
+checks across call sites (discovery stays dynamic).
 """
 
 from __future__ import annotations

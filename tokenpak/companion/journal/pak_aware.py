@@ -45,8 +45,8 @@ from tokenpak.tip.pak import (
 
 # Marker keys stored under entries.metadata_json. Constants rather than
 # magic strings — daemon-side code reads these too and we want a single
-# source of truth (per `feedback_always_dynamic.md`: enumerations get
-# discovered, but stable identifiers in a metadata schema are fine).
+# source of truth (enumerations get discovered dynamically, but stable
+# identifiers in a metadata schema are fine).
 KEY_IS_PROMOTION_CANDIDATE = "is_promotion_candidate"
 KEY_PROMOTED_PAK_ID = "promoted_pak_id"
 
@@ -235,8 +235,8 @@ def _authority_for_entry_type(entry_type: str) -> PakAuthority:
     """Return the canonical PakAuthority for a journal entry_type.
 
     Unknown entry types fall back to LLM_GENERATED (lowest authority).
-    Per ``feedback_always_dynamic.md`` consumers must consult this
-    function rather than hardcoding the mapping.
+    Consumers must consult this function rather than hardcoding the
+    mapping (discovery stays dynamic).
     """
     return _AUTHORITY_BY_ENTRY_TYPE.get(entry_type, PakAuthority.LLM_GENERATED)
 

@@ -78,8 +78,8 @@ class PakSubtype(str, Enum):
         Unknown values raise ``ValueError`` only after the alias table is
         consulted; new subtypes added in future minor revisions of TIP-1.x
         SHOULD be added to this enum and the registry catalog in lockstep
-        (per ``feedback_always_dynamic.md`` — no hardcoded enumeration in
-        consumer code paths).
+        (no hardcoded enumeration in consumer code paths — discovery
+        stays dynamic).
         """
         normalized = value.strip().lower()
         if normalized in _LEGACY_SUBTYPE_ALIASES:
@@ -329,8 +329,8 @@ class Pak:
 
 
 # ---------------------------------------------------------------------------
-# Default-retention discovery (per `feedback_always_dynamic.md` — no hardcoded
-# subtype enumeration in consumer paths; consumers ask the contract).
+# Default-retention discovery (no hardcoded subtype enumeration in
+# consumer paths; consumers ask the contract).
 # ---------------------------------------------------------------------------
 
 

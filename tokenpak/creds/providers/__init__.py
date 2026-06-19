@@ -4,7 +4,7 @@
 Adding a new provider is one function: define ``discover()`` that
 returns ``list[Credential]`` and add the module to :data:`BUILTIN_PROVIDERS`.
 No registry enumeration in calling code — the driver walks this list
-at runtime so discovery stays dynamic per ``feedback_always_dynamic.md``.
+at runtime so discovery stays dynamic.
 """
 
 from __future__ import annotations
