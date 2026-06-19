@@ -87,6 +87,16 @@ def test_hook_allow_with_session_id(tmp_path):
     assert result.returncode == 0
 
 
+def test_python_hook_writes_current_session(tmp_path):
+    """Python fallback refreshes run/current-session from the hook payload."""
+    result = _run_hook(
+        {"session_id": "py-current", "transcript_path": "", "prompt": "hello"},
+        tmp_path=tmp_path,
+    )
+    assert result.returncode == 0
+    assert (tmp_path / "run" / "current-session").read_text().strip() == "py-current"
+
+
 # ---------------------------------------------------------------------------
 # Fail-open paths (exit 0)
 # ---------------------------------------------------------------------------
@@ -337,6 +347,16 @@ def test_bash_hook_allow_empty_transcript(tmp_path):
     """Bash hook exits 0 when transcript_path is empty (no tokens to estimate)."""
     result = _run_bash_hook(dict(_SIX_FIELD_INPUT), tmp_path=tmp_path)
     assert result.returncode == 0
+
+
+def test_bash_hook_writes_current_session_before_zero_token_exit(tmp_path):
+    """Normal bash hook refreshes run/current-session before early allow."""
+    hook_input = dict(_SIX_FIELD_INPUT)
+    hook_input["session_id"] = "bash-current"
+    hook_input["transcript_path"] = ""
+    result = _run_bash_hook(hook_input, tmp_path=tmp_path)
+    assert result.returncode == 0
+    assert (tmp_path / "run" / "current-session").read_text().strip() == "bash-current"
 
 
 def test_bash_hook_allow_no_budget_set(tmp_path):

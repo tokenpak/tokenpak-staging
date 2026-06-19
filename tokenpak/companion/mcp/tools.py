@@ -60,6 +60,10 @@ class CompanionState:
     _budget_tracker: Any = None
     _journal_store: Any = None
 
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            self.session_id = self.config.session_id
+
     @property
     def budget_tracker(self) -> Any:
         if self._budget_tracker is None:
