@@ -7,7 +7,7 @@ import io
 
 import pytest
 
-from tokenpak.cli.commands import status as status_cmds
+import tokenpak
 from tokenpak.companion.codex import (
     agents_md,
     hooks,
@@ -49,7 +49,6 @@ def _patch_setup(monkeypatch, tmp_path):
         "install_skills",
         lambda: [tmp_path / "skill-a", tmp_path / "skill-b"],
     )
-    monkeypatch.setattr(status_cmds, "_get_version", lambda: "v1.8.0")
     monkeypatch.setattr(
         launcher.random,
         "choice",
@@ -73,7 +72,7 @@ def test_install_only_prints_loading_status_then_codex_banner(
     assert "tokenpak: registering Codex MCP server..." in err
     assert "tokenpak: installing Codex hooks..." in err
     assert "Codex Companion" in err
-    assert "TokenPak v1.8.0" in err
+    assert f"TokenPak v{tokenpak.__version__}" in err
     assert "Ready • Mode: Balanced • Budget: Unlimited" in err
     assert "Proxy active" not in err
     assert "Cache is king. Tokens are pawns." in err
