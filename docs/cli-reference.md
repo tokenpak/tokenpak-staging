@@ -1176,6 +1176,10 @@ Show every feature TokenPak knows about and whether the current license entitles
   - `FEATURE` — Feature key (e.g. T9_replay_system)
   - `--json` — Emit JSON
 
+### `tokenpak guard`
+
+Alias for `tokenpak budget`.
+
 ### `tokenpak help`
 
 Show tier-aware help. Pass a command name for details, or --minimal for compact list.
@@ -1286,6 +1290,10 @@ Example:
 - `--show-diff` — Show before/after token counts
 - `--json` — Machine-readable JSON output
 
+### `tokenpak pack`
+
+Alias for `tokenpak compress`.
+
 ### `tokenpak pakplan`
 
 Read-only consumer surface over the PAKPlan recall foundation. Scoring + capture pipeline are Pro.
@@ -1337,6 +1345,10 @@ Example:
 - `--threshold` — Quality score below which blocks are pruned (default: 0.4) (default: 0.4)
 - `--json` — Output raw JSON
 
+### `tokenpak receipt`
+
+Alias for `tokenpak dispatch receipt`.
+
 ### `tokenpak report`
 
 Generate and display daily savings report.
@@ -1345,6 +1357,10 @@ Generate and display daily savings report.
 
 - `--markdown` — Output markdown format (for messaging)
 - `--json` — Output JSON format
+
+### `tokenpak reuse`
+
+Alias for `tokenpak recipe`.
 
 ### `tokenpak savings`
 
@@ -1421,6 +1437,10 @@ Example:
 **Subcommands:**
 
 - `repair`
+
+### `tokenpak verify`
+
+Alias for `tokenpak prove`.
 
 ### `tokenpak watch`
 

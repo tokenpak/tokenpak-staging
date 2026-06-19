@@ -226,10 +226,30 @@
       "tier": "pro",
       "category": "Configuration",
       "description": "Manage compression recipes",
-      "aliases": [],
+      "aliases": ["reuse"],
       "usage": "/tokenpak recipe [list|apply|create] <name>",
       "detail": "Named compression presets for different use cases (code, docs, chat). Apply recipes to fine-tune compression behavior.",
       "related": ["route", "template", "compression"]
+    },
+    {
+      "command": "compress",
+      "tier": "oss",
+      "category": "Optimization",
+      "description": "Compress text, JSON, or code content",
+      "aliases": ["pack"],
+      "usage": "/tokenpak compress [--file FILE] [--json]",
+      "detail": "Runs TokenPak compression on direct input so you can inspect compressed output and token savings.",
+      "related": ["savings", "recipe", "preview"]
+    },
+    {
+      "command": "pack",
+      "tier": "oss",
+      "category": "Optimization",
+      "description": "Alias for compressing direct content",
+      "aliases": [],
+      "usage": "/tokenpak pack [--file FILE] [--json]",
+      "detail": "Thin alias for `tokenpak compress`.",
+      "related": ["compress", "savings"]
     },
     {
       "command": "template",
@@ -242,14 +262,34 @@
       "related": ["recipe", "config"]
     },
     {
+      "command": "reuse",
+      "tier": "pro",
+      "category": "Configuration",
+      "description": "Alias for compression recipe reuse",
+      "aliases": [],
+      "usage": "/tokenpak reuse [create|validate|test|benchmark] ...",
+      "detail": "Thin alias for `tokenpak recipe`.",
+      "related": ["recipe"]
+    },
+    {
       "command": "budget",
       "tier": "pro",
       "category": "Configuration",
       "description": "Set API budget limits",
-      "aliases": [],
+      "aliases": ["guard"],
       "usage": "/tokenpak budget [set|status|reset] [--limit AMOUNT]",
       "detail": "Define daily/monthly spend caps. Requests are blocked or degraded when limits are reached.",
       "related": ["cost", "savings", "metrics"]
+    },
+    {
+      "command": "guard",
+      "tier": "pro",
+      "category": "Configuration",
+      "description": "Alias for budget guardrails",
+      "aliases": [],
+      "usage": "/tokenpak guard [set|status|history] ...",
+      "detail": "Thin alias for `tokenpak budget`.",
+      "related": ["budget", "cost"]
     },
     {
       "command": "optimize",
@@ -546,10 +586,40 @@
       "tier": "oss",
       "category": "Visibility",
       "description": "A/B value proof: direct API vs TokenPak",
-      "aliases": [],
+      "aliases": ["verify"],
       "usage": "/tokenpak prove [create|run|show|list|providers]",
       "detail": "Run A/B value proofs comparing direct API calls against TokenPak to quantify savings.",
       "related": ["savings", "cost"]
+    },
+    {
+      "command": "dispatch",
+      "tier": "oss",
+      "category": "Automation",
+      "description": "Workflow-control commands for packaged work",
+      "aliases": ["receipt"],
+      "usage": "/tokenpak dispatch [run|decide|receipt] ...",
+      "detail": "Run, decide, and inspect delivery receipts for workflow-control packages.",
+      "related": ["run", "receipt"]
+    },
+    {
+      "command": "receipt",
+      "tier": "oss",
+      "category": "Automation",
+      "description": "Alias for dispatch delivery receipts",
+      "aliases": [],
+      "usage": "/tokenpak receipt <job_id> [--json]",
+      "detail": "Thin alias for `tokenpak dispatch receipt`.",
+      "related": ["dispatch"]
+    },
+    {
+      "command": "verify",
+      "tier": "oss",
+      "category": "Visibility",
+      "description": "Alias for A/B value proof",
+      "aliases": [],
+      "usage": "/tokenpak verify [create|run|show|list|providers]",
+      "detail": "Thin alias for `tokenpak prove`.",
+      "related": ["prove"]
     },
     {
       "command": "init",

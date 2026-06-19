@@ -335,8 +335,22 @@ _EXTRA_KNOWN_COMMANDS = frozenset(
         "home",
         # Dispatch v0.1-alpha (workflow-control layer)
         "dispatch",
+        # Mission-verb aliases: thin routes to existing commands.
+        "pack",
+        "reuse",
+        "guard",
+        "receipt",
+        "verify",
     }
 )
+
+_MISSION_VERB_ALIASES = {
+    "pack": ("compress",),
+    "reuse": ("recipe",),
+    "guard": ("budget",),
+    "receipt": ("dispatch", "receipt"),
+    "verify": ("prove",),
+}
 
 
 def _core_command_names() -> set:
@@ -434,6 +448,38 @@ def registered_command_names(parser=None) -> set:
         if isinstance(action, argparse._SubParsersAction):
             names.update(action.choices.keys())
     return names
+
+
+def _rewrite_mission_verb_alias(argv: list[str]) -> list[str]:
+    """Rewrite top-level mission aliases to their canonical parser path."""
+    if len(argv) < 2:
+        return argv
+    command_index = 1
+    while command_index < len(argv):
+        token = argv[command_index]
+        if token == "--db":
+            command_index += 2
+            continue
+        if token.startswith("--db="):
+            command_index += 1
+            continue
+        if token.startswith("-"):
+            return argv
+        break
+    if command_index >= len(argv):
+        return argv
+    target = _MISSION_VERB_ALIASES.get(argv[command_index])
+    if not target:
+        return argv
+    return [*argv[:command_index], *target, *argv[command_index + 1:]]
+
+
+def _mission_alias_dispatch(args):
+    """Fallback for direct parser use; normal CLI entry rewrites before parse."""
+    target = " ".join(_MISSION_VERB_ALIASES[args.command])
+    print(f"tokenpak {args.command} is an alias for `tokenpak {target}`.")
+    print(f"Run `tokenpak {target} --help` for details.")
+    return 0
 
 
 # ── Plugin command discovery (tokenpak.commands entry-point group) ────────────
@@ -3252,6 +3298,15 @@ def build_parser():
     p_setup = sub.add_parser("setup", help="Interactive first-time configuration wizard")
     p_setup.set_defaults(func=cmd_setup)
 
+    for alias, target in _MISSION_VERB_ALIASES.items():
+        target_text = " ".join(target)
+        p_alias = sub.add_parser(
+            alias,
+            help=f"Alias for `tokenpak {target_text}`",
+            description=f"Alias for `tokenpak {target_text}`.",
+        )
+        p_alias.set_defaults(func=_mission_alias_dispatch)
+
     p_start = sub.add_parser(
         "start",
         help="Start the proxy (localhost:8766)",
@@ -5574,6 +5629,7 @@ def main():
 
     remaining, global_opts = _consume_global_prefix(sys.argv[1:])
     sys.argv = [sys.argv[0], *remaining]
+    sys.argv = _rewrite_mission_verb_alias(sys.argv)
     forced_oss_global = bool(global_opts.get("oss"))
 
     parser = build_parser()
