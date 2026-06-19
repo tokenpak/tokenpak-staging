@@ -1,4 +1,4 @@
-
+# ruff: noqa: I001
 import pytest
 
 # tokenpak.extraction is a namespace package in the slim OSS install — the
