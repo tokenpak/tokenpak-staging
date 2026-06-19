@@ -8,6 +8,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Prompt Packing wrapper (Available Now).** New `PromptPacker` / `PromptPackingService` / `PromptPackingResult` surface in `tokenpak.compression`. Orchestrates the existing compression pipeline and context-pack compiler, producing a TIP-conformant `Pak` with full compression metadata. Import path: `from tokenpak.compression import PromptPacker, PromptPackingService, PromptPackingResult`.
 - Permission tier system for `tokenpak integrate` (strict/standard/auto/fleet)
   with a new `tokenpak permissions` verb, doctor rows, and launcher fleet
   mode — see `tokenpak permissions --help`.

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-18T06:22:50Z",
+  "generated_at": "2026-06-19T19:11:23Z",
   "package_version": "1.7.1",
   "symbols": [
     {
@@ -3113,6 +3113,10 @@
     },
     {
       "module": "tokenpak.compression",
+      "name": "CompressionMetadata"
+    },
+    {
+      "module": "tokenpak.compression",
       "name": "CompressionPipeline"
     },
     {
@@ -3181,7 +3185,23 @@
     },
     {
       "module": "tokenpak.compression",
+      "name": "PackingPolicy"
+    },
+    {
+      "module": "tokenpak.compression",
       "name": "PrivacyLevel"
+    },
+    {
+      "module": "tokenpak.compression",
+      "name": "PromptPacker"
+    },
+    {
+      "module": "tokenpak.compression",
+      "name": "PromptPackingResult"
+    },
+    {
+      "module": "tokenpak.compression",
+      "name": "PromptPackingService"
     },
     {
       "module": "tokenpak.compression",
@@ -4150,6 +4170,26 @@
     {
       "module": "tokenpak.compression.processors.text",
       "name": "TextProcessor"
+    },
+    {
+      "module": "tokenpak.compression.prompt_packing",
+      "name": "CompressionMetadata"
+    },
+    {
+      "module": "tokenpak.compression.prompt_packing",
+      "name": "PackingPolicy"
+    },
+    {
+      "module": "tokenpak.compression.prompt_packing",
+      "name": "PromptPacker"
+    },
+    {
+      "module": "tokenpak.compression.prompt_packing",
+      "name": "PromptPackingResult"
+    },
+    {
+      "module": "tokenpak.compression.prompt_packing",
+      "name": "PromptPackingService"
     },
     {
       "module": "tokenpak.compression.query_rewriter",

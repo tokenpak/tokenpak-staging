@@ -91,3 +91,18 @@ __all__ += [
 from .doc_compressor import DocCompressor, compress_document
 
 __all__ += ["DocCompressor", "compress_document"]
+from .prompt_packing import (
+    CompressionMetadata,
+    PackingPolicy,
+    PromptPacker,
+    PromptPackingResult,
+    PromptPackingService,
+)
+
+__all__ += [
+    "CompressionMetadata",
+    "PackingPolicy",
+    "PromptPacker",
+    "PromptPackingResult",
+    "PromptPackingService",
+]
