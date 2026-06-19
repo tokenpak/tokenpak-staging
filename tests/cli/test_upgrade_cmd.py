@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 
-from tokenpak._cli_core import _COMMAND_GROUPS, _core_command_names, build_parser
 from tokenpak import licensing as _lic
+from tokenpak._cli_core import _COMMAND_GROUPS, _core_command_names, build_parser
 from tokenpak.cli.commands import help as help_cmd
 from tokenpak.cli.commands import license_cmd, status, upgrade
 
