@@ -205,6 +205,7 @@ _COMMAND_GROUPS = {
         ("demo", "See compression in action"),
         ("cost", "View API spend"),
         ("status", "Check proxy health"),
+        ("upgrade", "Open the TokenPak Pro upgrade page"),
         ("logs", "Show recent logs"),
     ],
     "Indexing": [
@@ -3278,6 +3279,7 @@ def build_parser():
     _build_agent_parser(sub)
     _build_replay_parser(sub)
     _build_status_parser(sub)
+    _build_upgrade_parser(sub)
     _build_usage_parser(sub)
     _build_savings_parser(sub)
     _build_recommendations_parser(sub)
@@ -3916,6 +3918,13 @@ def _build_savings_parser(sub):
 def _build_recommendations_parser(sub):
     """Build `tokenpak recommendations` parser via the modular CLI command."""
     from tokenpak.cli.commands.recommendations import build_parser
+
+    build_parser(sub)
+
+
+def _build_upgrade_parser(sub):
+    """Build `tokenpak upgrade` parser via the modular CLI command."""
+    from tokenpak.cli.commands.upgrade import build_parser
 
     build_parser(sub)
 
