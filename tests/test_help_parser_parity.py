@@ -56,6 +56,15 @@ def _registry_commands():
     return [c["command"] for c in data.get("commands", [])]
 
 
+def test_mission_verb_aliases_are_advertised_and_invokable():
+    """Mission verbs are thin aliases, but still real user-facing CLI verbs."""
+    invokable = registered_command_names(build_parser())
+    advertised = set(_registry_commands())
+    aliases = {"pack", "reuse", "guard", "receipt", "verify"}
+    assert aliases <= advertised
+    assert aliases <= invokable
+
+
 def test_no_phantom_commands():
     """Every advertised command must be invokable (no ``Unknown command``)."""
     invokable = registered_command_names(build_parser())
