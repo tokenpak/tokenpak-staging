@@ -23,7 +23,7 @@ drift signal. Two compounding causes, both fixed here:
    external-tool/gstack sources, etc.). Net: **+364 symbols, −3** (4310 → 4671 symbols
    excluding the generated_at timestamp).
 
-3. **§3 internal-but-authored `__all__` curation (Sue ruling 2026-06-17, §2).** The
+3. **§3 internal-but-authored `__all__` curation (§2).** The
    `__module__`-based third-party sweep above cannot distinguish *TokenPak-authored-but-
    internal* symbols from *intended-public* ones, so a handful of internal helpers and
    cross-module re-exports were captured. They are scoped out **before** the contract is
@@ -43,7 +43,7 @@ correction via the re-export denylist.
 removes-public-symbol: tokenpak.vault.retrieval.vector_local.faiss — third-party re-export
 (faiss library), never TokenPak-owned API; snapshot leak correction via the re-export denylist.
 
-# §3 internal-but-authored `__all__` curation (Sue ruling 2026-06-17 §2), 12 scope-outs:
+# §3 internal-but-authored `__all__` curation (§2), 12 scope-outs:
 removes-public-symbol: tokenpak.cli.commands.alerts.error — internal-but-authored; re-import
 of `tokenpak.cli._messages.error` (a private CLI message-helper module already excluded from
 the snapshot), never an intended public entrypoint.
