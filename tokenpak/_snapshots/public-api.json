@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-18T00:45:53Z",
-  "package_version": "1.9.2",
+  "generated_at": "2026-07-01T19:31:15Z",
+  "package_version": "1.10.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -8822,6 +8822,22 @@
     {
       "module": "tokenpak.proxy.embedding_router",
       "name": "PROVIDER_VOYAGE"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "STATEFUL_API_UNSUPPORTED"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "STATEFUL_API_UNSUPPORTED_STATUS"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "STATEFUL_SURFACES_REGISTRY"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "build_stateful_api_unsupported_error"
     },
     {
       "module": "tokenpak.proxy.error_response",
