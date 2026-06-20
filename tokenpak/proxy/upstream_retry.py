@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,8 +215,79 @@ def delete_record_file(path: Path) -> bool:
         return False
 
 
+# ── Retry policy ───────────────────────────────────────────────────────────
+
+_DEFAULT_MAX_RETRIES = int(os.environ.get("TOKENPAK_UPSTREAM_MAX_RETRIES", "3"))
+_DEFAULT_RETRY_DELAY = float(os.environ.get("TOKENPAK_UPSTREAM_RETRY_DELAY", "1.0"))
+
+# 4xx status codes that are deterministic failures (no retry)
+_DETERMINISTIC_4XX = frozenset({400, 401, 403, 404, 422})
+
+
+@dataclass
+class UpstreamRetryPolicy:
+    """Controls whether and how upstream requests are retried.
+
+    Deterministic mode (TOKENPAK_DETERMINISTIC_MODE=1) disables all retries so
+    test and eval runs produce stable, reproducible traces.
+
+    Retries are never issued once any upstream output frame has been delivered
+    to the caller (stream_started=True).
+    """
+
+    max_retries: int = _DEFAULT_MAX_RETRIES
+    retry_delay_seconds: float = _DEFAULT_RETRY_DELAY
+    deterministic: bool = False
+
+    @classmethod
+    def from_env(cls) -> "UpstreamRetryPolicy":
+        deterministic = os.environ.get("TOKENPAK_DETERMINISTIC_MODE", "0").strip() == "1"
+        return cls(
+            max_retries=_DEFAULT_MAX_RETRIES,
+            retry_delay_seconds=_DEFAULT_RETRY_DELAY,
+            deterministic=deterministic,
+        )
+
+    def should_retry(self, *, status: int, attempt: int, stream_started: bool) -> bool:
+        """Return True if the request should be retried.
+
+        Args:
+            status: HTTP status code from the upstream response.
+            attempt: 0-based retry attempt number (0 = first try).
+            stream_started: True if any output frame has already been sent.
+        """
+        if stream_started:
+            return False
+        if self.deterministic:
+            return False
+        if attempt >= self.max_retries:
+            return False
+        if status in _DETERMINISTIC_4XX:
+            return False
+        # 429 and 5xx are retryable
+        return status == 429 or status >= 500
+
+    def retry_after_seconds(self, headers: Dict[str, str]) -> float:
+        """Return the delay in seconds before the next retry attempt.
+
+        Uses the ``Retry-After`` header value (integer seconds) if present and
+        valid; otherwise falls back to ``self.retry_delay_seconds``.
+        """
+        val = headers.get("Retry-After") or headers.get("retry-after")
+        if val is not None:
+            try:
+                return max(0.0, float(val))
+            except (ValueError, TypeError):
+                pass
+        return self.retry_delay_seconds
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
 __all__ = [
     "UpstreamRetryRecord",
+    "UpstreamRetryPolicy",
     "STATUS_TERMINAL",
     "STATUS_RETRYABLE",
     "STATUS_DETERMINISTIC",
