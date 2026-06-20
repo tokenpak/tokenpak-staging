@@ -2224,6 +2224,9 @@ def cmd_codex(args):
     if forwarded and forwarded[0] == "uninstall":
         from .companion.codex.uninstall import main as uninstall_main
         sys.exit(uninstall_main(forwarded[1:]))
+    if forwarded and forwarded[0] == "continue":
+        from .cli.commands.retry_cmd import cmd_codex_continue_last_failed
+        sys.exit(cmd_codex_continue_last_failed(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     from .companion.codex import launch
@@ -2394,6 +2397,69 @@ def _build_claude_parser(sub):
     p.set_defaults(func=cmd_claude)
 
 
+def cmd_retry(args):
+    """Route ``tokenpak retry <action>`` subcommands."""
+    action = getattr(args, "retry_action", None)
+    if action == "drain":
+        from .cli.commands.retry_cmd import cmd_retry_drain
+        sys.exit(cmd_retry_drain(args))
+    # No action given — print help
+    if hasattr(args, "_parser"):
+        args._parser.print_help()
+    return 1
+
+
+def _build_retry_parser(sub):
+    p = sub.add_parser(
+        "retry",
+        help="Manage upstream retry recovery records",
+        description=(
+            "Tools for inspecting and draining upstream retry recovery records.\n\n"
+            "Records are written to <tokenpak-home>/recovery/upstream/ when a\n"
+            "request fails terminally after all retry escalation is exhausted.\n"
+            "Credential headers are always redacted in stored records.\n\n"
+            "Examples:\n"
+            "  tokenpak retry drain\n"
+            "  tokenpak retry drain --visible-turn     # also drain visible-continuation records\n"
+            "  tokenpak retry drain --dry-run          # preview without deleting\n"
+            "  tokenpak retry drain --json             # machine-readable output\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    rsub = p.add_subparsers(dest="retry_action", required=True)
+
+    p_drain = rsub.add_parser(
+        "drain",
+        help="List and clear drainable recovery records",
+        description=(
+            "List and remove drainable pending recovery records.\n\n"
+            "By default, records that require a visible continuation turn are\n"
+            "skipped (they must be handled via ``tokenpak codex continue --last-failed``).\n"
+            "Deterministic failures are always skipped regardless of flags.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_drain.add_argument(
+        "--visible-turn",
+        action="store_true",
+        help="Also drain records that require a visible continuation turn",
+    )
+    p_drain.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List records that would be drained without deleting them",
+    )
+    p_drain.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit results as JSON",
+    )
+    p_drain.set_defaults(func=cmd_retry)
+
+    p.set_defaults(func=cmd_retry)
+    return p
+
+
 def _build_codex_parser(sub):
     p = sub.add_parser(
         "codex",
@@ -2404,9 +2470,10 @@ def _build_codex_parser(sub):
             "then launches Codex with any user-provided arguments.\n\n"
             "Examples:\n"
             "  tokenpak codex\n"
-            "  tokenpak codex --install-only    # set up without launching Codex\n"
-            "  tokenpak codex doctor            # verify installation\n"
-            "  tokenpak codex uninstall         # reverse installation\n"
+            "  tokenpak codex --install-only          # set up without launching Codex\n"
+            "  tokenpak codex doctor                  # verify installation\n"
+            "  tokenpak codex uninstall               # reverse installation\n"
+            "  tokenpak codex continue --last-failed  # build visible turn from last failure\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
@@ -3173,6 +3240,7 @@ def build_parser():
     _build_prune_parser(sub)
     _build_retrieval_parser(sub)
     _build_claude_parser(sub)
+    _build_retry_parser(sub)
     _build_codex_parser(sub)
     _build_creds_parser(sub)
     _build_pak_parser(sub)
