@@ -6,6 +6,9 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Docs
+- **prove:** value proof (`tokenpak prove`) now has a guide page, mkdocs nav entry, and sample output. Fixes docs drift: `tokenpak savings --lifetime` (nonexistent flag) replaced with `tokenpak savings` in four docs files.
+
 ## [1.9.1] — 2026-06-16
 
 Patch release: privacy/security hardening, honest telemetry, license alignment,
