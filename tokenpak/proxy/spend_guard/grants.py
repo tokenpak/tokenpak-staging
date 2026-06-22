@@ -13,7 +13,7 @@ removes the interactive Yes/No prompt, it is NOT a spend exemption. The
 hard-block band and rolling caps remain non-bypassable (W5).
 
 DB layout follows the ``pending.py`` convention: one file at
-``~/.tokenpak/spend_guard.db`` (configurable), lazy ``CREATE TABLE IF NOT
+``~/.tpk/spend_guard.db`` (configurable), lazy ``CREATE TABLE IF NOT
 EXISTS``, per-call ``sqlite3.connect`` (no pool — the proxy is per-request
 threaded). Grants are ephemeral; they are NOT meant to survive a proxy
 restart (short TTL — losing them just re-prompts once).
@@ -25,12 +25,22 @@ to the normal block band (never auto-allow on a read error).
 
 from __future__ import annotations
 
-import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from .._local_data import (
+    resolve_spend_guard_db_path as _resolve_spend_guard_db_path,
+)
+from .._local_data import (
+    secure_sqlite_connect as _secure_sqlite_connect,
+)
+from .._local_data import (
+    sqlite_schema_cache_key as _sqlite_schema_cache_key,
+)
 
 
 @dataclass
@@ -59,46 +69,58 @@ REDEEMED = "redeemed"
 NO_GRANT = "no_grant"
 EXPIRED = "expired"
 EXHAUSTED = "exhausted"
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: set[tuple[str, int, int]] = set()
 
 
-def _db_path(audit_db_path: str) -> Path:
-    p = Path(os.path.expanduser(audit_db_path))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+def _db_path(audit_db_path: Optional[str]) -> Path:
+    return _resolve_spend_guard_db_path(audit_db_path)
 
 
 def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = _secure_sqlite_connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS session_grants (
-            session_id TEXT NOT NULL,
-            fleet_id TEXT NOT NULL DEFAULT '',
-            agent_id TEXT NOT NULL DEFAULT '',
-            granted_at REAL NOT NULL,
-            expires_at REAL NOT NULL,
-            granted_by_pending_id TEXT NOT NULL DEFAULT '',
-            grant_kind TEXT NOT NULL DEFAULT 'session',
-            max_cost_usd_remaining REAL,
-            remaining_count INTEGER,
-            PRIMARY KEY (session_id, fleet_id, agent_id)
+    schema_key = _sqlite_schema_cache_key(conn)
+    if schema_key in _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if schema_key in _SCHEMA_READY:
+            return
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_grants (
+                session_id TEXT NOT NULL,
+                fleet_id TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT '',
+                granted_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                granted_by_pending_id TEXT NOT NULL DEFAULT '',
+                grant_kind TEXT NOT NULL DEFAULT 'session',
+                max_cost_usd_remaining REAL,
+                remaining_count INTEGER,
+                PRIMARY KEY (session_id, fleet_id, agent_id)
+            )
+            """
         )
-        """
-    )
-    # Migration: add ``remaining_count`` to a table created before count grants
-    # existed (the CREATE above is a no-op for pre-existing tables).
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(session_grants)")}
-    if "remaining_count" not in cols:
-        conn.execute("ALTER TABLE session_grants ADD COLUMN remaining_count INTEGER")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_grants_expiry ON session_grants(expires_at)"
-    )
-    conn.commit()
+        # Migration: add ``remaining_count`` to a table created before count grants
+        # existed (the CREATE above is a no-op for pre-existing tables).
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(session_grants)")}
+        if "remaining_count" not in cols:
+            conn.execute("ALTER TABLE session_grants ADD COLUMN remaining_count INTEGER")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_grants_expiry ON session_grants(expires_at)"
+        )
+        conn.commit()
+        if schema_key is not None:
+            _SCHEMA_READY.add(schema_key)
 
 
 def _row_to_grant(row: sqlite3.Row) -> SessionGrant:
@@ -127,7 +149,7 @@ class GrantStore:
     connection to stay thread-safe under the per-request proxy server.
     """
 
-    def __init__(self, audit_db_path: str = "~/.tokenpak/spend_guard.db"):
+    def __init__(self, audit_db_path: Optional[str] = None):
         self.path = _db_path(audit_db_path)
 
     # -- write -------------------------------------------------------------

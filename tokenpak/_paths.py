@@ -67,7 +67,7 @@ _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
     {
         "paks",
         # cards/ — user-global installed/compiled card manifests per the
-        # Cards authoring layer (Std 54 §K: ~/.tpk/cards/installed/,
+        # Cards authoring layer: ~/.tpk/cards/installed/,
         # ~/.tpk/cards/compiled/). Path-layout reconciliation pending.
         "cards",
     }
@@ -252,9 +252,19 @@ def _monitor_db_candidates() -> list[Path]:
         env_compat = os.environ.get(_MONITOR_DB_ENV_COMPAT, "").strip()
         if env_compat:
             candidates.append(Path(env_compat).expanduser())
-    candidates.append(Path.home() / CANONICAL_DIRNAME / "monitor.db")
-    candidates.append(Path.home() / LEGACY_DIRNAME / "monitor.db")
-    candidates.append(Path.home() / "tokenpak" / "monitor.db")
+    if os.environ.get(ENV_VAR, "").strip():
+        candidate = home() / "monitor.db"
+        if candidate not in candidates:
+            candidates.append(candidate)
+        return candidates
+    for candidate in (
+        home() / "monitor.db",
+        canonical_home() / "monitor.db",
+        legacy_home() / "monitor.db",
+        Path.home() / "tokenpak" / "monitor.db",
+    ):
+        if candidate not in candidates:
+            candidates.append(candidate)
     return candidates
 
 
@@ -272,8 +282,12 @@ def monitor_db(mode: str = "read") -> Optional[Path]:
         if _is_valid_monitor_db(candidate):
             return candidate
     if mode == "write":
-        target = Path.home() / CANONICAL_DIRNAME / "monitor.db"
+        target = home() / "monitor.db"
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            target.parent.chmod(0o700)
+        except OSError:
+            pass
         return target
     return None
 
