@@ -5125,6 +5125,43 @@ def _bare_help(name, description, subs, exit_nonzero=False):
     return _help
 
 
+def _extract_claude_budget(claude_tail):
+    """Split a ``claude`` passthrough tail into ``(budget, passthrough_args)``.
+
+    ``--budget <value>`` is the only tokenpak-owned flag; everything else passes
+    through verbatim to the claude binary. A missing or non-numeric value is a
+    clean usage error (exit 2) rather than an uncaught ``ValueError`` traceback,
+    and a trailing ``--budget`` with no value is no longer silently forwarded to
+    the claude binary.
+    """
+    budget = None
+    passthrough = []
+    i = 0
+    n = len(claude_tail)
+    while i < n:
+        if claude_tail[i] == "--budget":
+            if i + 1 >= n:
+                print(
+                    "tokenpak: --budget requires a numeric value (e.g. --budget 5.00)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            raw = claude_tail[i + 1]
+            try:
+                budget = float(raw)
+            except ValueError:
+                print(
+                    f"tokenpak: --budget expects a number, got {raw!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            i += 2
+        else:
+            passthrough.append(claude_tail[i])
+            i += 1
+    return budget, passthrough
+
+
 def main():
     global _NO_TUI_FLAG
     # Strip --no-tui from argv before any other parsing so per-subcommand
@@ -5242,17 +5279,9 @@ def main():
     if raw_cmd == "claude":
         claude_idx = sys.argv.index("claude")
         claude_tail = sys.argv[claude_idx + 1:]
-        # Extract --budget (the only tokenpak-owned flag) if present
-        budget = None
-        passthrough = []
-        i = 0
-        while i < len(claude_tail):
-            if claude_tail[i] == "--budget" and i + 1 < len(claude_tail):
-                budget = float(claude_tail[i + 1])
-                i += 2
-            else:
-                passthrough.append(claude_tail[i])
-                i += 1
+        # Extract --budget (the only tokenpak-owned flag) if present; everything
+        # else passes through verbatim to the claude binary.
+        budget, passthrough = _extract_claude_budget(claude_tail)
         args = argparse.Namespace(
             command="claude", func=cmd_claude, budget=budget, args=passthrough, db=".tokenpak/registry.db"
         )
