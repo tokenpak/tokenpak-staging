@@ -140,6 +140,14 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _normalize_authorization_for_strip(value: str) -> str:
+    """Normalize an Authorization value for proxy-token strip comparison."""
+    parts = value.strip().split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return f"bearer {parts[1].strip()}"
+    return value.strip()
+
+
 # ---------------------------------------------------------------------------
 # Core check
 # ---------------------------------------------------------------------------
@@ -267,9 +275,16 @@ def strip_proxy_auth_for_upstream(
     """
     if not client_authorization:
         return fwd_headers
+    client_auth_normalized = _normalize_authorization_for_strip(client_authorization)
     # Walk all case variants — fwd_headers may have been built with lower-cased
     # keys (Anthropic allowlist path) or original casing (legacy path).
-    for variant in ("authorization", "Authorization", "AUTHORIZATION"):
-        if variant in fwd_headers and fwd_headers[variant] == client_authorization:
-            del fwd_headers[variant]
+    for key in list(fwd_headers.keys()):
+        if not isinstance(key, str) or key.lower() != "authorization":
+            continue
+        value = fwd_headers[key]
+        if not isinstance(value, str):
+            continue
+        value_normalized = _normalize_authorization_for_strip(value)
+        if hmac.compare_digest(value_normalized, client_auth_normalized):
+            del fwd_headers[key]
     return fwd_headers

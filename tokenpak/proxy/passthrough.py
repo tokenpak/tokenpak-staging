@@ -42,7 +42,7 @@ from tokenpak.proxy.headers import CLAUDE_CODE_HEADER_ALLOWLIST  # noqa: F401
 # ---------------------------------------------------------------------------
 # Per-route HTTP header forwarding allowlists
 # ---------------------------------------------------------------------------
-# These mirror the WS-path allowlist tuple onto the HTTP path as a per-route
+# These mirror the WebSocket-path allowlist tuple onto the HTTP path as a per-route
 # allowlist. LEGACY_HEADER_ALLOWLIST must never gain new entries — legacy
 # traffic must produce exactly the same forwarded headers as today (bit-for-bit).
 # CLAUDE_CODE_HEADER_ALLOWLIST lives in tokenpak.proxy.headers (canonical
@@ -147,7 +147,6 @@ _DEFAULT_CONFIG = PassthroughConfig()
 
 # Patterns for auth header validation (format check only — values not inspected)
 _BEARER_RE = re.compile(r"^Bearer\s+\S+$", re.IGNORECASE)
-_AUTH_HEADERS = frozenset({"authorization", "x-api-key"})
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +291,8 @@ class CredentialPassthrough:
             key_lower = key.lower()
             if key_lower in cfg.safe_to_log:
                 masked[key] = value
-            elif key_lower in _AUTH_HEADERS or "key" in key_lower or "token" in key_lower:
-                masked[key] = "[REDACTED]"
             else:
-                masked[key] = value if len(value) <= 20 else f"{value[:4]}...[{len(value)} chars]"
+                masked[key] = "[REDACTED]"
 
         return masked
 
