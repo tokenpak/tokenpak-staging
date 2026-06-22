@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-02T19:15:59Z",
+  "generated_at": "2026-06-20T15:07:20Z",
   "guarded_globs": [
     "release*.yml",
     "release-rehearsal.yml"
@@ -323,6 +323,30 @@
       "job": "build",
       "id": "",
       "name": "Verify package"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": ""
+    },
+    {
+      "workflow": "release.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Build sdist + wheel for scanning"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Scan shipped artifact for public-leak patterns"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Set up Python 3.12"
     },
     {
       "workflow": "release.yml",
