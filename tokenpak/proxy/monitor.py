@@ -11,6 +11,13 @@ import threading
 from datetime import datetime
 from queue import Empty, Queue
 
+from tokenpak.proxy._local_data import (
+    secure_sqlite_connect as _secure_sqlite_connect,
+)
+from tokenpak.proxy._local_data import (
+    secure_sqlite_sidecars as _secure_sqlite_sidecars,
+)
+
 # ---------------------------------------------------------------------------
 # Migration system (optional — graceful fallback)
 # ---------------------------------------------------------------------------
@@ -107,13 +114,14 @@ def _get_db_connection(db_path: str) -> sqlite3.Connection:
     """Get or create persistent SQLite connection with WAL mode enabled."""
     global _DB_CONNECTION
     if _DB_CONNECTION is None:
-        _DB_CONNECTION = sqlite3.connect(
+        _DB_CONNECTION = _secure_sqlite_connect(
             db_path,
             check_same_thread=False,  # Required for ThreadedHTTPServer
         )
         _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
         _DB_CONNECTION.execute("PRAGMA synchronous=NORMAL")
         _DB_CONNECTION.execute("PRAGMA busy_timeout=5000")
+        _secure_sqlite_sidecars(db_path)
     return _DB_CONNECTION
 
 
@@ -134,7 +142,10 @@ class Monitor:
             pass
 
     def _init_db(self):
-        conn = sqlite3.connect(str(self.db_path))
+        conn = _secure_sqlite_connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,6 +351,7 @@ class Monitor:
         except NameError:
             pass
 
+        _secure_sqlite_sidecars(self.db_path)
         conn.close()
         global _DB_CONNECTION
         _DB_CONNECTION = None  # reset so next call reopens fresh
@@ -439,7 +451,7 @@ class Monitor:
             _DB_WRITE_QUEUE.put_nowait((self.db_path, insert_params))
             _queued = True
         except (NameError, Exception):
-            _conn = sqlite3.connect(str(self.db_path))
+            _conn = _secure_sqlite_connect(self.db_path)
             _conn.execute(
                 "INSERT INTO requests (timestamp, model, request_type, input_tokens, output_tokens, "
                 "estimated_cost, latency_ms, status_code, endpoint, compilation_mode, protected_tokens, "
@@ -527,7 +539,7 @@ class Monitor:
             threshold_pct = 80.0
         if daily_limit <= 0:
             return
-        conn = sqlite3.connect(str(self.db_path))
+        conn = _secure_sqlite_connect(self.db_path)
         try:
             spent = conn.execute(
                 'SELECT COALESCE(SUM(estimated_cost), 0) FROM requests WHERE date(timestamp) = date("now")'
@@ -563,7 +575,7 @@ class Monitor:
             threshold_pct = _threshold_pct if _threshold_pct is not None else BUDGET_ALERT_THRESHOLD_PCT
         except NameError:
             threshold_pct = 80.0
-        conn = sqlite3.connect(str(self.db_path))
+        conn = _secure_sqlite_connect(self.db_path)
         try:
             spent = conn.execute(
                 'SELECT COALESCE(SUM(estimated_cost), 0) FROM requests WHERE date(timestamp) = date("now")'
