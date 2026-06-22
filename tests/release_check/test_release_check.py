@@ -74,7 +74,7 @@ def test_leak_scan_clean():
 
 def test_leak_scan_flags_ticket_and_path():
     pats = rc.load_leak_patterns()
-    hits = rc.scan_leaks("docs/x.md", "Tracked in TSR-7; logs under /home/sue/run.", pats)
+    hits = rc.scan_leaks("docs/x.md", "Tracked in ABC-42; logs under /home/privateuser/run.", pats)
     assert hits  # both a ticket-ID and a private path
 
 

@@ -10,9 +10,10 @@ Exercises scripts/release_gate/check_release_leaks.py end-to-end via its CLI:
   * the ``--dist`` mode extracts an sdist, strips the version prefix, and still
     applies the path-scoped allowlist correctly.
 
-These fixtures intentionally contain the forbidden strings. They live under
-``tests/`` (excluded from the delta gate and never shipped in the wheel/sdist),
-so they cannot trip either gate themselves.
+These fixtures intentionally contain structural trigger strings. They live
+under ``tests/`` (explicit scanner fixtures, excluded from the public-safety
+gate and never shipped in the wheel/sdist), so they cannot trip either gate
+themselves.
 """
 
 from __future__ import annotations
@@ -63,23 +64,35 @@ def test_clean_tree_passes(tmp_path):
 def test_untouched_private_path_leak_fails(tmp_path):
     # An untouched file with a private home path — the exact class the delta
     # gate misses when no PR touches the file.
-    _write(tmp_path, "tokenpak/proxy/cache.py", 'CACHE_DIR = "/home/sue/.cache"\n')
+    _write(tmp_path, "tokenpak/proxy/cache.py", 'CACHE_DIR = "/home/privateuser/.cache"\n')
     res = _run_tree(tmp_path)
     assert res.returncode == 1, "private-path leak must fail the gate"
     assert "tokenpak/proxy/cache.py" in res.stdout
 
 
-def test_agent_name_leak_fails(tmp_path):
-    _write(tmp_path, "tokenpak/core/notes.py", "# last reviewed by Sue\nX = 1\n")
+def test_internal_fleet_phrase_leak_fails(tmp_path):
+    _write(tmp_path, "tokenpak/core/notes.py", "# agent fleet worker loop\nX = 1\n")
     res = _run_tree(tmp_path)
-    assert res.returncode == 1, "agent-name leak must fail the gate"
+    assert res.returncode == 1, "internal fleet phrase must fail the gate"
     assert "tokenpak/core/notes.py" in res.stdout
 
 
 def test_internal_task_id_leak_fails(tmp_path):
-    _write(tmp_path, "tokenpak/core/x.py", "# tracked in TSR-1234\nX = 1\n")
+    _write(tmp_path, "tokenpak/core/x.py", "# tracked in ABC-1234\nX = 1\n")
     res = _run_tree(tmp_path)
     assert res.returncode == 1, "internal task-ID leak must fail the gate"
+
+
+def test_utf8_boundary_text_file_is_not_skipped(tmp_path):
+    prefix = "a" * 4095 + "€"
+    _write(
+        tmp_path,
+        "tokenpak/proxy/boundary.py",
+        prefix + '\nCACHE_DIR = "/home/privateuser/.cache"\n',
+    )
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "valid UTF-8 text split at the read boundary must be scanned"
+    assert "tokenpak/proxy/boundary.py" in res.stdout
 
 
 def test_allowlisted_openclaw_path_passes(tmp_path):
@@ -110,12 +123,12 @@ def test_allowlisted_fleet_path_passes(tmp_path):
     assert res.returncode == 0, f"allowlisted fleet must pass:\n{res.stdout}"
 
 
-def test_bare_openclaw_outside_allowlist_fails(tmp_path):
-    # Same token, NON-allowlisted path -> still caught. Proves the allowlist is
-    # path-scoped, not a blanket exemption.
+def test_internal_fleet_phrase_outside_allowlist_fails(tmp_path):
+    # Public fleet product forms are masked, but internal orchestration phrases
+    # remain caught outside allowlisted product paths.
     _write(tmp_path, "tokenpak/proxy/misc.py", "# the openclaw agent fleet\n")
     res = _run_tree(tmp_path)
-    assert res.returncode == 1, "bare openclaw outside allowlist must fail"
+    assert res.returncode == 1, "internal fleet phrase outside allowlist must fail"
 
 
 def test_bare_fleet_outside_allowlist_fails(tmp_path):
@@ -126,7 +139,7 @@ def test_bare_fleet_outside_allowlist_fails(tmp_path):
 
 def test_top_level_tests_dir_excluded(tmp_path):
     # Mirrors the delta gate: top-level tests/ is a dev surface, not scanned.
-    _write(tmp_path, "tests/test_thing.py", "# authored by Sue, see TSR-01\n")
+    _write(tmp_path, "tests/test_thing.py", "# scanner fixture: ABC-01 under /home/privateuser\n")
     _write(tmp_path, "tokenpak/proxy/server.py", "OK = True\n")
     res = _run_tree(tmp_path)
     assert res.returncode == 0, f"top-level tests/ must be excluded:\n{res.stdout}"
@@ -174,7 +187,7 @@ def _make_sdist(dist_dir: Path, files: dict[str, str], name: str = "tokenpak-9.9
 
 def test_dist_mode_strips_prefix_and_detects_leak(tmp_path):
     dist = tmp_path / "dist"
-    _make_sdist(dist, {"tokenpak/proxy/cache.py": 'D = "/home/sue/x"\n'})
+    _make_sdist(dist, {"tokenpak/proxy/cache.py": 'D = "/home/privateuser/x"\n'})
     res = _run_dist(dist)
     assert res.returncode == 1, "sdist leak must be detected"
     # path reported repo-relative (version prefix stripped)

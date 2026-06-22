@@ -1,38 +1,9 @@
-# Internal identity / private-path / credential / task-ID leak register —
-# public-safe-defaults policy. This list mirrors the delta-mode identity
-# scan so a single curated register can drive both checks; once this file is
-# the source of truth, that workflow reads from here too.
+# Deprecated compatibility note.
 #
-# Match semantics: each non-comment line is a Python regular expression
-# (re.search, case-sensitive). Lines starting with '#' and blank lines are
-# ignored. This file is plaintext (.txt) on purpose: the conformance scan
-# and the identity scan both skip .txt, so the register can name the very
-# tokens it forbids without flagging itself.
-\bSue\b
-\bCali\b
-\bTrix\b
-\bSuki\b
-\bAya\b
-\bDee\b
-\bReiPo\b
-\bopenclaw\b
-\bfleet\b
-TSR-[0-9]
-TPS-[0-9]
-CCI-[0-9]
-MTC-[0-9]
-OAS-[0-9]
-TIP7-[0-9]
-TRIX-MTC
-WS-[0-9]
-CCG-[0-9]
-CCP-[0-9]
-VDS-[0-9]
-FIN-[0-9]
-TSG-[0-9]
-TIP-[0-9][0-9]
-\.claude/projects
-/home/sue/
-trixxie168
-\bStd 2[0-9]\b
-\bStd 3[0-9]\b
+# Public conformance now delegates internal-reference scanning to
+# scripts/release_gate/public_safety_scan.py. This keeps the public repo on
+# structural pattern classes and leaves exact private identifiers in the
+# internal standards/vault register.
+#
+# Runtime source of truth:
+#   scripts/release_gate/public_safety_scan.py
