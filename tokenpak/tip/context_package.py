@@ -62,7 +62,7 @@ def context_level_label(level: ContextLevel) -> str:
 
     Consumers SHOULD use this rather than constructing the string ad-hoc —
     when a future TIP-1.x minor revision adds a new level, only this table
-    needs updating (per ``feedback_always_dynamic.md``).
+    needs updating (discovery stays dynamic).
     """
     return _CONTEXT_LEVEL_LABELS.get(level, "unknown")
 

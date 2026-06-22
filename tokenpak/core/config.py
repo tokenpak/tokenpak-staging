@@ -97,6 +97,31 @@ def get_config() -> dict[str, Any]:
     return base
 
 
+def redacted_config() -> dict[str, Any]:
+    """Return a display/debug-safe view of :func:`get_config` with secret-class
+    keys masked.
+
+    This is the masked *view* for config dumps / debug rendering. It intentionally
+    does **not** change :func:`get_config`: runtime consumers that legitimately
+    read raw credential values (e.g. the proxy in ``proxy/server_async.py``) keep
+    calling ``get_config()`` and receive raw values. Only display/debug surfaces
+    should render this redacted view.
+
+    Secret classification and masking reuse the single shared masker in
+    ``cli.commands.config_env`` — high/medium secret-class keys collapse to the
+    presence sentinel ``"set"`` (never any portion of the value); low-class tuning
+    values pass through unchanged. No parallel masking logic is defined here.
+
+    The import is function-local on purpose: ``config_env`` lives in the CLI layer,
+    while this module is imported very early (proxy runtime, ``config show``). A
+    module-level import would invert the core→CLI layering and risk a partial-init
+    import cycle; deferring it to call time (always a display context) avoids that.
+    """
+    from tokenpak.cli.commands.config_env import mask_value
+
+    return {key: mask_value(key, value) for key, value in get_config().items()}
+
+
 def set_config(key: str, value: Any) -> None:
     """Persist a config key to file (env vars still override at read time)."""
     data = _load()

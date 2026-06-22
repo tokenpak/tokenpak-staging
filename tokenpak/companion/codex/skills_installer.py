@@ -5,7 +5,7 @@ Skills are copied from the bundled ``skills/`` directory to the user
 skill-discovery path Codex actually scans: ``$HOME/.agents/skills``
 (spec: https://developers.openai.com/docs/guides/tools-skills). The set
 of skills is discovered at runtime by globbing for ``SKILL.md`` — no
-hardcoded enumeration (see ``feedback_always_dynamic.md``).  Uninstall
+hardcoded enumeration (discovery stays dynamic).  Uninstall
 sweeps both the canonical path AND the pre-L3 legacy ``~/.codex/skills``
 location so users upgrading from earlier installs don't leave orphans.
 """
