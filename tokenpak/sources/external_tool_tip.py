@@ -25,7 +25,7 @@ OFF BY DEFAULT.  Nothing in this module runs unless::
 
     TOKENPAK_TIP_TOOL_ADAPTERS=1
 
-Runtime discovery (``feedback_always_dynamic`` — no hardcoded tool enum):
+Runtime discovery (no hardcoded tool enum):
 tools register themselves via :func:`register_external_tool_source`
 at import time.  :func:`discover_sources` finds registrants by
 
@@ -222,7 +222,7 @@ class ExternalToolTIPSource(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Registry — populated by registration, never by enum (feedback_always_dynamic)
+# Registry — populated by registration, never by enum (discovery stays dynamic)
 # ---------------------------------------------------------------------------
 
 _REGISTRY: Dict[str, Type[ExternalToolTIPSource]] = {}

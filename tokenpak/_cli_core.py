@@ -4724,8 +4724,19 @@ def cmd_config_sync(args):
         try:
             import urllib.request as _ur
 
-            with _ur.urlopen(url, timeout=10) as resp:
-                remote_cfg = json.loads(resp.read())
+            from tokenpak.sources.url_adapter import (
+                _MAX_RESPONSE_BYTES,
+                _read_capped,
+                _urlopen_checked,
+                _validate_url_safe,
+            )
+
+            # SSRF guard: reuse the URL-adapter scheme allowlist + private-IP
+            # block + redirect re-validation + byte cap (do not fork G4).
+            _validate_url_safe(url)
+            _req = _ur.Request(url, headers={"User-Agent": "TokenPak/1.0"})
+            with _urlopen_checked(_req, timeout=10) as resp:
+                remote_cfg = json.loads(_read_capped(resp, _MAX_RESPONSE_BYTES))
             print(f"  ✓ Fetched config from {url}")
             if dry_run:
                 print("  (dry-run: not applying)")
