@@ -10,6 +10,7 @@ on:
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
+      - 'scripts/check-dist-contents.py'
       - 'scripts/slim-install-smoke.sh'
   pull_request:
     branches: [main, develop]
@@ -19,6 +20,7 @@ on:
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
+      - 'scripts/check-dist-contents.py'
       - 'scripts/slim-install-smoke.sh'
   workflow_dispatch:
 
@@ -106,6 +108,27 @@ jobs:
 
       - name: Run slim install smoke
         run: bash scripts/slim-install-smoke.sh
+
+  package-contents:
+    name: Package Contents
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Check distribution contents
+        run: python scripts/check-dist-contents.py
 
   test:
     name: Test (Python ${{ matrix.python-version }})
