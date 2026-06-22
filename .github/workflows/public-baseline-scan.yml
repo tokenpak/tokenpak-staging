@@ -1,0 +1,41 @@
+name: Public baseline scan
+
+on:
+  schedule:
+    - cron: "37 8 * * *"
+  push:
+    tags:
+      - "v*rc*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  public-baseline:
+    name: Public baseline scan (recommended)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Full tracked-tree public-safety scan
+        continue-on-error: true
+        run: |
+          python scripts/release_gate/public_safety_scan.py \
+            --git-tracked . \
+            --profile baseline \
+            --annotation warning \
+            --recommended
+
+      - name: Full tracked-tree public-conformance scan
+        continue-on-error: true
+        run: |
+          python scripts/release_gate/check_public_conformance.py \
+            --mode baseline \
+            --root .
