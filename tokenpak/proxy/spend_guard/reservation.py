@@ -25,21 +25,30 @@ This module closes that hole with a transient reservation ledger:
   direction, never under-protecting.
 
 DB layout follows the ``pending.py`` / ``grants.py`` convention: same SQLite
-file (``~/.tokenpak/spend_guard.db``, configurable), lazy ``CREATE TABLE IF
+file (``~/.tpk/spend_guard.db``, configurable), lazy ``CREATE TABLE IF
 NOT EXISTS``, per-call ``sqlite3.connect`` — this is a transient holding
 ledger, NOT a parallel budget store; settled truth stays in ``monitor.db``.
 """
 
 from __future__ import annotations
 
-import os
 import secrets
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .._local_data import (
+    resolve_spend_guard_db_path as _resolve_spend_guard_db_path,
+)
+from .._local_data import (
+    secure_sqlite_connect as _secure_sqlite_connect,
+)
+from .._local_data import (
+    sqlite_schema_cache_key as _sqlite_schema_cache_key,
+)
 from .rolling_caps import CapBreach, RollingCapsConfig
 
 # Interim pessimistic ceiling for output-token reservation when the caller
@@ -50,6 +59,8 @@ INTERIM_MAX_OUTPUT_RESERVATION = 32_000
 # Status tokens returned by :meth:`ReservationStore.reserve`.
 RESERVED = "reserved"
 DENIED = "denied"
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: set[tuple[str, int, int]] = set()
 
 
 @dataclass
@@ -105,49 +116,59 @@ def pessimistic_output_reservation(
     return INTERIM_MAX_OUTPUT_RESERVATION
 
 
-def _db_path(audit_db_path: str) -> Path:
-    p = Path(os.path.expanduser(audit_db_path))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+def _db_path(audit_db_path: Optional[str]) -> Path:
+    return _resolve_spend_guard_db_path(audit_db_path)
 
 
 def _connect(path: Path) -> sqlite3.Connection:
     # autocommit mode: reserve()/settle() manage their own BEGIN IMMEDIATE /
     # COMMIT explicitly, which the stdlib's implicit-transaction layer would
     # otherwise fight ("cannot start a transaction within a transaction").
-    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
+    conn = _secure_sqlite_connect(path, timeout=30.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS budget_reservations (
-            reservation_id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL DEFAULT '',
-            fleet_id TEXT NOT NULL DEFAULT '',
-            agent_id TEXT NOT NULL DEFAULT '',
-            created_at REAL NOT NULL,
-            expires_at REAL NOT NULL,
-            reserved_input_tokens INTEGER NOT NULL DEFAULT 0,
-            reserved_output_tokens INTEGER NOT NULL DEFAULT 0,
-            reserved_cost_usd REAL NOT NULL DEFAULT 0.0,
-            status TEXT NOT NULL DEFAULT 'active',
-            actual_cost_usd REAL,
-            actual_tokens INTEGER
+    schema_key = _sqlite_schema_cache_key(conn)
+    if schema_key in _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if schema_key in _SCHEMA_READY:
+            return
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS budget_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL DEFAULT '',
+                fleet_id TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                reserved_input_tokens INTEGER NOT NULL DEFAULT 0,
+                reserved_output_tokens INTEGER NOT NULL DEFAULT 0,
+                reserved_cost_usd REAL NOT NULL DEFAULT 0.0,
+                status TEXT NOT NULL DEFAULT 'active',
+                actual_cost_usd REAL,
+                actual_tokens INTEGER
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resv_active "
-        "ON budget_reservations(status, expires_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_resv_agent "
-        "ON budget_reservations(agent_id, status)"
-    )
-    conn.commit()
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resv_active "
+            "ON budget_reservations(status, expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resv_agent "
+            "ON budget_reservations(agent_id, status)"
+        )
+        conn.commit()
+        if schema_key is not None:
+            _SCHEMA_READY.add(schema_key)
 
 
 def _row_to_reservation(row: sqlite3.Row) -> Reservation:
@@ -174,7 +195,7 @@ class ReservationStore:
     connection to stay thread-safe under the per-request proxy server.
     """
 
-    def __init__(self, audit_db_path: str = "~/.tokenpak/spend_guard.db"):
+    def __init__(self, audit_db_path: Optional[str] = None):
         self.path = _db_path(audit_db_path)
 
     # -- admission -----------------------------------------------------------
