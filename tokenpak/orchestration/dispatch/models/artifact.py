@@ -1,6 +1,6 @@
-"""DispatchArtifact record (Standards Delta v0 §2/§4 record list — SKETCH).
+"""DispatchArtifact record (Dispatch contract §2/§4 record list — SKETCH).
 
-The Standards Delta enumerates ``DispatchArtifact`` in the §2 record vocabulary
+The Dispatch contract enumerates ``DispatchArtifact`` in the §2 record vocabulary
 and §4 record list but does NOT provide a full field schema for it (the §4
 note for the record list reads "sketch needed"). This module is therefore a
 faithful **sketch**, not a transcription: fields follow the artifact semantics

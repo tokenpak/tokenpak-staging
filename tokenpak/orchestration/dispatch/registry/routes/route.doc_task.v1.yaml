@@ -1,4 +1,4 @@
-# doc_task route (Standards Delta v0 §4.3 + §13 routes + §16).
+# doc_task route (Dispatch contract §4.3 + §13 routes + §16).
 #
 # Two-station route: a builder station (doc_builder overlay) drafts the document,
 # then a reviewer station reviews it for clarity / grounding against the manifest

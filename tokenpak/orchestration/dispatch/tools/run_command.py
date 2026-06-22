@@ -47,7 +47,7 @@ from ._matrix import (
     authorize_tool_call,
 )
 
-# System-default station timeout (Standards Delta v0 §5.4 max_wall_seconds).
+# System-default station timeout (Dispatch contract §5.4 max_wall_seconds).
 _DEFAULT_TIMEOUT_SECONDS = StationLoopPolicy().max_wall_seconds
 
 
@@ -115,7 +115,7 @@ def run_command(
     launch and ``applied`` after completion.
     """
 
-    # 1. Matrix gate (Standards Delta v0 §5.3).
+    # 1. Matrix gate (Dispatch contract §5.3).
     authorize_tool_call(ToolName.RUN_COMMAND, autonomy_mode, approval_granted=approval_granted)
 
     # 1b. + 2. Category allowlist / forbidden-list enforcement.

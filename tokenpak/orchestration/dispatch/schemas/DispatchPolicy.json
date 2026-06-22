@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AutonomyMode": {
-      "description": "DispatchJob / DispatchManifest autonomy mode (Standards Delta v0 \u00a74.1).",
+      "description": "DispatchJob / DispatchManifest autonomy mode (Dispatch contract \u00a74.1).",
       "enum": [
         "advisory",
         "draft",
@@ -45,7 +45,7 @@
     },
     "QualityRequirements": {
       "additionalProperties": false,
-      "description": "DispatchManifest.quality_requirements block (Standards Delta v0 \u00a74.2).",
+      "description": "DispatchManifest.quality_requirements block (Dispatch contract \u00a74.2).",
       "properties": {
         "docs_required": {
           "title": "Docs Required",
