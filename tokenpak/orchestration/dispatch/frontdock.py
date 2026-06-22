@@ -1,6 +1,6 @@
 """FrontDock intake module — turns a raw request into scoped Dispatch records.
 
-The Front Dock is the first thing a request hits (Standards Delta v0 §13 item 3).
+The Front Dock is the first thing a request hits (Dispatch contract §13 item 3).
 It is **not a worker**: it does not execute the work, call a builder/reviewer
 station, or mutate the workspace. It is a single deterministic-first intake module
 that reads a raw request and produces:
@@ -15,7 +15,7 @@ that reads a raw request and produces:
   created when, and only when, ``missing_info`` contains a **high-risk** item
   (§4.6). The Front Dock never silently assumes for those.
 
-Design contracts (Standards Delta v0 §5.8, §13):
+Design contracts (Dispatch contract §5.8, §13):
 
 * **Deterministic path works with NO LLM.** Intent detection runs a fixed
   keyword/heuristic battery first; when that resolves a confident intent, no LLM
@@ -71,7 +71,7 @@ from .models.manifest import DispatchManifest
 # Intent + route vocabulary (v0.1-alpha)
 # ---------------------------------------------------------------------------
 
-# v0.1-alpha intents (Standards Delta v0 §13 routes: quick_answer / code_task /
+# v0.1-alpha intents (Dispatch contract §13 routes: quick_answer / code_task /
 # doc_task, plus the open-world ``unknown``). These are the only strings the
 # Front Dock will ever place in ``DispatchJob.detected_intent``.
 INTENT_CODE_TASK = "code_task"
@@ -83,7 +83,7 @@ KNOWN_INTENTS: frozenset[str] = frozenset(
     {INTENT_CODE_TASK, INTENT_DOC_TASK, INTENT_QUICK_ANSWER, INTENT_UNKNOWN}
 )
 
-# Intent → route hint (Standards Delta v0 §4.3 id form "route.<name>.v<n>"). The
+# Intent → route hint (Dispatch contract §4.3 id form "route.<name>.v<n>"). The
 # ``unknown`` intent has no route hint (None) — routing is deferred to a decision
 # or an explicit ``--route`` override downstream.
 INTENT_TO_ROUTE_HINT: dict[str, str | None] = {
@@ -93,7 +93,7 @@ INTENT_TO_ROUTE_HINT: dict[str, str | None] = {
     INTENT_UNKNOWN: None,
 }
 
-# Deterministic keyword sets per intent (Standards Delta v0 §5.8 step 4: "intent
+# Deterministic keyword sets per intent (Dispatch contract §5.8 step 4: "intent
 # classification match (deterministic keyword set)"). Matched as whole words,
 # case-insensitively. Order of evaluation is fixed (see _INTENT_PRECEDENCE) so the
 # rule path is fully deterministic.
@@ -161,7 +161,7 @@ _WORD_RE = re.compile(r"[a-z0-9_]+")
 # Risk-flag registry (PAKPlan-style, simple registered set for alpha)
 # ---------------------------------------------------------------------------
 
-# Standards Delta v0 §4.1: ``risk_flags`` is "registry-bound (PAKPlan risk_flag
+# Dispatch contract §4.1: ``risk_flags`` is "registry-bound (PAKPlan risk_flag
 # registry)". The full PAKPlan registry is a later concern; for v0.1-alpha a
 # simple registered set is sufficient (this module's docstring + the packet say
 # so). Each flag maps to a severity; HIGH/CRITICAL flags are the ones that make a
@@ -717,7 +717,7 @@ class FrontDock:
             reason=(
                 "Front Dock Rule: high-risk missing information must be resolved "
                 "before dispatch; the Front Dock does not silently assume "
-                "(Standards Delta v0 §4.6, §13)."
+                "(Dispatch contract §4.6, §13)."
             ),
             risk_level=highest,
             options=[
@@ -763,7 +763,7 @@ class FrontDock:
     def _derive_id(prefix: str, created_at: datetime) -> str:
         """Derive a stable-ish record id ("<prefix>_<utc-compact>").
 
-        The Standards Delta id form is ``<prefix>_<ulid>``; ULID minting is a Run
+        The Dispatch contract id form is ``<prefix>_<ulid>``; ULID minting is a Run
         Ledger concern (P-LEDGER-01). For intake-only output a deterministic
         timestamp-derived id is sufficient and keeps this module dependency-free.
         Callers that need real ULIDs pass ``job_id`` / ``manifest_id`` explicitly.

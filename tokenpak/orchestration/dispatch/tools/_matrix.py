@@ -1,11 +1,11 @@
 """Dispatch tool registry, autonomy × tool matrix, and command categories.
 
-Authoritative source: **Standards Delta v0 §5.3** (Tool Registry + autonomy ×
+Authoritative source: **Dispatch contract §5.3** (Tool Registry + autonomy ×
 tool matrix). This module holds the *metadata and policy* layer that the two
 effect-bearing tool implementations (``apply_patch``, ``run_command``) and the
 station runner consume. The five tool descriptors and the 4×5 permission matrix
 are transcribed verbatim from §5.3; do not add, drop, or re-grade a cell
-without a Standards Delta amendment landing first.
+without a Dispatch contract amendment landing first.
 
 Design split (kept deliberately impl-free so there is no import cycle):
 
@@ -31,13 +31,13 @@ from enum import Enum
 from tokenpak.orchestration.dispatch.models.enums import AutonomyMode
 
 # ``run_command.mutates_workspace`` is not a static bool — it depends on the
-# command category (Standards Delta v0 §5.3). Sentinel kept as a module
+# command category (Dispatch contract §5.3). Sentinel kept as a module
 # constant so the descriptor stays faithful to the spec text.
 POLICY_DEPENDENT = "policy_dependent"
 
 
 class ToolName(str, Enum):
-    """The five v0.1-alpha Dispatch tools (Standards Delta v0 §5.3)."""
+    """The five v0.1-alpha Dispatch tools (Dispatch contract §5.3)."""
 
     READ_CONTEXT = "read_context"
     WRITE_ARTIFACT = "write_artifact"
@@ -67,7 +67,7 @@ class ToolPermission(str, Enum):
 
 
 class CommandCategory(str, Enum):
-    """``run_command`` command categories (Standards Delta v0 §5.3).
+    """``run_command`` command categories (Dispatch contract §5.3).
 
     Two are on the allowlist; five are categorically forbidden. The split is
     encoded in :data:`ALLOWED_COMMAND_CATEGORIES` /
@@ -83,12 +83,12 @@ class CommandCategory(str, Enum):
     RELEASE_TAG = "release_tag"
 
 
-# Standards Delta v0 §5.3 run_command.allowed_categories (verbatim).
+# Dispatch contract §5.3 run_command.allowed_categories (verbatim).
 ALLOWED_COMMAND_CATEGORIES: frozenset[CommandCategory] = frozenset(
     {CommandCategory.READ_ONLY_INSPECTION, CommandCategory.TESTS}
 )
 
-# Standards Delta v0 §5.3 run_command.forbidden_categories (verbatim).
+# Dispatch contract §5.3 run_command.forbidden_categories (verbatim).
 FORBIDDEN_COMMAND_CATEGORIES: frozenset[CommandCategory] = frozenset(
     {
         CommandCategory.INSTALL_DEPENDENCY,
@@ -110,7 +110,7 @@ CATEGORY_MUTATES_WORKSPACE: dict[CommandCategory, bool] = {
 
 
 # ---------------------------------------------------------------------------
-# Autonomy × tool matrix (Standards Delta v0 §5.3, transcribed verbatim)
+# Autonomy × tool matrix (Dispatch contract §5.3, transcribed verbatim)
 # ---------------------------------------------------------------------------
 
 _A = ToolPermission.ALLOWED
@@ -157,7 +157,7 @@ AUTONOMY_TOOL_MATRIX: dict[AutonomyMode, dict[ToolName, ToolPermission]] = {
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """Declared metadata for one Dispatch tool (Standards Delta v0 §5.3).
+    """Declared metadata for one Dispatch tool (Dispatch contract §5.3).
 
     ``mutates_workspace`` is ``True``/``False`` for the four file/artifact tools
     and the :data:`POLICY_DEPENDENT` sentinel for ``run_command``.
@@ -181,7 +181,7 @@ def _modes_allowing(tool: ToolName) -> frozenset[AutonomyMode]:
     )
 
 
-# Per-tool static flags (Standards Delta v0 §5.3 tool block). ``mutates`` /
+# Per-tool static flags (Dispatch contract §5.3 tool block). ``mutates`` /
 # ``effect`` / ``path_check`` follow the YAML verbatim.
 _TOOL_FLAGS: dict[ToolName, tuple[bool | str, bool, bool]] = {
     #                         mutates_workspace,  effect, path_check
@@ -217,7 +217,7 @@ class ToolPolicyViolation(RuntimeError):
         self.mode = mode
         super().__init__(
             f"tool {tool.value!r} is denied under autonomy mode {mode.value!r} "
-            f"(Standards Delta v0 §5.3 autonomy × tool matrix)"
+            f"(Dispatch contract §5.3 autonomy × tool matrix)"
         )
 
 
@@ -230,7 +230,7 @@ class ApprovalRequiredError(RuntimeError):
         super().__init__(
             f"tool {tool.value!r} requires approval under autonomy mode "
             f"{mode.value!r}; invoke with approval_granted=True once the "
-            f"approval handshake has resolved (Standards Delta v0 §5.3)"
+            f"approval handshake has resolved (Dispatch contract §5.3)"
         )
 
 
@@ -243,7 +243,7 @@ def _coerce_mode(mode: AutonomyMode | str) -> AutonomyMode:
 
 
 def resolve_tool_permission(tool: ToolName | str, mode: AutonomyMode | str) -> ToolPermission:
-    """Return the matrix grade for ``(mode, tool)`` (Standards Delta v0 §5.3)."""
+    """Return the matrix grade for ``(mode, tool)`` (Dispatch contract §5.3)."""
 
     return AUTONOMY_TOOL_MATRIX[_coerce_mode(mode)][_coerce_tool(tool)]
 
@@ -254,7 +254,7 @@ def authorize_tool_call(
     *,
     approval_granted: bool = False,
 ) -> ToolPermission:
-    """Invocation-time gate for one tool call (Standards Delta v0 §5.3).
+    """Invocation-time gate for one tool call (Dispatch contract §5.3).
 
     Returns the resolved :class:`ToolPermission` when the call may proceed.
     Raises :class:`ToolPolicyViolation` for a DENIED cell, and

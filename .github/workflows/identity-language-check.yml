@@ -293,8 +293,15 @@ jobs:
                 -e 's/--fleet([^a-zA-Z]|$)/--__PUBLIC_FLEET_FLAG__\1/g' \
                 -e 's/fleet\.yaml/__PUBLIC_FLEET_CONFIG__.yaml/g' \
                 -e 's/fleet[[:space:]]+(config|configuration|command|management|rollup|status)/__PUBLIC_FLEET_PHRASE__ \1/g' \
+                -e 's/fleet[[:space:]]+stats/__PUBLIC_FLEET_PHRASE__ stats/g' \
+                -e 's/fleet[[:space:]]+agent[[:space:]]+data/__PUBLIC_FLEET_PHRASE__ agent data/g' \
                 -e 's/fleet-telemetry/__PUBLIC_FLEET_PHRASE__-telemetry/g' \
                 -e 's/fleet-wide/__PUBLIC_FLEET_PHRASE__-wide/g' \
+                -e 's/in[[:space:]]+the[[:space:]]+fleet/in the __PUBLIC_FLEET_PHRASE__/g' \
+                -e 's/for[[:space:]]+the[[:space:]]+fleet/for the __PUBLIC_FLEET_PHRASE__/g' \
+                -e 's/to[[:space:]]+the[[:space:]]+fleet/to the __PUBLIC_FLEET_PHRASE__/g' \
+                -e 's/to[[:space:]]+fleet/to __PUBLIC_FLEET_PHRASE__/g' \
+                -e 's/in[[:space:]]+fleet/in __PUBLIC_FLEET_PHRASE__/g' \
                 -e 's/multi-instance[[:space:]]+fleet/multi-instance __PUBLIC_TMUX_MODE__/g' \
                 -e 's/multi-instance-fleet/multi-instance-__PUBLIC_TMUX_MODE__/g' \
                 -e 's/"fleet"/"__PUBLIC_FLEET_LITERAL__"/g' \

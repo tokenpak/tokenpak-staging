@@ -1,4 +1,4 @@
-# code_task route (Standards Delta v0 §4.3 + §13 routes + §16).
+# code_task route (Dispatch contract §4.3 + §13 routes + §16).
 #
 # Two-station route: a builder station (code_builder overlay) drafts/patches the
 # change, then a reviewer station semantically reviews it against the manifest

@@ -1,4 +1,4 @@
-# quick_answer route (Standards Delta v0 §4.3 + §13 routes + §16).
+# quick_answer route (Dispatch contract §4.3 + §13 routes + §16).
 #
 # Single-station answer-only route: one builder station carrying the
 # quick_answer overlay. No file changes, no reviewer (a direct answer needs no

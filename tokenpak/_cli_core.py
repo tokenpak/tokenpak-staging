@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Tuple
 
+from tokenpak import _paths
 from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
 from tokenpak._formatting import symbols as FS
 
@@ -4242,8 +4243,8 @@ def _build_user_template_parser(sub):
 # ── Version Control Commands ──────────────────────────────────────────────────
 
 PROXY_VERSION = "1.1.0"
-_LOCK_FILE = Path.home() / "vault" / "System" / "tokenpak.lock.json"
-_TOKENPAK_CFG = Path.home() / ".tokenpak" / "config.json"
+_LOCK_FILE = _paths.under("tokenpak.lock.json")
+_TOKENPAK_CFG = _paths.under("config.json")
 _PROXY_URL = "http://localhost:8766"
 
 
@@ -4672,32 +4673,18 @@ def cmd_uninstall(args):
 
 
 def cmd_config_sync(args):
-    """Pull latest config from canonical source (git/vault)."""
-    import subprocess as _sp
-
+    """Reconcile config against an explicit source or the local lock file."""
     source = getattr(args, "source", "git")
     dry_run = getattr(args, "dry_run", False)
 
     print(f"Syncing config from source: {source}")
 
     if source == "git":
-        vault_dir = Path.home() / "vault"
-        if not vault_dir.exists():
-            print(f"  ✗ Vault not found at {vault_dir}")
-            return
-        # Pull latest vault
-        result = _sp.run(
-            ["bash", str(vault_dir / "scripts" / "vault-sync.sh")],
-            capture_output=True,
-            text=True,
-            cwd=str(vault_dir),
-        )
-        if result.returncode == 0:
-            print("  ✓ Vault synced")
-        else:
-            print(f"  ⚠ Vault sync output: {result.stdout[-200:]}")
+        print("  Git-backed config sync is not bundled in the public CLI.")
+        print("  Use --source url with an explicit config URL, or manage config locally.")
 
-        # Compare lock file with current config
+        # Compare the local lock file with current config without invoking any
+        # host-private sync hooks.
         lock = _load_lock()
         try:
             cfg = json.loads(_TOKENPAK_CFG.read_text())
@@ -6678,7 +6665,7 @@ def _build_pakplan_parser(sub):
 def _build_dispatch_parser(sub):
     """Register the ``tokenpak dispatch`` command group (Dispatch v0.1-alpha).
 
-    TokenPak Dispatch is the OSS workflow-control layer (Standards Delta v0):
+    TokenPak Dispatch is the OSS workflow-control layer (Dispatch contract):
     Decision Inbox + ``run|status|inspect|decisions|approve|reject|pause|resume|
     cancel|discard-late|delivery|receipt`` verbs over the Run Ledger.
     Implementation lives in :mod:`tokenpak.cli.commands.dispatch_cmd`; lazy

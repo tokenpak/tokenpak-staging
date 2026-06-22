@@ -1,4 +1,4 @@
-"""DispatchEffect record (Standards Delta v0 §4.8)."""
+"""DispatchEffect record (Dispatch contract §4.8)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from .enums import EffectStatus, EffectTargetType, RollbackBehavior
 
 
 class DispatchEffect(DispatchBaseModel):
-    """A single workspace-mutating effect record (Standards Delta v0 §4.8).
+    """A single workspace-mutating effect record (Dispatch contract §4.8).
 
     Covers the three file-state cases from §4.8:
 
