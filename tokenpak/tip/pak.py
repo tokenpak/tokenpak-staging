@@ -6,11 +6,10 @@ into prompts, handed off across sessions, or shared across agents. This
 module defines the TIP-1.x schema for Paks; it is the OSS-side contract
 that the MultiPak Pro daemon (closed-source) consumes.
 
-The schema follows ``32-multipak-pro-architecture.md §2`` (taxonomy) and
-PRD §18. It must land in OSS before any Pro implementation can rely on
-it (per ``25 §1.1`` inviolable rule).
+The schema follows the Pak architecture taxonomy and PRD §18. It must
+land in OSS before any Pro implementation can rely on it.
 
-**Subtype taxonomy** (Std 32 §2, ratified 2026-05-07 via Decision #2=A):
+**Subtype taxonomy**:
 
 - ``vault``: long-term durable Pak from project files (authority: file_source).
 - ``interaction``: from AI sessions (user prompts, LLM responses, tool outputs).
@@ -21,9 +20,9 @@ it (per ``25 §1.1`` inviolable rule).
 The deprecated subtype names (``project``, ``memory``, ``context``) are
 preserved as import-time aliases until v3.0.0 with a ``DeprecationWarning``.
 
-**Privacy contract** (Std 32 §7): ``Pak`` instances are local-only. The
-license-validation egress path (``25 §4.4``) MUST NOT receive any field
-defined here; this is enforced by the privacy contract tests.
+**Privacy contract**: ``Pak`` instances are local-only. The
+license-validation egress path MUST NOT receive any field defined here;
+this is enforced by the privacy contract tests.
 
 Naming note: in code we use the title-case form ``Pak`` per glossary 08.
 The all-caps form ``PAK`` is reserved for marketing-brand stylization
@@ -45,8 +44,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 # Module-level alias table — kept outside ``PakSubtype`` to sidestep Enum
 # metaclass quirks (a dict assigned inside an Enum body would be treated
-# as a member). Maps deprecated 08-pre-2026-05-07 subtype names to the
-# canonical Std 32 §2 names. Target removal: v3.0.0.
+# as a member). Maps deprecated pre-2026-05-07 subtype names to the
+# canonical TIP subtype names. Target removal: v3.0.0.
 _LEGACY_SUBTYPE_ALIASES: Mapping[str, str] = {
     "project": "vault",
     "context": "recall",
@@ -57,11 +56,11 @@ _LEGACY_SUBTYPE_ALIASES: Mapping[str, str] = {
 
 
 class PakSubtype(str, Enum):
-    """Canonical Pak subtype taxonomy per Std 32 §2.
+    """Canonical Pak subtype taxonomy.
 
     The 5 values are the ratified canonical taxonomy. Receivers parsing a
-    Pak with an unknown subtype string MUST fall back gracefully (per
-    Std 31 §2 capability-codes rule); never raise on an unrecognized value.
+    Pak with an unknown subtype string MUST fall back gracefully; never
+    raise on an unrecognized value.
     Use :func:`PakSubtype.parse` to normalize legacy/aliased values.
     """
 
@@ -78,8 +77,8 @@ class PakSubtype(str, Enum):
         Unknown values raise ``ValueError`` only after the alias table is
         consulted; new subtypes added in future minor revisions of TIP-1.x
         SHOULD be added to this enum and the registry catalog in lockstep
-        (per ``feedback_always_dynamic.md`` — no hardcoded enumeration in
-        consumer code paths).
+        (no hardcoded enumeration in consumer code paths — discovery
+        stays dynamic).
         """
         normalized = value.strip().lower()
         if normalized in _LEGACY_SUBTYPE_ALIASES:
@@ -95,7 +94,7 @@ class PakSubtype(str, Enum):
 
 
 class PakAuthority(str, Enum):
-    """Source-of-truth weight applied to a Pak in recall ranking (Std 32 §5.2).
+    """Source-of-truth weight applied to a Pak in recall ranking.
 
     ``user_approved`` outranks ``file_source`` outranks ``tool_result``
     outranks ``llm_generated``. Recall scoring multiplies by this weight.
@@ -108,7 +107,7 @@ class PakAuthority(str, Enum):
 
 
 class PakStatus(str, Enum):
-    """Lifecycle state of a Pak (Std 32 §2 + PRD §18)."""
+    """Lifecycle state of a Pak."""
 
     PROPOSED = "proposed"
     ACCEPTED = "accepted"
@@ -118,7 +117,7 @@ class PakStatus(str, Enum):
 
 
 class PakConfidence(str, Enum):
-    """Confidence in the Pak's content. Drives hydration triggering (Std 32 §10)."""
+    """Confidence in the Pak's content. Drives hydration triggering."""
 
     HIGH = "high"
     MEDIUM = "medium"
@@ -126,7 +125,7 @@ class PakConfidence(str, Enum):
 
 
 class PakRetention(str, Enum):
-    """TTL bucket for a Pak. Drives compaction (Std 32 §8).
+    """TTL bucket for a Pak. Drives compaction.
 
     ``session`` = lifetime of the originating session.
     ``days_30`` / ``days_180`` = bucketed TTL.
@@ -153,10 +152,10 @@ class PakSourceType(str, Enum):
 
 
 class PakPrivacyClass(str, Enum):
-    """Privacy classification. v1 admits ``local_only`` only (Std 32 §1.2).
+    """Privacy classification. v1 admits ``local_only`` only.
 
     Additional classes (``team_local`` for Pro Team LAN sharing) require
-    their own Class B amendment per Std 32 §12.
+    their own compatibility review.
     """
 
     LOCAL_ONLY = "local_only"
@@ -169,7 +168,7 @@ class PakPrivacyClass(str, Enum):
 
 @dataclass(frozen=True)
 class PakScope:
-    """User / project / topic scoping (Std 32 §5 ``project_scope``, ``topic_scope``).
+    """User / project / topic scoping.
 
     Cross-project leakage is blocked by default — recall hard-filters on
     ``project`` when an explicit project_scope is declared by the caller.
@@ -206,7 +205,7 @@ class PakAnchor:
 
 @dataclass(frozen=True)
 class PakRelationships:
-    """Directed relationships between Paks (Std 32 §5.2 conflict_penalty).
+    """Directed relationships between Paks.
 
     All four lists hold opaque Pak IDs.
     """
@@ -242,7 +241,7 @@ class Pak:
 
     Frozen by design — Paks are immutable once captured; mutations create a
     new Pak with ``supersedes`` pointing at the predecessor. This matches
-    the Std 32 §5 ranking model where ``conflict_penalty`` and
+    the recall ranking model where ``conflict_penalty`` and
     ``stale_penalty`` apply to Paks superseded by newer revisions.
 
     See ``pak-v1.json`` (registry) for the JSON Schema canonical form.
@@ -329,8 +328,8 @@ class Pak:
 
 
 # ---------------------------------------------------------------------------
-# Default-retention discovery (per `feedback_always_dynamic.md` — no hardcoded
-# subtype enumeration in consumer paths; consumers ask the contract).
+# Default-retention discovery (no hardcoded subtype enumeration in
+# consumer paths; consumers ask the contract).
 # ---------------------------------------------------------------------------
 
 
@@ -347,14 +346,14 @@ _DEFAULT_RETENTION_BY_SUBTYPE: Mapping[PakSubtype, PakRetention] = {
 
 
 def default_retention_for(subtype: PakSubtype) -> PakRetention:
-    """Return the default retention bucket for a Pak subtype (Std 32 §8).
+    """Return the default retention bucket for a Pak subtype.
 
     Callers MUST consult this function rather than hardcoding subtype-to-
     retention mapping at call sites — when a new subtype is added in a
     future TIP-1.x minor revision, only this table needs updating.
     """
     if subtype not in _DEFAULT_RETENTION_BY_SUBTYPE:
-        # Per Std 31 §2: receivers fall back gracefully on unknown subtypes.
+        # Receivers fall back gracefully on unknown subtypes.
         return PakRetention.SESSION
     return _DEFAULT_RETENTION_BY_SUBTYPE[subtype]
 
