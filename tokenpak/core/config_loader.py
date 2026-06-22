@@ -65,6 +65,7 @@ def _config_home_candidates() -> list[Path]:
     """Directories the JSON auto-migration may act on, in resolution order."""
     try:
         from tokenpak import _paths
+
         homes = [_paths.home(), _paths.legacy_home()]
     except Exception:
         homes = [Path.home() / ".tokenpak"]
@@ -124,11 +125,14 @@ def _maybe_migrate_json_to_yaml() -> None:
     try:
         json_path.rename(migrated_path)
     except Exception as exc:
-        print(f"tokenpak: migrated config.yaml written but failed to rename config.json: {exc}",
-              file=sys.stderr)
+        print(
+            f"tokenpak: migrated config.yaml written but failed to rename config.json: {exc}",
+            file=sys.stderr,
+        )
         return
 
     print("tokenpak: migrated config.json \u2192 config.yaml")
+
 
 # Cached config
 _config: Optional[Dict[str, Any]] = None
@@ -169,7 +173,11 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     if config_path.exists():
         try:
             _config = _load_yaml(str(config_path))
-        except Exception:
+        except Exception as exc:
+            print(
+                f"tokenpak: WARN failed to parse config {config_path}: {exc}; using defaults",
+                file=sys.stderr,
+            )
             _config = {}
     else:
         _config = {}
@@ -315,14 +323,24 @@ def get_all() -> Dict[str, Any]:
     # Logging (merged from legacy config.json)
     result["logging.enabled"] = get("logging.enabled", True, "TOKENPAK_LOG_ENABLED", bool)
     result["logging.level"] = get("logging.level", "info", "TOKENPAK_LOG_LEVEL", str)
-    result["logging.destination"] = get("logging.destination", "file", "TOKENPAK_LOG_DESTINATION", str)
-    result["logging.retention_days"] = get("logging.retention_days", 30, "TOKENPAK_LOG_RETENTION_DAYS", int)
-    result["logging.include_request_body"] = get("logging.include_request_body", False, "TOKENPAK_LOG_REQUEST_BODY", bool)
-    result["logging.include_response_body"] = get("logging.include_response_body", False, "TOKENPAK_LOG_RESPONSE_BODY", bool)
+    result["logging.destination"] = get(
+        "logging.destination", "file", "TOKENPAK_LOG_DESTINATION", str
+    )
+    result["logging.retention_days"] = get(
+        "logging.retention_days", 30, "TOKENPAK_LOG_RETENTION_DAYS", int
+    )
+    result["logging.include_request_body"] = get(
+        "logging.include_request_body", False, "TOKENPAK_LOG_REQUEST_BODY", bool
+    )
+    result["logging.include_response_body"] = get(
+        "logging.include_response_body", False, "TOKENPAK_LOG_RESPONSE_BODY", bool
+    )
 
     # Validation (merged from legacy config.json)
     result["validation.mode"] = get("validation.mode", "warn", "TOKENPAK_REQUEST_VALIDATION", str)
-    result["validation.strict"] = get("validation.strict", False, "TOKENPAK_VALIDATION_STRICT", bool)
+    result["validation.strict"] = get(
+        "validation.strict", False, "TOKENPAK_VALIDATION_STRICT", bool
+    )
 
     # Plugins (merged from legacy config.json)
     result["plugins.enabled"] = get("plugins.enabled", [], None, list)

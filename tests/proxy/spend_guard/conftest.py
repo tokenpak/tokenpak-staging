@@ -15,12 +15,15 @@ from tokenpak.proxy.spend_guard import rolling_caps as rc
 def tmp_monitor_db(tmp_path, monkeypatch):
     """Provide a fresh monitor.db at tmp_path with the standard schema.
 
-    Patches `rolling_caps._DEFAULT_MONITOR_DB` so production code paths
-    pick up our temp DB without needing to pass `monitor_db_path` everywhere.
+    Sets TOKENPAK_DB so production code paths resolve this temp DB through
+    tokenpak._paths.monitor_db(mode="read") without needing to pass
+    `monitor_db_path` everywhere.
     Returns the path string.
     """
     db = tmp_path / "monitor.db"
-    conn = sqlite3.connect(str(db))
+    conn = sqlite3.connect(str(db), timeout=2.0)
+    conn.execute("PRAGMA journal_mode=MEMORY")
+    conn.execute("PRAGMA synchronous=OFF")
     conn.execute(
         """CREATE TABLE requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +43,8 @@ def tmp_monitor_db(tmp_path, monkeypatch):
     )
     conn.commit()
     conn.close()
-    monkeypatch.setattr(rc, "_DEFAULT_MONITOR_DB", str(db))
+    monkeypatch.setenv("TOKENPAK_DB", str(db))
+    monkeypatch.delenv("TOKENPAK_MONITOR_DB", raising=False)
     rc.reset_caches_for_testing()
     yield str(db)
     rc.reset_caches_for_testing()
@@ -57,7 +61,8 @@ def insert_request(
 ):
     """Insert one synthetic monitor row."""
     ts = (dt.datetime.now() - dt.timedelta(seconds=seconds_ago)).isoformat()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=2.0)
+    conn.execute("PRAGMA synchronous=OFF")
     conn.execute(
         """INSERT INTO requests (timestamp, model, request_type, input_tokens,
               output_tokens, estimated_cost, cache_read_tokens, cache_creation_tokens, session_id)
