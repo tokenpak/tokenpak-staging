@@ -1387,8 +1387,8 @@ def _handle_pak_status(handler: Any) -> None:
 
     state = detect_daemon_state()
 
-    # multipak.enabled config flag — read dynamically per
-    # ``feedback_always_dynamic.md``. The flag lives under ``pro.multipak.
+    # multipak.enabled config flag — read dynamically (discovery stays
+    # dynamic). The flag lives under ``pro.multipak.
     # enabled`` in ``~/.tokenpak/config.yaml``. Default false until soak.
     multipak_enabled = _read_multipak_enabled()
 

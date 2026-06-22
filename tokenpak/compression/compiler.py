@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 
+from ..sources.url_adapter import SourceFetchError as _SourceFetchError
+from ..sources.url_adapter import _validate_url_safe
 from .reference_fetcher import fetch_reference
 from .reference_scanner import Reference, scan_for_references
 from .wire import make_slice_id, pack
@@ -93,6 +95,22 @@ def _estimate_tokens(text: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _is_safe_ref(ref: Reference) -> bool:
+    """Return False for references whose URL targets a local/private/metadata
+    address.
+
+    Applies the URL-adapter SSRF guard to content-driven auto-fetch so a
+    metadata URL embedded in prompt/doc content (e.g. ``http://169.254.169.254/``)
+    is never auto-fetched. This only filters unsafe targets; it does not change
+    the ``_inject_refs`` default-on behaviour.
+    """
+    try:
+        _validate_url_safe(ref.resolved_url)
+        return True
+    except _SourceFetchError:
+        return False
+
+
 def _build_ephemeral_block(ref: Reference, content: str) -> dict:
     """Wrap fetched reference content as an ephemeral wire block dict."""
     tokens = _estimate_tokens(content)
@@ -145,6 +163,9 @@ def compile_with_refs(
     # 1. Scan for references
     all_text = query + "\n" + "\n".join(b.get("content", "") for b in blocks)
     refs = scan_for_references(all_text)
+    # SSRF guard: drop refs whose URL targets local/private/metadata hosts so a
+    # content-embedded URL is never auto-fetched (does not change _inject_refs).
+    refs = [r for r in refs if _is_safe_ref(r)]
 
     # 2. Load cache
     cache = _load_cache(cache_path)

@@ -40,9 +40,10 @@ from __future__ import annotations
 
 import sys
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
+from .._local_data import default_spend_guard_db_path as _default_spend_guard_db_path
 from .contracts import PreflightDecision, RiskEstimate, TIPDirective
 
 # Default fraction of a model's max context above which a request is held
@@ -208,7 +209,7 @@ class SpendGuardConfig:
 
     # ── Operational knobs ──
     pending_ttl_seconds: int = 600
-    audit_db_path: str = "~/.tokenpak/spend_guard.db"
+    audit_db_path: str = field(default_factory=_default_spend_guard_db_path)
     # Below this projected-cost floor we don't even audit (avoid noise).
     audit_min_cost_usd: float = 0.10
 
@@ -225,7 +226,7 @@ class SpendGuardConfig:
     # ── Rolling/cumulative caps (2026-05-15 post-incident P0) ──
     # Supplements the per-session cap. Catches the 2026-05-15 pattern
     # where 64 sub-cap sessions cumulated to $566 in 8 hours. Default
-    # values per packet p0-rolling-spend-guard-caps-2026-05-15.md.
+    # values per the rolling spend-guard cap policy.
     rolling_caps_enabled: bool = True
     rolling_caps_window_seconds: int = 3600
     rolling_caps_per_agent_max_cost_usd: float = 20.0
