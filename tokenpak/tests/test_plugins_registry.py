@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from tokenpak.plugins.base import CompressorPlugin
-from tokenpak.plugins.registry import PluginRegistry
+from tokenpak.plugins.registry import _CWD_PLUGIN_CONFIG_ENV, PluginRegistry
 
 # ---------------------------------------------------------------------------
 # Concrete plugin fixtures
@@ -291,26 +291,15 @@ class TestDiscoverFromConfigYaml:
 
 
 # ---------------------------------------------------------------------------
-# _discover_from_config() — legacy JSON fallback
+# _discover_from_config() — legacy CWD JSON fallback
 # ---------------------------------------------------------------------------
 
 class TestDiscoverFromConfigLegacyJson:
-    def test_legacy_json_loads_plugins(self, tmp_path, monkeypatch):
+    def test_legacy_json_is_ignored_by_default(self, tmp_path, monkeypatch, caplog):
         monkeypatch.chdir(tmp_path)
         cfg = {"plugins": ["tokenpak.plugins.examples.passthrough.PassthroughPlugin"]}
         (tmp_path / "tokenpak.config.json").write_text(json.dumps(cfg))
-
-        reg = PluginRegistry()
-        with patch("tokenpak.core.config_loader.get") as mock_get:
-            mock_get.return_value = []  # canonical list is empty → fall to legacy
-            reg._discover_from_config()
-
-        assert len(reg.get_plugins()) == 1
-
-    def test_legacy_json_emits_deprecation_warning(self, tmp_path, monkeypatch, caplog):
-        monkeypatch.chdir(tmp_path)
-        cfg = {"plugins": ["tokenpak.plugins.examples.passthrough.PassthroughPlugin"]}
-        (tmp_path / "tokenpak.config.json").write_text(json.dumps(cfg))
+        monkeypatch.delenv(_CWD_PLUGIN_CONFIG_ENV, raising=False)
 
         reg = PluginRegistry()
         with patch("tokenpak.core.config_loader.get") as mock_get:
@@ -318,11 +307,31 @@ class TestDiscoverFromConfigLegacyJson:
             with caplog.at_level(logging.WARNING, logger="tokenpak.plugins.registry"):
                 reg._discover_from_config()
 
+        assert reg.get_plugins() == []
+        assert "Ignoring tokenpak.config.json" in caplog.text
+
+    def test_legacy_json_loads_plugins_with_explicit_opt_in(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        monkeypatch.chdir(tmp_path)
+        cfg = {"plugins": ["tokenpak.plugins.examples.passthrough.PassthroughPlugin"]}
+        (tmp_path / "tokenpak.config.json").write_text(json.dumps(cfg))
+        monkeypatch.setenv(_CWD_PLUGIN_CONFIG_ENV, "1")
+
+        reg = PluginRegistry()
+        with patch("tokenpak.core.config_loader.get") as mock_get:
+            mock_get.return_value = []
+            with caplog.at_level(logging.WARNING, logger="tokenpak.plugins.registry"):
+                reg._discover_from_config()
+
+        assert len(reg.get_plugins()) == 1
         assert "deprecated" in caplog.text.lower()
+        assert _CWD_PLUGIN_CONFIG_ENV in caplog.text
 
     def test_legacy_json_missing_plugins_key_noop(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "tokenpak.config.json").write_text(json.dumps({}))
+        monkeypatch.setenv(_CWD_PLUGIN_CONFIG_ENV, "1")
 
         reg = PluginRegistry()
         with patch("tokenpak.core.config_loader.get") as mock_get:
@@ -334,6 +343,7 @@ class TestDiscoverFromConfigLegacyJson:
     def test_legacy_json_malformed_warns_and_skips(self, tmp_path, monkeypatch, caplog):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "tokenpak.config.json").write_text("NOT VALID JSON {{")
+        monkeypatch.setenv(_CWD_PLUGIN_CONFIG_ENV, "1")
 
         reg = PluginRegistry()
         with patch("tokenpak.core.config_loader.get") as mock_get:

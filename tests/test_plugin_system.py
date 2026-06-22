@@ -7,7 +7,7 @@ import textwrap
 import pytest
 
 from tokenpak.plugins.base import CompressorPlugin
-from tokenpak.plugins.registry import PluginRegistry
+from tokenpak.plugins.registry import _CWD_PLUGIN_CONFIG_ENV, PluginRegistry
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -184,13 +184,50 @@ def test_env_var_discovery(registry, monkeypatch):
 # 10. Config file discovery works
 # ---------------------------------------------------------------------------
 
-def test_config_file_discovery(registry, tmp_path, monkeypatch):
+def test_config_file_discovery(registry):
+    from unittest.mock import patch
+
+    with patch("tokenpak.core.config_loader.get") as mock_get:
+        mock_get.return_value = [
+            "tokenpak.plugins.examples.passthrough.PassthroughPlugin"
+        ]
+        registry._discover_from_config()
+
+    plugins = registry.get_plugins()
+    assert len(plugins) == 1
+    assert plugins[0].name == "passthrough"
+
+
+def test_cwd_legacy_config_ignored_by_default(registry, tmp_path, monkeypatch, caplog):
+    from unittest.mock import patch
+
     config = {"plugins": ["tokenpak.plugins.examples.passthrough.PassthroughPlugin"]}
-    config_file = tmp_path / "tokenpak.config.json"
-    config_file.write_text(json.dumps(config))
+    (tmp_path / "tokenpak.config.json").write_text(json.dumps(config))
 
     monkeypatch.chdir(tmp_path)
-    registry._discover_from_config()
+    monkeypatch.delenv(_CWD_PLUGIN_CONFIG_ENV, raising=False)
+
+    with patch("tokenpak.core.config_loader.get") as mock_get:
+        mock_get.return_value = []
+        with caplog.at_level(logging.WARNING, logger="tokenpak.plugins.registry"):
+            registry._discover_from_config()
+
+    assert registry.get_plugins() == []
+    assert "Ignoring tokenpak.config.json" in caplog.text
+
+
+def test_cwd_legacy_config_requires_explicit_opt_in(registry, tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    config = {"plugins": ["tokenpak.plugins.examples.passthrough.PassthroughPlugin"]}
+    (tmp_path / "tokenpak.config.json").write_text(json.dumps(config))
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(_CWD_PLUGIN_CONFIG_ENV, "1")
+
+    with patch("tokenpak.core.config_loader.get") as mock_get:
+        mock_get.return_value = []
+        registry._discover_from_config()
 
     plugins = registry.get_plugins()
     assert len(plugins) == 1
@@ -236,18 +273,17 @@ def test_discover_combines_env_and_config(tmp_path, monkeypatch):
 
     sys.path.insert(0, str(tmp_path))
     try:
-        config = {"plugins": ["my_config_plugin.ConfigPlugin"]}
-        config_file = tmp_path / "tokenpak.config.json"
-        config_file.write_text(json.dumps(config))
-
-        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(
             "TOKENPAK_PLUGINS",
             "tokenpak.plugins.examples.passthrough.PassthroughPlugin",
         )
 
         reg = PluginRegistry()
-        reg.discover()
+        from unittest.mock import patch
+
+        with patch("tokenpak.core.config_loader.get") as mock_get:
+            mock_get.return_value = ["my_config_plugin.ConfigPlugin"]
+            reg.discover()
         names = {p.name for p in reg.get_plugins()}
         assert "passthrough" in names
         assert "config_plugin" in names
