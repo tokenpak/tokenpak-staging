@@ -13,8 +13,8 @@ config file without explicit opt-in and per-client write logic.
 Design goals:
     - Zero runtime dependency on the proxy (works before it's started).
     - Detection is best-effort and never fails the command.
-    - Adding a new client = one Integration entry (stay dynamic, per
-      feedback_always_dynamic memory).
+    - Adding a new client = one Integration entry (stay dynamic — no
+      hardcoded enumeration).
 """
 
 from __future__ import annotations
