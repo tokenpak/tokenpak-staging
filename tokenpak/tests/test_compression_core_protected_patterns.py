@@ -48,7 +48,7 @@ class TestProtectedPatternClassification:
 
 class TestProtectedPatternsAreNeutral:
     def test_patterns_encode_no_specific_folder_identity(self):
-        """The shipped pattern list must not name any personal/fleet folder.
+        """The shipped pattern list must not name any personal folder.
 
         Only the neutral semantic subtree names are permitted as alpha
         tokens; the numbered-section rule is purely structural.
