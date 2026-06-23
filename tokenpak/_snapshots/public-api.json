@@ -7976,6 +7976,26 @@
       "name": "GrokAdapter"
     },
     {
+      "module": "tokenpak.proxy.adapters.hermes_adapter",
+      "name": "CanonicalRequest"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.hermes_adapter",
+      "name": "FormatAdapter"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.hermes_adapter",
+      "name": "HermesAdapter"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.hermes_adapter",
+      "name": "TIP_ROUTE_CLASS_V1"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.hermes_adapter",
+      "name": "TIP_TELEMETRY_ATTRIBUTION_V1"
+    },
+    {
       "module": "tokenpak.proxy.adapters.jina_embedding",
       "name": "CanonicalEmbeddingRequest"
     },
@@ -8085,11 +8105,27 @@
     },
     {
       "module": "tokenpak.proxy.adapters.registry",
+      "name": "ASSERTED_TIP_VERSION"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.registry",
+      "name": "AdapterCompatibilityError"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.registry",
       "name": "AdapterRegistry"
     },
     {
       "module": "tokenpak.proxy.adapters.registry",
+      "name": "AdapterSelfTestResult"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.registry",
       "name": "FormatAdapter"
+    },
+    {
+      "module": "tokenpak.proxy.adapters.registry",
+      "name": "validate_adapter_compatibility"
     },
     {
       "module": "tokenpak.proxy.adapters.utils",
@@ -15938,6 +15974,38 @@
     {
       "module": "tokenpak.tip",
       "name": "parse_context_level"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "ASSERTED_TIP_VERSION"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "AdapterCapabilityContract"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "AdapterCompatibilityError"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "TIP_VERSION_DEFAULT_MAX"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "TIP_VERSION_DEFAULT_MIN"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "TipVersion"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "is_known_capability"
+    },
+    {
+      "module": "tokenpak.tip.adapter_contract",
+      "name": "validate_adapter_compatibility"
     },
     {
       "module": "tokenpak.tip.cache_contract",

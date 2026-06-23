@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Callable, FrozenSet, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, FrozenSet, Mapping, Optional, Tuple
 
 from .canonical import CanonicalRequest
+
+if TYPE_CHECKING:
+    from tokenpak.tip.adapter_contract import AdapterCapabilityContract
 
 TokenCounter = Callable[[str], int]
 
@@ -18,6 +21,25 @@ class FormatAdapter(ABC):
     # TIP-1.0 capability labels this adapter publishes. Subclasses override
     # with a frozenset of ``tip.<group>.<feature>`` label strings.
     capabilities: FrozenSet[str] = frozenset()
+    # Inclusive TIP version range this adapter supports. Defaults accept any
+    # minor within TIP-1 (TIP-1.0 .. TIP-1.x); subclasses override to narrow.
+    tip_min_version: str = "TIP-1.0"
+    tip_max_version: str = "TIP-1.x"
+
+    def capability_contract(self) -> "AdapterCapabilityContract":
+        """Return this adapter's declared TIP capability contract.
+
+        Built from ``source_format`` / ``capabilities`` / ``tip_min_version`` /
+        ``tip_max_version``. The proxy validates this at adapter load / startup.
+        """
+        from tokenpak.tip.adapter_contract import AdapterCapabilityContract
+
+        return AdapterCapabilityContract(
+            adapter_name=self.source_format,
+            tip_min_version=self.tip_min_version,
+            tip_max_version=self.tip_max_version,
+            capabilities=frozenset(self.capabilities),
+        )
 
     @abstractmethod
     def detect(self, path: str, headers: Mapping[str, str], body: Optional[bytes]) -> bool:
