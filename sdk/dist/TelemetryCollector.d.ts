@@ -1,12 +1,14 @@
 /**
  * TokenPak TelemetryCollector
- * Wraps the /telemetry/* HTTP endpoints.
+ * Wraps experimental /telemetry/* HTTP endpoints when a custom server provides them.
  * Tracks LLM usage, costs, and latency across your application.
  */
 import { TelemetryEvent, TelemetryStats, TokenPakConfig } from './types';
 export declare class TelemetryCollector {
     private readonly client;
+    private readonly experimentalEndpoints;
     constructor(config?: TokenPakConfig);
+    private requireExperimentalEndpoint;
     /**
      * Record a telemetry event.
      *

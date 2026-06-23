@@ -3,7 +3,8 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from tokenpak_local.utils import Block, TokenPak
+
+from tokenpak.sdk.local.utils import Block, TokenPak
 
 
 def _make_pack(instructions="", num_blocks=1):
@@ -23,7 +24,7 @@ class TestTokenPakOpenAICompatInit:
         with patch.dict("sys.modules", {"openai": None}):
             import importlib
 
-            import tokenpak_local.openai_compat as mod
+            import tokenpak.sdk.local.openai_compat as mod
 
             importlib.reload(mod)
             mod._OPENAI_AVAILABLE = False
@@ -38,7 +39,7 @@ class TestTokenPakOpenAICompatInit:
         with patch.dict("sys.modules", {"openai": mock_openai}):
             import importlib
 
-            import tokenpak_local.openai_compat as mod
+            import tokenpak.sdk.local.openai_compat as mod
 
             importlib.reload(mod)
             mod._OPENAI_AVAILABLE = True
@@ -58,7 +59,7 @@ class TestBuildMessages:
         with patch.dict("sys.modules", {"openai": mock_openai}):
             import importlib
 
-            import tokenpak_local.openai_compat as mod
+            import tokenpak.sdk.local.openai_compat as mod
 
             importlib.reload(mod)
             mod._OPENAI_AVAILABLE = True
@@ -127,7 +128,7 @@ class TestBuildMessages:
         with patch.dict("sys.modules", {"openai": mock_openai}):
             import importlib
 
-            import tokenpak_local.openai_compat as mod
+            import tokenpak.sdk.local.openai_compat as mod
 
             importlib.reload(mod)
             mod._OPENAI_AVAILABLE = True
@@ -145,13 +146,13 @@ class TestTokenPakLMStudio:
         with patch.dict("sys.modules", {"openai": mock_openai}):
             import importlib
 
-            import tokenpak_local.lmstudio as mod
+            import tokenpak.sdk.local.lmstudio as mod
 
             importlib.reload(mod)
             mod._OPENAI_AVAILABLE = True
             mod.OpenAI = mock_openai.OpenAI
 
-            import tokenpak_local.openai_compat as compat_mod
+            import tokenpak.sdk.local.openai_compat as compat_mod
 
             importlib.reload(compat_mod)
             compat_mod._OPENAI_AVAILABLE = True

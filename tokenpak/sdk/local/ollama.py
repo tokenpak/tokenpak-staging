@@ -5,7 +5,7 @@ Provides TokenPakOllama: a thin wrapper around ollama.Client that accepts
 a TokenPak pack, auto-sizes the budget to the model's context window, and
 compiles the pack before calling Ollama.
 
-Requires: pip install tokenpak-local[ollama]
+Requires the optional ollama dependency.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class TokenPakOllama:
     set based on the model's known context window before compilation.
 
     Usage:
-        from tokenpak_local import TokenPakOllama, TokenPak, Block
+        from tokenpak.sdk.local import TokenPakOllama, TokenPak, Block
 
         client = TokenPakOllama()  # connects to http://localhost:11434
 
@@ -82,7 +82,7 @@ class TokenPakOllama:
         """
         if not _OLLAMA_AVAILABLE:
             raise ImportError(
-                "ollama package is required: pip install tokenpak-local[ollama]"
+                "ollama package is required: pip install ollama"
             )
         self._host = host
         self._output_fraction = output_fraction
