@@ -257,7 +257,7 @@ class RetryEngine:
         self.context = context
         self.partial_state: dict = partial_state if partial_state is not None else {}
         self.state_dir = Path(state_dir or DEFAULT_STATE_DIR)
-        self.agent_id = agent_id or os.environ.get("TOKENPAK_AGENT", "cali")
+        self.agent_id = agent_id or os.environ.get("TOKENPAK_AGENT", "default")
         self.wait_seconds = wait_seconds or cfg.get("wait_seconds", [1.0, 2.0, 4.0])
 
         # Per-error routing: defaults ← config file ← caller override

@@ -1,4 +1,4 @@
-"""DispatchWorker registry + prompt-overlay loader (Standards Delta v0 §5.1 + §16).
+"""DispatchWorker registry + prompt-overlay loader (Dispatch contract §5.1 + §16).
 
 This module turns the packaged worker/overlay YAML profiles into validated,
 registry-bound runtime records and provides the additive prompt-composition and
@@ -107,7 +107,7 @@ class RouteBindError(ValueError):
 
 
 class PromptOverlay(DispatchBaseModel):
-    """A prompt overlay record (Standards Delta v0 §16).
+    """A prompt overlay record (Dispatch contract §16).
 
     Overlays are *additive deltas* to a base worker prompt, never full
     replacements: ``mode`` is fixed to ``"additive"``. ``required_capabilities``

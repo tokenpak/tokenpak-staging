@@ -8,6 +8,11 @@ import sys
 
 from tokenpak.cli._messages import error
 
+# Public surface of this command module. ``error`` is a re-import from the
+# internal ``tokenpak.cli._messages`` helper module (never an intended public
+# entrypoint) and is scoped out of the API snapshot.
+__all__ = ["cmd_alerts_test"]
+
 
 def cmd_alerts_test(args) -> None:
     """Test an alert delivery channel by sending a sample payload."""

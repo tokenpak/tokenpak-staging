@@ -1,4 +1,4 @@
-"""FulfillmentLine runner — sequential station execution (Standards Delta v0 §5).
+"""FulfillmentLine runner — sequential station execution (Dispatch contract §5).
 
 The :class:`FulfillmentLine` is the top-level execution engine P-EXEC-01 ships. It
 takes a *selected, bound* route (from :class:`DispatchRuntime.select_route`) and
@@ -9,7 +9,7 @@ propagates.
 **Sequential execution only.** Stations run strictly in declaration order; the
 output of each station is available to the next. There is **no parallel
 execution** and **no branch primitive** in v0.1-alpha — these are a deliberate
-omission (Standards Delta v0 §13 "Explicitly NOT v0.1-alpha": parallel
+omission (Dispatch contract §13 "Explicitly NOT v0.1-alpha": parallel
 fulfillment, branch decisions). A FulfillmentLine is a *line*, not a graph; the
 runner asserts this by walking ``route.stations`` in order with no fan-out.
 
@@ -106,7 +106,7 @@ class LineStatus(str, Enum):
 
 @dataclass
 class FulfillmentResult:
-    """The result of running a FulfillmentLine (Standards Delta v0 §5).
+    """The result of running a FulfillmentLine (Dispatch contract §5).
 
     Carries the line status, the persisted :class:`DispatchRun`, the per-station
     :class:`DispatchStationRun` records produced, any :class:`DispatchDecision`
@@ -128,7 +128,7 @@ class FulfillmentResult:
 
 
 class FulfillmentLine:
-    """Sequential station-execution engine (Standards Delta v0 §5).
+    """Sequential station-execution engine (Dispatch contract §5).
 
     Construct with the foundation seams — a :class:`WorkerLLM` (the TIP worker
     boundary), a context provider, a :class:`RunLedger`, a worker registry, and
@@ -224,7 +224,7 @@ class FulfillmentLine:
         route_intent: Optional[str] = None,
         approval_granted: bool = False,
     ) -> FulfillmentResult:
-        """Resume an interrupted run (Standards Delta v0 §5.5).
+        """Resume an interrupted run (Dispatch contract §5.5).
 
         Reconciles the last station via :func:`reconcile_run`, persists the
         station-status transition, and — depending on the reconciliation verdict —
@@ -759,7 +759,7 @@ class FulfillmentLine:
                 "the job?"
             ),
             reason=(
-                "Standards Delta v0 §8: a station hit the Spend Guard cap hard "
+                "Dispatch contract §8: a station hit the Spend Guard cap hard "
                 "stop (reason=spend_guard_exceeded). Dispatch surfaces a decision "
                 "rather than bypassing Spend Guard."
             ),

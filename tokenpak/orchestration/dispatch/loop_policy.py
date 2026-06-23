@@ -41,7 +41,7 @@ from .models.common import StationLoopPolicy, WorkerLoopDefault
 from .models.enums import LoopStopCondition
 
 # ---------------------------------------------------------------------------
-# Route wall-second defaults (Standards Delta v0 §5.4, round-6 §4.6)
+# Route wall-second defaults (Dispatch contract §5.4, round-6 §4.6)
 # ---------------------------------------------------------------------------
 #
 # status: alpha_placeholder; recalibrate_before: v0.1-beta. These are GUT-FEEL

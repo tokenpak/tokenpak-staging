@@ -1,7 +1,7 @@
 """TokenPak Dispatch Run Ledger (P-LEDGER-01).
 
 The Run Ledger is the durable SQLite store for the ten Dispatch execution
-record classes produced during a run (Standards Delta v0 §4–§5). It lives under
+record classes produced during a run (Dispatch contract §4–§5). It lives under
 the canonical TokenPak home — ``~/.tpk/dispatch/runs.db``, resolved via
 :func:`tokenpak._paths.under` — and never writes into the project repo.
 

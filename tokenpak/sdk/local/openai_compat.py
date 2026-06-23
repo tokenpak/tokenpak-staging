@@ -6,7 +6,7 @@ Works with any server that speaks the OpenAI chat completions API, including:
   - Ollama OpenAI endpoint (http://localhost:11434/v1)
   - LocalAI, llama.cpp server, vLLM, TabbyAPI, etc.
 
-Requires: pip install tokenpak-local[openai]
+Requires the optional openai dependency.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class TokenPakOpenAICompat:
     budget before sending to the local endpoint.
 
     Usage (LM Studio):
-        from tokenpak_local import TokenPakOpenAICompat, TokenPak, Block
+        from tokenpak.sdk.local import TokenPakOpenAICompat, TokenPak, Block
 
         client = TokenPakOpenAICompat(base_url="http://localhost:1234/v1")
 
@@ -79,7 +79,7 @@ class TokenPakOpenAICompat:
         """
         if not _OPENAI_AVAILABLE:
             raise ImportError(
-                "openai package is required: pip install tokenpak-local[openai]"
+                "openai package is required: pip install openai"
             )
         self._base_url = base_url
         self._output_fraction = output_fraction
@@ -153,7 +153,7 @@ class TokenPakOpenAICompat:
         if tokenpak is not None:
             # Auto-set budget if not already set
             if not getattr(tokenpak, "budget", None):
-                tokenpak.telemetry.budget = self.budget_for(model)
+                tokenpak.budget = self.budget_for(model)
             try:
                 compiled = tokenpak.compile()
                 messages.extend(compiled.to_messages())

@@ -3,7 +3,8 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from tokenpak_local.utils import Block, TokenPak
+
+from tokenpak.sdk.local.utils import Block, TokenPak
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -28,7 +29,7 @@ class TestTokenPakOllamaInit:
             # Force re-import
             import importlib
 
-            import tokenpak_local.ollama as mod
+            import tokenpak.sdk.local.ollama as mod
 
             importlib.reload(mod)
             mod._OLLAMA_AVAILABLE = False
@@ -43,7 +44,7 @@ class TestTokenPakOllamaInit:
         with patch.dict("sys.modules", {"ollama": mock_ollama}):
             import importlib
 
-            import tokenpak_local.ollama as mod
+            import tokenpak.sdk.local.ollama as mod
 
             importlib.reload(mod)
             mod._OLLAMA_AVAILABLE = True
@@ -64,7 +65,7 @@ class TestTokenPakOllamaChat:
         with patch.dict("sys.modules", {"ollama": mock_ollama}):
             import importlib
 
-            import tokenpak_local.ollama as mod
+            import tokenpak.sdk.local.ollama as mod
 
             importlib.reload(mod)
             mod._OLLAMA_AVAILABLE = True
@@ -165,7 +166,7 @@ class TestBudgetFor:
         with patch.dict("sys.modules", {"ollama": mock_ollama}):
             import importlib
 
-            import tokenpak_local.ollama as mod
+            import tokenpak.sdk.local.ollama as mod
 
             importlib.reload(mod)
             mod._OLLAMA_AVAILABLE = True
@@ -200,7 +201,7 @@ class TestContextDetection:
         with patch.dict("sys.modules", {"ollama": mock_ollama}):
             import importlib
 
-            import tokenpak_local.ollama as mod
+            import tokenpak.sdk.local.ollama as mod
 
             importlib.reload(mod)
             mod._OLLAMA_AVAILABLE = True

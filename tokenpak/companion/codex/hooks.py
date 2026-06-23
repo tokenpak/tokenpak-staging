@@ -17,9 +17,9 @@ Hooks must be enabled via the ``hooks`` feature flag.
 The event set is held in :data:`_TOKENPAK_HOOK_EVENTS` — a declarative
 module-level table keyed by Codex event name. Adding a new event means
 appending an entry (and shipping a matching script); install / merge /
-uninstall flow through it without further code changes.  Per
-``feedback_always_dynamic.md``, no hardcoded enumeration of events lives
-inside a function body.
+uninstall flow through it without further code changes.  Discovery
+stays dynamic — no hardcoded enumeration of events lives inside a
+function body.
 """
 
 from __future__ import annotations

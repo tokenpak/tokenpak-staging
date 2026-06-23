@@ -231,8 +231,8 @@ def _devshim_tier(key: str) -> str:
     """Parse the requested tier out of a dev-shim key.
 
     Shape: ``TPK-DEVSHIM-<TIER>-<anything>``. Recognizes any *paid* tier
-    name from the canonical tier constants (no separate hardcoded list,
-    per ``feedback_always_dynamic``); defaults to Pro when no tier segment
+    name from the canonical tier constants (no separate hardcoded list —
+    discovery stays dynamic); defaults to Pro when no tier segment
     is present.
     """
     paid = {TIER_PRO, TIER_TEAM, TIER_ENTERPRISE}
@@ -538,7 +538,7 @@ def discover_plans() -> list[dict[str, Any]]:
     Tier presence is data-driven: a tier appears in the catalog only if
     at least one feature is gated to it, which means adding a new
     feature with a new tier automatically shows up here — no hardcoded
-    list to maintain (``feedback_always_dynamic.md``).
+    list to maintain (discovery stays dynamic).
 
     Pricing data is read from a discovery file at
     ``<TOKENPAK_HOME>/pricing.json`` when present; otherwise the

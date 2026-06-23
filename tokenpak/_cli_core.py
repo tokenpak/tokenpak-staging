@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Tuple
 
+from tokenpak import _paths
 from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
 from tokenpak._formatting import symbols as FS
 
@@ -380,13 +381,71 @@ def registered_command_names(parser=None) -> set:
 
 _plugin_commands_cache: Optional[dict] = None
 
+_PRO_PLUGIN_COMMANDS = frozenset({
+    "budget",
+    "compliance",
+    "compression",
+    "daemon",
+    "debug",
+    "diff",
+    "fingerprint",
+    "handoff",
+    "maintenance",
+    "metrics",
+    "multipak",
+    "policy",
+    "retain",
+    "route",
+    "run",
+    "sla",
+    "trigger",
+    "workflow",
+})
+
+
+def _env_truthy(name: str) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return False
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
 
 def _plugins_enabled() -> bool:
     """Return False only when discovery is explicitly disabled via env."""
+    if _env_truthy("TOKENPAK_DISABLE_PRO"):
+        return False
     val = os.environ.get("TOKENPAK_ENABLE_PLUGINS")
     if val is None:
         return True
     return val.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _pro_routing_disabled(argv: Optional[list] = None) -> bool:
+    """Return True when this invocation must avoid all Pro/plugin routing."""
+    if _env_truthy("TOKENPAK_DISABLE_PRO"):
+        return True
+    return bool(argv and "--oss" in argv)
+
+
+def _print_pro_command_unavailable(verb: str, *, disabled: bool = False) -> None:
+    if disabled:
+        print(
+            f"⚠ tokenpak {verb} has no OSS implementation; Pro routing is disabled.",
+            file=sys.stderr,
+        )
+        print(
+            "  Remove --oss / TOKENPAK_DISABLE_PRO=1 to use the Pro package when installed.",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"⚠ tokenpak {verb} requires TokenPak Pro.",
+        file=sys.stderr,
+    )
+    print(
+        "  Install tokenpak-paid and activate a license that includes this feature.",
+        file=sys.stderr,
+    )
 
 
 def _discover_plugin_commands(force: bool = False) -> dict:
@@ -4193,8 +4252,8 @@ def _build_user_template_parser(sub):
 # ── Version Control Commands ──────────────────────────────────────────────────
 
 PROXY_VERSION = "1.1.0"
-_LOCK_FILE = Path.home() / "vault" / "System" / "tokenpak.lock.json"
-_TOKENPAK_CFG = Path.home() / ".tokenpak" / "config.json"
+_LOCK_FILE = _paths.under("tokenpak.lock.json")
+_TOKENPAK_CFG = _paths.under("config.json")
 _PROXY_URL = "http://localhost:8766"
 
 
@@ -4623,32 +4682,18 @@ def cmd_uninstall(args):
 
 
 def cmd_config_sync(args):
-    """Pull latest config from canonical source (git/vault)."""
-    import subprocess as _sp
-
+    """Reconcile config against an explicit source or the local lock file."""
     source = getattr(args, "source", "git")
     dry_run = getattr(args, "dry_run", False)
 
     print(f"Syncing config from source: {source}")
 
     if source == "git":
-        vault_dir = Path.home() / "vault"
-        if not vault_dir.exists():
-            print(f"  ✗ Vault not found at {vault_dir}")
-            return
-        # Pull latest vault
-        result = _sp.run(
-            ["bash", str(vault_dir / "scripts" / "vault-sync.sh")],
-            capture_output=True,
-            text=True,
-            cwd=str(vault_dir),
-        )
-        if result.returncode == 0:
-            print("  ✓ Vault synced")
-        else:
-            print(f"  ⚠ Vault sync output: {result.stdout[-200:]}")
+        print("  Git-backed config sync is not bundled in the public CLI.")
+        print("  Use --source url with an explicit config URL, or manage config locally.")
 
-        # Compare lock file with current config
+        # Compare the local lock file with current config without invoking any
+        # host-private sync hooks.
         lock = _load_lock()
         try:
             cfg = json.loads(_TOKENPAK_CFG.read_text())
@@ -4675,8 +4720,19 @@ def cmd_config_sync(args):
         try:
             import urllib.request as _ur
 
-            with _ur.urlopen(url, timeout=10) as resp:
-                remote_cfg = json.loads(resp.read())
+            from tokenpak.sources.url_adapter import (
+                _MAX_RESPONSE_BYTES,
+                _read_capped,
+                _urlopen_checked,
+                _validate_url_safe,
+            )
+
+            # SSRF guard: reuse the URL-adapter scheme allowlist + private-IP
+            # block + redirect re-validation + byte cap (do not fork G4).
+            _validate_url_safe(url)
+            _req = _ur.Request(url, headers={"User-Agent": "TokenPak/1.0"})
+            with _urlopen_checked(_req, timeout=10) as resp:
+                remote_cfg = json.loads(_read_capped(resp, _MAX_RESPONSE_BYTES))
             print(f"  ✓ Fetched config from {url}")
             if dry_run:
                 print("  (dry-run: not applying)")
@@ -5065,6 +5121,43 @@ def _bare_help(name, description, subs, exit_nonzero=False):
     return _help
 
 
+def _extract_claude_budget(claude_tail):
+    """Split a ``claude`` passthrough tail into ``(budget, passthrough_args)``.
+
+    ``--budget <value>`` is the only tokenpak-owned flag; everything else passes
+    through verbatim to the claude binary. A missing or non-numeric value is a
+    clean usage error (exit 2) rather than an uncaught ``ValueError`` traceback,
+    and a trailing ``--budget`` with no value is no longer silently forwarded to
+    the claude binary.
+    """
+    budget = None
+    passthrough = []
+    i = 0
+    n = len(claude_tail)
+    while i < n:
+        if claude_tail[i] == "--budget":
+            if i + 1 >= n:
+                print(
+                    "tokenpak: --budget requires a numeric value (e.g. --budget 5.00)",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            raw = claude_tail[i + 1]
+            try:
+                budget = float(raw)
+            except ValueError:
+                print(
+                    f"tokenpak: --budget expects a number, got {raw!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            i += 2
+        else:
+            passthrough.append(claude_tail[i])
+            i += 1
+    return budget, passthrough
+
+
 def main():
     global _NO_TUI_FLAG
     # Strip --no-tui from argv before any other parsing so per-subcommand
@@ -5072,6 +5165,10 @@ def main():
     if "--no-tui" in sys.argv:
         _NO_TUI_FLAG = True
         sys.argv = [a for a in sys.argv if a != "--no-tui"]
+    forced_oss_global = False
+    if len(sys.argv) >= 2 and sys.argv[1] == "--oss":
+        forced_oss_global = True
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
 
     parser = build_parser()
 
@@ -5124,11 +5221,15 @@ def main():
     # after the verb is forwarded verbatim so the plugin owns its own flags
     # (including its own --help). Entitlement gating is the plugin's job.
     if raw_cmd and not raw_cmd.startswith("-") and raw_cmd not in known_cmds:
-        _plugin_cmds = _discover_plugin_commands()
+        _pro_disabled = forced_oss_global or _pro_routing_disabled(sys.argv[2:])
+        _plugin_cmds = {} if _pro_disabled else _discover_plugin_commands()
         if raw_cmd in _plugin_cmds:
             _verb_idx = sys.argv.index(raw_cmd)
             _rc = _dispatch_plugin_command(raw_cmd, sys.argv[_verb_idx + 1:])
             sys.exit(_rc)
+        if raw_cmd in _PRO_PLUGIN_COMMANDS:
+            _print_pro_command_unavailable(raw_cmd, disabled=_pro_disabled)
+            sys.exit(2)
 
     # If user asks --help on an unrecognised command, just show that command's usage + exit 0
     if (
@@ -5174,17 +5275,9 @@ def main():
     if raw_cmd == "claude":
         claude_idx = sys.argv.index("claude")
         claude_tail = sys.argv[claude_idx + 1:]
-        # Extract --budget (the only tokenpak-owned flag) if present
-        budget = None
-        passthrough = []
-        i = 0
-        while i < len(claude_tail):
-            if claude_tail[i] == "--budget" and i + 1 < len(claude_tail):
-                budget = float(claude_tail[i + 1])
-                i += 2
-            else:
-                passthrough.append(claude_tail[i])
-                i += 1
+        # Extract --budget (the only tokenpak-owned flag) if present; everything
+        # else passes through verbatim to the claude binary.
+        budget, passthrough = _extract_claude_budget(claude_tail)
         args = argparse.Namespace(
             command="claude", func=cmd_claude, budget=budget, args=passthrough, db=".tokenpak/registry.db"
         )
@@ -6581,7 +6674,7 @@ def _build_pakplan_parser(sub):
 def _build_dispatch_parser(sub):
     """Register the ``tokenpak dispatch`` command group (Dispatch v0.1-alpha).
 
-    TokenPak Dispatch is the OSS workflow-control layer (Standards Delta v0):
+    TokenPak Dispatch is the OSS workflow-control layer (Dispatch contract):
     Decision Inbox + ``run|status|inspect|decisions|approve|reject|pause|resume|
     cancel|discard-late|delivery|receipt`` verbs over the Run Ledger.
     Implementation lives in :mod:`tokenpak.cli.commands.dispatch_cmd`; lazy

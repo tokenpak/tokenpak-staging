@@ -2,8 +2,8 @@
 
 Loaded by path so the test does not depend on a particular package layout for
 ``scripts/``. Lives under tests/ (which both the conformance scan and the
-identity scan skip), so the deliberate trigger fixtures below — task-ID and
-private-path forms from the leak register — do not flag the test file itself.
+identity scan skip), so the deliberate structural trigger fixtures below do
+not flag the test file itself.
 """
 import importlib.util
 from pathlib import Path
@@ -41,8 +41,7 @@ def test_privacy_overclaim_flagged():
 
 
 def test_internal_leak_flagged():
-    # neutral leak-register forms (task-ID + private path), no agent name
-    findings = _scan("Tracked in TSR-42; logs under /home/sue/runs.")
+    findings = _scan("Tracked in ABC-42; logs under /home/privateuser/runs.")
     assert "internal" in _classes(findings)
 
 

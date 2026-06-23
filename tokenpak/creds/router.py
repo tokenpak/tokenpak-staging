@@ -16,9 +16,8 @@ Three-layer decision chain (first match wins):
 3. **Platform default** — pick the first healthy credential whose
    platform matches the destination host.
 
-Ambiguity at any layer = :class:`AmbiguousRoute`. Fail loudly per
-the Kevin 2026-04-16 scope decision — never silently route to the
-wrong account.
+Ambiguity at any layer = :class:`AmbiguousRoute`. Fail loudly by
+design; never silently route to the wrong account.
 """
 
 from __future__ import annotations
@@ -62,7 +61,7 @@ class RouteContext:
     ``destination_host`` is the host the request is bound for (the
     upstream provider, e.g. ``api.openai.com``). ``caller_identity`` is
     a free-form string the caller declares about itself (e.g.
-    ``openclaw:trix:main``) — the router matches it against glob
+    ``adapter:agent-a:main``) — the router matches it against glob
     patterns in routes.toml.
     """
 

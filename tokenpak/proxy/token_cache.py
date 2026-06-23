@@ -3,6 +3,7 @@ tokenpak.proxy.token_cache — LRU token count cache + counters.
 
 Extracted from runtime/proxy.py (L1143-1176, L6260-6270) as part of TPK-RESTRUCTURE-004.
 """
+import hashlib
 from typing import Dict
 
 # ---------------------------------------------------------------------------
@@ -24,16 +25,21 @@ def _inc_token_cache_miss() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hash-keyed FIFO token count cache
+# Digest-keyed FIFO token count cache
 # ---------------------------------------------------------------------------
 
-_TOKEN_COUNT_CACHE: Dict[int, int] = {}  # hash(text) -> token_count
+_TOKEN_COUNT_CACHE: Dict[str, int] = {}  # sha256(text) -> token_count
 _TOKEN_COUNT_CACHE_MAX = 1024
 
 
 def _token_count_cached(text: str, encoder) -> int:
-    """Count tokens with hash-keyed FIFO cache. Avoids re-encoding repeated text."""
-    key = hash(text)
+    """Count tokens with a digest-keyed FIFO cache. Avoids re-encoding repeated text.
+
+    Keyed on a SHA-256 digest of the text (not ``hash(text)``): the builtin hash
+    is collision-prone and process-randomised, which could return another text's
+    count and corrupt budget/truncation accounting.
+    """
+    key = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if key in _TOKEN_COUNT_CACHE:
         _inc_token_cache_hit()
         return _TOKEN_COUNT_CACHE[key]

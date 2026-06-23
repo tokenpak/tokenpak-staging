@@ -73,7 +73,7 @@ except (ImportError, AttributeError):
     }
 
 # ---------------------------------------------------------------------------
-# Current pricing rates (USD per 1K input/output tokens)
+# Current pricing rates (USD per 1,000,000 input/output tokens)
 # Source: official docs, 2026-02 snapshot
 # ---------------------------------------------------------------------------
 SEED_PRICING: List[dict] = [
@@ -252,19 +252,19 @@ class Pricing:
 
     provider: str
     model: str
-    input_rate: float  # USD per 1K tokens
-    output_rate: float  # USD per 1K tokens
+    input_rate: float  # USD per 1,000,000 tokens
+    output_rate: float  # USD per 1,000,000 tokens
     version: str
     effective_date: str
     source: str = "official"
 
     @property
     def input_per_token(self) -> float:
-        return self.input_rate / 1000.0
+        return self.input_rate / 1_000_000.0
 
     @property
     def output_per_token(self) -> float:
-        return self.output_rate / 1000.0
+        return self.output_rate / 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ class CostEngine:
     """
 
     # Fallback rates for unknown models
-    _FALLBACK_INPUT_RATE = 3.00  # USD/1K (sonnet-tier estimate)
+    _FALLBACK_INPUT_RATE = 3.00  # USD/1M (sonnet-tier estimate)
     _FALLBACK_OUTPUT_RATE = 15.00
 
     def __init__(self, db_path: str = ""):
@@ -435,6 +435,8 @@ class CostEngine:
         """Parse a timestamp string to YYYY-MM-DD, defaulting to today."""
         if not ts:
             return datetime.now(timezone.utc).date().isoformat()
+        if isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(float(ts), timezone.utc).date().isoformat()
         try:
             # Handle various ISO formats
             dt = ts.replace("Z", "+00:00")
@@ -583,7 +585,7 @@ class CostEngine:
                           u.output_billed AS output
                    FROM tp_events e
                    LEFT JOIN tp_usage u ON u.trace_id = e.trace_id
-                   WHERE DATE(e.ts) >= ? AND DATE(e.ts) <= ?
+                   WHERE DATE(e.ts, 'unixepoch') >= ? AND DATE(e.ts, 'unixepoch') <= ?
                      AND e.status != 'error'""",
                 (from_date, to_date),
             ).fetchall()

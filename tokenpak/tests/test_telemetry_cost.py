@@ -11,7 +11,7 @@ Avoids duplicating test_cost_integration.py coverage; focuses on:
   - _parse_date edge cases
   - Negative / clamped token inputs
 """
-
+from datetime import datetime, timezone
 
 import pytest
 
@@ -57,16 +57,16 @@ class TestPricingDataclass:
 
     def test_input_per_token(self):
         p = self._make_pricing(input_rate=3.0)
-        assert p.input_per_token == pytest.approx(0.003)
+        assert p.input_per_token == pytest.approx(0.000003)
 
     def test_output_per_token(self):
         p = self._make_pricing(output_rate=15.0)
-        assert p.output_per_token == pytest.approx(0.015)
+        assert p.output_per_token == pytest.approx(0.000015)
 
     def test_haiku_rates(self):
         p = self._make_pricing(input_rate=0.80, output_rate=4.0)
-        assert p.input_per_token == pytest.approx(0.0008)
-        assert p.output_per_token == pytest.approx(0.004)
+        assert p.input_per_token == pytest.approx(0.0000008)
+        assert p.output_per_token == pytest.approx(0.000004)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +178,12 @@ class TestPricingCatalog:
 class TestCalculateEdgeCases:
     """calculate() edge cases not in test_cost_integration."""
 
+    def test_sonnet_million_token_parity(self, engine):
+        """One million Sonnet input tokens at $3/1M costs about $3."""
+        result = engine.calculate("claude-sonnet-4-6", 1_000_000, 1_000_000, 0)
+        assert result.actual_cost == pytest.approx(3.0)
+        assert result.baseline_cost == pytest.approx(3.0)
+
     def test_cache_read_tokens_reduce_actual(self, engine):
         """cache_read_tokens lowers actual cost below baseline."""
         result = engine.calculate(
@@ -229,6 +235,82 @@ class TestCalculateEdgeCases:
     def test_result_has_correct_pricing_version(self, engine):
         result = engine.calculate("claude-haiku-4-6", 1000, 800, 200)
         assert result.pricing_version == CURRENT_PRICING_VERSION
+
+
+# ---------------------------------------------------------------------------
+# reprocess_costs
+# ---------------------------------------------------------------------------
+
+
+class TestReprocessCosts:
+    """CostEngine.reprocess_costs updates epoch-timestamped telemetry rows."""
+
+    def test_reprocess_costs_filters_unix_epoch_dates(self, engine):
+        event_ts = datetime(2026, 2, 27, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        conn = engine._connect()
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE tp_events (
+                    trace_id TEXT PRIMARY KEY,
+                    model TEXT,
+                    ts REAL,
+                    status TEXT
+                );
+                CREATE TABLE tp_usage (
+                    trace_id TEXT PRIMARY KEY,
+                    input_billed INTEGER,
+                    input_est INTEGER,
+                    output_billed INTEGER
+                );
+                CREATE TABLE tp_costs (
+                    trace_id TEXT PRIMARY KEY,
+                    baseline_cost REAL,
+                    actual_cost REAL,
+                    savings_total REAL,
+                    pricing_version TEXT,
+                    cost_source TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO tp_events (trace_id, model, ts, status) VALUES (?, ?, ?, ?)",
+                ("trace-epoch", "claude-sonnet-4-6", event_ts, "ok"),
+            )
+            conn.execute(
+                """INSERT INTO tp_usage
+                   (trace_id, input_billed, input_est, output_billed)
+                   VALUES (?, ?, ?, ?)""",
+                ("trace-epoch", 500_000, 1_000_000, 0),
+            )
+            conn.execute(
+                """INSERT INTO tp_costs
+                   (trace_id, baseline_cost, actual_cost, savings_total, pricing_version, cost_source)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                ("trace-epoch", 0.0, 0.0, 0.0, "v1", "stale"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        summary = engine.reprocess_costs("2026-02-27", "2026-02-27")
+
+        assert summary["rows_processed"] == 1
+        assert summary["rows_updated"] == 1
+        conn = engine._connect()
+        try:
+            row = conn.execute(
+                """SELECT baseline_cost, actual_cost, savings_total, pricing_version, cost_source
+                   FROM tp_costs WHERE trace_id = ?""",
+                ("trace-epoch",),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row["baseline_cost"] == pytest.approx(3.0)
+        assert row["actual_cost"] == pytest.approx(1.5)
+        assert row["savings_total"] == pytest.approx(1.5)
+        assert row["pricing_version"] == CURRENT_PRICING_VERSION
+        assert row["cost_source"] == "official"
 
 
 # ---------------------------------------------------------------------------
@@ -293,22 +375,22 @@ class TestModuleLevelHelpers:
         )
 
     def test_calculate_baseline_math(self, sonnet_pricing):
-        # 1000 input * 0.003 + 100 output * 0.015 = 3.0 + 1.5 = 4.5
+        # 1000 input * 0.000003 + 100 output * 0.000015 = 0.003 + 0.0015 = 0.0045
         result = calculate_baseline(1000, 100, sonnet_pricing)
-        assert result == pytest.approx(4.5)
+        assert result == pytest.approx(0.0045)
 
     def test_calculate_baseline_zero(self, sonnet_pricing):
         assert calculate_baseline(0, 0, sonnet_pricing) == pytest.approx(0.0)
 
     def test_calculate_actual_with_cache_reads(self, sonnet_pricing):
-        # final=1000, cache_read=400 → effective=600 * 0.003 + 100 * 0.015 = 1.8 + 1.5 = 3.3
+        # final=1000, cache_read=400 -> effective=600 * 0.000003 + 100 * 0.000015
         result = calculate_actual(1000, 100, sonnet_pricing, cache_read_tokens=400)
-        assert result == pytest.approx(3.3)
+        assert result == pytest.approx(0.0033)
 
     def test_calculate_actual_no_cache_reads(self, sonnet_pricing):
-        # 1000 * 0.003 + 100 * 0.015 = 3.0 + 1.5 = 4.5
+        # 1000 * 0.000003 + 100 * 0.000015 = 0.003 + 0.0015 = 0.0045
         result = calculate_actual(1000, 100, sonnet_pricing)
-        assert result == pytest.approx(4.5)
+        assert result == pytest.approx(0.0045)
 
     def test_calculate_savings_normal(self):
         amount, pct = calculate_savings(10.0, 6.0)
@@ -359,8 +441,11 @@ class TestParseDate:
         d = CostEngine._parse_date("2026-06-01")
         assert d == "2026-06-01"
 
+    def test_unix_epoch_number(self):
+        ts = datetime(2026, 2, 27, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        assert CostEngine._parse_date(ts) == "2026-02-27"
+
     def test_invalid_ts_returns_today(self):
-        from datetime import datetime, timezone
         d = CostEngine._parse_date("not-a-date")
         today = datetime.now(timezone.utc).date().isoformat()
         assert d == today

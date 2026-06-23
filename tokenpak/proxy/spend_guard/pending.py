@@ -8,7 +8,7 @@ gets a structured block response. The held request is replayed verbatim
 or expires after ``pending_ttl_seconds``.
 
 DB layout follows the ``monitor.db`` / ``budget.db`` convention:
-- One file at ``~/.tokenpak/spend_guard.db`` (configurable).
+- One file at ``~/.tpk/spend_guard.db`` (configurable).
 - Lazy CREATE TABLE IF NOT EXISTS.
 - Per-call ``sqlite3.connect`` — no pool. WAL not enabled (writes are infrequent).
 """
@@ -21,10 +21,20 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
+from .._local_data import (
+    resolve_spend_guard_db_path as _resolve_spend_guard_db_path,
+)
+from .._local_data import (
+    secure_sqlite_connect as _secure_sqlite_connect,
+)
+from .._local_data import (
+    sqlite_schema_cache_key as _sqlite_schema_cache_key,
+)
 from .contracts import PendingRequest
 
 # Credential-bearing request headers are NEVER persisted to spend_guard.db.
@@ -43,6 +53,8 @@ _SENSITIVE_HEADERS = frozenset({
     "cookie",
     "set-cookie",
 })
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: set[tuple[str, int, int]] = set()
 
 
 def redact_headers(headers: dict) -> dict:
@@ -59,20 +71,15 @@ def redact_headers(headers: dict) -> dict:
     }
 
 
-def _db_path(audit_db_path: str) -> Path:
-    """Expand and ensure parent dir exists (owner-only)."""
-    p = Path(os.path.expanduser(audit_db_path))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(p.parent, 0o700)
-    except OSError:
-        pass
-    return p
+def _db_path(audit_db_path: Optional[str]) -> Path:
+    """Resolve and ensure parent dir exists (owner-only)."""
+    return _resolve_spend_guard_db_path(audit_db_path)
 
 
 def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = _secure_sqlite_connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
     # The db holds request metadata — keep it owner-only (0600), like
     # credentials.toml. Best-effort; never fail a connect over perms.
     try:
@@ -84,39 +91,50 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Idempotent schema setup. Adds missing columns as the schema evolves."""
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS pending_requests (
-            pending_id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            expires_at REAL NOT NULL,
-            request_hash TEXT NOT NULL,
-            provider TEXT NOT NULL DEFAULT '',
-            model TEXT NOT NULL DEFAULT '',
-            projected_tokens INTEGER NOT NULL DEFAULT 0,
-            projected_cost_usd REAL NOT NULL DEFAULT 0.0,
-            raw_request_blob BLOB NOT NULL,
-            raw_request_headers TEXT NOT NULL DEFAULT '{}',
-            target_url TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending'
+    schema_key = _sqlite_schema_cache_key(conn)
+    if schema_key in _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if schema_key in _SCHEMA_READY:
+            return
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_requests (
+                pending_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                request_hash TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                projected_tokens INTEGER NOT NULL DEFAULT 0,
+                projected_cost_usd REAL NOT NULL DEFAULT 0.0,
+                raw_request_blob BLOB NOT NULL,
+                raw_request_headers TEXT NOT NULL DEFAULT '{}',
+                target_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending'
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_pending_session ON pending_requests(session_id, status)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_pending_hash ON pending_requests(request_hash, status)"
-    )
-    # One-time migration: redact credential headers from any rows written by
-    # an older build that persisted raw headers (raw credential-on-disk
-    # exposure). Gated by PRAGMA user_version so it runs exactly once per db;
-    # no rows are deleted, so held requests stay replayable.
-    if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
-        _redact_existing_rows(conn)
-        conn.execute("PRAGMA user_version = 1")
-    conn.commit()
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_session ON pending_requests(session_id, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_hash ON pending_requests(request_hash, status)"
+        )
+        # One-time migration: redact credential headers from any rows written by
+        # an older build that persisted raw headers (raw credential-on-disk
+        # exposure). Gated by PRAGMA user_version so it runs exactly once per db;
+        # no rows are deleted, so held requests stay replayable.
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+            _redact_existing_rows(conn)
+            conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        if schema_key is not None:
+            _SCHEMA_READY.add(schema_key)
 
 
 def _redact_existing_rows(conn: sqlite3.Connection) -> None:
@@ -164,7 +182,7 @@ class PendingStore:
     connection to keep the proxy thread-safe (BaseHTTPServer is per-request).
     """
 
-    def __init__(self, audit_db_path: str = "~/.tokenpak/spend_guard.db"):
+    def __init__(self, audit_db_path: Optional[str] = None):
         self.path = _db_path(audit_db_path)
 
     # -- store -------------------------------------------------------------

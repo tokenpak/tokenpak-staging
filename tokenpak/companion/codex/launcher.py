@@ -221,11 +221,7 @@ def main(args: list[str] | None = None) -> int:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(config.budget_daily_usd)
 
     env = os.environ.copy()
-    if config.profile != "balanced":
-        env["TOKENPAK_COMPANION_PROFILE"] = config.profile
-    default_journal_dir = str(config.journal_dir.__class__.home() / ".tokenpak" / "companion")
-    if str(config.journal_dir) != default_journal_dir:
-        env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
+    env.update(env_vars)
 
     # Point the child Codex process at the provisioned home and record the
     # PID sentinel (same PID survives execvpe, so it stays accurate). Do this

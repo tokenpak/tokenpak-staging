@@ -8,14 +8,16 @@
 // ---------------------------------------------------------------------------
 
 export interface TokenPakConfig {
-  /** Base URL of the TokenPak API server (default: http://localhost:8000) */
+  /** Base URL of the TokenPak proxy app API (default: http://127.0.0.1:8766) */
   baseUrl?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
-  /** API key for authentication (if TokenPak server requires it) */
+  /** Proxy key for authentication (sent as X-TPK-Key if configured) */
   apiKey?: string;
   /** HTTP headers to include in every request */
   headers?: Record<string, string>;
+  /** Enable legacy SDK endpoints only when a custom server implements them */
+  experimentalEndpoints?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,5 +180,15 @@ export class TokenPakTimeoutError extends TokenPakError {
   constructor(timeoutMs: number) {
     super(`Request timed out after ${timeoutMs}ms`);
     this.name = 'TokenPakTimeoutError';
+  }
+}
+
+export class TokenPakUnsupportedEndpointError extends TokenPakError {
+  constructor(feature: string, path: string) {
+    super(
+      `${feature} requires ${path}, which is not part of the shipped TokenPak app API. ` +
+        'Pass { experimentalEndpoints: true } only when your server implements that legacy endpoint.'
+    );
+    this.name = 'TokenPakUnsupportedEndpointError';
   }
 }

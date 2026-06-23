@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402,I001
 """release_check.py — Tier-1 release-check entrypoint + deterministic gates.
 
 ``make release-check`` runs the always-on baseline of cheap, deterministic,
@@ -13,8 +14,8 @@ Baseline gates:
   license           first-party README / LICENSE / package metadata declare
                     Apache-2.0 (third-party dependency notices excluded).
   leak              delta-style scan of changed files for internal identity /
-                    ticket-ID / private-path references (register:
-                    ``leak_patterns.txt``; mirrors the identity-language check).
+                    ticket-ID / private-path references (shared structural
+                    public-safety scanner; mirrors the identity-language check).
   help-verbs        every help-advertised CLI verb resolves to an implemented
                     handler — no phantom verbs. Minimal parser introspection
                     until the generated CLI registry lands.
@@ -36,6 +37,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RELEASE_GATE_DIR = REPO_ROOT / "scripts" / "release_gate"
+if str(RELEASE_GATE_DIR) not in sys.path:
+    sys.path.insert(0, str(RELEASE_GATE_DIR))
+
+from public_safety_scan import compiled_patterns, scan_text as scan_public_safety_text  # noqa: E402
 
 # Trove maturity classifiers, keyed by the lowercased README marker word.
 MATURITY_TO_CLASSIFIER = {
@@ -128,22 +135,15 @@ def gate_license(root: Path) -> GateResult:
 # gate: internal-reference leak (delta-style)
 # --------------------------------------------------------------------------- #
 def load_leak_patterns() -> list:
-    out = []
-    for line in (HERE / "leak_patterns.txt").read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if s and not s.startswith("#"):
-            out.append(s)
-    return [re.compile(p) for p in out]
+    return compiled_patterns("release")
 
 
 def scan_leaks(rel_path, text, patterns) -> list:
     """Pure: return 'path:line: pattern' strings for one file's content."""
-    hits = []
-    for i, line in enumerate(text.splitlines(), 1):
-        for rx in patterns:
-            if rx.search(line):
-                hits.append(f"{rel_path}:{i}: {rx.pattern}")
-    return hits
+    return [
+        f"{finding.path}:{finding.line}: {finding.label}"
+        for finding in scan_public_safety_text(rel_path, text, patterns)
+    ]
 
 
 def _changed_files(root: Path, base: str):
