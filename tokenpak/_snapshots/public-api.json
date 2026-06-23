@@ -841,6 +841,10 @@
     },
     {
       "module": "tokenpak.cli.commands",
+      "name": "upgrade"
+    },
+    {
+      "module": "tokenpak.cli.commands",
       "name": "validate_config"
     },
     {
@@ -1321,6 +1325,10 @@
     },
     {
       "module": "tokenpak.cli.commands.license_cmd",
+      "name": "DEFAULT_UPGRADE_URL"
+    },
+    {
+      "module": "tokenpak.cli.commands.license_cmd",
       "name": "run_activate"
     },
     {
@@ -1761,6 +1769,10 @@
     },
     {
       "module": "tokenpak.cli.commands.status",
+      "name": "DEFAULT_UPGRADE_URL"
+    },
+    {
+      "module": "tokenpak.cli.commands.status",
       "name": "HAS_CLICK"
     },
     {
@@ -1838,6 +1850,26 @@
     {
       "module": "tokenpak.cli.commands.uninstall",
       "name": "run_uninstall"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "DEFAULT_UPGRADE_URL"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "UPGRADE_URL_ENV"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "build_parser"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "cmd_upgrade"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "resolve_upgrade_url"
     },
     {
       "module": "tokenpak.cli.commands.validate_config",
