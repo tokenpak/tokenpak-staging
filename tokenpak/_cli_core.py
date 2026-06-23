@@ -2312,7 +2312,7 @@ def cmd_codex(args):
         forwarded = ["--install-only", *forwarded]
     _maybe_update_nudge()
     from .companion.codex import launch
-    launch(args=forwarded)
+    sys.exit(launch(args=forwarded))
 
 
 def _codex_clean(argv):
@@ -2563,12 +2563,14 @@ def _build_codex_parser(sub):
             "  tokenpak codex doctor            # verify installation\n"
             "  tokenpak codex uninstall         # reverse installation\n"
             "  tokenpak codex statusline        # enable native status modules (additive)\n"
-            "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
-            "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
-            "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
+            "  tokenpak codex clean             # reclaim orphaned parallel-safe homes\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
-            "  tokenpak codex --model o3 -s workspace-write"
+            "  tokenpak codex --model o3 -s workspace-write\n\n"
+            "By default, TokenPak starts Codex in an automatic parallel-safe "
+            "session.\n"
+            "Advanced session modes remain available for debugging:\n"
+            "  TOKENPAK_CODEX_SESSION_MODE=shared|workspace|isolated"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

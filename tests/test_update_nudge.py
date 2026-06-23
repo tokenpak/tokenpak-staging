@@ -120,8 +120,12 @@ def test_only_launchers_nudge(monkeypatch):
     assert nudge.call_count == 1
 
     # codex launcher: nudges then launches.
-    monkeypatch.setattr("tokenpak.companion.codex.launch", mock.Mock(), raising=False)
-    _cli_core.cmd_codex(Namespace(args=[], budget=None, install_only=False))
+    monkeypatch.setattr(
+        "tokenpak.companion.codex.launch", mock.Mock(return_value=0), raising=False
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        _cli_core.cmd_codex(Namespace(args=[], budget=None, install_only=False))
+    assert excinfo.value.code == 0
     assert nudge.call_count == 2
 
     # A non-launcher verb (`update`) must NOT fire the nudge.

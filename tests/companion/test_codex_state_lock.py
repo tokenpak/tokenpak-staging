@@ -31,6 +31,15 @@ def codex_home(monkeypatch, tmp_path):
 
 def _make_state_db(home: Path) -> Path:
     db = home / sl.STATE_DB_NAME
+    return _make_db(db)
+
+
+def _make_log_db(home: Path) -> Path:
+    db = home / "logs_2.sqlite"
+    return _make_db(db)
+
+
+def _make_db(db: Path) -> Path:
     conn = sqlite3.connect(str(db))
     conn.execute("CREATE TABLE IF NOT EXISTS t (id INTEGER)")
     conn.commit()
@@ -78,6 +87,58 @@ def test_probe_detects_locked_db(codex_home):
         holder.close()
 
 
+def test_probe_detects_locked_log_db(codex_home):
+    db = _make_log_db(codex_home)
+    holder = sqlite3.connect(str(db), isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        status = sl.probe(codex_home)
+        assert status.locked is True
+        assert status.db_path == db
+        assert status.db_label == "log database"
+        assert "busy/locked" in status.detail
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_internal_wait_until_unlocked_retries_until_free(monkeypatch, codex_home):
+    locked = sl.LockStatus(
+        home=codex_home,
+        db_path=codex_home / "logs_2.sqlite",
+        exists=True,
+        locked=True,
+        detail="log database is busy/locked",
+        db_label="log database",
+    )
+    free = sl.LockStatus(
+        home=codex_home,
+        db_path=codex_home / "logs_2.sqlite",
+        exists=True,
+        locked=False,
+        detail="log database is free",
+        db_label="log database",
+    )
+    statuses = [locked, free]
+    sleeps = []
+
+    def fake_probe(home):
+        assert home == codex_home
+        return statuses.pop(0)
+
+    monkeypatch.setattr(sl, "probe", fake_probe)
+    monkeypatch.setattr(sl.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    status = sl._wait_until_unlocked(
+        codex_home,
+        timeout_s=1.0,
+        poll_interval_s=0.01,
+    )
+
+    assert status.locked is False
+    assert sleeps
+
+
 def test_locked_status_with_no_holder_pid_still_locked(codex_home):
     db = _make_state_db(codex_home)
     holder = sqlite3.connect(str(db), isolation_level=None)
@@ -103,28 +164,26 @@ def test_remediation_hint_for_locked_shared_home(codex_home):
         status = sl.probe(codex_home)
         hint = sl.remediation_hint(status)
         assert str(db) in hint
-        # message points the user at the isolation escape hatch
-        assert "TOKENPAK_CODEX_SESSION_MODE=workspace" in hint
-        assert "isolated" in hint
+        # message points the user back to the automatic parallel-safe path
+        assert "TokenPak auto mode normally starts a parallel-safe session" in hint
+        assert "unset the forced session mode" in hint
     finally:
         holder.execute("ROLLBACK")
         holder.close()
 
 
 def test_locked_with_live_holder_pid_names_it(codex_home, monkeypatch):
-    import os
-
     db = _make_state_db(codex_home)
-    # record our own (live) PID as the holder
-    (codex_home / "codex.pid").write_text(f"{os.getpid()}\n")
-    # ensure our PID is not classified as stopped
+    pid = 12345
+    (codex_home / "codex.pid").write_text(f"{pid}\n")
+    monkeypatch.setattr(sl, "_pid_alive", lambda p: p == pid)
     monkeypatch.setattr(sl, "_pid_stopped", lambda pid: False)
     holder = sqlite3.connect(str(db), isolation_level=None)
     holder.execute("BEGIN EXCLUSIVE")
     try:
         status = sl.probe(codex_home)
         assert status.locked is True
-        assert os.getpid() in status.holder_pids
+        assert pid in status.holder_pids
         assert "active Codex process" in status.detail
     finally:
         holder.execute("ROLLBACK")
@@ -132,12 +191,10 @@ def test_locked_with_live_holder_pid_names_it(codex_home, monkeypatch):
 
 
 def test_locked_with_stopped_holder_pid_distinct_message(codex_home, monkeypatch):
-    import os
-
     db = _make_state_db(codex_home)
-    pid = os.getpid()
+    pid = 12345
     (codex_home / "codex.pid").write_text(f"{pid}\n")
-    # force the stopped classification
+    monkeypatch.setattr(sl, "_pid_alive", lambda p: p == pid)
     monkeypatch.setattr(sl, "_pid_stopped", lambda p: True)
     holder = sqlite3.connect(str(db), isolation_level=None)
     holder.execute("BEGIN EXCLUSIVE")

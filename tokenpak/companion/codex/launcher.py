@@ -27,6 +27,8 @@ _TOKENPAK_CHATGPT_BASE_URL = "http://127.0.0.1:8766/v1"
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
 _TRUTHY = {"1", "true", "yes"}
+_CODEX_LOCK_WAIT_S = 8.0
+_CODEX_LOCK_POLL_S = 0.5
 
 
 def _bypass_env_enabled(env: dict[str, str] | None = None) -> bool:
@@ -112,23 +114,24 @@ def main(args: list[str] | None = None) -> int:
     progress = _LoadingStatus(sys.stderr)
 
     # ── Step 0a: Resolve CODEX_HOME isolation mode ───────────
-    # workspace = default isolation unit (per-project), isolated =
-    # advanced (per-session). shared = current behavior (literal default).
-    # Provisioning + preflight run before any exec so a contended home
-    # is surfaced instead of hung on.
+    # auto = default user contract: start with the per-project workspace
+    # home, then fall back to a fresh isolated home if it is busy.
+    # shared/workspace/isolated remain explicit advanced/debug modes.
     from . import session_home, state_lock
 
     codex_home = None
+    claimed_home = False
+    mode = "auto"
     try:
         mode = session_home.resolve_mode()
         if mode == session_home.MODE_ATTACH:
             progress.clear()
             print(
                 "tokenpak: TOKENPAK_CODEX_SESSION_MODE=attach is deferred; "
-                "falling back to shared mode",
+                "falling back to auto mode",
                 file=sys.stderr,
             )
-            mode = session_home.MODE_SHARED
+            mode = "auto"
         provisioned = session_home.provision_codex_home(mode)
         codex_home = provisioned.home
     except Exception as exc:  # never let isolation block the launcher
@@ -139,14 +142,6 @@ def main(args: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         provisioned = None
-
-    # State-lock preflight against the home that Codex will actually use.
-    if not install_only:
-        lock = state_lock.probe(codex_home)
-        if lock.locked:
-            progress.clear()
-            print(state_lock.remediation_hint(lock), file=sys.stderr)
-            return 1
 
     # ── Step 0: Refresh model-rate snapshot for shell hooks ──
     from .rates_snapshot import refresh as refresh_rates
@@ -206,6 +201,97 @@ def main(args: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
+    if not install_only:
+        progress.step("connecting to Codex")
+        if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
+            claimed_home = session_home._claim_home(provisioned.home)
+        if not claimed_home and provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
+            if mode == "auto":
+                try:
+                    fallback = session_home.provision_codex_home(
+                        session_home.MODE_ISOLATED
+                    )
+                    claimed_home = session_home._claim_home(fallback.home)
+                except Exception as exc:
+                    progress.clear()
+                    print(
+                        f"tokenpak: parallel-safe Codex session setup failed ({exc})",
+                        file=sys.stderr,
+                    )
+                    return 1
+                if not claimed_home:
+                    progress.clear()
+                    print(
+                        "tokenpak: parallel-safe Codex session setup failed "
+                        "(could not claim an isolated home)",
+                        file=sys.stderr,
+                    )
+                    return 1
+                progress.clear()
+                print(
+                    "tokenpak: Codex workspace is already active; starting a "
+                    "fresh parallel-safe session.",
+                    file=sys.stderr,
+                )
+                provisioned = fallback
+                codex_home = fallback.home
+            else:
+                progress.clear()
+                print(
+                    "tokenpak: Codex session home is already active; close the "
+                    "existing session or use the default auto mode.",
+                    file=sys.stderr,
+                )
+                return 1
+        lock = state_lock._wait_until_unlocked(
+            codex_home,
+            timeout_s=_CODEX_LOCK_WAIT_S,
+            poll_interval_s=_CODEX_LOCK_POLL_S,
+        )
+        if lock.locked:
+            if claimed_home and provisioned is not None:
+                session_home._release_home_claim(provisioned.home)
+                claimed_home = False
+            if mode == "auto":
+                try:
+                    fallback = session_home.provision_codex_home(
+                        session_home.MODE_ISOLATED
+                    )
+                    claimed_home = session_home._claim_home(fallback.home)
+                    if not claimed_home:
+                        raise RuntimeError("could not claim an isolated home")
+                    fallback_lock = state_lock._wait_until_unlocked(
+                        fallback.home,
+                        timeout_s=_CODEX_LOCK_WAIT_S,
+                        poll_interval_s=_CODEX_LOCK_POLL_S,
+                    )
+                except Exception as exc:
+                    progress.clear()
+                    print(
+                        f"tokenpak: parallel-safe Codex session setup failed ({exc})",
+                        file=sys.stderr,
+                    )
+                    return 1
+                if fallback_lock.locked:
+                    if claimed_home:
+                        session_home._release_home_claim(fallback.home)
+                        claimed_home = False
+                    progress.clear()
+                    print(state_lock.remediation_hint(fallback_lock), file=sys.stderr)
+                    return 1
+                progress.clear()
+                print(
+                    "tokenpak: local Codex data is busy; starting a fresh "
+                    "parallel-safe session.",
+                    file=sys.stderr,
+                )
+                provisioned = fallback
+                codex_home = fallback.home
+            else:
+                progress.clear()
+                print(state_lock.remediation_hint(lock), file=sys.stderr)
+                return 1
+
     progress.clear()
     _print_ready_banner(config, proxy_url, sys.stderr)
 
@@ -228,7 +314,8 @@ def main(args: list[str] | None = None) -> int:
     # before the bypass-flag injection so the bypass logic sees the final env.
     if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
         env = session_home.apply_to_env(provisioned.home, env)
-        session_home.record_pid(provisioned.home)
+        if not claimed_home:
+            session_home.record_pid(provisioned.home)
 
     fleet = _fleet_state_enabled()
     forwarded = _maybe_inject_bypass_flag(args, env, fleet=fleet)

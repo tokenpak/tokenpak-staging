@@ -33,8 +33,14 @@ def fake_home(monkeypatch, tmp_path):
 
 # ── mode resolution ──────────────────────────────────────────────────
 
-def test_resolve_mode_default_is_shared(fake_home):
-    assert sh.resolve_mode() == sh.MODE_SHARED
+def test_resolve_mode_default_is_auto(fake_home):
+    assert sh.resolve_mode() == "auto"
+
+
+@pytest.mark.parametrize("value", ["auto", "AUTO", " auto "])
+def test_resolve_mode_auto(fake_home, monkeypatch, value):
+    monkeypatch.setenv(sh.ENV_SESSION_MODE, value)
+    assert sh.resolve_mode() == "auto"
 
 
 @pytest.mark.parametrize("value", ["workspace", "WORKSPACE", " workspace "])
@@ -48,9 +54,9 @@ def test_resolve_mode_isolated(fake_home, monkeypatch):
     assert sh.resolve_mode() == sh.MODE_ISOLATED
 
 
-def test_resolve_mode_unknown_falls_back_to_shared(fake_home, monkeypatch):
+def test_resolve_mode_unknown_falls_back_to_auto(fake_home, monkeypatch):
     monkeypatch.setenv(sh.ENV_SESSION_MODE, "garbage-value")
-    assert sh.resolve_mode() == sh.MODE_SHARED
+    assert sh.resolve_mode() == "auto"
 
 
 def test_resolve_mode_attach_is_recognized_but_deferred(fake_home, monkeypatch):
@@ -81,6 +87,15 @@ def test_attach_mode_raises_not_implemented(fake_home):
 
 
 # ── workspace mode ────────────────────────────────────────────────────
+
+def test_provision_auto_uses_per_project_workspace_home(fake_home):
+    proj = fake_home / "projects" / "alpha"
+    proj.mkdir(parents=True)
+    res = sh.provision_codex_home("auto", workspace_dir=proj)
+    assert res.mode == "auto"
+    assert res.home == sh.workspaces_root() / sh.workspace_hash(proj)
+    assert res.home.parent == sh.workspaces_root()
+
 
 def test_provision_workspace_is_per_project_and_stable(fake_home):
     proj = fake_home / "projects" / "alpha"
@@ -187,6 +202,35 @@ def test_record_pid_writes_sentinel(fake_home):
     res = sh.provision_codex_home("isolated")
     sh.record_pid(res.home, pid=os.getpid())
     assert (res.home / "codex.pid").read_text().strip() == str(os.getpid())
+
+
+def test_internal_claim_home_writes_pid_sentinel(fake_home):
+    res = sh.provision_codex_home("isolated")
+    assert sh._claim_home(res.home, pid=1234) is True
+    assert (res.home / "codex.pid").read_text().strip() == "1234"
+
+
+def test_internal_claim_home_refuses_live_existing_claim(fake_home):
+    res = sh.provision_codex_home("isolated")
+    sh.record_pid(res.home, pid=os.getpid())
+    assert sh._claim_home(res.home, pid=1234) is False
+    assert (res.home / "codex.pid").read_text().strip() == str(os.getpid())
+
+
+def test_internal_claim_home_replaces_dead_existing_claim(fake_home):
+    res = sh.provision_codex_home("isolated")
+    sh.record_pid(res.home, pid=2147480000)
+    assert sh._claim_home(res.home, pid=1234) is True
+    assert (res.home / "codex.pid").read_text().strip() == "1234"
+
+
+def test_internal_release_home_claim_only_removes_matching_pid(fake_home):
+    res = sh.provision_codex_home("isolated")
+    sh._claim_home(res.home, pid=1234)
+    sh._release_home_claim(res.home, pid=5678)
+    assert (res.home / "codex.pid").exists()
+    sh._release_home_claim(res.home, pid=1234)
+    assert not (res.home / "codex.pid").exists()
 
 
 # ── orphan detection ──────────────────────────────────────────────────

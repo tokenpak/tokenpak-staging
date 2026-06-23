@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Codex state-database lock diagnostics for ``CODEX_HOME``.
+"""Codex local-database lock diagnostics for ``CODEX_HOME``.
 
-Codex keeps interactive session state in a single SQLite database
-(``state_5.sqlite``) under ``CODEX_HOME`` (default ``~/.codex/``).  When
-two Codex processes share the same home they contend over that database,
+Codex keeps interactive session state and logs in SQLite databases under
+``CODEX_HOME`` (default ``~/.codex/``).  When two Codex processes share the
+same home they can contend over those databases,
 and a Codex process that is suspended by job control (``Tl`` — stopped via
 SIGTSTP) keeps the file descriptors open without releasing the lock.  The
 result is a zombie-style lock: the foreground process blocks on a database
@@ -32,11 +32,18 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 # Codex's interactive state database filename under CODEX_HOME.
 STATE_DB_NAME = "state_5.sqlite"
+# Codex's log database can block startup independently of the state DB.
+_LOG_DB_NAME = "logs_2.sqlite"
+_PROBED_DBS = (
+    (STATE_DB_NAME, "state database"),
+    (_LOG_DB_NAME, "log database"),
+)
 
 # How long the probe waits for the database before declaring it locked.
 # Kept short — this is a preflight, not a retry loop.
@@ -45,11 +52,11 @@ _PROBE_TIMEOUT_S = 0.5
 
 @dataclass
 class LockStatus:
-    """Result of a state-lock preflight on one ``CODEX_HOME``.
+    """Result of a local-database preflight on one ``CODEX_HOME``.
 
-    ``locked`` is the load-bearing field: ``True`` means another
-    connection currently holds the state database and a fresh Codex
-    session in this home would contend.  ``holder_pids`` /
+    ``locked`` is the load-bearing field: ``True`` means another connection
+    currently holds a known Codex local database and a fresh Codex session in
+    this home would contend.  ``holder_pids`` /
     ``stopped_pids`` are best-effort context for the message — they may be
     empty even when ``locked`` is ``True`` (e.g. the holder PID could not
     be recovered) and that does not weaken the ``locked`` verdict.
@@ -62,6 +69,7 @@ class LockStatus:
     holder_pids: list[int] = field(default_factory=list)
     stopped_pids: list[int] = field(default_factory=list)
     detail: str = ""
+    db_label: str = "state database"
 
 
 def _db_path(home: Path) -> Path:
@@ -130,7 +138,7 @@ def _candidate_holder_pids(home: Path) -> list[int]:
 
 
 def probe(home: "Path | str | None" = None) -> LockStatus:
-    """Preflight the Codex state database under ``home``.
+    """Preflight Codex local databases under ``home``.
 
     ``home`` defaults to ``$CODEX_HOME`` then ``~/.codex``.  Returns a
     :class:`LockStatus`.  Never raises on a contended database — the lock
@@ -140,40 +148,54 @@ def probe(home: "Path | str | None" = None) -> LockStatus:
     if home is None:
         home = os.environ.get("CODEX_HOME") or (Path.home() / ".codex")
     home = Path(home)
-    db = _db_path(home)
+    first_existing: tuple[Path, str] | None = None
+    for db_name, db_label in _PROBED_DBS:
+        db = home / db_name
+        if not db.exists():
+            continue
+        if first_existing is None:
+            first_existing = (db, db_label)
+        locked = _is_locked(db)
+        if not locked:
+            continue
 
-    if not db.exists():
-        # No state database yet — a fresh home is by definition uncontended.
+        # Locked — gather best-effort holder context for the message.
+        current_pid = os.getpid()
+        candidates = [
+            p for p in _candidate_holder_pids(home)
+            if p != current_pid and _pid_alive(p)
+        ]
+        stopped = [p for p in candidates if _pid_stopped(p)]
+        detail = _format_lock_detail(candidates, stopped, db_label)
         return LockStatus(
             home=home,
             db_path=db,
-            exists=False,
-            locked=False,
-            detail="no state database yet (uncontended)",
+            exists=True,
+            locked=True,
+            holder_pids=candidates,
+            stopped_pids=stopped,
+            detail=detail,
+            db_label=db_label,
         )
 
-    locked = _is_locked(db)
-    if not locked:
+    if first_existing is not None:
+        db, db_label = first_existing
         return LockStatus(
             home=home,
             db_path=db,
             exists=True,
             locked=False,
-            detail="state database is free",
+            detail=f"{db_label} is free",
+            db_label=db_label,
         )
 
-    # Locked — gather best-effort holder context for the message.
-    candidates = [p for p in _candidate_holder_pids(home) if _pid_alive(p)]
-    stopped = [p for p in candidates if _pid_stopped(p)]
-    detail = _format_lock_detail(candidates, stopped)
+    # No known Codex DB exists yet — a fresh home is uncontended.
     return LockStatus(
         home=home,
-        db_path=db,
-        exists=True,
-        locked=True,
-        holder_pids=candidates,
-        stopped_pids=stopped,
-        detail=detail,
+        db_path=_db_path(home),
+        exists=False,
+        locked=False,
+        detail="no Codex database yet (uncontended)",
     )
 
 
@@ -212,36 +234,56 @@ def _is_locked(db: Path) -> bool:
                 pass
 
 
-def _format_lock_detail(holders: list[int], stopped: list[int]) -> str:
+def _format_lock_detail(
+    holders: list[int], stopped: list[int], db_label: str = "state database"
+) -> str:
     """Human-actionable description of who holds the lock and what to do."""
     if not holders:
         return (
-            "state database is locked by another Codex process "
+            f"{db_label} is busy/locked because another Codex process is using it "
             "(holder PID unavailable)"
         )
     if stopped:
         s = ", ".join(str(p) for p in stopped)
         return (
-            f"state database is locked by a stopped Codex process (PID {s}); "
+            f"{db_label} is busy/locked behind a stopped Codex process (PID {s}); "
             "a suspended session never releases the lock — resume it (fg) and "
             "exit, or terminate it"
         )
     h = ", ".join(str(p) for p in holders)
     return (
-        f"state database is locked by an active Codex process (PID {h}); "
-        "finish or close that session, or use an isolated home"
+        f"{db_label} is busy/locked behind an active Codex process (PID {h}); "
+        "finish or close that session"
     )
 
 
-def remediation_hint(status: LockStatus) -> str:
-    """Multi-line, mode-aware guidance for a locked shared home.
+def _wait_until_unlocked(
+    home: "Path | str | None" = None,
+    *,
+    timeout_s: float = 8.0,
+    poll_interval_s: float = 0.5,
+) -> LockStatus:
+    """Poll known Codex local databases until they are free or timeout."""
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    status = probe(home)
+    while status.locked and time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(max(0.01, poll_interval_s), remaining))
+        status = probe(home)
+    return status
 
-    Shown by the launcher preflight so the user is not left guessing how
-    to escape a contended ``~/.codex`` without re-deriving the isolation
-    design themselves.
+
+def remediation_hint(status: LockStatus) -> str:
+    """Multi-line, mode-aware guidance for a locked forced home.
+
+    Normal ``tokenpak codex`` launches use auto mode and route around
+    contention. This message is for explicit legacy/debug homes where the
+    user forced TokenPak to stay on a busy Codex home.
     """
     lines = [
-        f"tokenpak: Codex state database is locked: {status.db_path}",
+        f"tokenpak: still connecting to Codex; local data is busy: {status.db_path}",
         f"          {status.detail}",
     ]
     if status.stopped_pids:
@@ -251,8 +293,7 @@ def remediation_hint(status: LockStatus) -> str:
             f"kill -CONT {pids} ; or terminate: kill {pids}"
         )
     lines.append(
-        "          to run a parallel session without contention, set "
-        "TOKENPAK_CODEX_SESSION_MODE=workspace (per-project home) or "
-        "=isolated (fresh per-session home)."
+        "          TokenPak auto mode normally starts a parallel-safe session; "
+        "unset the forced session mode or close the listed session."
     )
     return "\n".join(lines)

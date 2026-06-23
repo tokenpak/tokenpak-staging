@@ -13,19 +13,18 @@ Isolation modes (env var ``TOKENPAK_CODEX_SESSION_MODE``):
 ==========  ============================================  ==========================
 mode        CODEX_HOME                                    semantics
 ==========  ============================================  ==========================
-``shared``  ``~/.codex/`` (or existing ``$CODEX_HOME``)   default; current behavior
+``auto``    ``~/.tokenpak/codex-workspaces/<hash>/``      default; parallel-safe
+                                                             with launcher fallback
+``shared``  ``~/.codex/`` (or existing ``$CODEX_HOME``)   legacy/debug behavior
 ``workspace`` ``~/.tokenpak/codex-workspaces/<hash>/``    per-project; durable state
 ``isolated``  ``~/.tokenpak/codex-sessions/<uuid>/``      per-session; ephemeral
 ``attach``  (deferred)                                     not implemented
 ==========  ============================================  ==========================
 
-**Option C** is the shipped policy: ``workspace`` is the natural default for
-interactive use (same project directory ⇒ same Codex state, different
-projects ⇒ no contention); ``isolated`` is the advanced mode for
-unattended multi-worker automation where multiple workers share one
-project and must not share state.  ``shared`` remains the literal default until a release flips
-the target default, so existing behavior is unchanged unless the user opts
-in.
+``auto`` is the shipped user-facing default. It starts with the durable
+per-project workspace home, and the launcher falls back to a fresh
+``isolated`` home if that workspace is already owned by another live Codex
+session. ``shared`` remains available only as an explicit legacy/debug mode.
 
 Auth/config propagation uses the never-mirror-credentials rule: we
 **symlink** ``auth.json`` and ``config.toml`` into the isolated home rather
@@ -53,6 +52,7 @@ from pathlib import Path
 
 # ── Mode constants ───────────────────────────────────────────────────
 MODE_SHARED = "shared"
+_MODE_AUTO = "auto"
 MODE_WORKSPACE = "workspace"
 MODE_ISOLATED = "isolated"
 MODE_ATTACH = "attach"  # deferred — see module docstring
@@ -61,7 +61,7 @@ ENV_SESSION_MODE = "TOKENPAK_CODEX_SESSION_MODE"
 ENV_CODEX_HOME = "CODEX_HOME"
 
 # Modes that resolve to a provisioned home under ~/.tokenpak.
-_ISOLATING_MODES = frozenset({MODE_WORKSPACE, MODE_ISOLATED})
+_ISOLATING_MODES = frozenset({_MODE_AUTO, MODE_WORKSPACE, MODE_ISOLATED})
 
 # Files symlinked from the canonical ~/.codex into a provisioned home.
 # auth.json: shared so Codex's external refresh is never forked.
@@ -119,19 +119,19 @@ def workspace_hash(workspace_dir: "Path | str") -> str:
 def resolve_mode(raw: "str | None" = None) -> str:
     """Normalize the session mode from the env (or an explicit value).
 
-    Unknown values fall back to ``shared`` rather than erroring — a typo
+    Unknown values fall back to ``auto`` rather than erroring — a typo
     in the env var must never break ``tokenpak codex`` for a user who just
     wants the default behavior.
     """
-    value = (raw if raw is not None else os.environ.get(ENV_SESSION_MODE) or MODE_SHARED)
+    value = (raw if raw is not None else os.environ.get(ENV_SESSION_MODE) or _MODE_AUTO)
     value = value.strip().lower()
-    if value in (MODE_SHARED, MODE_WORKSPACE, MODE_ISOLATED):
+    if value in (_MODE_AUTO, MODE_SHARED, MODE_WORKSPACE, MODE_ISOLATED):
         return value
     if value == MODE_ATTACH:
         # Deferred — degrade to shared with the same not-implemented signal
         # the launcher surfaces. Resolved here so callers have one code path.
         return MODE_ATTACH
-    return MODE_SHARED
+    return _MODE_AUTO
 
 
 # ── Provisioning ─────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ def provision_codex_home(
             "Codex upstream session-attach API. Use 'workspace' or 'isolated'."
         )
 
-    if resolved == MODE_WORKSPACE:
+    if resolved in (_MODE_AUTO, MODE_WORKSPACE):
         ws = workspace_dir if workspace_dir is not None else Path.cwd()
         home = workspaces_root() / workspace_hash(ws)
         # workspace homes are durable; run a retention sweep on the
@@ -256,6 +256,50 @@ def record_pid(home: Path, pid: "int | None" = None) -> None:
     pid = pid if pid is not None else os.getpid()
     try:
         (home / "codex.pid").write_text(f"{pid}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _claim_home(home: Path, pid: "int | None" = None) -> bool:
+    """Atomically claim a provisioned Codex home for the launching process.
+
+    This is an internal lease, not a user-facing lock. It closes the launch
+    race where two ``tokenpak codex`` processes could both find a workspace
+    database free before either Codex process opens it.
+    """
+    pid = pid if pid is not None else os.getpid()
+    sentinel = home / "codex.pid"
+    home.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            fd = os.open(str(sentinel), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(f"{pid}\n")
+            return True
+        except FileExistsError:
+            existing = _home_pid(home)
+            if existing == pid:
+                return True
+            if _pid_alive(existing):
+                return False
+            try:
+                sentinel.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+        except OSError:
+            return False
+
+
+def _release_home_claim(home: Path, pid: "int | None" = None) -> None:
+    """Release a claim written by this process, best-effort."""
+    pid = pid if pid is not None else os.getpid()
+    sentinel = home / "codex.pid"
+    if _home_pid(home) != pid:
+        return
+    try:
+        sentinel.unlink()
     except OSError:
         pass
 
