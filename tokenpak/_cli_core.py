@@ -537,6 +537,18 @@ def _is_first_run() -> bool:
     return not _FIRST_RUN_FLAG.exists()
 
 
+# Per-subcommand --json flags register under varying dest names (status uses
+# `as_json`, preview/others use `json`, etc.). Machine/JSON output must stay a
+# single parseable document, so human first-run/welcome prose is suppressed when
+# any of these are set rather than tied to a single global flag.
+_MACHINE_OUTPUT_FLAGS = ("json", "as_json", "json_output", "json_out")
+
+
+def _is_machine_output(args) -> bool:
+    """True when the resolved command requested machine-readable (JSON) output."""
+    return any(bool(getattr(args, attr, False)) for attr in _MACHINE_OUTPUT_FLAGS)
+
+
 def _print_quick_help():
     """Print the beginner-friendly --help output."""
     print(
@@ -5349,7 +5361,10 @@ def main():
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    if _is_first_run() and args.command not in ("help",):
+    # Skip entirely in machine/JSON mode: the welcome must never contaminate a
+    # machine stream, and the first-run flag is left unconsumed so a later
+    # interactive run still greets the human.
+    if _is_first_run() and args.command not in ("help",) and not _is_machine_output(args):
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
             "   Run `tokenpak demo` to see compression in action.\n"

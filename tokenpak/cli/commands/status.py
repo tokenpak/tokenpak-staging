@@ -1495,7 +1495,6 @@ def _run_json(
             "all_time": savings_all if not savings_all.get("error") else None,
         },
         "tip_cache": tip_cache,
-        "meme_lines": MEME_LINES,
     }
     print(json.dumps(output, indent=2, default=str))
 
