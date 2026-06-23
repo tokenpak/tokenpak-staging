@@ -116,10 +116,6 @@ def main(args: list[str] | None = None) -> int:
     settings_path = _write_settings(config)
     prompt_path = _write_system_prompt(config)
 
-    _TEAL = "\033[38;2;0;180;170m"
-    _DIM = "\033[2m"
-    _RESET = "\033[0m"
-
     mode = config.profile.capitalize()
     budget = f"${config.budget_daily_usd:.2f}/day" if config.budget_daily_usd > 0 else "Unlimited"
 
@@ -153,16 +149,15 @@ def main(args: list[str] | None = None) -> int:
     meme = random.choice(_MEME_LINES)
     version = _get_version()
 
-    print(file=sys.stderr)
-    bare_tag = " \u2022 Bare: ON" if config.bare else ""
-    print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Claude Companion", file=sys.stderr)
-    print(f"     {_DIM}TokenPak {version}{_RESET}", file=sys.stderr)
-    print(f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{bare_tag}{_RESET}", file=sys.stderr)
-    if proxy_url:
-        print(f"     {_DIM}Proxy active \u2192 {proxy_url}{_RESET}", file=sys.stderr)
-    print(file=sys.stderr)
-    print(f"     {_DIM}{meme}{_RESET}", file=sys.stderr)
-    print(file=sys.stderr)
+    for _line in _render_banner(
+        version=version,
+        mode=mode,
+        budget=budget,
+        proxy_url=proxy_url,
+        bare=config.bare,
+        meme=meme,
+    ):
+        print(_line, file=sys.stderr)
 
     # Prefix session name with 📦 so tokenpak sessions are visually distinct
     # in terminal tabs. If the user provided --name/-n, prefix their value;
@@ -206,6 +201,49 @@ def main(args: list[str] | None = None) -> int:
 
 
 _SESSION_PREFIX = "\U0001f4e6"  # 📦
+def _render_banner(
+    *,
+    version: str,
+    mode: str,
+    budget: str,
+    proxy_url: str = "",
+    bare: bool = False,
+    meme: str = "",
+    color: bool = True,
+) -> list[str]:
+    """Build the companion startup banner as a list of lines (one per row).
+
+    Returned as strings — not printed — so the banner, including the dynamic
+    license-tier badge, can be unit-tested without launching claude. The
+    product wordmark carries the active tier badge via :mod:`tokenpak.branding`:
+    Free renders plain ``TokenPak``, Pro renders ``TokenPak PRO``. The badge is
+    single-colour per the Brand Style Guide (the teal "Pak" split is
+    pre-existing and intentionally unchanged here).
+    """
+    from tokenpak.branding import product_label, tier_badge
+
+    teal = "\033[38;2;0;180;170m" if color else ""
+    dim = "\033[2m" if color else ""
+    reset = "\033[0m" if color else ""
+
+    badge = tier_badge()
+    badge_sfx = f" {badge}" if badge else ""
+    bare_tag = " • Bare: ON" if bare else ""
+
+    lines = [
+        "",
+        f"  \U0001f4e6 Token{teal}Pak{reset}{badge_sfx} Claude Companion",
+        f"     {dim}{product_label()} {version}{reset}",
+        f"     {dim}Ready • Mode: {mode} • Budget: {budget}{bare_tag}{reset}",
+    ]
+    if proxy_url:
+        lines.append(f"     {dim}Proxy active → {proxy_url}{reset}")
+    lines.append("")
+    lines.append(f"     {dim}{meme}{reset}")
+    lines.append("")
+    return lines
+
+
 _MEME_LINES = [
     "Your API bill called. It's crying.",
     "Context packed. Wallet intact.",
