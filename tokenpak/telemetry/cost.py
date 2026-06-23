@@ -74,22 +74,43 @@ except (ImportError, AttributeError):
 
 # ---------------------------------------------------------------------------
 # Current pricing rates (USD per 1,000,000 input/output tokens)
-# Source: official docs, 2026-02 snapshot
+# Source: official docs, 2026-06 snapshot
 # ---------------------------------------------------------------------------
 SEED_PRICING: List[dict] = [
     # Anthropic
     {
         "provider": "anthropic",
+        "model": "claude-fable-5",
+        "input_rate": 10.00,
+        "output_rate": 50.00,
+        "source": "official",
+    },
+    {
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "input_rate": 5.00,
+        "output_rate": 25.00,
+        "source": "official",
+    },
+    {
+        "provider": "anthropic",
+        "model": "claude-opus-4-7",
+        "input_rate": 5.00,
+        "output_rate": 25.00,
+        "source": "official",
+    },
+    {
+        "provider": "anthropic",
         "model": "claude-opus-4-6",
-        "input_rate": 15.00,
-        "output_rate": 75.00,
+        "input_rate": 5.00,
+        "output_rate": 25.00,
         "source": "official",
     },
     {
         "provider": "anthropic",
         "model": "claude-opus-4-5",
-        "input_rate": 15.00,
-        "output_rate": 75.00,
+        "input_rate": 5.00,
+        "output_rate": 25.00,
         "source": "official",
     },
     {
@@ -209,7 +230,7 @@ SEED_PRICING: List[dict] = [
     },
 ]
 
-CURRENT_PRICING_VERSION = "2026.02"
+CURRENT_PRICING_VERSION = "2026.06"
 CURRENT_EFFECTIVE_DATE = "2026-02-01"
 
 
@@ -312,7 +333,7 @@ class CostEngine:
     # DB init & seeding
     # ------------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, uri=self.db_path.startswith("file:"))
         conn.row_factory = sqlite3.Row
         return conn
 
