@@ -11,7 +11,7 @@ Avoids duplicating test_cost_integration.py coverage; focuses on:
   - _parse_date edge cases
   - Negative / clamped token inputs
 """
-
+from datetime import datetime, timezone
 
 import pytest
 
@@ -238,6 +238,82 @@ class TestCalculateEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# reprocess_costs
+# ---------------------------------------------------------------------------
+
+
+class TestReprocessCosts:
+    """CostEngine.reprocess_costs updates epoch-timestamped telemetry rows."""
+
+    def test_reprocess_costs_filters_unix_epoch_dates(self, engine):
+        event_ts = datetime(2026, 2, 27, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        conn = engine._connect()
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE tp_events (
+                    trace_id TEXT PRIMARY KEY,
+                    model TEXT,
+                    ts REAL,
+                    status TEXT
+                );
+                CREATE TABLE tp_usage (
+                    trace_id TEXT PRIMARY KEY,
+                    input_billed INTEGER,
+                    input_est INTEGER,
+                    output_billed INTEGER
+                );
+                CREATE TABLE tp_costs (
+                    trace_id TEXT PRIMARY KEY,
+                    baseline_cost REAL,
+                    actual_cost REAL,
+                    savings_total REAL,
+                    pricing_version TEXT,
+                    cost_source TEXT
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO tp_events (trace_id, model, ts, status) VALUES (?, ?, ?, ?)",
+                ("trace-epoch", "claude-sonnet-4-6", event_ts, "ok"),
+            )
+            conn.execute(
+                """INSERT INTO tp_usage
+                   (trace_id, input_billed, input_est, output_billed)
+                   VALUES (?, ?, ?, ?)""",
+                ("trace-epoch", 500_000, 1_000_000, 0),
+            )
+            conn.execute(
+                """INSERT INTO tp_costs
+                   (trace_id, baseline_cost, actual_cost, savings_total, pricing_version, cost_source)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                ("trace-epoch", 0.0, 0.0, 0.0, "v1", "stale"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        summary = engine.reprocess_costs("2026-02-27", "2026-02-27")
+
+        assert summary["rows_processed"] == 1
+        assert summary["rows_updated"] == 1
+        conn = engine._connect()
+        try:
+            row = conn.execute(
+                """SELECT baseline_cost, actual_cost, savings_total, pricing_version, cost_source
+                   FROM tp_costs WHERE trace_id = ?""",
+                ("trace-epoch",),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row["baseline_cost"] == pytest.approx(3.0)
+        assert row["actual_cost"] == pytest.approx(1.5)
+        assert row["savings_total"] == pytest.approx(1.5)
+        assert row["pricing_version"] == CURRENT_PRICING_VERSION
+        assert row["cost_source"] == "official"
+
+
+# ---------------------------------------------------------------------------
 # CostResult.to_dict
 # ---------------------------------------------------------------------------
 
@@ -365,8 +441,11 @@ class TestParseDate:
         d = CostEngine._parse_date("2026-06-01")
         assert d == "2026-06-01"
 
+    def test_unix_epoch_number(self):
+        ts = datetime(2026, 2, 27, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        assert CostEngine._parse_date(ts) == "2026-02-27"
+
     def test_invalid_ts_returns_today(self):
-        from datetime import datetime, timezone
         d = CostEngine._parse_date("not-a-date")
         today = datetime.now(timezone.utc).date().isoformat()
         assert d == today

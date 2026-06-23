@@ -435,6 +435,8 @@ class CostEngine:
         """Parse a timestamp string to YYYY-MM-DD, defaulting to today."""
         if not ts:
             return datetime.now(timezone.utc).date().isoformat()
+        if isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(float(ts), timezone.utc).date().isoformat()
         try:
             # Handle various ISO formats
             dt = ts.replace("Z", "+00:00")
@@ -583,7 +585,7 @@ class CostEngine:
                           u.output_billed AS output
                    FROM tp_events e
                    LEFT JOIN tp_usage u ON u.trace_id = e.trace_id
-                   WHERE DATE(e.ts) >= ? AND DATE(e.ts) <= ?
+                   WHERE DATE(e.ts, 'unixepoch') >= ? AND DATE(e.ts, 'unixepoch') <= ?
                      AND e.status != 'error'""",
                 (from_date, to_date),
             ).fetchall()
