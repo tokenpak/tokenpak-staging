@@ -41,6 +41,7 @@ _CODEX_BASH_HOOK = str(_CODEX_DIR / "hooks_pre_send.sh")
 _SESSION_START_HOOK = str(_CODEX_DIR / "hooks_session_start.sh")
 _PRE_TOOL_USE_HOOK = str(_CODEX_DIR / "hooks_pre_tool_use.sh")
 _POST_TOOL_USE_HOOK = str(_CODEX_DIR / "hooks_post_tool_use.sh")
+_STOP_HOOK = str(_CODEX_DIR / "hooks_stop.sh")
 _FIXTURES = _REPO_ROOT / "tests" / "fixtures" / "codex"
 
 _SIX_FIELD_INPUT = {
@@ -73,6 +74,27 @@ def _run_codex_bash_hook(
         env.update(extra_env)
     return subprocess.run(
         ["bash", _CODEX_BASH_HOOK],
+        input=json.dumps(hook_input),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        cwd=_REPO_ROOT,
+        env=env,
+    )
+
+
+def _run_stop_bash_hook(
+    hook_input: dict,
+    tmp_path: Path,
+    extra_env: dict | None = None,
+) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["TOKENPAK_COMPANION_ENABLED"] = "1"
+    env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(tmp_path)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", _STOP_HOOK],
         input=json.dumps(hook_input),
         capture_output=True,
         text=True,
@@ -169,6 +191,40 @@ def _seed_budget_db(tmp_path: Path, daily_cost: float) -> Path:
     return db
 
 
+def _install_fake_sqlite3(tmp_path: Path, select_output: str = "0.0") -> tuple[Path, dict]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    capture = tmp_path / "sqlite-capture.txt"
+    fake = bin_dir / "sqlite3"
+    fake.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            {
+              printf 'ARGS:'
+              for arg in "$@"; do
+                printf ' [%s]' "$arg"
+              done
+              printf '\\n'
+            } >> "$TOKENPAK_SQLITE_CAPTURE"
+            for arg in "$@"; do
+              case "$arg" in
+                *SELECT*) printf '%s\\n' "${TOKENPAK_SQLITE_SELECT_OUTPUT:-0.0}"; exit 0 ;;
+              esac
+            done
+            exit 0
+            """
+        )
+    )
+    fake.chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "TOKENPAK_SQLITE_CAPTURE": str(capture),
+        "TOKENPAK_SQLITE_SELECT_OUTPUT": select_output,
+    }
+    return capture, env
+
+
 # ──────────────────────────────────────────────────────────────
 # hooks #3 — pre-existing PR-45 contract, unchanged.
 # ──────────────────────────────────────────────────────────────
@@ -213,6 +269,55 @@ def test_codex_bash_hook_allow_no_budget(tmp_path):
     result = _run_codex_bash_hook(hook_input, tmp_path=tmp_path)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+
+
+def test_codex_bash_hook_preserves_decimal_rate_snapshot(tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_bytes(b"x" * 4_000_000)
+    rates_path = tmp_path / "model_rates.tsv"
+    rates_path.write_text("cheap-model\t0.8\n")
+    hook_input = dict(_SIX_FIELD_INPUT)
+    hook_input["transcript_path"] = str(transcript_path)
+    hook_input["model"] = "cheap-model"
+
+    result = _run_codex_bash_hook(
+        hook_input,
+        tmp_path=tmp_path,
+        extra_env={"TOKENPAK_COMPANION_RATES_FILE": str(rates_path)},
+    )
+
+    assert result.returncode == 0
+    assert "est $0.800000" in result.stderr
+
+
+def test_codex_bash_hook_sql_escapes_journal_values(tmp_path):
+    capture, fake_env = _install_fake_sqlite3(tmp_path)
+    (tmp_path / "journal.db").touch()
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_bytes(b"x" * 4000)
+    hook_input = dict(_SIX_FIELD_INPUT)
+    hook_input["session_id"] = "sess'quoted"
+    hook_input["model"] = "model'quoted"
+    hook_input["transcript_path"] = str(transcript_path)
+
+    result = _run_codex_bash_hook(hook_input, tmp_path=tmp_path, extra_env=fake_env)
+
+    assert result.returncode == 0
+    import time
+
+    captured_sql = ""
+    for _ in range(20):
+        if capture.exists():
+            captured_sql = capture.read_text()
+            if "sess''quoted" in captured_sql:
+                break
+        time.sleep(0.05)
+    assert captured_sql, "fake sqlite3 should have captured the journal write"
+    assert "PRAGMA journal_mode=WAL" in captured_sql
+    assert "PRAGMA busy_timeout=5000" in captured_sql
+    assert "PRAGMA foreign_keys=ON" in captured_sql
+    assert "sess''quoted" in captured_sql
+    assert "model''quoted" in captured_sql
 
 
 # ──────────────────────────────────────────────────────────────
@@ -415,6 +520,49 @@ def test_post_tool_use_hook_hardcap_emits_additional_context(tmp_path):
     spec = payload["hookSpecificOutput"]
     assert spec["hookEventName"] == "PostToolUse"
     assert "hard cap" in spec["additionalContext"].lower()
+
+
+# ──────────────────────────────────────────────────────────────
+# Stop fixture replay.
+# ──────────────────────────────────────────────────────────────
+
+
+def test_stop_hook_records_decimal_safe_cost_and_escaped_sql(tmp_path):
+    capture, fake_env = _install_fake_sqlite3(tmp_path)
+    (tmp_path / "journal.db").touch()
+    (tmp_path / "budget.db").touch()
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_bytes(b"x" * 800_000)
+    rates_path = tmp_path / "model_rates.tsv"
+    rates_path.write_text("model'quoted\t3\n")
+    hook_input = {
+        "session_id": "sess'quoted",
+        "transcript_path": str(transcript_path),
+        "cwd": str(tmp_path),
+        "hook_event_name": "Stop",
+        "model": "model'quoted",
+        "stop_hook_active": False,
+        "last_assistant_message": "",
+    }
+
+    result = _run_stop_bash_hook(
+        hook_input,
+        tmp_path=tmp_path,
+        extra_env={
+            **fake_env,
+            "TOKENPAK_COMPANION_RATES_FILE": str(rates_path),
+        },
+    )
+
+    assert result.returncode == 0
+    captured_sql = capture.read_text()
+    assert "PRAGMA journal_mode=WAL" in captured_sql
+    assert "PRAGMA busy_timeout=5000" in captured_sql
+    assert "PRAGMA foreign_keys=ON" in captured_sql
+    assert "sess''quoted" in captured_sql
+    assert "model''quoted" in captured_sql
+    assert "0.600000" in captured_sql
+    assert "0.000600" not in captured_sql
 
 
 # ──────────────────────────────────────────────────────────────

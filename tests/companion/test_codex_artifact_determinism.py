@@ -172,3 +172,26 @@ def test_rates_snapshot_content_is_sorted_deterministic(tmp_path):
     rates_snapshot.refresh(path=target)
     lines = [ln for ln in target.read_text().splitlines() if ln.strip()]
     assert lines == sorted(lines)
+
+
+def test_rates_snapshot_preserves_fractional_input_rates(tmp_path, monkeypatch):
+    """Sub-dollar rates must not round up before the shell hook estimate."""
+    from tokenpak.companion.codex import rates_snapshot
+
+    monkeypatch.setattr(rates_snapshot, "known_models", lambda: ["cheap-model", "whole-model"])
+
+    def fake_rates(model: str) -> dict[str, float]:
+        return {
+            "cheap-model": {"input": 0.8},
+            "whole-model": {"input": 3.0},
+        }[model]
+
+    monkeypatch.setattr(rates_snapshot, "get_rates", fake_rates)
+    target = tmp_path / "model_rates.tsv"
+
+    rates_snapshot.refresh(path=target)
+
+    assert target.read_text().splitlines() == [
+        "cheap-model\t0.8",
+        "whole-model\t3",
+    ]

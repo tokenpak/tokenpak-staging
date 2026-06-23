@@ -6,8 +6,8 @@ rules out Python invocation and jq parsing. A two-column TSV is sub-ms via
 awk and requires no tokenpak runtime on the critical path.
 
 The snapshot is regenerated every time the launcher runs, so registry edits
-propagate to hooks automatically.  Rate is rounded to whole dollars per
-1M input tokens — matches existing hook precision.
+propagate to hooks automatically.  Rates preserve fractional dollars per
+1M input tokens so low-cost models do not round up in hook estimates.
 """
 
 from __future__ import annotations
@@ -19,11 +19,16 @@ from tokenpak.models import get_rates, known_models
 DEFAULT_SNAPSHOT_PATH = Path.home() / ".tokenpak" / "companion" / "run" / "model_rates.tsv"
 
 
+def _format_rate(rate: float) -> str:
+    """Format a USD-per-1M-token rate without noisy trailing zeroes."""
+    return f"{rate:.6f}".rstrip("0").rstrip(".") or "0"
+
+
 def refresh(path: Path | None = None) -> Path:
     """Write ``<model>\\t<input_rate_usd_per_mtok>`` lines to ``path``.
 
-    Rate is an integer dollar value — sufficient precision for the
-    hook's budget gate (sub-dollar differences don't shift decisions).
+    Rate may include decimals; the shell hooks use awk for the final
+    dollar arithmetic while keeping lookup TSV-based.
     """
     out_path = path or DEFAULT_SNAPSHOT_PATH
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,8 +38,8 @@ def refresh(path: Path | None = None) -> Path:
         rates = get_rates(model)
         if not rates:
             continue
-        rate = round(float(rates.get("input", 0)))
-        lines.append(f"{model}\t{rate}")
+        rate = float(rates.get("input", 0))
+        lines.append(f"{model}\t{_format_rate(rate)}")
 
     # Sort by model id for determinism — stable snapshots play better with
     # git diffs if a user ever checks this file in.

@@ -15,6 +15,34 @@ INPUT=$(cat)
 
 [ "${TOKENPAK_COMPANION_ENABLED:-1}" = "0" ] && exit 0
 
+sql_escape() {
+    printf '%s' "$1" | sed "s/'/''/g"
+}
+
+sqlite_scalar() {
+    db="$1"
+    sql="$2"
+    sqlite3 "$db" "PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; $sql" 2>/dev/null | tail -n 1
+}
+
+sqlite_write() {
+    db="$1"
+    sql="$2"
+    sqlite3 "$db" "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; $sql" >/dev/null 2>&1
+}
+
+cost_usd() {
+    awk -v tokens="$1" -v rate="$2" 'BEGIN { printf "%.6f", (tokens + 0) * (rate + 0) / 1000000 }'
+}
+
+usd_to_micro() {
+    awk -v dollars="$1" 'BEGIN { if ((dollars + 0) <= 0) print 0; else printf "%.0f", (dollars + 0) * 1000000 }'
+}
+
+estimate_micro() {
+    awk -v tokens="$1" -v rate="$2" 'BEGIN { if ((tokens + 0) <= 0 || (rate + 0) <= 0) print 0; else printf "%.0f", (tokens + 0) * (rate + 0) }'
+}
+
 if command -v jq >/dev/null 2>&1; then
     TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
     SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
@@ -55,8 +83,7 @@ if [ -n "$MODEL" ] && [ -f "$RATES_FILE" ]; then
     [ -z "$RATE" ] && RATE=3
 fi
 
-COST_MICRO=$((TOKENS * RATE / 1000))
-COST_DOLLARS="$((COST_MICRO / 1000)).$(printf '%04d' $((COST_MICRO % 1000)))"
+COST_DOLLARS=$(cost_usd "$TOKENS" "$RATE")
 
 BUDGET="${TOKENPAK_COMPANION_BUDGET:-0}"
 BUDGET_TAG=""
@@ -68,13 +95,15 @@ if [ "$BUDGET" != "0" ] && [ -n "$BUDGET" ]; then
     DAILY_TOTAL="0.0"
 
     if [ -f "$BUDGET_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-        DAILY_TOTAL=$(sqlite3 "$BUDGET_DB" \
-            "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = '$TODAY';" 2>/dev/null || echo "0.0")
+        TODAY_SQL=$(sql_escape "$TODAY")
+        DAILY_TOTAL=$(sqlite_scalar "$BUDGET_DB" \
+            "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = '$TODAY_SQL';")
+        DAILY_TOTAL=${DAILY_TOTAL:-0.0}
     fi
 
-    BUDGET_MICRO=$(echo "$BUDGET * 1000000" | bc 2>/dev/null | cut -d. -f1 || echo 0)
-    DAILY_MICRO=$(echo "$DAILY_TOTAL * 1000000" | bc 2>/dev/null | cut -d. -f1 || echo 0)
-    EST_MICRO=$((TOKENS * RATE))
+    BUDGET_MICRO=$(usd_to_micro "$BUDGET")
+    DAILY_MICRO=$(usd_to_micro "$DAILY_TOTAL")
+    EST_MICRO=$(estimate_micro "$TOKENS" "$RATE")
 
     if [ "$((DAILY_MICRO + EST_MICRO))" -gt "${BUDGET_MICRO:-0}" ] 2>/dev/null; then
         MSG="tokenpak: budget exceeded (\$$DAILY_TOTAL / \$$BUDGET daily)"
@@ -103,9 +132,15 @@ if [ -n "$SESSION_ID" ]; then
     JOURNAL_DB="$JOURNAL_DIR/journal.db"
     if [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
         TIMESTAMP=$(date +%s)
-        sqlite3 "$JOURNAL_DB" \
-            "INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
-             VALUES ('$SESSION_ID', $TIMESTAMP, 'auto', 'prompt submitted (~${TOKENS_FMT} tokens, est \$$COST_DOLLARS, model: ${MODEL:-unknown})', '{}');" 2>/dev/null &
+        SESSION_SQL=$(sql_escape "$SESSION_ID")
+        MODEL_LABEL="${MODEL:-unknown}"
+        MODEL_SQL=$(sql_escape "$MODEL_LABEL")
+        CONTENT_SQL=$(sql_escape "prompt submitted (~${TOKENS_FMT} tokens, est \$$COST_DOLLARS, model: $MODEL_LABEL)")
+        sqlite_write "$JOURNAL_DB" \
+            "INSERT OR IGNORE INTO sessions (session_id, started_at, model)
+             VALUES ('$SESSION_SQL', $TIMESTAMP, '$MODEL_SQL');
+             INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
+             VALUES ('$SESSION_SQL', $TIMESTAMP, 'auto', '$CONTENT_SQL', '{}');" &
     fi
 fi
 

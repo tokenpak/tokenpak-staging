@@ -117,6 +117,18 @@ def test_record_persists_to_db(tmp_path):
     assert len(rows) == 1
 
 
+def test_budget_tracker_sqlite_pragmas_enabled(tmp_path):
+    """Budget DB connections enable WAL, busy timeout, and foreign keys."""
+    t = _tracker(tmp_path)
+    conn = t._connect()
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_record_cross_instance_retrieval(tmp_path):
     """Cost recorded by one BudgetTracker instance is readable by a new one."""
     db_path = tmp_path / "budget.db"
