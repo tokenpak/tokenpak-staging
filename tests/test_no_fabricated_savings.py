@@ -23,6 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # free of fabricated values.
 TRUST_SURFACE_FILES = [
     _REPO_ROOT / "tokenpak" / "_cli_core.py",
+    _REPO_ROOT / "tokenpak" / "cli" / "commands" / "status.py",
 ]
 
 # (label, compiled regex) for each forbidden fabrication pattern.

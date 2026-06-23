@@ -525,6 +525,23 @@ def _parse_since(since: str) -> int:
         return 7
 
 
+def _actual_session_savings_pct(tokens_raw: Any, tokens_saved: Any) -> Optional[float]:
+    """Return receipt-backed compression savings pct from token counters."""
+    try:
+        raw = float(tokens_raw or 0)
+        saved = float(tokens_saved or 0)
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    pct = saved / raw * 100.0
+    return max(0.0, min(100.0, pct))
+
+
+def _fmt_savings_pct(pct: Optional[float], *, decimals: int = 1) -> str:
+    return "unknown" if pct is None else f"{pct:.{decimals}f}%"
+
+
 # ---------------------------------------------------------------------------
 # TIP cache attribution helpers
 # ---------------------------------------------------------------------------
@@ -1419,14 +1436,14 @@ def _run_minimal(
         saved_tok = session.get("saved_tokens", 0)
         sent = session.get("sent_input_tokens", 0)
         raw = sent + saved_tok
-        pct = (saved_tok / raw * 100) if raw > 0 else 0.0
+        pct = _actual_session_savings_pct(raw, saved_tok)
         # Pull tokenpak cache hit rate from /cache-stats
         cache_data = _fetch(f"{proxy_base}/cache-stats")
         tp_hits = cache_data.get("cache_hits", 0) if cache_data else 0
         tp_misses = cache_data.get("cache_misses", 0) if cache_data else 0
         tp_total = tp_hits + tp_misses
         tp_cache_pct = (tp_hits / tp_total * 100) if tp_total > 0 else 0.0
-        line = f"📦 TokenPak: {_fmt_num(saved_tok)} tokens saved ({pct:.0f}%) | {reqs:,} reqs | {tp_cache_pct:.0f}% cache hit"
+        line = f"📦 TokenPak: {_fmt_num(saved_tok)} tokens saved ({_fmt_savings_pct(pct, decimals=0)}) | {reqs:,} reqs | {tp_cache_pct:.0f}% cache hit"
     else:
         # Fall back to DB
         savings = _calculate_fleet_savings(db_path=db_path, period="24h")
@@ -1531,13 +1548,13 @@ def run_full(
     tokens_raw = session.get("tokens_raw", 0)
     total_cost = session.get("total_cost", 0.0)
     cost_saved = session.get("session_total_saved", 0.0)
-    avg_savings = session.get("avg_savings_pct", 0.0)
+    avg_savings = _actual_session_savings_pct(tokens_raw, tokens_saved)
     errors = session.get("errors", 0)
     compression_avg = health.get("compression_ratio_avg", 0.0)
 
     if minimal:
         mark = "⚠️ DEGRADED" if is_degraded else "● Active"
-        pct = f"{avg_savings:.1f}% saved" if tokens_raw else "n/a"
+        pct = f"{_fmt_savings_pct(avg_savings)} saved" if avg_savings is not None else "unknown savings"
         print(f"{mark} | {requests:,} req | {pct}")
         return
 
@@ -1563,7 +1580,7 @@ def run_full(
         print("💰  Session Savings")
         print(f"    Requests:      {requests:,}")
         print(f"    Input tokens:  {tokens_raw:,}")
-        print(f"    Tokens saved:  {tokens_saved:,} ({avg_savings:.1f}% compression)")
+        print(f"    Tokens saved:  {tokens_saved:,} ({_fmt_savings_pct(avg_savings)} compression)")
         print(
             f"    Cache reads:   {session.get('cache_read_tokens', 0):,} ({savings_data.get('cache_hit_rate', 0):.0f}% hit rate)"
         )
@@ -1575,7 +1592,7 @@ def run_full(
         print(f"{'Errors:':<28}{errors:,}")
         print(f"{'Tokens (raw):':<28}{tokens_raw:,}")
         print(f"{'Tokens (saved):':<28}{tokens_saved:,}")
-        print(f"{'Avg Compression:':<28}{avg_savings:.1f}%  (ratio {compression_avg:.3f})")
+        print(f"{'Avg Compression:':<28}{_fmt_savings_pct(avg_savings)}  (ratio {compression_avg:.3f})")
         print(f"{'Cost (this session):':<28}${total_cost:.4f}")
         print(f"{'Cost Saved:':<28}${cost_saved:.4f}")
         print()
