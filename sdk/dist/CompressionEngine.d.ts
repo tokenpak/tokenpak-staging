@@ -1,10 +1,11 @@
 /**
  * TokenPak CompressionEngine
- * Wraps the /compress and /compress/conversation HTTP endpoints.
+ * Wraps the shipped /tpk/v1/compress HTTP endpoint.
  */
 import { CompressOptions, CompressResult, ConversationMessage, ConversationCompressOptions, ConversationCompressResult, TokenPakConfig } from './types';
 export declare class CompressionEngine {
     private readonly client;
+    private readonly experimentalEndpoints;
     constructor(config?: TokenPakConfig);
     /**
      * Compress a single text string.

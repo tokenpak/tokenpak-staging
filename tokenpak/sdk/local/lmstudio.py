@@ -5,7 +5,7 @@ LM Studio exposes an OpenAI-compatible API at http://localhost:1234/v1.
 This module is a thin specialization of TokenPakOpenAICompat with LM Studio
 defaults and context window detection.
 
-Requires: pip install tokenpak-local[openai]
+Requires the optional openai dependency.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ class TokenPakLMStudio(TokenPakOpenAICompat):
     correct defaults and provides LM Studio-specific helpers.
 
     Usage:
-        from tokenpak_local import TokenPakLMStudio, TokenPak, Block
+        from tokenpak.sdk.local import TokenPakLMStudio, TokenPak, Block
 
         client = TokenPakLMStudio()  # auto-connects to localhost:1234
 

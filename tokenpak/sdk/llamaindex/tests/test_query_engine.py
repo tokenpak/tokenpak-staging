@@ -2,7 +2,7 @@
 
 import asyncio
 
-from llamaindex_tokenpak import TokenPakQueryEngine
+from tokenpak.sdk.llamaindex import TokenPakQueryEngine
 
 # --- Mock query engine ---
 

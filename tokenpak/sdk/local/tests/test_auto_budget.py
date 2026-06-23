@@ -1,7 +1,8 @@
 """Tests for auto_budget module."""
 
 import pytest
-from tokenpak_local.auto_budget import (
+
+from tokenpak.sdk.local.auto_budget import (
     DEFAULT_OUTPUT_FRACTION,
     auto_budget,
     budget_info,

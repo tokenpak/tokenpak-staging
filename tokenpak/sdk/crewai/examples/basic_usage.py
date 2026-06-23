@@ -1,6 +1,6 @@
 """Basic usage for crewai-tokenpak."""
 
-from crewai_tokenpak import TokenPakContext
+from tokenpak.sdk.crewai import TokenPakContext
 
 
 def example():
