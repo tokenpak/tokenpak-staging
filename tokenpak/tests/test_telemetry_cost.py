@@ -11,6 +11,8 @@ Avoids duplicating test_cost_integration.py coverage; focuses on:
   - _parse_date edge cases
   - Negative / clamped token inputs
 """
+import sqlite3
+import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -31,10 +33,14 @@ from tokenpak.telemetry.cost import (
 
 
 @pytest.fixture
-def engine(tmp_path):
-    """CostEngine backed by a temp DB."""
-    db = tmp_path / "cost_test.db"
-    return CostEngine(db_path=str(db))
+def engine():
+    """CostEngine backed by a shared in-memory SQLite DB."""
+    db_uri = f"file:cost-test-{uuid.uuid4().hex}?mode=memory&cache=shared"
+    keeper = sqlite3.connect(db_uri, uri=True)
+    try:
+        yield CostEngine(db_path=db_uri)
+    finally:
+        keeper.close()
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +96,13 @@ class TestGetPricing:
 
     def test_exact_match_opus(self, engine):
         p = engine.get_pricing("claude-opus-4-6")
-        assert p.input_rate == pytest.approx(15.0)
-        assert p.output_rate == pytest.approx(75.0)
+        assert p.input_rate == pytest.approx(5.0)
+        assert p.output_rate == pytest.approx(25.0)
+
+    def test_exact_match_fable(self, engine):
+        p = engine.get_pricing("claude-fable-5")
+        assert p.input_rate == pytest.approx(10.0)
+        assert p.output_rate == pytest.approx(50.0)
 
     def test_fallback_unknown_model(self, engine):
         p = engine.get_pricing("totally-unknown-model-xyz")
