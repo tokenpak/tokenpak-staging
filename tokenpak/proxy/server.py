@@ -789,11 +789,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             from urllib.parse import parse_qs
             from urllib.parse import urlparse as _urlparse
 
-            from tokenpak.dashboard import CCI09_DASHBOARD_MODES, serve_dashboard_file
+            from tokenpak.dashboard import DASHBOARD_MODES, serve_dashboard_file
 
             dashboard_request = _urlparse(path)
             mode = parse_qs(dashboard_request.query).get("mode", [None])[0]
-            if mode and mode not in CCI09_DASHBOARD_MODES:
+            if mode and mode not in DASHBOARD_MODES:
                 self.send_error(404)
                 return
 

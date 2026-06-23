@@ -738,12 +738,12 @@ class ProxyRoutesMixin:
 
     def _serve_dashboard(self):
         """Serve static dashboard files (HTML/CSS/JS)."""
-        from tokenpak.dashboard import CCI09_DASHBOARD_MODES
+        from tokenpak.dashboard import DASHBOARD_MODES
         from tokenpak.proxy.config import DASHBOARD_AUTH_ENABLED
 
         parsed = urlparse(self.path)
         mode = parse_qs(parsed.query).get("mode", [None])[0]
-        if mode and mode not in CCI09_DASHBOARD_MODES:
+        if mode and mode not in DASHBOARD_MODES:
             self._send_json(
                 {"error": {"type": "not_found", "message": f"Unknown dashboard mode: {mode}"}},
                 status=404,

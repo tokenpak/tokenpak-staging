@@ -1,10 +1,18 @@
 """TokenPak Metrics Dashboard - web UI for observability."""
 
 import os  # noqa: F401 — reserved for dashboard file path expansion
+import warnings as _warnings
 from pathlib import Path
 
 DASHBOARD_DIR = Path(__file__).parent
-CCI09_DASHBOARD_MODES = ("cli", "tui", "tmux", "sdk", "ide", "cron")
+
+# Canonical public name for the set of supported dashboard render modes.
+# The legacy export ``CCI09_DASHBOARD_MODES`` embedded an internal review id
+# ("CCI09") in a public-API symbol name; it is retained as a deprecation alias
+# (see ``__getattr__`` below) and scheduled for removal in the next minor
+# release per Std 21 §11.2 (deprecation-alias declaration + api-snapshot
+# ratchet, NOT a bare rename of a public-API symbol).
+DASHBOARD_MODES = ("cli", "tui", "tmux", "sdk", "ide", "cron")
 
 
 def get_dashboard_files():
@@ -63,6 +71,32 @@ try:
     from .export_api import ExportAPI
     from .export_csv import CSVExporter, ExportDataType, ExportFormat
     from .session_filter import SessionFilter
-    __all__ = ['get_dashboard_files', 'serve_dashboard_file', 'CCI09_DASHBOARD_MODES', 'ExportAPI', 'CSVExporter', 'ExportDataType', 'ExportFormat', 'SessionFilter', 'account_dashboard', 'app', 'export_api', 'export_csv', 'session_filter']
+    __all__ = ['get_dashboard_files', 'serve_dashboard_file', 'DASHBOARD_MODES', 'CCI09_DASHBOARD_MODES', 'ExportAPI', 'CSVExporter', 'ExportDataType', 'ExportFormat', 'SessionFilter', 'account_dashboard', 'app', 'export_api', 'export_csv', 'session_filter']
 except ImportError:
-    __all__ = ["get_dashboard_files", "serve_dashboard_file", "CCI09_DASHBOARD_MODES", 'account_dashboard', 'app', 'export_api', 'export_csv', 'session_filter']
+    __all__ = ["get_dashboard_files", "serve_dashboard_file", "DASHBOARD_MODES", "CCI09_DASHBOARD_MODES", 'account_dashboard', 'app', 'export_api', 'export_csv', 'session_filter']
+
+
+# Public-API symbols renamed for a public-safe surface but kept importable as
+# deprecation aliases. Accessing one emits a ``DeprecationWarning`` and resolves
+# to its canonical replacement. The alias is retained through the next minor
+# release and then removed (Std 21 §11.2). Listed in ``__all__`` above so the
+# api-snapshot continues to record it as a (deprecated) public symbol — the
+# snapshot generator reads ``__all__`` without dereferencing names, so emitting
+# the snapshot does not trip this warning.
+_DEPRECATED_ALIASES = {
+    "CCI09_DASHBOARD_MODES": "DASHBOARD_MODES",
+}
+
+
+def __getattr__(name):
+    """PEP 562 module-level hook resolving deprecation aliases with a warning."""
+    replacement = _DEPRECATED_ALIASES.get(name)
+    if replacement is not None:
+        _warnings.warn(
+            f"tokenpak.dashboard.{name} is deprecated and will be removed in the "
+            f"next minor release; use {replacement} instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[replacement]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
