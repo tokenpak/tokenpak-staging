@@ -38,6 +38,17 @@ def test_start_session_creates_record(store: JournalStore) -> None:
     assert record.ended_at is None
 
 
+def test_journal_store_sqlite_pragmas_enabled(store: JournalStore) -> None:
+    """Journal DB connections enable WAL, busy timeout, and foreign keys."""
+    conn = store._connect()
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_end_session_sets_ended_at(store: JournalStore) -> None:
     store.start_session("sess-end", project_dir="", model="")
     before = time.time()

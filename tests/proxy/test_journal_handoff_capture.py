@@ -209,8 +209,15 @@ def test_handoff_journal_post_legacy_db_compat(tmp_path, monkeypatch):
     monkeypatch.setenv("TOKENPAK_COMPANION_JOURNAL_DIR", str(tmp_path))
     from tokenpak.companion.journal.store import JournalStore
 
-    store = JournalStore(db_path=tmp_path / "journal.db")
-    store.add_entry(session_id="sess-legacy", entry_type="user", content="old entry")
+    JournalStore(db_path=tmp_path / "journal.db")
+    con = sqlite3.connect(str(tmp_path / "journal.db"))
+    con.execute(
+        """INSERT INTO entries (session_id, timestamp, entry_type, content, metadata_json)
+           VALUES (?, ?, ?, ?, ?)""",
+        ("sess-legacy", time.time(), "user", "old entry", "{}"),
+    )
+    con.commit()
+    con.close()
     con = sqlite3.connect(str(tmp_path / "journal.db"))
     assert con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
     con.close()
