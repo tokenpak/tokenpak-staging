@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-18T00:45:53Z",
-  "package_version": "1.9.2",
+  "generated_at": "2026-07-01T19:20:38Z",
+  "package_version": "1.10.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -178,6 +178,14 @@
     {
       "module": "tokenpak.alerts.channels.webhook",
       "name": "deliver"
+    },
+    {
+      "module": "tokenpak.branding",
+      "name": "product_label"
+    },
+    {
+      "module": "tokenpak.branding",
+      "name": "tier_badge"
     },
     {
       "module": "tokenpak.cache",
