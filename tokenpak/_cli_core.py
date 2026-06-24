@@ -4484,6 +4484,18 @@ _TOKENPAK_CFG = _paths.under("config.json")
 _PROXY_URL = "http://localhost:8766"
 
 
+def _lock_file_display() -> str:
+    if os.environ.get("TOKENPAK_HOME"):
+        return "$TOKENPAK_HOME/tokenpak.lock.json"
+    return "TokenPak lock file"
+
+
+def _config_read_error(exc: Exception) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return "not found"
+    return exc.__class__.__name__
+
+
 def _compute_config_hash(cfg: dict) -> str:
     import hashlib as _hl
 
@@ -4607,12 +4619,12 @@ def cmd_version(args):
         print(f"Config hash      : {meta.get('configHash', 'unknown')}")
         print(f"Last updated     : {meta.get('lastUpdated', 'unknown')}")
     except Exception as e:
-        print(f"Config           : ✗ could not read ({e})")
+        print(f"Config           : ✗ could not read ({_config_read_error(e)})")
 
     # Lock file drift check
     lock = _load_lock()
     if lock:
-        print(f"\nLock file        : {_LOCK_FILE}")
+        print(f"\nLock file        : {_lock_file_display()}")
         print(f"  Locked version : {lock.get('proxyVersion', '?')}")
         print(f"  Locked hash    : {lock.get('configHash', '?')}")
         print(f"  Locked by      : {lock.get('lockedBy', '?')} at {lock.get('lockedAt', '?')}")
@@ -4630,7 +4642,7 @@ def cmd_version(args):
         except Exception:
             pass
     else:
-        print(f"\n  Lock file not found at {_LOCK_FILE}")
+        print(f"\n  Lock file not found ({_lock_file_display()})")
 
 
 # ── Update check (shared by `update` and the claude/codex launcher nudge) ──────
@@ -4887,7 +4899,7 @@ def cmd_update(args):
             "lockedBy": "tokenpak-update",
         }
         _save_lock(lock)
-        print(f"  ✓ Lock file updated at {_LOCK_FILE}")
+        print(f"  ✓ Lock file updated ({_lock_file_display()})")
     except Exception as e:
         print(f"  ⚠ Could not update lock file: {e}")
 
