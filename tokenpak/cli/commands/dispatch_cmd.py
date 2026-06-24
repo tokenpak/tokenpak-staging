@@ -34,8 +34,7 @@ Design notes:
 * The **Decision Inbox MVP** is the ``decisions`` / ``approve`` / ``reject``
   verbs over ``DispatchDecision`` records. Cards render human-readable with a
   ``--json`` fallback for scripting (§13 item 17).
-* User-facing output uses plain **Worker / Route / Station** terminology. The
-  literal string "Fleet Worker" never appears (§11 verification gate).
+* User-facing output uses plain **Worker / Route / Station** terminology.
 * Receipt + Delivery output is run through the public-safe sanitizer
   (:func:`tokenpak.orchestration.dispatch.public_safe.sanitize_public_text`)
   before display — these surfaces are public-export-eligible (§10).
