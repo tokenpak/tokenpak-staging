@@ -43,6 +43,8 @@ Design notes:
 
 from __future__ import annotations
 
+import functools
+import importlib.util
 import json
 import sqlite3
 import sys
@@ -219,6 +221,66 @@ def _err(msg: str, as_json: bool, *, code: str = "error") -> int:
 
 
 # ---------------------------------------------------------------------------
+# Runtime availability gate (Dispatch v0.1-alpha: runtime is source/main-only)
+# ---------------------------------------------------------------------------
+#
+# The Dispatch *runtime engine* (DispatchRuntime / FrontDock / Run Ledger) is
+# excluded from the released wheel for v0.1-alpha — only the CLI command file and
+# the registry/schema DATA ship under ``tokenpak/orchestration/dispatch/``. Those
+# data files make that directory a PEP 420 *namespace package*, so probing the
+# package directory (``find_spec("tokenpak.orchestration.dispatch")``) is NOT a
+# reliable presence check — it resolves non-``None`` even when no runtime module
+# is installed. We therefore sentinel on a real runtime module. The runtime
+# package is build-excluded as a unit, so a single sentinel is sufficient.
+
+_DISPATCH_RUNTIME_SENTINEL = "tokenpak.orchestration.dispatch.dispatch"
+
+_DISPATCH_RUNTIME_UNAVAILABLE_MSG = (
+    "Dispatch runtime is source/main-only in TokenPak v0.1-alpha. This build "
+    "ships the Dispatch CLI and registry/schema data but not the runtime engine. "
+    "The optional `[dispatch]` extra installs preview dependencies for running "
+    "Dispatch from a source checkout — it does not bundle a packaged runtime. "
+    "Run Dispatch from a source/main install to use this verb."
+)
+
+
+def _dispatch_runtime_available() -> bool:
+    """Return ``True`` when the Dispatch runtime engine is importable.
+
+    Checks the real runtime module rather than the namespace-package directory,
+    so a slim/data-only install (where ``tokenpak/orchestration/dispatch/`` exists
+    only as a PEP 420 namespace package of registry/schema data) reports the
+    runtime as absent instead of falsely present.
+    """
+    try:
+        return importlib.util.find_spec(_DISPATCH_RUNTIME_SENTINEL) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _needs_runtime(fn):
+    """Degrade a runtime-touching dispatch verb to an actionable message.
+
+    When the Dispatch runtime engine is absent (e.g. the slim released wheel),
+    invoking a runtime verb returns a concise, nonzero "source/main-only" notice
+    instead of raising a raw ``ModuleNotFoundError`` traceback (B1). The message
+    also explains the truthful ``[dispatch]`` extra contract (B2).
+    """
+
+    @functools.wraps(fn)
+    def _wrapper(args: Any) -> int:
+        if not _dispatch_runtime_available():
+            return _err(
+                _DISPATCH_RUNTIME_UNAVAILABLE_MSG,
+                getattr(args, "as_json", False),
+                code="dispatch_runtime_unavailable",
+            )
+        return fn(args)
+
+    return _wrapper
+
+
+# ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
 
@@ -238,6 +300,7 @@ def _default_autonomy(args: Any) -> str:
     return "dispatch_with_approval"
 
 
+@_needs_runtime
 def cmd_dispatch_run(args: Any) -> int:
     from tokenpak.orchestration.dispatch.dispatch import DispatchRuntime
     from tokenpak.orchestration.dispatch.frontdock import FrontDock
@@ -325,6 +388,7 @@ def cmd_dispatch_run(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_status(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     ledger = _ledger()
@@ -371,6 +435,7 @@ def cmd_dispatch_status(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_inspect(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     include_late = getattr(args, "late", False)
@@ -437,6 +502,7 @@ def cmd_dispatch_inspect(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_decisions(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     job_filter = getattr(args, "job", None)
@@ -466,10 +532,12 @@ def cmd_dispatch_decisions(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_approve(args: Any) -> int:
     return _resolve_decision(args, approve=True)
 
 
+@_needs_runtime
 def cmd_dispatch_reject(args: Any) -> int:
     return _resolve_decision(args, approve=False)
 
@@ -536,10 +604,12 @@ def _resolve_decision(args: Any, *, approve: bool) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_pause(args: Any) -> int:
     return _set_control_state(args, "paused", verb="pause")
 
 
+@_needs_runtime
 def cmd_dispatch_resume(args: Any) -> int:
     return _set_control_state(args, "active", verb="resume")
 
@@ -578,6 +648,7 @@ def _set_control_state(args: Any, control_state: str, *, verb: str) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_cancel(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     ledger = _ledger()
@@ -609,6 +680,7 @@ def cmd_dispatch_cancel(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_discard_late(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     ledger = _ledger()
@@ -645,6 +717,7 @@ def cmd_dispatch_discard_late(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_receipt(args: Any) -> int:
     from tokenpak.orchestration.dispatch.public_safe import sanitize_public_obj
 
@@ -697,6 +770,7 @@ def cmd_dispatch_receipt(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_delivery(args: Any) -> int:
     """Show the Delivery Package view for a job.
 
