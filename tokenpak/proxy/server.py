@@ -3524,7 +3524,10 @@ class ProxyServer:
         if deep:
             import shutil
 
-            import psutil  # optional; fall back gracefully
+            try:
+                import psutil  # type: ignore[import-untyped]
+            except ImportError:
+                psutil = None
             # providers: list active providers with their circuit-breaker status
             providers = [
                 {"name": name, "status": info.get("state", "unknown")}
@@ -3532,6 +3535,8 @@ class ProxyServer:
             ]
             # memory usage in MB
             try:
+                if psutil is None:
+                    raise RuntimeError("psutil unavailable")
                 proc = psutil.Process()
                 mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
             except Exception:

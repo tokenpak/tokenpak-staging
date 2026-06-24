@@ -19,7 +19,7 @@ This guide covers production deployment of the TokenPak LLM proxy — from a sin
 | Python | 3.10+ | 3.11+ |
 | OS | Linux / macOS / Windows | Linux (Ubuntu 22.04 LTS+) |
 
-RAM is low because TokenPak is a lightweight async proxy. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
+RAM is low because TokenPak's default local proxy uses a lightweight threaded HTTP server. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
 
 ### Network Requirements
 
@@ -90,7 +90,7 @@ docker run -d \
  -p 127.0.0.1:8766:8766 \
  -e ANTHROPIC_API_KEY="sk-ant-..." \
  -e OPENAI_API_KEY="sk-..." \
- -v tokenpak-data:/home/tokenpak/.tokenpak \
+ -v tokenpak-data:/var/lib/tokenpak/.tokenpak \
  tokenpak/tokenpak:latest
 ```
 
@@ -293,7 +293,7 @@ services:
  env_file:
  - .env.secrets # ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
  volumes:
- - tokenpak-data:/home/tokenpak/.tokenpak
+ - tokenpak-data:/var/lib/tokenpak/.tokenpak
  healthcheck:
  test: ["CMD", "tokenpak", "status"]
  interval: 30s
@@ -361,15 +361,15 @@ tokenpak savings --lifetime
 
 ### Single Instance (default)
 
-TokenPak is async (uvicorn + starlette) and handles concurrent requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
+TokenPak's default proxy is a single-process threaded HTTP server and handles concurrent local requests well on one machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
 
-Tune uvicorn workers:
+Tune proxy concurrency by running one proxy process per port and load-balancing across instances. The `--workers` flag is reserved for FastAPI ingest/telemetry surfaces and does not add worker processes to the default proxy.
 
 ```bash
-tokenpak serve --port 8766 --workers 4
+tokenpak serve --port 8766
 ```
 
-Rule of thumb: `workers = (2 × CPU cores) + 1`.
+Use the multi-instance pattern below when you need process-level parallelism.
 
 ### Multi-Instance (load-balanced)
 

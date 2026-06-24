@@ -13,10 +13,10 @@ Your goal today: install TokenPak, start the proxy, send one request, and confir
 ### Install
 
 ```bash
-pip install "tokenpak[serve]"
+pip install tokenpak
 ```
 
-The `[serve]` extra installs FastAPI, required for the proxy server. If you only want the compression SDK (no proxy), use plain `pip install tokenpak`.
+Plain `pip install tokenpak` includes the local proxy. Install `tokenpak[serve]` only when you also need the optional FastAPI-based dashboard, telemetry, or ingest surfaces.
 
 Confirm it installed:
 
@@ -294,7 +294,7 @@ After=network.target
 [Service]
 Type=simple
 User=tokenpak
-ExecStart=/usr/local/bin/tokenpak serve --port 8766 --workers 4
+ExecStart=/usr/local/bin/tokenpak serve --port 8766
 Restart=on-failure
 RestartSec=5
 Environment=TOKENPAK_LOG_LEVEL=info

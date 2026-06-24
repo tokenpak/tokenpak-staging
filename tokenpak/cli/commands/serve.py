@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,13 @@ def _maybe_show_compression_notice(safe: bool) -> None:
 
 def run_serve_cmd(args) -> None:
     """Start the TokenPak ingest API server."""
+    warnings.warn(
+        "tokenpak.cli.commands.serve.run_serve_cmd is deprecated; "
+        "the tokenpak serve CLI dispatches through tokenpak._cli_core.cmd_serve",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     # --safe: restore legacy passthrough defaults BEFORE any proxy imports
     if getattr(args, "safe", False):
         _apply_safe_defaults()

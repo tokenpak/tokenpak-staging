@@ -433,6 +433,23 @@ class TestProxyServerHealth:
         result = proxy.health(deep=True)
         assert isinstance(result, dict)
 
+    def test_health_method_deep_without_psutil(self, monkeypatch, proxy):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "psutil":
+                raise ImportError("psutil intentionally absent")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        result = proxy.health(deep=True)
+
+        assert result["memory"]["rss_mb"] is None
+        assert "disk" in result
+
 
 class TestProxyServerStats:
 

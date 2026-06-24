@@ -80,6 +80,15 @@ def _post_json(url: str, payload: dict, timeout: float = 5.0) -> dict:
 class TestWorkersFlag:
     """AC1: --workers N flag is accepted and wired through."""
 
+    def test_parser_dispatches_serve_to_canonical_cli_core(self):
+        """The real `tokenpak serve` parser uses _cli_core.cmd_serve."""
+        from tokenpak import _cli_core
+
+        parser = _cli_core.build_parser()
+        args = parser.parse_args(["serve", "--port", str(BASE_PORT)])
+
+        assert args.func is _cli_core.cmd_serve
+
     def test_default_workers_value(self):
         """Default workers = max(1, cpu_count // 2) — at least 1."""
         from tokenpak.cli.commands.serve import _default_workers
