@@ -56,6 +56,10 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
         # tmp/, overlays/). Added per the canonical layout amendment of
         # 2026-05-20.
         "dispatch",
+        # debug/ - bounded diagnostic report/store/receipt artifacts. Live
+        # external submission is governed separately by the diagnostic intake
+        # standard; this only authorizes local paths under the TokenPak home.
+        "debug",
     }
 )
 
