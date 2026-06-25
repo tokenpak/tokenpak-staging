@@ -15,11 +15,10 @@ Usage:
 
 import argparse
 import sys
-from pathlib import Path
 
 try:
     from tokenpak import HeuristicEngine
-    from tokenpak.engines.base import CompactionHints
+    from tokenpak.compression.engines.base import CompactionHints
 except ImportError:
     print("Error: TokenPak not installed. Run: pip install tokenpak[ml,tiktoken]")
     sys.exit(1)
