@@ -1,257 +1,273 @@
-# TokenPak Adapter Compatibility Matrix
+# TokenPak Adapter Capability Matrix
 
-## Overview
+**Last updated:** 2026-06-26 — `feat/provider-adapter-certification-matrix-2026-06-25`
 
-This matrix documents which TokenPak versions are compatible with which SDK versions. TokenPak adapters communicate via HTTP, so compatibility is determined by:
-
-1. **API shape preservation** — the adapter correctly translates between TokenPak and the provider's API
-2. **Token usage reporting** — the adapter correctly extracts usage metrics from responses
-3. **Error handling** — common error cases are handled correctly
-
-**Status Legend:**
-- ✅ **Supported** — tested and working
-- ⚠️ **Beta/Experimental** — working but limited testing
-- 🔲 **Not tested** — likely works (same API shape) but not verified
-- ❌ **Not supported** — breaking changes or deprecated
+This document states **what TokenPak can prove per provider** based on code-level analysis and
+offline smoke tests. It supersedes the SDK-version compatibility table that was here previously
+(that table covered _which SDK versions work_; this matrix covers _which capabilities work_).
 
 ---
 
-## OpenAI SDK Adapter
+## Status Legend
 
-The OpenAI adapter routes `chat.completions.create` requests through TokenPak while preserving the full OpenAI Chat Completions API shape.
+| Symbol | Meaning |
+|--------|---------|
+| ✅ **supported** | Implemented, tested offline, behaves as documented |
+| ⚠️ **partial** | Implemented but with known caveats or untested edge cases |
+| ❌ **missing** | Not implemented or deliberately disabled |
+| ❓ **unknown** | Provider API does not document / expose this feature; cannot prove either way without live credentials |
 
-### Compatibility
-
-| TokenPak | OpenAI SDK | Python | Status | Notes |
-|----------|-----------|--------|--------|-------|
-| v1.0+ | 1.0–1.x | 3.10+ | ✅ | Stable. Tested with 1.x; API stable since v1.0 |
-| v1.0+ | 2.0–2.x | 3.10+ | ✅ | Stable. Tested with 2.26.0 (current). Function calling, vision support |
-| v1.0+ | 0.28–0.45 | 3.10+ | 🔲 | Not tested but likely works; API shape stable across v0/v1 |
-| v0.9.x | 0.28–1.x | 3.8+ | ⚠️ | Legacy. No longer tested; may have subtle issues |
-
-### Implementation Notes
-
-- **Location:** `tokenpak/adapters/openai.py`
-- **HTTP client:** requests library (optional dependency)
-- **Token tracking:** Extracts from `usage.prompt_tokens`, `usage.completion_tokens`, `usage.prompt_tokens_details.cached_tokens`
-- **Streaming:** Supports streaming responses via server-sent events
-- **Tools/Functions:** Handles both `tools` and legacy `functions` (auto-promoted)
-
-### Reference
-- [OpenAI Python SDK Releases](https://github.com/openai/openai-python/releases)
-- [OpenAI API Versioning](https://platform.openai.com/docs/api-reference/versioning)
+> **Live-only gaps** — any cell marked ❓ requires a live provider call to verify.
+> These are reported explicitly so they are not silently presented as green.
+> `live_api_allowed: false` means they stay ❓ until a certified live-call task is dispatched.
 
 ---
 
-## Anthropic SDK Adapter
+## Proxy Adapter Registry
 
-The Anthropic adapter routes `messages.create` requests through TokenPak while preserving the full Anthropic Messages API shape.
+Adapters registered in `build_default_registry()` (`tokenpak/proxy/adapters/__init__.py`),
+listed highest-priority first:
 
-### Compatibility
+| Priority | Source format | Class | Detection signals |
+|----------|--------------|-------|-------------------|
+| 300 | `anthropic-messages` | `AnthropicAdapter` | path `/v1/messages`, `x-api-key` header, `anthropic-version` header |
+| 270 | `openai-codex-responses` | `OpenAICodexResponsesAdapter` | path `/codex/responses`, `/v1/codex/responses`, or `/v1/responses` with JWT bearer |
+| 260 | `openai-responses` | `OpenAIResponsesAdapter` | path `/v1/responses` |
+| 255 | `xai-grok` | `GrokAdapter` | `api.x.ai` host, `x-xai-api-key` header, or body model starts with `grok-` |
+| 250 | `openai-chat` | `OpenAIChatAdapter` | path `/v1/chat/completions` |
+| 240 | `google-generative-ai` | `GoogleGenerativeAIAdapter` | path `/v1beta/`, `x-goog-api-key` header, or `key=` in path |
+| 0 | `passthrough` | `PassthroughAdapter` | catch-all (always matches) |
 
-| TokenPak | Anthropic SDK | Python | Status | Notes |
-|----------|---------------|--------|--------|-------|
-| v1.0+ | 0.28–0.x | 3.10+ | ✅ | Stable. Tested with current SDK; Messages API stable |
-| v1.0+ | 0.24–0.27 | 3.8+ | 🔲 | Not tested; API shape compatible, but older tokens reporting |
-| v0.9.x | 0.24–0.x | 3.8+ | ⚠️ | Legacy. No longer tested |
+## Telemetry Adapter Registry
 
-### Implementation Notes
+Adapters in `AdapterRegistry.build_default()` (`tokenpak/telemetry/adapters/registry.py`):
 
-- **Location:** `tokenpak/adapters/anthropic.py`
-- **HTTP client:** requests library (optional dependency)
-- **Token tracking:** Exact usage in every response: `usage.input_tokens`, `usage.output_tokens`, `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens`
-- **Streaming:** Supports streaming responses with token counting via `message_start`, `message_stop` events
-- **Models:** Works with Claude 3, 3.5, and newer variants
-
-### Reference
-- [Anthropic Python SDK Releases](https://github.com/anthropics/anthropic-sdk-python/releases)
-- [Claude API Documentation](https://docs.anthropic.com)
-
----
-
-## LangChain Integration
-
-The `langchain-tokenpak` package provides a TokenPak callback handler for LangChain.
-
-### Compatibility
-
-| TokenPak | LangChain | Python | Status | Notes |
-|----------|-----------|--------|--------|-------|
-| v1.0+ | 0.1+ | 3.10+ | ✅ | Stable. Tested with langchain-core 1.2.17 |
-| v1.0+ | 0.0.x | 3.9+ | 🔲 | Not tested; likely works with adapters |
-| v0.9.x | 0.1+ | 3.10+ | ⚠️ | Legacy. Callback interface may have changed |
-
-### Implementation Notes
-
-- **Location:** `packages/langchain-tokenpak/`
-- **Integration type:** LangChain callback handler (integrates at request/response boundary)
-- **Supported models:** Works with any LangChain LLM that uses OpenAI/Anthropic backends
-- **Token tracking:** Derives from provider token counts reported by LangChain
-
-### Reference
-- [LangChain Python SDK Releases](https://github.com/langchain-ai/langchain/releases)
-- [LangChain Callbacks Documentation](https://python.langchain.com/docs/modules/callbacks/)
+| Provider | Class | Detection key |
+|----------|-------|---------------|
+| `anthropic` | `AnthropicAdapter` | `stop_reason`, `type: "message"`, `anthropic-version` |
+| `openai` | `OpenAIAdapter` | `choices` (Chat), `output` list + `object: "response"` (Responses API) |
+| `gemini` | `GeminiAdapter` | `candidates`, `usageMetadata` |
+| _(fallback)_ | `UnknownAdapter` | anything below 0.5 confidence |
 
 ---
 
-## LiteLLM Integration
+## Capability Matrix — Proxy Adapters
 
-The `tokenpak/integrations/litellm/` module provides TokenPak adapter for LiteLLM.
+**Columns:**
+- **Token count** — accurate extraction of input/output tokens from response bodies
+- **Streaming** — SSE streaming with token extraction from stream events
+- **Tools** — round-trip fidelity of tool/function definitions through normalize/denormalize
+- **Spend guard** — tokens feed into cost/spend enforcement reliably
+- **Receipt** — produces `CanonicalUsage(usage_source=PROVIDER_REPORTED, confidence=HIGH)`
+- **Recall inject** — system-prompt injection for vault recall (stable/volatile two-layer design)
+- **Cache tokens** — cache read/write token counts extracted (used for receipt accuracy)
 
-### Compatibility
-
-| TokenPak | LiteLLM | Python | Status | Notes |
-|----------|---------|--------|--------|-------|
-| v1.0+ | 1.0+ | 3.10+ | ✅ | Stable. Tested via adapter interface; works with 1.x+ models |
-| v1.0+ | 0.9.x | 3.10+ | 🔲 | Not tested; likely works; API stable |
-| v0.9.x | 0.9+ | 3.10+ | ⚠️ | Legacy. No longer tested |
-
-### Implementation Notes
-
-- **Location:** `tokenpak/integrations/litellm/`
-- **Integration type:** Adapter wrapping LiteLLM's proxy mode
-- **Supported providers:** All LiteLLM-supported providers (OpenAI, Anthropic, Google, Azure, etc.)
-- **Token tracking:** Derives from provider-specific token reporting
-
-### Reference
-- [LiteLLM Documentation](https://docs.litellm.ai)
-- [LiteLLM GitHub Releases](https://github.com/BerriAI/litellm/releases)
+| Provider | Token count | Streaming | Tools | Spend guard | Receipt | Recall inject | Cache tokens |
+|----------|------------|-----------|-------|-------------|---------|---------------|-------------|
+| **Anthropic** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ cacheable-injection | ✅ read+write |
+| **OpenAI Chat** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ generic | ⚠️ read only |
+| **OpenAI Responses** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ generic | ⚠️ read only |
+| **OpenAI Codex** | ✅ | ✅ forced | ✅ | ✅ | ✅ | ✅ generic | ⚠️ read only |
+| **Google / Gemini** | ⚠️ body only | ⚠️ ndjson | ✅ with translation | ⚠️ body only | ⚠️ when metadata present | ✅ generic | ⚠️ read only |
+| **xAI Grok** | ✅ | ✅ | ✅ | ✅ cost model | ⚠️ via OpenAI adapter | ✅ generic | ❓ unknown |
+| **Passthrough** | ❌ | ⚠️ generic | ⚠️ verbatim | ❌ | ❌ | ❌ noop | ❌ |
 
 ---
 
-## Google Vertex AI (via Generative AI SDK)
+## Capability Detail per Provider
 
-TokenPak includes proxy-mode support for Google Vertex AI via the generative AI SDK.
+### Anthropic
 
-### Compatibility
+**Source format:** `anthropic-messages` | **Default upstream:** `https://api.anthropic.com`
 
-| TokenPak | Google SDK | Python | Status | Notes |
-|----------|-----------|--------|--------|-------|
-| v1.0+ | 0.45+ | 3.10+ | ⚠️ | Beta. Implemented in tokenpak.proxy.py; limited real-world testing |
-| v1.0+ | <0.45 | 3.10+ | 🔲 | Not tested; API shape may differ |
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ✅ | `usage.input_tokens` / `output_tokens` always in response; telemetry adapter: `confidence=HIGH` |
+| Streaming | ✅ | SSE format `anthropic-sse`; `_extract_sse_output_tokens` reads `message_delta.usage.output_tokens` |
+| Tools | ✅ | `tools` field round-trips; `tool_use` stop_reason mapped in telemetry |
+| Spend guard | ✅ | Provider-reported tokens with HIGH confidence feed budget enforcement |
+| Receipt | ✅ | `CanonicalUsage(usage_source=PROVIDER_REPORTED, confidence=HIGH)` always |
+| Recall inject | ✅ | Full two-layer cacheable-injection: stable prefix gets `cache_control: ephemeral`; volatile block does NOT; TTL bypass when client already manages cache_control |
+| Cache tokens | ✅ | `cache_read_input_tokens` (read) + `cache_creation_input_tokens` (write) both extracted |
 
-### Implementation Notes
-
-- **Location:** `tokenpak/tokenpak.proxy.py` (provider routing layer)
-- **Integration type:** Proxy mode (HTTP request translation)
-- **Supported models:** Gemini models via Vertex AI API
-- **Token tracking:** Google SDK provides token counts in `usage_metadata`
-
-### Reference
-- [Google Generative AI SDK Releases](https://github.com/googleapis/python-genai/releases)
-- [Vertex AI API Documentation](https://cloud.google.com/vertex-ai/docs/generative-ai/start/quickstarts/api-quickstart)
+**Caveats:**
+- `_body_has_explicit_ttl` check: when the client sends explicit TTL cache_control, TokenPak does not add its own markers (`cache_origin="client"`). Cali's cacheable injection is attribution-aware.
+- Streaming token count arrives in the final `message_delta` event; intermediate chunks have 0.
 
 ---
 
-## Framework Adapters Status
+### OpenAI Chat Completions
 
-### AutoGen (Microsoft)
+**Source format:** `openai-chat` | **Default upstream:** `https://api.openai.com`
 
-| TokenPak | AutoGen | Python | Status | Notes |
-|----------|---------|--------|--------|-------|
-| v1.0+ | 0.2+ | 3.10+ | 🔲 | Not tested; supports custom client override |
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ✅ | `usage.prompt_tokens` / `completion_tokens`; base class `extract_response_tokens` |
+| Streaming | ✅ | SSE format `openai-sse`; token count in final SSE event `usage.completion_tokens` |
+| Tools | ✅ | `tools` + legacy `functions` → promoted to `tools`; `tool_choice` / `parallel_tool_calls` in generation params |
+| Spend guard | ✅ | Provider-reported tokens with HIGH confidence |
+| Receipt | ✅ | `CanonicalUsage(usage_source=PROVIDER_REPORTED, confidence=HIGH)` when `usage` present |
+| Recall inject | ✅ | Generic two-layer injection via base class; `cache_origin="unknown"` (OpenAI does not expose proxy-attributable cache placement) |
+| Cache tokens | ⚠️ | Cache read: `usage.prompt_tokens_details.cached_tokens` — extracted. Cache write: **not exposed by OpenAI API**; always 0. |
 
-**Location:** Example in docs or framework-adapter ecosystem
-**Integration:** Use OpenAI/Anthropic adapters as custom client
-**Reference:** [AutoGen Documentation](https://microsoft.github.io/autogen/)
-
-### CrewAI
-
-| TokenPak | CrewAI | Python | Status | Notes |
-|----------|--------|--------|--------|-------|
-| v1.0+ | 0.27+ | 3.10+ | 🔲 | Not tested; uses LangChain/LiteLLM underneath |
-
-**Location:** Via LangChain or LiteLLM adapter
-**Integration:** Override LLM provider with TokenPak-wrapped client
-**Reference:** [CrewAI Documentation](https://docs.crewai.com)
-
-### LlamaIndex
-
-| TokenPak | LlamaIndex | Python | Status | Notes |
-|----------|-----------|--------|--------|-------|
-| v1.0+ | 0.9+ | 3.10+ | 🔲 | Not tested; use OpenAI/Anthropic adapters as custom LLM |
-
-**Location:** Via custom LLM callback
-**Integration:** Override default LLM with TokenPak wrapper
-**Reference:** [LlamaIndex Documentation](https://docs.llamaindex.ai)
-
-### Langfuse
-
-| TokenPak | Langfuse | Python | Status | Notes |
-|----------|----------|--------|--------|-------|
-| v1.0+ | 2.0+ | 3.10+ | 🔲 | Not tested; telemetry integration possible |
-
-**Location:** Observability layer on top of adapters
-**Integration:** Combine with any TokenPak adapter for telemetry
-**Reference:** [Langfuse Documentation](https://langfuse.com)
+**Caveats:**
+- Legacy `functions` key is auto-promoted to `tools` format on normalize; transparent to callers.
+- `cache_write` is always 0; no way to know how many tokens OpenAI wrote to its prefix cache.
 
 ---
 
-## Python Version Support
+### OpenAI Responses API
 
-TokenPak requires **Python 3.10+** (as of v1.0).
+**Source format:** `openai-responses` | **Default upstream:** `https://api.openai.com`
 
-**Tested versions:**
-- ✅ Python 3.10
-- ✅ Python 3.11
-- ✅ Python 3.12
-- ✅ Python 3.13
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ✅ | Same usage schema as Chat Completions |
+| Streaming | ✅ | SSE format `openai-responses-sse` |
+| Tools | ✅ | Tools sorted deterministically for cache-key stability |
+| Spend guard | ✅ | Same as Chat Completions |
+| Receipt | ✅ | Same as Chat Completions |
+| Recall inject | ✅ | Generic injection via base class |
+| Cache tokens | ⚠️ | Cache read only (same as Chat); cache_write=0 |
 
-**Older Python (3.8–3.9):** Not supported by TokenPak v1.0+. Use v0.9.x if needed.
-
----
-
-## Proxy Mode Provider Support
-
-The TokenPak proxy (`tokenpak.proxy.py`) supports routing to these providers:
-
-| Provider | Status | Notes |
-|----------|--------|-------|
-| OpenAI | ✅ | Stable. `/v1/chat/completions` passthrough |
-| Anthropic | ✅ | Stable. `/v1/messages` passthrough |
-| Google (Vertex AI) | ⚠️ | Beta. Generative AI SDK passthrough |
-| Azure (via OpenAI compat) | 🔲 | Not tested but likely works (OpenAI API compatible) |
-| LiteLLM | 🔲 | Not tested; acts as provider aggregator |
+**Caveats:**
+- `input` field supports four shapes: string, content array, message array, single message. All round-trip correctly via `_input_format` tag in `raw_extra`.
+- `prompt_cache_key` is auto-computed from a stable sha256 of model + instructions + tools + message prefix. Ensures consistent caching across turns.
+- Capability label `tip.cache.semantic.v1` declared (TIP-04 eligible for semantic cache stage).
 
 ---
 
-## Known Issues & Workarounds
+### OpenAI Codex Responses
 
-### Issue: Old OpenAI SDK + Streaming
-If using OpenAI SDK < 1.0 with streaming, token counts may be delayed or incomplete.
-**Workaround:** Upgrade to OpenAI SDK 1.x or 2.x.
+**Source format:** `openai-codex-responses` | **Default upstream:** `https://chatgpt.com/backend-api`
 
-### Issue: Anthropic SDK Cache Tokens (< 0.24)
-Older Anthropic SDK versions don't report cache tokens in usage.
-**Workaround:** Upgrade to latest Anthropic SDK (0.28+).
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ✅ | Inherits from `OpenAIResponsesAdapter` |
+| Streaming | ✅ | **Always forced to `stream=True`** — ChatGPT backend requires SSE; `store=False` always |
+| Tools | ✅ | Inherits from `OpenAIResponsesAdapter` |
+| Spend guard | ✅ | Inherits token extraction |
+| Receipt | ✅ | Inherits from OpenAI telemetry adapter |
+| Recall inject | ✅ | Inherits generic injection |
+| Cache tokens | ⚠️ | Cache read only (inherits OpenAI); cache_write=0 |
 
-### Issue: LangChain LLM vs Provider Token Counts
-LangChain may derive token counts differently than the underlying provider.
-**Workaround:** Use TokenPak telemetry for ground-truth token tracking; verify against provider bills.
-
----
-
-## How to Request New Adapter Support
-
-1. **Identify the SDK/framework:** Does it have a documented API?
-2. **Check HTTP shape:** Can TokenPak translate HTTP requests/responses?
-3. **Token reporting:** Does the SDK report usage metrics?
-4. **Open an issue:** [TokenPak GitHub Issues](https://github.com/tokenpak/tokenpak/issues)
-
-Include:
-- SDK name and version
-- Expected use case
-- API documentation link
-- Example code showing how you'd use TokenPak with this SDK
+**Caveats:**
+- Requires `curl_cffi` for Cloudflare bypass on `chatgpt.com`; falls back to urllib3 (likely 403).
+- Detection: JWT bearer on `/v1/responses` (starts with `eyJ`) routes to Codex; `sk-` API keys route to standard OpenAI Responses.
+- `max_output_tokens` is stripped from payload (unsupported by ChatGPT backend).
+- `codex_responses_payload_fixup()` can be applied without a full normalize/denormalize round-trip.
 
 ---
 
-## Last Updated
+### Google Generative AI (Gemini)
 
-- **Date:** 2026-03-11
-- **TokenPak Version:** 1.0+
+**Source format:** `google-generative-ai` | **Default upstream:** `https://generativelanguage.googleapis.com`
 
-For current adapter status, check:
-- `tokenpak/adapters/` directory
-- `packages/*/` subdirectories
-- `tokenpak/integrations/` directory
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ⚠️ | `usageMetadata.candidatesTokenCount` (output), `promptTokenCount` (input) — **only in non-streaming responses**; `usageMetadata` absent in streaming NDJSON chunks |
+| Streaming | ⚠️ | NDJSON format (`google-ndjson`); streaming detected from URL (`streamGenerateContent`/`alt=sse`), not body; token count unreliable per-chunk |
+| Tools | ✅ | Full translation: OpenAI `tools[]`, Anthropic `input_schema`, or Google `functionDeclarations` → Google native format; JSON Schema sanitization (removes `$schema`, `additionalProperties`, etc.); type name uppercasing |
+| Spend guard | ⚠️ | Token counts available from non-streaming responses; streaming gaps mean spend guard may undercount until final response |
+| Receipt | ⚠️ | `CanonicalUsage(confidence=HIGH)` when `usageMetadata` present; `confidence=LOW, usage_source=UNKNOWN` when absent (streaming chunks) |
+| Recall inject | ✅ | Generic two-layer injection via base class; `cache_origin="unknown"` |
+| Cache tokens | ⚠️ | `usageMetadata.cachedContentTokenCount` → `cache_read`; cache_write **not exposed** by Gemini API; always 0 |
+
+**Caveats:**
+- Google `functionDeclarations` format does not support: `$schema`, `$ref`, `$defs`, `additionalProperties`, `patternProperties`, `oneOf`, `anyOf`, `allOf`, `not`, `if/then/else`, `examples`, `default`, `title`, `format`. These are silently dropped on translation.
+- Null types in JSON Schema are converted: `["string", "null"]` → `type: STRING, nullable: True`.
+- Streaming token count gap: if spend guard relies on per-chunk accumulation, Google NDJSON may not emit `usageMetadata` until the final chunk. Partial spend tracking until chunk terminal.
+- `systemInstruction` translated to/from `system` canonical field; `generationConfig` preserved verbatim.
+
+---
+
+### xAI Grok
+
+**Source format:** `xai-grok` | **Default upstream:** `https://api.x.ai`
+
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ✅ | `usage.completion_tokens` for output; OpenAI-compatible schema |
+| Streaming | ✅ | SSE format `openai-sse`; inherits OpenAI SSE parsing |
+| Tools | ✅ | OpenAI-compatible tool format; `functions` legacy key promoted |
+| Spend guard | ✅ | Built-in `estimate_cost()` with per-model pricing table (grok-3, grok-3-fast, grok-3-mini, grok-2 variants); USD per 1M tokens |
+| Receipt | ⚠️ | No dedicated telemetry adapter in `build_default()`; OpenAI adapter detects via `choices` key (Grok uses OpenAI-compatible response shape). Works in practice but not explicitly tested. |
+| Recall inject | ✅ | Generic two-layer injection via base class |
+| Cache tokens | ❓ | xAI does not document cache token fields; no `prompt_tokens_details` equivalent observed; **live call required to verify** |
+
+**Caveats:**
+- Grok uses the OpenAI Chat Completions wire format. The xAI-specific detection (host/header/model prefix) fires before `OpenAIChatAdapter` (priority 255 > 250).
+- `estimate_cost()` uses hardcoded pricing as of 2025-Q1. Prices may drift; not guaranteed accurate.
+- Cache token gap: if xAI adds a `prompt_tokens_details.cached_tokens` field in the future, it will be picked up automatically by the OpenAI telemetry adapter. Until confirmed: ❓.
+
+---
+
+### Passthrough
+
+**Source format:** `passthrough` | **Default upstream:** `https://api.anthropic.com` (never used for passthrough traffic)
+
+| Capability | Status | Evidence |
+|-----------|--------|---------|
+| Token count | ❌ | No provider-specific extraction; `UnknownAdapter` fallback returns `proxy_estimate, LOW` |
+| Streaming | ⚠️ | SSE format `generic`; bytes are forwarded unchanged |
+| Tools | ⚠️ | `tools` preserved verbatim; no translation between formats |
+| Spend guard | ❌ | No reliable token counts; spend guard cannot enforce limits |
+| Receipt | ❌ | `CanonicalUsage(usage_source=PROXY_ESTIMATE, confidence=LOW)` from `UnknownAdapter` |
+| Recall inject | ❌ | Deliberate NO-OP: `inject_system_context` returns body unchanged; `cache_origin="client"` trace emitted to avoid false attribution |
+| Cache tokens | ❌ | Not extracted |
+
+**Caveats:**
+- Passthrough is intentionally byte-preserving. It is the correct choice for traffic where TokenPak should not touch the payload (custom provider formats, client-managed cache, non-JSON bodies).
+- Any passthrough traffic will register 0 tokens in spend guard. This is by design, not a bug.
+
+---
+
+## Offline Smoke Commands
+
+These commands validate the main adapters without live credentials.
+Run from the workbench root (`/home/cali/tokenpak` or `/home/sue/workspace/tokenpak-dev`).
+
+```bash
+# Full offline adapter smoke suite
+python -m pytest tests/test_proxy_adapters.py tests/test_adapter_roundtrip.py tests/proxy/adapters -q 2>&1 | tail -20
+
+# Lint
+python -m ruff check tokenpak tests 2>&1 | head -30
+```
+
+Expected: all tests pass, no ruff errors.
+
+If `tests/proxy/adapters/` does not exist yet, run the `test_proxy_adapters.py` alone as the canonical offline check.
+
+---
+
+## Known Provider Gaps Needing Follow-Up
+
+| Gap | Provider | Requires | Status |
+|-----|----------|----------|--------|
+| Cache write tokens | OpenAI (all) | OpenAI API exposes write count | ❌ missing — API limitation |
+| Cache write tokens | Gemini | Gemini API exposes write count | ❌ missing — API limitation |
+| Cache tokens | xAI Grok | Live call to verify `prompt_tokens_details` presence | ❓ blocked (live API) |
+| Streaming token count | Gemini | Verify `usageMetadata` in final NDJSON chunk | ❓ blocked (live API) |
+| Grok telemetry adapter | xAI | Add dedicated `GrokAdapter` to `build_default()` | ⚠️ partial — falls to OpenAI adapter |
+| curl_cffi availability | OpenAI Codex | Verify installed in runtime venv | ⚠️ runtime check required |
+
+---
+
+## SDK Version Compatibility (legacy table)
+
+The previous version of this file contained an SDK version compatibility matrix
+(`TokenPak v1.0 × OpenAI SDK 1.x–2.x × Python 3.10–3.13` etc.). That data is still
+accurate and is preserved in `docs/adapters/ARCHITECTURE.md`. The focus of this file
+is now **capability proof per provider**, not SDK version ranges.
+
+---
+
+## Sources
+
+- `tokenpak/proxy/adapters/__init__.py` — `build_default_registry()` priority table
+- `tokenpak/proxy/adapters/{anthropic,openai_chat,openai_responses,openai_codex_responses,google,grok,passthrough}_adapter.py`
+- `tokenpak/telemetry/adapters/{anthropic,openai,gemini}.py` + `registry.py`
+- `tokenpak/telemetry/canonical.py` — `CanonicalUsage`, `UsageSource`, `Confidence`
+- `tests/test_proxy_adapters.py`, `tests/test_adapter_roundtrip.py`
+- Offline analysis only; `live_api_allowed: false`
