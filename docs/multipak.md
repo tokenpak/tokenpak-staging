@@ -67,6 +67,34 @@ Vault Paks: `vault:<source-path>#<sha256-prefix>` — for example, `vault:/home/
 
 Other subtypes (Pro): `interaction:<session>:<entry>`, `decision:<id>`, `recall:<query-hash>`, `handoff:<target>:<id>`.
 
+## Recall Preview + Apply — `tokenpak pakplan` (OSS, baseline same-store)
+
+The `pakplan` surface turns baseline Pak recall into a **preview → review → apply** workflow so you stop copy-pasting context by hand and stop dumping the whole history into a session.
+
+```bash
+# 1. Preview baseline recall candidates (single-source, deterministic, unscored)
+$ tokenpak pakplan recall --query auth --limit 10
+PAKPlan recall preview (OSS, unscored, single-source)
+   1. vault://gamma-runbook  Gamma auth runbook
+      source : doc/file_source  score: None
+      snippet: auth incident escalation
+      risk   : warn
+   2. vault://alpha-design   Alpha auth design
+      source : doc/file_source  score: None
+      reasons: current_task
+
+# 2. Apply a selection — keep some, drop the rest, and record why
+$ tokenpak pakplan apply --query auth --exclude vault://gamma-runbook --json
+{ "included": [ ... ], "dropped": [ {"pak_id": "vault://gamma-runbook", "drop_reason": "user_excluded", ...} ],
+  "boundary": "oss_baseline_same_store", "proof_path": ".../selections/sel-….json", ... }
+```
+
+- `recall` previews candidates with **source**, **rank**, **snippet/title**, and **reason/risk** fields. `--query` is a case-insensitive substring over title + summary; `--project` / `--type` are byte-literal filters.
+- `apply` partitions candidates into an **include/drop proof**: `--include id …` keeps only those (the rest are dropped as `not_selected`), or `--exclude id …` drops those (the rest are included). `--dry-run` shows the proof without writing it; `--reason` records a note.
+- The proof is written next to the recall db under `selections/` as an inspectable, reversible JSON artifact — delete the file to undo. Its `included` / `dropped` lists are exactly what **Receipt v1** surfaces as the request's context proof.
+
+> **OSS boundary (the relevant standard).** This is **baseline, single-source, same-store** retrieval over the local recall db. It is *deterministic* (newest-first, with substring + byte-literal metadata filters) and *unscored* — every candidate's `score` is `null` and `rank` is just the position in that deterministic order, carrying the honest `boundary: "oss_baseline_same_store"` marker on every proof. OSS never auto-applies a selection to a live request. **Cross-source scoring, learned ranking, capture, and anchor hydration are Pro** and run behind the daemon — `POST /pak/v1/recall` stays `501` (see below). The OSS slice is retrieval + selection + proof, not ranking.
+
 ## HTTP — `/pak/v1/*`
 
 The proxy exposes a separate `/pak/v1/*` namespace from the existing `/tpk/v1/*` OSS app API. Auth is the same: localhost-only, optional `X-TPK-Key` header.

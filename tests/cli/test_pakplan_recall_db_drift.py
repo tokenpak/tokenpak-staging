@@ -16,8 +16,10 @@ These tests pin the current names so the drift cannot silently return:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from tokenpak.cli.commands import pakplan
 from tokenpak.companion.recall.store import (
@@ -92,3 +94,116 @@ def test_source_has_no_stale_drift_literals() -> None:
     assert '"pak_reason_codes"' in src
     assert '"pak_risk_flags"' in src
     assert '"recall.db"' in src
+
+
+# ---------------------------------------------------------------------------
+# recall preview + apply CLI surface (OSS baseline same-store)
+# ---------------------------------------------------------------------------
+
+
+def _seed_two(path: Path) -> None:
+    store = RecallStore.open(path)
+    try:
+        store.upsert_pak(
+            pak_id="vault://a", pak_type="vault", source_type="doc",
+            authority="file_source", title="Alpha auth design",
+            content_hash="aaaa1111", summary="how auth tokens rotate",
+            project="proj", now="2026-06-20T10:00:00Z",
+        )
+        store.upsert_pak(
+            pak_id="vault://c", pak_type="vault", source_type="doc",
+            authority="file_source", title="Gamma auth runbook",
+            content_hash="cccc2222", summary="auth incident escalation",
+            project="proj", now="2026-06-22T10:00:00Z",
+        )
+        store.set_pak_reason_codes("vault://a", [ReasonCodeEntry("current_task", 0.9)])
+        store.set_pak_risk_flags(
+            "vault://c", [RiskFlagEntry("mandatory_context_missing", "warn")]
+        )
+    finally:
+        store.close()
+
+
+def test_cli_recall_preview_json_is_unscored_same_store(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    db = tmp_path / "recall.db"
+    _seed_two(db)
+    monkeypatch.setattr(pakplan, "_recall_db", lambda: db)
+
+    args = SimpleNamespace(
+        query="auth", project=None, pak_type=None, limit=10, as_json=True
+    )
+    rc = pakplan.cmd_pakplan_recall(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["boundary"] == "oss_baseline_same_store"
+    assert payload["count"] == 2
+    # Newest-first, deterministic rank, and unscored (score is null).
+    assert [c["pak_id"] for c in payload["candidates"]] == ["vault://c", "vault://a"]
+    assert all(c["score"] is None for c in payload["candidates"])
+    assert payload["candidates"][0]["risk"] == "warn"
+
+
+def test_cli_apply_exclude_writes_include_drop_proof(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    db = tmp_path / "recall.db"
+    _seed_two(db)
+    monkeypatch.setattr(pakplan, "_recall_db", lambda: db)
+
+    out = tmp_path / "proof.json"
+    args = SimpleNamespace(
+        query="auth", project=None, pak_type=None, limit=10,
+        include=None, exclude=["vault://c"], reason="cli demo",
+        out=str(out), dry_run=False, as_json=True,
+    )
+    rc = pakplan.cmd_pakplan_apply(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert [c["pak_id"] for c in payload["included"]] == ["vault://a"]
+    assert [c["pak_id"] for c in payload["dropped"]] == ["vault://c"]
+    assert payload["dropped"][0]["drop_reason"] == "user_excluded"
+    assert payload["proof_path"] == str(out)
+    # Proof persisted and reloadable for a later Receipt path.
+    assert out.exists()
+    assert json.loads(out.read_text())["schema"] == "tokenpak.recall.context_selection/v1"
+
+
+def test_cli_apply_dry_run_does_not_write(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    db = tmp_path / "recall.db"
+    _seed_two(db)
+    monkeypatch.setattr(pakplan, "_recall_db", lambda: db)
+
+    args = SimpleNamespace(
+        query="auth", project=None, pak_type=None, limit=10,
+        include=["vault://a"], exclude=None, reason=None,
+        out=None, dry_run=True, as_json=True,
+    )
+    rc = pakplan.cmd_pakplan_apply(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["dry_run"] is True
+    assert payload["proof_path"] is None
+    assert not (db.parent / "selections").exists()
+
+
+def test_cli_recall_no_db_is_honest(tmp_path: Path, monkeypatch, capsys) -> None:
+    missing = tmp_path / "nope.db"
+    monkeypatch.setattr(pakplan, "_recall_db", lambda: missing)
+
+    args = SimpleNamespace(
+        query=None, project=None, pak_type=None, limit=10, as_json=True
+    )
+    rc = pakplan.cmd_pakplan_recall(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["present"] is False
+    assert payload["count"] == 0
+    assert payload["candidates"] == []

@@ -44,6 +44,8 @@ on so cascade behaviour from the schema fires as expected.
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -218,6 +220,27 @@ RISK_FLAG_SEVERITIES: frozenset[str] = frozenset({"info", "warn", "block"})
 
 PAK_RELATION_TYPES: frozenset[str] = frozenset({"supersedes", "conflicts_with"})
 """Relation types accepted by ``set_pak_relations``."""
+
+
+# --- OSS recall preview + apply (baseline same-store) ------------------------
+#
+# Boundary (Std 32): OSS recall is *single-source, same-store* metadata
+# retrieval over the local recall db. It is deterministic — newest-first
+# order with optional byte-literal (``project`` / ``pak_type``) and
+# case-insensitive substring (``query``) metadata filters — and *unscored*:
+# every candidate's ``score`` is ``None``. ``rank`` is the position in the
+# deterministic order, not a learned relevance score. Cross-source scoring,
+# learned ranking, capture, and anchor hydration are Pro and live behind the
+# daemon. Nothing here contacts the daemon or reads a store other than
+# ``self``. These names are intentionally ``_``-prefixed module constants so
+# the public-API snapshot surface is unchanged.
+_SELECTION_SCHEMA = "tokenpak.recall.context_selection/v1"
+_SNIPPET_MAX = 280
+_RISK_SEVERITY_ORDER = {"info": 0, "warn": 1, "block": 2}
+# Bounds the same-store scan a single ``recall_preview`` performs so an
+# enormous local store cannot turn a preview into a full table walk. OSS
+# baseline behaviour, not a crawler.
+_RECALL_SCAN_CAP = 1000
 
 
 class UpsertResult(NamedTuple):
@@ -911,6 +934,205 @@ class RecallStore:
         ).fetchall()
         return [RiskFlagEntry(risk_flag=r[0], severity=r[1]) for r in rows]
 
+    # OSS recall preview + apply surface ------------------------------------
+
+    def recall_preview(
+        self,
+        *,
+        query: Optional[str] = None,
+        project: Optional[str] = None,
+        pak_type: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return baseline same-store recall candidates for preview.
+
+        OSS baseline recall: deterministic newest-first retrieval from *this*
+        store's ``paks`` metadata (see :meth:`list_paks`), optionally narrowed
+        by byte-literal ``project`` / ``pak_type`` filters and a
+        case-insensitive substring ``query`` over title + summary.
+
+        This is metadata *retrieval*, not ranking — each candidate's ``score``
+        is ``None`` (OSS is unscored) and ``rank`` is the 1-based position in
+        the deterministic order. Cross-source scoring / learned ranking stay in
+        Pro. The scan over the same store is bounded by
+        :data:`_RECALL_SCAN_CAP`.
+
+        Each candidate dict carries what a preview or a later Receipt needs:
+        ``pak_id``, ``title``, ``snippet``, ``source`` (``source_type`` /
+        ``authority`` / ``pak_type`` / ``project``), ``rank``, ``score``
+        (always ``None`` here), ``reason_codes``, ``risk_flags`` and the
+        derived top ``risk`` severity.
+        """
+        raw_limit = limit if isinstance(limit, int) and limit > 0 else 20
+        q = query.strip().lower() if isinstance(query, str) and query.strip() else None
+
+        # Page through list_paks so the substring filter sees the full
+        # candidate set rather than a single capped page, while the scan stays
+        # bounded.
+        matched: list[PakRow] = []
+        cursor: Optional[str] = None
+        scanned = 0
+        while len(matched) < raw_limit and scanned < _RECALL_SCAN_CAP:
+            page = self.list_paks(
+                PakListFilters(
+                    project=project,
+                    pak_type=pak_type,
+                    limit=LIST_LIMIT_MAX,
+                    cursor=cursor,
+                )
+            )
+            if not page.items:
+                break
+            for row in page.items:
+                scanned += 1
+                if q is not None and q not in f"{row.title}\n{row.summary}".lower():
+                    continue
+                matched.append(row)
+                if len(matched) >= raw_limit:
+                    break
+            if not page.truncated or page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+
+        return [self._candidate_from_row(row, rank=i + 1) for i, row in enumerate(matched)]
+
+    def _candidate_from_row(self, row: PakRow, *, rank: int) -> dict:
+        """Project a :class:`PakRow` into a preview/selection candidate dict."""
+        reason_codes = [e.reason_code for e in self.get_pak_reason_codes(row.pak_id)]
+        risk_entries = self.get_pak_risk_flags(row.pak_id)
+        risk_flags = [
+            {"risk_flag": e.risk_flag, "severity": e.severity} for e in risk_entries
+        ]
+        top_risk = None
+        if risk_entries:
+            top_risk = max(
+                (e.severity for e in risk_entries),
+                key=lambda s: _RISK_SEVERITY_ORDER.get(s, -1),
+            )
+        return {
+            "pak_id": row.pak_id,
+            "title": row.title,
+            "snippet": _snippet(row.summary),
+            "source": {
+                "source_type": row.source_type,
+                "authority": row.authority,
+                "pak_type": row.pak_type,
+                "project": row.project,
+            },
+            "rank": rank,
+            # OSS baseline recall is unscored; learned ranking is Pro.
+            "score": None,
+            "reason_codes": reason_codes,
+            "risk_flags": risk_flags,
+            "risk": top_risk,
+            "status": row.status,
+        }
+
+    def build_context_selection(
+        self,
+        candidates: Sequence[dict],
+        *,
+        include: Optional[Sequence[str]] = None,
+        exclude: Optional[Sequence[str]] = None,
+        query: Optional[str] = None,
+        reason: Optional[str] = None,
+        now: Optional[str] = None,
+    ) -> dict:
+        """Partition recall candidates into an include/drop proof object.
+
+        A pure, deterministic transform — no DB writes. The returned dict is
+        the OSS *context selection proof*: an inspectable, reversible record of
+        which candidates were applied to a request context and which were
+        dropped (and why). Receipt v1 consumes ``included`` / ``dropped`` as
+        its context proof; this method does not build a Receipt and never
+        mutates a live request.
+
+        Selection semantics are explicit — context is never silently added or
+        removed:
+
+        - ``include`` non-empty → only those ``pak_id`` values are included;
+          every other candidate is dropped with ``drop_reason="not_selected"``.
+        - else ``exclude`` non-empty → those ``pak_id`` values are dropped with
+          ``drop_reason="user_excluded"``; the rest are included.
+        - neither given → every candidate is included.
+
+        ``pak_id`` values in ``include`` / ``exclude`` that match no candidate
+        are surfaced under ``unknown_ids`` (and counted) so a typo reads as a
+        reported miss rather than a silent no-op.
+        """
+        include_set = {i for i in (include or []) if i}
+        exclude_set = {e for e in (exclude or []) if e}
+        present_ids = {c.get("pak_id") for c in candidates}
+
+        included: list[dict] = []
+        dropped: list[dict] = []
+        for c in candidates:
+            pid = c.get("pak_id")
+            if include_set:
+                if pid in include_set:
+                    included.append({**c, "decision": "included"})
+                else:
+                    dropped.append(
+                        {**c, "decision": "dropped", "drop_reason": "not_selected"}
+                    )
+            elif exclude_set:
+                if pid in exclude_set:
+                    dropped.append(
+                        {**c, "decision": "dropped", "drop_reason": "user_excluded"}
+                    )
+                else:
+                    included.append({**c, "decision": "included"})
+            else:
+                included.append({**c, "decision": "included"})
+
+        unknown = sorted(str(x) for x in (include_set | exclude_set) - present_ids)
+        return {
+            "schema": _SELECTION_SCHEMA,
+            "selection_id": _selection_id(query, included, dropped),
+            "generated_at": now if now is not None else _utc_now_iso8601(),
+            "store": str(self._path),
+            # Honest provenance: OSS baseline, single-source, no Pro ranking.
+            "boundary": "oss_baseline_same_store",
+            "query": query,
+            "reason": reason,
+            "included": included,
+            "dropped": dropped,
+            "unknown_ids": unknown,
+            "counts": {
+                "candidates": len(candidates),
+                "included": len(included),
+                "dropped": len(dropped),
+                "unknown": len(unknown),
+            },
+        }
+
+    def write_context_selection(
+        self,
+        selection: dict,
+        *,
+        path: Optional[Path] = None,
+    ) -> Path:
+        """Persist a context-selection proof to JSON and return its path.
+
+        The proof is written next to the recall db (a ``selections/`` sibling)
+        by default so it is discoverable, inspectable, and reversible — delete
+        the file to undo. Receipt v1 reads this artifact; OSS never
+        auto-applies a selection to a live request. The write is atomic
+        (temp-file + ``os.replace``).
+        """
+        if path is not None:
+            out = Path(path)
+        else:
+            sid = selection.get("selection_id") or "selection"
+            out = self._path.parent / "selections" / f"{sid}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(out.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(selection, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        os.replace(tmp, out)
+        return out
+
     def close(self) -> None:
         """Close the underlying connection.
 
@@ -945,6 +1167,35 @@ def _short_hash(value: object) -> str:
     """Render a hash for log lines without leaking the whole digest."""
     s = "" if value is None else str(value)
     return s[:12] + ("…" if len(s) > 12 else "")
+
+
+def _snippet(text: object, *, limit: int = _SNIPPET_MAX) -> str:
+    """Collapse whitespace and clip ``text`` to a preview-sized snippet."""
+    s = " ".join(("" if text is None else str(text)).split())
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _selection_id(
+    query: Optional[str],
+    included: Sequence[dict],
+    dropped: Sequence[dict],
+) -> str:
+    """Deterministic id for a selection from its query + member pak_ids.
+
+    Excludes the timestamp so the same query + same include/drop partition
+    yields a stable id (useful for tests and idempotent re-application).
+    """
+    h = hashlib.sha256()
+    h.update((query or "").encode("utf-8"))
+    for entry in included:
+        h.update(b"\x01")
+        h.update(str(entry.get("pak_id")).encode("utf-8"))
+    for entry in dropped:
+        h.update(b"\x02")
+        h.update(str(entry.get("pak_id")).encode("utf-8"))
+    return "sel-" + h.hexdigest()[:16]
 
 
 # Cursor encode/decode --------------------------------------------------------

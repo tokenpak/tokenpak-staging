@@ -70,7 +70,64 @@ def build_pakplan_parser(sub: Any) -> None:
     )
     p_report.set_defaults(func=cmd_pakplan_report)
 
+    p_recall = psub.add_parser(
+        "recall",
+        help="Preview baseline same-store Pak recall candidates (OSS, unscored)",
+    )
+    _add_recall_query_args(p_recall)
+    p_recall.add_argument(
+        "--json", dest="as_json", action="store_true", help="Emit JSON",
+    )
+    p_recall.set_defaults(func=cmd_pakplan_recall)
+
+    p_apply = psub.add_parser(
+        "apply",
+        help="Select/exclude recall candidates into an include/drop proof (OSS)",
+    )
+    _add_recall_query_args(p_apply)
+    p_apply.add_argument(
+        "--include", action="append", default=None, metavar="PAK_ID",
+        help="Include only these pak_ids (repeatable); others are dropped",
+    )
+    p_apply.add_argument(
+        "--exclude", action="append", default=None, metavar="PAK_ID",
+        help="Exclude these pak_ids (repeatable); the rest are included",
+    )
+    p_apply.add_argument(
+        "--reason", default=None, help="Free-text note recorded in the proof",
+    )
+    p_apply.add_argument(
+        "--out", default=None,
+        help="Write the proof JSON here (default: alongside the recall db)",
+    )
+    p_apply.add_argument(
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Build and show the proof without writing it",
+    )
+    p_apply.add_argument(
+        "--json", dest="as_json", action="store_true", help="Emit JSON",
+    )
+    p_apply.set_defaults(func=cmd_pakplan_apply)
+
     p.set_defaults(func=lambda a: p.print_help())
+
+
+def _add_recall_query_args(parser: Any) -> None:
+    """Shared recall-query arguments for the ``recall`` and ``apply`` surfaces."""
+    parser.add_argument(
+        "--query", "-q", default=None,
+        help="Case-insensitive substring match over title + summary",
+    )
+    parser.add_argument(
+        "--project", default=None, help="Byte-literal project filter",
+    )
+    parser.add_argument(
+        "--type", dest="pak_type", default=None,
+        help="Byte-literal pak_type filter",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=20, help="Max candidates (default: 20)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +270,151 @@ def cmd_pakplan_report(args: Any) -> int:
     return 0
 
 
+def cmd_pakplan_recall(args: Any) -> int:
+    """Preview baseline same-store recall candidates (OSS, unscored).
+
+    This is single-source, deterministic metadata retrieval over the local
+    recall db — not Pro cross-source ranking. ``score`` is always ``null``.
+    """
+    db = _recall_db()
+    if not db or not db.exists():
+        return _no_recall_db(db, getattr(args, "as_json", False), "recall")
+
+    candidates = _store_recall_preview(db, args)
+    payload = {
+        "scope": "recall-preview",
+        "boundary": "oss_baseline_same_store",
+        "scoring": "not-shipped-in-OSS",
+        "recall_db": str(db),
+        "query": getattr(args, "query", None),
+        "count": len(candidates),
+        "candidates": candidates,
+    }
+    if getattr(args, "as_json", False):
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print("PAKPlan recall preview (OSS, unscored, single-source)")
+    print("─────────────────────────────────────────────────────")
+    if not candidates:
+        print(f"ℹ️  No matching Paks in {db}")
+        return 0
+    for c in candidates:
+        src = c.get("source", {})
+        print(f"  {c['rank']:>2}. {c['pak_id']}  {(c.get('title') or '')[:40]}")
+        print(f"      source : {src.get('source_type')}/{src.get('authority')}"
+              f"  score: {c.get('score')}")
+        if c.get("snippet"):
+            print(f"      snippet: {c['snippet'][:80]}")
+        if c.get("reason_codes"):
+            print(f"      reasons: {', '.join(c['reason_codes'])}")
+        if c.get("risk"):
+            print(f"      risk   : {c['risk']}")
+    print()
+    print("Ranking/scoring is Pro — OSS recall is deterministic + unscored.")
+    return 0
+
+
+def cmd_pakplan_apply(args: Any) -> int:
+    """Apply/exclude recall candidates into an include/drop proof object.
+
+    The proof is inspectable and reversible (a JSON file you can read or
+    delete); Receipt v1 consumes its ``included`` / ``dropped`` lists. OSS
+    never auto-applies the selection to a live request.
+    """
+    db = _recall_db()
+    if not db or not db.exists():
+        return _no_recall_db(db, getattr(args, "as_json", False), "apply")
+
+    from tokenpak.companion.recall.store import open_recall_store
+
+    store = open_recall_store(db)
+    try:
+        candidates = store.recall_preview(
+            query=getattr(args, "query", None),
+            project=getattr(args, "project", None),
+            pak_type=getattr(args, "pak_type", None),
+            limit=int(getattr(args, "limit", 20) or 20),
+        )
+        selection = store.build_context_selection(
+            candidates,
+            include=getattr(args, "include", None),
+            exclude=getattr(args, "exclude", None),
+            query=getattr(args, "query", None),
+            reason=getattr(args, "reason", None),
+        )
+        out_path: Optional[Path] = None
+        if not getattr(args, "dry_run", False):
+            raw_out = getattr(args, "out", None)
+            out_path = store.write_context_selection(
+                selection, path=Path(raw_out) if raw_out else None
+            )
+    finally:
+        store.close()
+
+    payload = dict(selection)
+    payload["proof_path"] = str(out_path) if out_path else None
+    payload["dry_run"] = bool(getattr(args, "dry_run", False))
+    if getattr(args, "as_json", False):
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    counts = selection.get("counts", {})
+    print("PAKPlan apply — context selection proof (OSS)")
+    print("─────────────────────────────────────────────")
+    print(f"  selection : {selection.get('selection_id')}")
+    print(f"  included  : {counts.get('included', 0)}")
+    print(f"  dropped   : {counts.get('dropped', 0)}")
+    for c in selection.get("included", []):
+        print(f"    ✓ {c['pak_id']}  {(c.get('title') or '')[:40]}")
+    for c in selection.get("dropped", []):
+        print(f"    ✗ {c['pak_id']}  ({c.get('drop_reason')})")
+    if selection.get("unknown_ids"):
+        print(f"  ⚠️  unknown ids: {', '.join(selection['unknown_ids'])}")
+    if out_path:
+        print(f"  proof     : {out_path}")
+    else:
+        print("  proof     : (dry-run — not written)")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Recall db helpers
 # ---------------------------------------------------------------------------
+
+
+def _store_recall_preview(db: Path, args: Any) -> list[dict]:
+    """Open the recall store and return preview candidates for ``args``."""
+    from tokenpak.companion.recall.store import open_recall_store
+
+    store = open_recall_store(db)
+    try:
+        return store.recall_preview(
+            query=getattr(args, "query", None),
+            project=getattr(args, "project", None),
+            pak_type=getattr(args, "pak_type", None),
+            limit=int(getattr(args, "limit", 20) or 20),
+        )
+    finally:
+        store.close()
+
+
+def _no_recall_db(db: Optional[Path], as_json: bool, action: str) -> int:
+    """Honest no-db response shared by the recall/apply surfaces."""
+    msg = "no recall db on disk"
+    if as_json:
+        print(json.dumps({
+            "scope": action,
+            "recall_db": str(db) if db else None,
+            "present": False,
+            "count": 0,
+            "candidates": [],
+            "note": msg,
+        }, indent=2, sort_keys=True))
+    else:
+        print(f"ℹ️  tokenpak pakplan {action} — {msg} ({db})")
+        print("   Foundation tables ship in OSS; population is Pro.")
+    return 0
 
 
 def _recall_db() -> Optional[Path]:
