@@ -4336,11 +4336,11 @@ def _compute_config_hash(cfg: dict) -> str:
 
 
 def _get_proxy_version() -> dict:
-    """Query proxy /version endpoint. Returns dict or raises."""
+    """Query proxy /health endpoint for live version info."""
     import urllib.request as _ur
 
     try:
-        with _ur.urlopen(f"{_PROXY_URL}/version", timeout=3) as resp:
+        with _ur.urlopen(f"{_PROXY_URL}/health", timeout=3) as resp:
             return json.loads(resp.read())
     except Exception as e:
         return {"error": str(e)}
@@ -4411,17 +4411,16 @@ def cmd_version(args):
     print(f"TokenPak CLI     : {cli_ver}")
     print(f"Proxy (expected) : {cli_ver}")
 
-    # Proxy version (live)
+    # Proxy version (live) — probes /health (not /version which returns 404)
     proxy_info = _get_proxy_version()
     if "error" in proxy_info:
         print(f"Proxy (running)  : ✗ not reachable ({proxy_info['error']})")
     else:
-        uptime = proxy_info.get("uptime", 0)
-        h, m = divmod(uptime // 60, 60)
+        uptime_s = proxy_info.get("uptime_seconds", 0)
+        h, m = divmod(uptime_s // 60, 60)
         print(
-            f"Proxy (running)  : {proxy_info.get('version', '?')}  uptime={h}h{m:02d}m  python={proxy_info.get('pythonVersion', '?')}"
+            f"Proxy (running)  : {proxy_info.get('version', '?')}  uptime={h}h{m:02d}m"
         )
-        print(f"Proxy config hash: {proxy_info.get('configHash', '?')}")
 
     # openclaw.json meta
     try:
@@ -4437,7 +4436,13 @@ def cmd_version(args):
     lock = _load_lock()
     if lock:
         print(f"\nLock file        : {_LOCK_FILE}")
-        print(f"  Locked version : {lock.get('proxyVersion', '?')}")
+        locked_ver = lock.get("proxyVersion", "?")
+        if locked_ver == "99.0.0":
+            print(
+                f"  Locked version : {locked_ver}  ⚠️  (dev sentinel — run `tokenpak update --lock` to set a real version)"
+            )
+        else:
+            print(f"  Locked version : {locked_ver}")
         print(f"  Locked hash    : {lock.get('configHash', '?')}")
         print(f"  Locked by      : {lock.get('lockedBy', '?')} at {lock.get('lockedAt', '?')}")
         # Drift check
@@ -4829,32 +4834,41 @@ def main():
         if _choices:
             known_cmds.update(_choices.keys())
     if raw_cmd and not raw_cmd.startswith("-") and raw_cmd not in known_cmds:
-        suggestion = _suggest_command(raw_cmd)
-        print(f"❌ Unknown command: '{raw_cmd}'")
-
-        if suggestion:
-            print(f"   Did you mean: tokenpak {suggestion}?")
+        # Known renamed/removed verbs get a targeted redirect before difflib suggestions.
+        _COMMAND_HINTS = {
+            # mission aliases (old names → current backing verbs)
+            "pack": "→ Use `tokenpak compress` to test compression locally, or route API calls through the proxy for automatic compression.",
+            "reuse": "→ Use `tokenpak recipe` to manage compression recipes.",
+            "guard": "→ Use `tokenpak budget` to set API budget limits.",
+            "verify": "→ Use `tokenpak prove` to run value proof scenarios.",
+            "receipt": "→ Use `tokenpak dispatch receipt` to view dispatch receipts.",
+            # inactive / renamed surfaces
+            "cache": "→ Cache info: use `tokenpak stats` for statistics, or the proxy `/cache-stats` endpoint.",
+            "sessions": "→ Use `tokenpak status` for proxy health, `tokenpak requests` for request history, or `tokenpak timeline` for trends.",
+            # other semantic confusers
+            "compress": "→ Compression happens automatically through the proxy.\n   Run `tokenpak demo` to see it in action.",
+            "run": "→ Use `tokenpak serve` to start the proxy, or `tokenpak start` for a quick alias.",
+            "proxy": "→ Use `tokenpak start` to start the proxy on localhost:8766.",
+            "kill": "→ Use `tokenpak stop` to stop the running proxy.",
+            "test": "→ Use `tokenpak demo` to test compression, or `tokenpak doctor` to test installation.",
+            "config": "→ Use `tokenpak config-check <file>` to validate config.\n   Or `tokenpak setup` to interactively create config.",
+        }
+        hint = _COMMAND_HINTS.get(raw_cmd)
+        print(f"❌ Unknown command: '{raw_cmd}'", file=sys.stderr)
+        if hint:
+            print(hint, file=sys.stderr)
         else:
-            # Check for a semantically confusing command
-            _COMMAND_HINTS = {
-                "compress": "→ Compression happens automatically through the proxy.\n   Run `tokenpak demo` to see it in action.",
-                "run": "→ Use `tokenpak serve` to start the proxy, or `tokenpak start` for a quick alias.",
-                "proxy": "→ Use `tokenpak start` to start the proxy on localhost:8766.",
-                "kill": "→ Use `tokenpak stop` to stop the running proxy.",
-                "test": "→ Use `tokenpak demo` to test compression, or `tokenpak doctor` to test installation.",
-                "config": "→ Use `tokenpak config-check <file>` to validate config.\n   Or `tokenpak setup` to interactively create config.",
-            }
-            hint = _COMMAND_HINTS.get(raw_cmd)
-            if hint:
-                print(hint)
+            suggestion = _suggest_command(raw_cmd)
+            if suggestion:
+                print(f"   Did you mean: tokenpak {suggestion}?", file=sys.stderr)
             else:
-                print("\n📖 Available commands (by category):")
+                print("\n📖 Available commands (by category):", file=sys.stderr)
                 for group, cmds in list(_COMMAND_GROUPS.items())[:3]:  # Show first 3 groups
-                    print(f"\n   {group}:")
+                    print(f"\n   {group}:", file=sys.stderr)
                     for cmd, desc in cmds[:3]:  # Show first 3 in each
-                        print(f"     • {cmd:<15} {desc}")
-                print("\n   (Use `tokenpak help` to see all commands)")
-        # Exit 2 = usage error (unknown verb) per 03 §3.
+                        print(f"     • {cmd:<15} {desc}", file=sys.stderr)
+                print("\n   (Use `tokenpak help` to see all commands)", file=sys.stderr)
+        # Exit 2 = usage error (unknown verb) per Std 03 §3.
         sys.exit(2)
 
     args = parser.parse_args()
