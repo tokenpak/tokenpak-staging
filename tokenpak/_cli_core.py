@@ -841,7 +841,6 @@ def cmd_init(args):
 def cmd_setup(args):
     """Interactive wizard for first-time TokenPak configuration."""
     import os
-    import subprocess
     import time
     from pathlib import Path
 
@@ -1003,16 +1002,15 @@ def cmd_setup(args):
         print("Warning: proxy.py not found. Skipping auto-start.")
         return
 
-    # Start proxy
+    # Start proxy (platform-appropriate detached background process)
+    from tokenpak.platform import process as _process
+
     env = os.environ.copy()
     env["TOKENPAK_PORT"] = str(port)
-    proc = subprocess.Popen(
+    proc = _process.start_background(
         [sys.executable, str(proxy_path)],
         env=env,
         cwd=str(proxy_path.parent),
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
 
     pid_path = Path.home() / ".tokenpak" / "proxy.pid"
@@ -1051,8 +1049,6 @@ def cmd_setup(args):
 
 def cmd_start(args):
     """Start the proxy on localhost:8766 (launches proxy.py)."""
-    import subprocess
-
     port = int(getattr(args, "port", None) or os.environ.get("TOKENPAK_PORT", "8766"))
     log_level = getattr(args, "log_level", None)
     config_path = getattr(args, "config", None)
@@ -1089,14 +1085,23 @@ def cmd_start(args):
         print(f"Proxy already running (port {port}, mode={mode}, {reqs} requests).")
         return
 
-    # Check stale PID file
+    # Check stale PID file (platform-safe liveness probe — os.kill(pid, 0) is a
+    # liveness check on POSIX but would terminate the process on Windows).
+    from tokenpak.platform import process as _process
+
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
-            os.kill(pid, 0)
-            print(f"Proxy process exists (PID {pid}) but not responding. Try `tokenpak restart`.")
-            return 1
-        except (ProcessLookupError, ValueError):
+        except ValueError:
+            pid_path.unlink(missing_ok=True)
+            pid = None
+        if pid is not None:
+            if _process.pid_alive(pid):
+                print(
+                    f"Proxy process exists (PID {pid}) but not responding. "
+                    "Try `tokenpak restart`."
+                )
+                return 1
             pid_path.unlink(missing_ok=True)
 
     env = os.environ.copy()
@@ -1119,13 +1124,10 @@ def cmd_start(args):
 
             serve_args = types.SimpleNamespace(port=port, telemetry=False, ingest=False, workers=1)
             return cmd_serve(serve_args)
-        proc = subprocess.Popen(
+        proc = _process.start_background(
             [sys.executable, str(proxy_path)],
             env=env,
             cwd=str(proxy_path.parent),
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
     else:
         cmd = [sys.executable, "-m", "tokenpak.proxy.server", "--port", str(port)]
@@ -1133,13 +1135,7 @@ def cmd_start(args):
             cmd.extend(["--log-level", str(log_level)])
         if config_path:
             cmd.extend(["--config", str(config_path)])
-        proc = subprocess.Popen(
-            cmd,
-            env=env,
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        proc = _process.start_background(cmd, env=env)
 
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(proc.pid))
@@ -1165,7 +1161,7 @@ def cmd_start(args):
 
 def cmd_stop(args):
     """Stop the running proxy."""
-    import signal as _signal
+    from tokenpak.platform import process as _process
 
     pid_path = Path.home() / ".tokenpak" / "proxy.pid"
     if not pid_path.exists():
@@ -1174,14 +1170,20 @@ def cmd_stop(args):
         return 1
     try:
         pid = int(pid_path.read_text().strip())
-        os.kill(pid, _signal.SIGTERM)
-        pid_path.unlink(missing_ok=True)
-        print(f"Proxy stopped (PID {pid}).")
-    except ProcessLookupError:
+    except (ValueError, OSError) as e:
+        print(f"Error stopping proxy: {e}")
+        return 1
+
+    if not _process.pid_alive(pid):
         pid_path.unlink(missing_ok=True)
         print("Proxy was not running (stale PID removed).")
-    except Exception as e:
-        print(f"Error stopping proxy: {e}")
+        return
+
+    if _process.terminate(pid):
+        pid_path.unlink(missing_ok=True)
+        print(f"Proxy stopped (PID {pid}).")
+    else:
+        print(f"Error stopping proxy (PID {pid}): could not signal process.")
         return 1
 
 
