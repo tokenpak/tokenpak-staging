@@ -161,6 +161,8 @@ def _monitor_db_savings(days: int = 30) -> dict:
                 COALESCE(SUM(input_tokens), 0)         AS total_input,
                 COALESCE(SUM(output_tokens), 0)        AS total_output,
                 COALESCE(SUM(cache_read_tokens), 0)    AS cache_read,
+                COALESCE(SUM(CASE WHEN COALESCE(cache_origin,'unknown') != 'client'
+                                  THEN cache_read_tokens ELSE 0 END), 0) AS proxy_cache_read,
                 COALESCE(SUM(cache_creation_tokens), 0) AS cache_created,
                 COALESCE(SUM(compressed_tokens), 0)    AS compressed,
                 COALESCE(SUM(protected_tokens), 0)     AS protected
@@ -171,15 +173,18 @@ def _monitor_db_savings(days: int = 30) -> dict:
         conn.close()
 
         actual = row["actual_cost"]
-        cache_read = row["cache_read"]
-        total_in = row["total_input"] + cache_read
+        cache_read_total = row["cache_read"]
+        # Only proxy-origin cache reads are TokenPak savings;
+        # cache_origin='client' means Anthropic served the client's own cache, not ours.
+        proxy_cache_read = row["proxy_cache_read"]
+        total_in = row["total_input"] + cache_read_total
 
         # Rough baseline: what it would cost without cache/compression
         raw_input = row["total_input"] + row["compressed"]
         return {
             "actual_cost": actual,
-            "cache_read": cache_read,
-            "cache_hit_rate": cache_read / total_in if total_in else 0,
+            "cache_read": proxy_cache_read,
+            "cache_hit_rate": cache_read_total / total_in if total_in else 0,
             "compressed_tokens": row["compressed"],
             "raw_input_tokens": raw_input,
             "total_input": row["total_input"],
@@ -1773,11 +1778,8 @@ def cmd_requests(args):
 
     if action == "tail":
         limit = getattr(args, "limit", 10)
-        follow = not getattr(args, "once", False)
-
-        if not REQUESTS_PATH.exists():
-            print("No request ledger found yet. Run requests through the proxy first.")
-            return
+        # follow=True by default causes an infinite read loop; make it opt-in via --follow
+        follow = getattr(args, "follow", False)
 
         def _print_rows(rows, with_header=False):
             header = (
@@ -1797,6 +1799,17 @@ def cmd_requests(args):
                 print(
                     f"{view.request_id[:8]:<10} {view.model:<17} {view.input_tokens:>6}  {view.output_tokens:>6}  {cache:>6}  {saved:>7}  {status_label(view):<8} {age_label(view.timestamp):>4}"
                 )
+
+        if not REQUESTS_PATH.exists():
+            db = _get_monitor_db_path()
+            if db is not None:
+                from tokenpak.cli.request_explorer import load_requests_from_db
+                db_rows = load_requests_from_db(db, limit=limit)
+                if db_rows:
+                    _print_rows(db_rows, with_header=True)
+                    return
+            print("No request ledger found yet. Run requests through the proxy first.")
+            return
 
         rows = load_requests(limit=limit)
         _print_rows(rows, with_header=True)
@@ -1885,11 +1898,21 @@ def cmd_attribution(args):
     """View savings breakdown by agent/skill/model."""
     import json as _json
 
+    days = getattr(args, "days", 7)
+
+    if not getattr(args, "as_json", False):
+        db = _get_monitor_db_path()
+        if db is not None:
+            from tokenpak.telemetry.attribution import get_attribution_summary_from_db
+            summary = get_attribution_summary_from_db(db, days=days)
+            if summary:
+                print(summary)
+                return
+
     from tokenpak.telemetry.attribution import AttributionTracker, format_attribution
 
     tracker = AttributionTracker()
     tracker.load()
-    days = getattr(args, "days", 7)
 
     if getattr(args, "as_json", False):
         import time
@@ -1914,6 +1937,12 @@ def cmd_timeline(args):
 
     days = getattr(args, "days", 7)
     entries = get_timeline(days=days)
+
+    if not entries:
+        db = _get_monitor_db_path()
+        if db is not None:
+            from tokenpak.telemetry.timeline import get_timeline_from_db
+            entries = get_timeline_from_db(db, days=days)
 
     if getattr(args, "as_json", False):
         print(_json.dumps(entries, indent=2))

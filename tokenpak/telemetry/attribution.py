@@ -241,6 +241,97 @@ AGENT_EMOJI = {
 }
 
 
+def get_attribution_summary_from_db(db_path, days: int = 7) -> str:
+    """Format attribution report by reading monitor.db attribution_source column directly."""
+    import sqlite3
+    from datetime import datetime, timedelta
+
+    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT
+                COALESCE(attribution_source, 'unknown') AS source,
+                COUNT(*) AS requests,
+                COUNT(CASE WHEN cache_read_tokens > 0 THEN 1 END) AS cache_hits
+               FROM requests
+               WHERE timestamp >= ? AND status_code < 400
+               GROUP BY COALESCE(attribution_source, 'unknown')
+               ORDER BY COUNT(*) DESC""",
+            (since,),
+        )
+        by_source = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            """SELECT model, COUNT(*) AS requests
+               FROM requests
+               WHERE timestamp >= ? AND status_code < 400
+               GROUP BY model
+               ORDER BY COUNT(*) DESC
+               LIMIT 5""",
+            (since,),
+        )
+        by_model = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            """SELECT
+                COUNT(*) AS total,
+                COUNT(CASE WHEN COALESCE(attribution_source,'unknown') = 'unknown' THEN 1 END)
+                    AS unknown_count
+               FROM requests
+               WHERE timestamp >= ? AND status_code < 400""",
+            (since,),
+        )
+        totals = dict(cur.fetchone())
+        conn.close()
+    except Exception:
+        return ""
+
+    if not by_source:
+        return ""
+
+    total_requests = totals.get("total", 0) or 1
+    unknown_count = totals.get("unknown_count", 0) or 0
+    leakage_pct = unknown_count / total_requests * 100
+
+    lines = [
+        f"TokenPak Attribution — Last {days} Days",
+        "───────────────────────────────────",
+        f"  Total requests: {total_requests:,}",
+        "",
+        "Agent Breakdown:",
+    ]
+    for row in by_source:
+        src = row["source"]
+        reqs = row["requests"]
+        cache_rate = (row["cache_hits"] / reqs * 100) if reqs else 0
+        pct = reqs / total_requests * 100
+        emoji = "??"
+        for key, em in AGENT_EMOJI.items():
+            if key in src.lower():
+                emoji = em
+                break
+        lines.append(
+            f"  {emoji} {src:<22} {reqs:>6} req ({pct:.0f}%)  cache:{cache_rate:.0f}%"
+        )
+
+    lines.append("")
+    lines.append("Top Models (by requests):")
+    for row in by_model:
+        model = row["model"] or "unknown"
+        pct = row["requests"] / total_requests * 100
+        lines.append(f"  {model:<24} {row['requests']:>6} req ({pct:.0f}%)")
+
+    if leakage_pct > 5:
+        lines.append("")
+        lines.append(
+            f"  ⚠️ HIGH LEAKAGE: {leakage_pct:.0f}% of requests lack source attribution"
+        )
+        lines.append("     → Add X-TokenPak-Source header to identify origin")
+
+    return "\n".join(lines)
+
+
 def format_attribution(tracker: AttributionTracker, days: int = 7) -> str:
     """Format human-readable attribution report."""
     since = time.time() - (days * 86400)

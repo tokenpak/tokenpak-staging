@@ -41,6 +41,56 @@ def save_snapshot(snapshot: dict, path: Optional[Path] = None) -> None:
         f.write(json.dumps(snapshot) + "\n")
 
 
+def get_timeline_from_db(db_path, days: int = 7) -> List[dict]:
+    """Get daily savings timeline from monitor.db, sorted newest first."""
+    import sqlite3
+    from datetime import datetime, timedelta
+
+    since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT
+                date(timestamp) AS date,
+                COUNT(*) AS requests,
+                COALESCE(SUM(CASE WHEN COALESCE(cache_origin,'unknown') != 'client'
+                                  THEN cache_read_tokens ELSE 0 END), 0) AS proxy_cache_read,
+                COALESCE(SUM(input_tokens + cache_read_tokens), 0) AS total_input_tokens,
+                COALESCE(SUM(compressed_tokens), 0) AS compressed,
+                COALESCE(SUM(estimated_cost), 0) AS actual_cost
+               FROM requests
+               WHERE timestamp >= ? AND status_code < 400
+               GROUP BY date(timestamp)
+               ORDER BY date(timestamp) DESC
+               LIMIT ?""",
+            (since, days),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+    except Exception:
+        return []
+
+    result = []
+    for row in rows:
+        total_in = row["total_input_tokens"] or 1
+        proxy_cache = row["proxy_cache_read"] or 0
+        compressed = row["compressed"] or 0
+        cache_hit_pct = proxy_cache / total_in * 100
+        actual_cost = row["actual_cost"] or 0
+        avg_rate = actual_cost / total_in
+        saved_usd = (proxy_cache + compressed) * avg_rate
+        result.append({
+            "date": row["date"],
+            "requests": row["requests"],
+            "saved_usd": round(saved_usd, 4),
+            "cache_hit_pct": round(cache_hit_pct, 1),
+            "compression_pct": round(compressed / total_in * 100, 1),
+        })
+    return result
+
+
 def get_timeline(days: int = 7, path: Optional[Path] = None) -> List[dict]:
     """Get last N days of history, sorted newest first."""
     entries = load_history(path)

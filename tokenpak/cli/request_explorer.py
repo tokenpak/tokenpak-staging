@@ -65,6 +65,36 @@ def load_requests(path: Optional[Path] = None, limit: Optional[int] = None) -> l
     return rows
 
 
+def load_requests_from_db(db_path, limit: int = 50) -> list[dict]:
+    """Load recent requests from monitor.db, normalized for to_view()."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT
+                request_id AS id,
+                model,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens AS cache_read,
+                0.0 AS saved_cost,
+                CASE WHEN status_code < 400 THEN 'success' ELSE 'error' END AS status,
+                timestamp,
+                '' AS session_id
+               FROM requests
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
 def get_request_by_id(request_id: str, path: Optional[Path] = None) -> Optional[dict]:
     for row in load_requests(path=path):
         if row.get("id") == request_id:
@@ -132,6 +162,7 @@ __all__ = [
     "REQUESTS_PATH",
     "RequestView",
     "load_requests",
+    "load_requests_from_db",
     "get_request_by_id",
     "to_view",
     "cache_pct",
