@@ -19,6 +19,7 @@ callable.
 from __future__ import annotations
 
 import importlib.metadata
+import sys
 
 import pytest
 
@@ -160,6 +161,84 @@ def test_plugins_disabled_via_env(monkeypatch):
 
     discovered = _cli_core._discover_plugin_commands(force=True)
     assert discovered == {}
+
+
+def test_pro_disable_env_disables_plugin_discovery(monkeypatch):
+    """TOKENPAK_DISABLE_PRO=1 is the Pro escape hatch and avoids discovery."""
+    _patch_entry_points(monkeypatch, [_FakeEntryPoint("daemon", lambda argv: 0)])
+    monkeypatch.setenv("TOKENPAK_DISABLE_PRO", "1")
+
+    discovered = _cli_core._discover_plugin_commands(force=True)
+    assert discovered == {}
+
+
+def test_oss_flag_disables_pro_routing_for_invocation():
+    """--oss is a per-invocation escape hatch for plugin/Pro routing."""
+    assert _cli_core._pro_routing_disabled(["status", "--oss"])
+    assert not _cli_core._pro_routing_disabled(["status"])
+
+
+def test_pro_only_command_message_when_package_absent(capsys):
+    """Known Pro-only verbs get a clean upgrade/install message, not a typo."""
+    _cli_core._print_pro_command_unavailable("daemon", disabled=False)
+
+    captured = capsys.readouterr()
+    assert "requires TokenPak Pro" in captured.err
+    assert "tokenpak-paid" in captured.err
+
+
+def test_pro_only_command_message_when_forced_oss(capsys):
+    """With --oss / TOKENPAK_DISABLE_PRO, report no OSS implementation."""
+    _cli_core._print_pro_command_unavailable("daemon", disabled=True)
+
+    captured = capsys.readouterr()
+    assert "no OSS implementation" in captured.err
+    assert "Pro routing is disabled" in captured.err
+
+
+def test_main_pro_only_command_without_plugin_is_clean_gate(monkeypatch, capsys):
+    """If tokenpak-paid is absent, Pro-only verbs do not fall to typo handling."""
+    _patch_entry_points(monkeypatch, [])
+    monkeypatch.setattr(sys, "argv", ["tokenpak", "daemon", "status"])
+
+    with pytest.raises(SystemExit) as exc:
+        _cli_core.main()
+
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "requires TokenPak Pro" in captured.err
+    assert "Unknown command" not in captured.err
+
+
+def test_main_pro_only_command_with_oss_flag_is_clean_oss_gate(monkeypatch, capsys):
+    """--oss skips plugin discovery and reports the absent OSS implementation."""
+    _patch_entry_points(monkeypatch, [_FakeEntryPoint("daemon", lambda argv: 0)])
+    monkeypatch.setattr(sys, "argv", ["tokenpak", "daemon", "status", "--oss"])
+
+    with pytest.raises(SystemExit) as exc:
+        _cli_core.main()
+
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "no OSS implementation" in captured.err
+    assert "Unknown command" not in captured.err
+
+
+def test_main_pro_only_command_with_global_oss_flag_is_clean_oss_gate(
+    monkeypatch, capsys
+):
+    """Global --oss skips argparse's invalid-choice path for Pro-only verbs."""
+    _patch_entry_points(monkeypatch, [_FakeEntryPoint("daemon", lambda argv: 0)])
+    monkeypatch.setattr(sys, "argv", ["tokenpak", "--oss", "daemon", "status"])
+
+    with pytest.raises(SystemExit) as exc:
+        _cli_core.main()
+
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert "no OSS implementation" in captured.err
+    assert "Unknown command" not in captured.err
+    assert "invalid choice" not in captured.err
 
 
 def test_broken_plugin_environment_is_safe(monkeypatch):

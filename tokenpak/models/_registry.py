@@ -252,6 +252,10 @@ class ModelRegistry:
                     # Skip alias-style entries (e.g. "claude-opus" without version)
                     if not any(c.isdigit() for c in mid) and mid not in ("codex", "o3", "o1"):
                         continue
+                    # Tier labels can outlive provider price cuts. Only suggest
+                    # alternatives that are actually cheaper for input pricing.
+                    if candidate.input_per_mtok >= info.input_per_mtok:
+                        continue
                     # Prefer models with higher input cost within the tier (more capable)
                     if best is None or candidate.input_per_mtok > best.input_per_mtok:
                         best = candidate

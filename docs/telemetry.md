@@ -136,8 +136,8 @@ tokenpak status --full
 Every request gets a trace ID. Inspect individual requests:
 
 ```bash
-tokenpak trace --last
-tokenpak trace --id <trace_id>
+tokenpak debug list
+tokenpak debug export <trace_id>
 ```
 
 Output:

@@ -92,6 +92,7 @@ def test_paks_table_columns_match_contract(tmp_path: Path, require_fts5: None) -
         "created_at",
         "updated_at",
         "superseded_by",
+        "status",
     }
     with RecallStore.open(db_path) as store:
         cols = {r[1] for r in store.conn.execute("PRAGMA table_info('paks')")}

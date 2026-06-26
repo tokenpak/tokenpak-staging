@@ -1,4 +1,4 @@
-"""DispatchWorker record (Standards Delta v0 §5.1)."""
+"""DispatchWorker record (Dispatch contract §5.1)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from .enums import ModifyFilesPolicy, RunCommandsPolicy
 
 
 class WorkerPermissionProfile(DispatchBaseModel):
-    """DispatchWorker.permission_profile (Standards Delta v0 §5.1).
+    """DispatchWorker.permission_profile (Dispatch contract §5.1).
 
     ``install_dependencies`` is always ``False`` in v0.1-alpha (external side
     effects are forbidden — §5.5).
@@ -26,7 +26,7 @@ class WorkerPermissionProfile(DispatchBaseModel):
 
 
 class DispatchWorker(DispatchBaseModel):
-    """A registry-loaded TIP worker profile (Standards Delta v0 §5.1).
+    """A registry-loaded TIP worker profile (Dispatch contract §5.1).
 
     ``capabilities`` is registry-bound: the loader rejects any string not in
     the §5.2 capability registry at construction time (fail-loud, per §5.2

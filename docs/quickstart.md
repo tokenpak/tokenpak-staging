@@ -68,25 +68,25 @@ pip install tokenpak
 
 ### Compress and send
 
+Point your existing LLM client at the TokenPak proxy — no API changes needed:
+
 ```python
-from tokenpak import TokenPak, Block
-
-pack = TokenPak(budget=4000)
-pack.add_instructions("You are a helpful assistant.")
-pack.add_knowledge("docs", "Your long documentation here...")
-pack.add_conversation([{"role": "user", "content": "Summarize the docs"}])
-
-# Works with any OpenAI-compatible client
 from openai import OpenAI
-client = OpenAI()
-response = client.chat.completions.create(
- model="gpt-4",
- messages=pack.to_messages()
+
+# Just change base_url — everything else stays the same
+client = OpenAI(
+    api_key="your-api-key",
+    base_url="http://localhost:8766"  # Route through TokenPak
 )
 
-# See how much was saved
-print(pack.compile().report)
-# → Input: 8,420 tokens → Output: 3,200 tokens | Savings: 62%
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Summarize the docs"}
+    ]
+)
+# TokenPak compresses your request automatically — savings appear in the response footer
 ```
 
 ---

@@ -1,6 +1,6 @@
 """Basic usage for autogen-tokenpak."""
 
-from autogen_tokenpak import compress_messages
+from tokenpak.sdk.autogen import compress_messages
 
 
 def example():

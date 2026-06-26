@@ -1,7 +1,7 @@
 """Dispatch Run Ledger — SQLite persistence for Dispatch execution records.
 
 The Run Ledger is the durable store for the ten Dispatch record classes
-produced during a run (Standards Delta v0 §4–§5). It lives under the canonical
+produced during a run (Dispatch contract §4–§5). It lives under the canonical
 TokenPak home (``~/.tpk/dispatch/runs.db``, resolved via
 :func:`tokenpak._paths.under`) and **never** writes into the project repo
 (acceptance criterion 6).
@@ -22,7 +22,7 @@ Design (acceptance criteria 1–9):
   :meth:`RunLedger.mark_effect_applied` / :meth:`RunLedger.mark_effect_failed`
   finalize it after. :meth:`RunLedger.select_dangling_planned_effects` returns
   ``planned`` effects with no ``finalized_at`` for resume reconciliation
-  (Standards Delta v0 §4.8 / §5.5, criterion 5).
+  (Dispatch contract §4.8 / §5.5, criterion 5).
 * **Execution records only** — the ledger does not promote records to canonical
   Pak types (criterion 7).
 
@@ -262,7 +262,7 @@ class RunLedger:
     def read_station_runs_for_run(self, run_id: str) -> list[DispatchStationRun]:
         """Return every station run for *run_id*, ordered by insertion (rowid).
 
-        Resume reconciliation (Standards Delta v0 §5.5) needs the station runs of
+        Resume reconciliation (Dispatch contract §5.5) needs the station runs of
         a run in execution order so it can inspect the *last* one. SQLite assigns
         a monotonically increasing implicit ``rowid`` in insert order, so ordering
         by it reproduces the order the runner wrote the rows (the runner runs
@@ -278,7 +278,7 @@ class RunLedger:
     def read_effects_for_station_run(self, station_run_id: str) -> list[DispatchEffect]:
         """Return every effect recorded for *station_run_id* (ordered by created_at).
 
-        Used by resume reconciliation (Standards Delta v0 §5.5 cases 3 & 4) to
+        Used by resume reconciliation (Dispatch contract §5.5 cases 3 & 4) to
         enumerate the applied / planned effects of the interrupted station so the
         runner can compare current workspace hashes against each effect's
         ``after_hash`` / ``before_hash``.
@@ -401,7 +401,7 @@ class RunLedger:
     def read_effect(self, effect_id: str) -> Optional[DispatchEffect]:
         return self._read_payload("dispatch_effects", effect_id, DispatchEffect)  # type: ignore[return-value]
 
-    # -- DispatchEffect lifecycle (Standards Delta v0 §4.8) -----------------
+    # -- DispatchEffect lifecycle (Dispatch contract §4.8) -----------------
 
     def record_planned_effect(self, effect: DispatchEffect) -> DispatchEffect:
         """Write a ``planned`` effect BEFORE tool execution (§4.8 protocol).

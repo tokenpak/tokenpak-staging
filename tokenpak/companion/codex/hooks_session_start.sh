@@ -33,6 +33,20 @@ fi
 
 JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
 JOURNAL_DB="$JOURNAL_DIR/journal.db"
+RUN_DIR="$JOURNAL_DIR/run"
+
+if [ -n "$SESSION_ID" ]; then
+    if [ -d "$RUN_DIR" ] || mkdir -p "$RUN_DIR" 2>/dev/null; then
+        CURRENT_SESSION_FILE="$RUN_DIR/current-session"
+        OLD_SESSION_ID=""
+        if [ -f "$CURRENT_SESSION_FILE" ]; then
+            IFS= read -r OLD_SESSION_ID < "$CURRENT_SESSION_FILE" || true
+        fi
+        if [ "$OLD_SESSION_ID" != "$SESSION_ID" ]; then
+            printf '%s\n' "$SESSION_ID" > "$CURRENT_SESSION_FILE" 2>/dev/null || true
+        fi
+    fi
+fi
 
 if [ -n "$SESSION_ID" ] && [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     TIMESTAMP=$(date +%s)

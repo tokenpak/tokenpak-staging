@@ -20,7 +20,7 @@ Telemetry note (v0.1-alpha): the per-station token spend is not yet threaded
 back from TIP into the persisted :class:`DispatchStationRun` records, so token
 totals here are aggregated from whatever the caller supplies via
 ``token_overrides`` (the deterministic fixtures pass the mocked turn spend). When
-the proxy attribution columns (Standards Delta v0 §7) are wired through, this
+the proxy attribution columns (Dispatch contract §7) are wired through, this
 builder reads them directly and the override seam is removed. Until then the
 override keeps the receipt's telemetry block assertable without fabricating
 numbers the runtime cannot yet observe.

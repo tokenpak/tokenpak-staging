@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tokenpak.companion.recall import RecallStore
+from tokenpak.companion.recall import PAK_STATUS_VALUES, RecallStore
 from tokenpak.companion.recall.store import UpsertResult
 
 _BASE_ROW = {
@@ -100,7 +100,7 @@ def test_upsert_two_distinct_paks(tmp_path: Path, require_fts5: None) -> None:
 def test_upsert_optional_fields_stored_as_null(
     tmp_path: Path, require_fts5: None
 ) -> None:
-    """``project`` / ``topic`` / ``superseded_by`` default to NULL when omitted."""
+    """``project`` / ``topic`` / ``superseded_by`` / ``status`` default to NULL."""
     db_path = tmp_path / "recall.db"
     minimal = {
         "pak_id": "vault://block/minimal",
@@ -113,10 +113,90 @@ def test_upsert_optional_fields_stored_as_null(
     with RecallStore.open(db_path) as store:
         store.upsert_pak(**minimal)
         row = store.conn.execute(
-            "SELECT project, topic, superseded_by FROM paks WHERE pak_id = ?",
+            "SELECT project, topic, superseded_by, status FROM paks WHERE pak_id = ?",
             (minimal["pak_id"],),
         ).fetchone()
-    assert row == (None, None, None)
+    assert row == (None, None, None, None)
+
+
+def test_upsert_status_round_trips(tmp_path: Path, require_fts5: None) -> None:
+    """An authored lifecycle status is stored and exposed on PakRow."""
+    db_path = tmp_path / "recall.db"
+    row = dict(_BASE_ROW)
+    row["status"] = "accepted"
+    with RecallStore.open(db_path) as store:
+        store.upsert_pak(**row)
+        got = store.get_pak(_BASE_ROW["pak_id"])
+    assert got is not None
+    assert got.status == "accepted"
+
+
+def test_upsert_omitted_status_preserves_existing_status(
+    tmp_path: Path, require_fts5: None
+) -> None:
+    """Older callers that omit status must not clear an existing lifecycle."""
+    db_path = tmp_path / "recall.db"
+    initial = dict(_BASE_ROW)
+    initial["status"] = "accepted"
+    update = dict(_BASE_ROW)
+    update["summary"] = "updated summary"
+    with RecallStore.open(db_path) as store:
+        store.upsert_pak(**initial)
+        store.upsert_pak(**update)
+        got = store.get_pak(_BASE_ROW["pak_id"])
+    assert got is not None
+    assert got.summary == "updated summary"
+    assert got.status == "accepted"
+
+
+def test_upsert_explicit_none_clears_existing_status(
+    tmp_path: Path, require_fts5: None
+) -> None:
+    """Passing ``status=None`` explicitly clears the lifecycle value."""
+    db_path = tmp_path / "recall.db"
+    initial = dict(_BASE_ROW)
+    initial["status"] = "accepted"
+    update = dict(_BASE_ROW)
+    update["status"] = None
+    with RecallStore.open(db_path) as store:
+        store.upsert_pak(**initial)
+        store.upsert_pak(**update)
+        got = store.get_pak(_BASE_ROW["pak_id"])
+    assert got is not None
+    assert got.status is None
+
+
+def test_upsert_superseded_by_defaults_status_to_superseded(
+    tmp_path: Path, require_fts5: None
+) -> None:
+    """A direct supersession projection backfills status when no status is provided."""
+    db_path = tmp_path / "recall.db"
+    successor = dict(_BASE_ROW)
+    successor["pak_id"] = "vault://block/successor"
+    successor["title"] = "successor"
+    old = dict(_BASE_ROW)
+    old["pak_id"] = "vault://block/old"
+    old["superseded_by"] = successor["pak_id"]
+    with RecallStore.open(db_path) as store:
+        store.upsert_pak(**successor)
+        store.upsert_pak(**old)
+        row = store.conn.execute(
+            "SELECT superseded_by, status FROM paks WHERE pak_id = ?",
+            (old["pak_id"],),
+        ).fetchone()
+    assert row == (successor["pak_id"], "superseded")
+
+
+def test_upsert_rejects_invalid_status(tmp_path: Path, require_fts5: None) -> None:
+    """Lifecycle status is nullable, but non-null values must be canonical."""
+    db_path = tmp_path / "recall.db"
+    bad = dict(_BASE_ROW)
+    bad["status"] = "unknown"
+    with RecallStore.open(db_path) as store:
+        with pytest.raises(ValueError) as exc:
+            store.upsert_pak(**bad)
+    assert "status" in str(exc.value)
+    assert "unknown" not in PAK_STATUS_VALUES
 
 
 @pytest.mark.parametrize(

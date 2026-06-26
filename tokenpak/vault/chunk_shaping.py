@@ -28,6 +28,11 @@ import logging
 import re
 from typing import Any, Dict, List, Tuple
 
+# Public surface of this module. ``skeleton_runtime_status`` is an internal
+# diagnostic helper with no consumers anywhere in the package — never an
+# intended public entrypoint — and is scoped out of the API snapshot.
+__all__ = ["CHUNK_SHAPES", "apply_shape", "get_shape_for_intent", "reshape_chunks"]
+
 _log = logging.getLogger("tokenpak.skeleton")
 
 # Diagnostic state: flipped True the first time skeleton extraction is requested

@@ -3,7 +3,8 @@
 import asyncio
 
 import pytest
-from llamaindex_tokenpak import MultiIndexFusion
+
+from tokenpak.sdk.llamaindex import MultiIndexFusion
 
 # --- Mock engines ---
 
