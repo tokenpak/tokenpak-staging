@@ -15,7 +15,7 @@ What the user sees:
     $ tokenpak claude
 
       📦 TokenPak Claude Companion
-         TokenPak v1.8.0
+         TokenPak v<version>   # rendered dynamically via _get_version()
          Ready • Mode: Balanced • Budget: Unlimited
          Proxy active → http://localhost:8766
 
