@@ -33,12 +33,38 @@ class RiskEstimate:
     cache_hit_ratio: float              # 0.0..1.0 — fraction we expect cached
     rates: dict = field(default_factory=dict)  # {input, output, cached} per MTok
 
+    # ── Receipt-ready preflight extensions (additive; default-empty) ──
+    # Ranked context contributors — what is filling the model's context for
+    # this request, biggest first. Each entry is a plain JSON-serializable
+    # dict ``{"source": str, "tokens": int, "pct": float}`` where ``pct`` is
+    # the share of ``projected_input_tokens``. Plain dicts (not a nested
+    # dataclass) keep the public API surface stable and receipts cheap to
+    # serialize.
+    contributors: list = field(default_factory=list)
+    # When ``contributors`` is empty, the reason it could not be computed —
+    # e.g. ``"unparseable_request_body"`` or ``"non_messages_request_shape"``.
+    # ``None`` once contributors are populated.
+    contributors_reason: Optional[str] = None
+    # True when the estimator could not parse the request body, so the token/
+    # cost figures are a crude whole-body fallback (or zero). The policy turns
+    # an unknown estimate into a ``warn`` rather than a silent ``allow`` — we
+    # never record a confident verdict for a request we couldn't measure.
+    estimate_unknown: bool = False
+    # Machine token describing why the estimate is unknown (e.g.
+    # ``"unparseable_request_body"``). ``None`` when the estimate is known.
+    unknown_reason: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Policy output
 # ---------------------------------------------------------------------------
 
 DecisionKind = Literal["allow", "warn", "block", "hard_block", "estimate_only", "cancel"]
+
+# Schema marker stamped on receipt proofs so a downstream RequestReceiptV1 can
+# version-gate the projection. Module-private (``_`` prefix) on purpose: it is
+# an internal contract detail, not part of the package's public API surface.
+_PROOF_VERSION = "preflight.v1"
 
 
 @dataclass
@@ -50,6 +76,54 @@ class PreflightDecision:
     requires_approval: bool             # True when caller can unblock with yes/[TIP]
     threshold_hit: Optional[str] = None  # the named threshold, for logging
     risk: Optional[RiskEstimate] = None
+
+    def to_receipt_proof(self) -> dict:
+        """Project this verdict into a Receipt-v1-ready proof object.
+
+        Pure, JSON-serializable, no I/O — the spend/context preflight proof a
+        downstream receipt (``RequestReceiptV1``) attaches verbatim. Captures
+        the allow/warn/block/hard_block decision, the risk projection (or an
+        explicit ``available: false`` marker with a reason when the estimate
+        was unknown/absent), and the ranked context contributors (or the
+        reason they're unavailable). Never raises.
+        """
+        risk = self.risk
+        if risk is None:
+            risk_block: dict = {"available": False, "reason": "no_estimate"}
+            contributors: list = []
+            contributors_reason: Optional[str] = "no_estimate"
+        elif getattr(risk, "estimate_unknown", False):
+            reason = getattr(risk, "unknown_reason", None) or "estimate_unavailable"
+            risk_block = {
+                "available": False,
+                "reason": reason,
+                "model": risk.model,
+            }
+            contributors = list(getattr(risk, "contributors", None) or [])
+            contributors_reason = getattr(risk, "contributors_reason", None) or reason
+        else:
+            risk_block = {
+                "available": True,
+                "model": risk.model,
+                "current_context_tokens": risk.current_context_tokens,
+                "request_tokens": risk.request_tokens,
+                "projected_input_tokens": risk.projected_input_tokens,
+                "projected_output_tokens": risk.projected_output_tokens,
+                "projected_cost_usd": risk.projected_cost_usd,
+                "cache_hit_ratio": risk.cache_hit_ratio,
+            }
+            contributors = list(getattr(risk, "contributors", None) or [])
+            contributors_reason = getattr(risk, "contributors_reason", None)
+        return {
+            "proof_version": _PROOF_VERSION,
+            "decision": self.decision,
+            "reason": self.reason,
+            "requires_approval": self.requires_approval,
+            "threshold_hit": self.threshold_hit,
+            "risk": risk_block,
+            "top_context_contributors": contributors,
+            "contributors_reason": contributors_reason,
+        }
 
 
 # ---------------------------------------------------------------------------

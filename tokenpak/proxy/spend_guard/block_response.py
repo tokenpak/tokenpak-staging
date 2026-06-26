@@ -58,6 +58,11 @@ def block(decision: PreflightDecision, pending: PendingRequest) -> bytes:
             "projected_cost_usd": risk.projected_cost_usd if risk else None,
             "cache_hit_ratio": risk.cache_hit_ratio if risk else None,
             "model": risk.model if risk else None,
+            # User-actionable: what is filling the context window this request,
+            # biggest-first — so the operator can see *why* it was held and
+            # what to trim (or the reason the breakdown is unavailable).
+            "top_context_contributors": (getattr(risk, "contributors", None) or []) if risk else [],
+            "contributors_reason": getattr(risk, "contributors_reason", None) if risk else None,
             "pending_id": pending.pending_id,
             "expires_at": pending.expires_at,
             "approval_prompt": "Proceed? yes / no / <N> (approve next N sends)",

@@ -866,7 +866,23 @@ def decide(
             risk=estimate,
         )
 
-    # 7. Allow
+    # 7. Unknown estimate → warn, never a silent allow. When the estimator
+    #    could not parse the body, the bands above ran on a crude whole-body
+    #    fallback (so an oversize unparseable blob still trips the token
+    #    ceilings). If no band fired we must not record a confident "allow"
+    #    for a request we couldn't measure — surface a user-actionable warn
+    #    carrying the reason instead. This does not weaken any protection:
+    #    the prior behavior here was a plain forward/allow.
+    if getattr(estimate, "estimate_unknown", False):
+        return PreflightDecision(
+            decision="warn",
+            reason="estimate_unavailable",
+            requires_approval=False,
+            threshold_hit=(getattr(estimate, "unknown_reason", None) or "estimate_unknown"),
+            risk=estimate,
+        )
+
+    # 8. Allow
     return PreflightDecision(
         decision="allow",
         reason="under_thresholds",

@@ -108,6 +108,12 @@ The default ratio 0.80 is published as `tokenpak.proxy.spend_guard.DEFAULT_BLOCK
  "projected_output_tokens": 4000,
  "projected_cost_usd": 0.62,
  "model": "claude-opus-4-7",
+ "top_context_contributors": [
+   {"source": "message[0]:user", "tokens": 52000, "pct": 0.6667},
+   {"source": "tools", "tokens": 18000, "pct": 0.2308},
+   {"source": "system", "tokens": 8000, "pct": 0.1026}
+ ],
+ "contributors_reason": null,
  "pending_id": "tpg_a1b2c3d4...",
  "expires_at": 1715126400.0,
  "approval_prompt": "Proceed? Yes / No",
@@ -122,6 +128,18 @@ HTTP status: **402 Payment Required**. This is **not** a model failure — your 
 ### Hard-block (terminal)
 
 Same shape but `error.type=tokenpak_spend_guard_hard_blocked`, `retryable: false`, `recovery_status: terminally_blocked`. Even `[TIP: bypass=on]` cannot release this — the hard-block ceiling is immutable.
+
+### Top context contributors
+
+Block responses (and the `[TIP: estimate=on]` dry-run) carry `top_context_contributors` — what is filling the model's context for *this* request, biggest first. Each entry is `{"source", "tokens", "pct"}`, where `source` is `system`, `tools`, or `message[<index>]:<role>` and `pct` is the share of projected input. This makes a block **actionable**: you can see whether to trim the system prompt, drop tool schemas, or compact the transcript rather than just approving blindly. When the request body can't be broken down (non-Anthropic shape or unparseable), `top_context_contributors` is empty and `contributors_reason` says why.
+
+### Unknown estimates are warned, never silently allowed
+
+If the proxy cannot parse a request body, the preflight still runs the ceilings on a crude whole-body size (so an oversize unparseable blob is still caught), but a request that trips no band resolves to a **`warn`** carrying `reason="estimate_unavailable"` — not a confident `allow`. The verdict is recorded so a downstream receipt shows the estimate was unavailable instead of implying everything was fine.
+
+### Receipt-ready proof
+
+Every allow/warn/block/hard_block verdict can be projected into a compact, JSON-serializable proof object (`proof_version`, `decision`, `reason`, `threshold_hit`, `risk`, `top_context_contributors`) for attachment to a request receipt. When the estimate was unknown or absent, the proof's `risk.available` is `false` with a reason — the proof never fabricates a projection it didn't compute.
 
 ---
 
