@@ -87,6 +87,26 @@ def run_setup_cmd(args) -> None:
     configure_claude_code(claude_dir=claude_dir)
 
 
+def _first_proof_help() -> str:
+    """Return the no-key first-proof next-step block for the setup wizard.
+
+    Points a freshly-configured (or still key-less) install at ``tokenpak demo``
+    — a real, local compression receipt that needs no provider key, network
+    call, or Pro license — then at the live ``serve``/``cost`` path once a key
+    is set. Kept underscore-private (mirroring the small helper style of
+    ``env_var_help``) so it stays off the public API surface.
+    """
+    return (
+        "\n📊 See your first proof now — no API key required:\n"
+        "  tokenpak demo     — run real compression on a bundled sample\n"
+        "                      (prints tokens saved + est. cost/call; your\n"
+        "                       savings vary with your own prompts)\n"
+        "\nThen route your own traffic:\n"
+        "  tokenpak serve    — start the proxy for your LLM client\n"
+        "  tokenpak cost     — track your real savings\n"
+    )
+
+
 __all__ = [
     "PROXY_URL",
     "OPENAI_PROXY_URL",

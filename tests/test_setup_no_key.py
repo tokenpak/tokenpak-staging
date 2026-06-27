@@ -50,6 +50,8 @@ def test_no_key_with_oauth_and_claude_login_configures_proxy(tmp_path, capsys, m
     assert "Configured Claude Code" in out
     settings = json.loads((home / ".claude" / "settings.json").read_text())
     assert settings["env"]["ANTHROPIC_BASE_URL"].startswith("http")
+    # ...and the no-key path ends with a concrete first-proof next step.
+    assert "tokenpak demo" in out
 
 
 def test_no_key_with_oauth_no_claude_login_no_warning_no_config(tmp_path, capsys, monkeypatch):
@@ -68,6 +70,8 @@ def test_no_key_with_oauth_no_claude_login_no_warning_no_config(tmp_path, capsys
     assert "authenticated via OAuth/session" in out
     # Nothing to configure: no settings.json written.
     assert not (home / ".claude" / "settings.json").exists()
+    # Even with nothing to configure, point the user at the first proof.
+    assert "tokenpak demo" in out
 
 
 def test_no_key_no_oauth_shows_cross_platform_guidance(tmp_path, capsys, monkeypatch):
@@ -87,3 +91,5 @@ def test_no_key_no_oauth_shows_cross_platform_guidance(tmp_path, capsys, monkeyp
     assert "export ANTHROPIC_API_KEY=sk-..." in out
     assert '$env:ANTHROPIC_API_KEY="sk-..."' in out
     assert "set ANTHROPIC_API_KEY=sk-..." in out
+    # The no-OAuth dead-end is replaced with a key-free first-proof pointer.
+    assert "tokenpak demo" in out

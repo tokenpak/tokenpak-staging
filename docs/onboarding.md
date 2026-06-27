@@ -42,6 +42,25 @@ The wizard never reads or writes API keys — only proxy URLs.
 
 > **Non-interactive / CI:** Run `tokenpak setup` and answer the prompts, or configure the proxy URL manually by editing your LLM client config directly.
 
+### See Your First Proof (No API Key Needed)
+
+Before wiring up a provider key, confirm TokenPak actually compresses — instantly, offline, with nothing else to configure:
+
+```bash
+tokenpak demo
+```
+
+This runs the real compression pipeline on a bundled sample conversation and prints a receipt:
+
+```
+Original                                747 tokens
+Compressed                              502 tokens
+Saved                          245 tokens  (32.8%)
+Cost saved (est.)                $0.00073 per call
+```
+
+That's the actual pipeline — no provider key, no network call, no Pro license. The numbers above are for the bundled fixture; **your savings vary with your own prompts.** Run `tokenpak demo --list` to browse the built-in compression recipes. When `tokenpak setup` finishes, it points you straight here.
+
 ### Start the Proxy
 
 ```bash

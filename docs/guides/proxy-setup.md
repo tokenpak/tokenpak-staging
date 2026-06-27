@@ -22,6 +22,18 @@ Your API key is in the `Authorization` header and passes through untouched. Toke
 
 ---
 
+## Prove It First (No API Key)
+
+Before connecting a client or setting any provider key, confirm the compression pipeline works on your machine:
+
+```bash
+tokenpak demo
+```
+
+This runs the real pipeline on a bundled sample and prints a receipt — tokens before and after, percent saved, and estimated cost saved per call — entirely offline. No key, no proxy, no Pro license. The bundled-fixture numbers are illustrative; **your savings vary with your own prompts.** Running `tokenpak setup` points you here automatically when it finishes.
+
+---
+
 ## Start the Proxy
 
 ```bash

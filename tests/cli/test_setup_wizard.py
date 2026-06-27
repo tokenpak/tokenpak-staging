@@ -52,6 +52,7 @@ import pytest
 from tokenpak.cli.commands.setup import (
     OPENAI_PROXY_URL,
     PROXY_URL,
+    _first_proof_help,
     configure_claude_code,
     detect_claude_code,
     run_setup_cmd,
@@ -374,3 +375,31 @@ def test_no_credentials_written(claude_settings, monkeypatch):
     assert "sk-secret-key" not in raw
     assert "sk-openai-secret" not in raw
     assert PROXY_URL in raw
+
+
+# ---------------------------------------------------------------------------
+# 9. First-proof helper — the no-key time-to-first-value pointer
+# ---------------------------------------------------------------------------
+
+
+def test_first_proof_help_points_at_keyfree_demo():
+    """The helper must name `tokenpak demo` as the first, key-free proof step."""
+    block = _first_proof_help()
+    assert "tokenpak demo" in block
+    # No API key required for the first proof (Std 25: OSS path is key-free).
+    assert "no api key" in block.lower()
+
+
+def test_first_proof_help_sequences_demo_then_live_path():
+    """After the demo, the helper routes to the live serve/cost path."""
+    block = _first_proof_help()
+    assert "tokenpak serve" in block
+    assert "tokenpak cost" in block
+    # demo (first proof) is presented before the live-traffic commands.
+    assert block.index("tokenpak demo") < block.index("tokenpak serve")
+
+
+def test_first_proof_help_is_honest_about_fixture_savings():
+    """No universal savings claim — the fixture numbers are caveated."""
+    block = _first_proof_help()
+    assert "vary" in block.lower()

@@ -849,6 +849,13 @@ def cmd_setup(args):
 
     from .core.profiles import get_profile
 
+    try:
+        from tokenpak.cli.commands.setup import _first_proof_help
+    except Exception:  # pragma: no cover - defensive: never block setup on this
+
+        def _first_proof_help() -> str:
+            return ""
+
     config_dir = Path.home() / ".tokenpak"
     config_file = config_dir / "config.yaml"
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
@@ -915,6 +922,7 @@ def cmd_setup(args):
             except Exception as _e:
                 print(f"   (Claude Code auto-config skipped: {_e})")
             print("   Set OPENAI_API_KEY or GOOGLE_API_KEY to proxy those providers.")
+            print(_first_proof_help())
             return
 
         print("⚠️  No API keys detected in environment variables.")
@@ -927,6 +935,7 @@ def cmd_setup(args):
             print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
         except Exception:
             print("    export ANTHROPIC_API_KEY='sk-...'")
+        print(_first_proof_help())
         return
 
     # Auto-detect primary provider
@@ -1035,7 +1044,8 @@ def cmd_setup(args):
     except Exception:
         print(f"✅ Proxy launched (PID {proc.pid}, port {port})")
 
-    # Success message with next steps
+    # Success message: lead with the no-key first proof, then next steps.
+    print(_first_proof_help())
     print("\nNext steps:")
     print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
     print("  2. Run: tokenpak status    (check health)")
