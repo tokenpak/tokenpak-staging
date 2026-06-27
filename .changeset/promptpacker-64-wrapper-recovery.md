@@ -18,4 +18,4 @@ regenerated to record the new surface. Net: **+10 symbols** (4659 → 4669), all
 additions, no removals — the 5 public classes
 (`CompressionMetadata`, `PackingPolicy`, `PromptPacker`, `PromptPackingResult`,
 `PromptPackingService`) recorded under both `tokenpak.compression` and
-`tokenpak.compression.prompt_packing`. Per Std 21 §11 / Std 30 §7 (R7).
+`tokenpak.compression.prompt_packing` for release review.
