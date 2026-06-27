@@ -3910,27 +3910,53 @@ def cmd_savings(args):
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Savings are read only from the receipt-backed telemetry engine, which
-    # counts proxy-attributable savings from real cost records. There is no
-    # estimated/derived path: when no receipt-backed data exists, a neutral
-    # "no data yet" state is shown rather than an invented figure.
-    from .telemetry.query import get_savings_report
+    # Canonical conservative savings (TPK-SAVINGS-001): the live `savings`
+    # command reports the SAME proxy-attributed figure as `status`/`doctor`,
+    # derived from the one `compute_savings` engine — no separate receipt-backed
+    # path that could disagree on the same install. The window is labelled
+    # explicitly; when there is no data a neutral "no data yet" state is shown
+    # rather than an invented figure.
+    from .telemetry.savings import compute_savings
 
-    report = get_savings_report(days=days)
+    _sv = compute_savings(window=f"{int(days)}d_custom")
+    _has = (not _sv.error) and _sv.requests > 0
+    actual = _sv.actual_cost if _has else 0.0
+    estimated_without = _sv.baseline_cost if _has else 0.0
+    savings_amount = _sv.saved_cost if _has else 0.0
+    savings_pct = _sv.savings_pct if _has else 0.0
+    if _has:
+        _cr = sum(m["cache_read_tokens"] for m in _sv.models)
+        _in = sum(m["input_tokens"] for m in _sv.models)
+        cache_hit_rate = (_cr / (_cr + _in)) if (_cr + _in) > 0 else 0.0
+    else:
+        cache_hit_rate = 0.0
 
     if mode == OutputMode.RAW:
-        print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
+        print(
+            fmt.raw(
+                {
+                    "section": "savings",
+                    "days": days,
+                    "window": _sv.window_label,
+                    "actual_cost": actual,
+                    "savings_amount": savings_amount,
+                    "savings_pct": savings_pct,
+                    "cache_hit_rate": cache_hit_rate,
+                    "estimated_without_compression": estimated_without,
+                }
+            )
+        )
         return
 
     # Check for empty database
-    if report.total_cost == 0.0 and report.savings_amount == 0.0:
+    if not _has:
         print("No savings data yet. Run your first request through the proxy to start tracking.")
         return
 
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{report.savings_pct:.1f}%", f"${report.savings_amount:.2f}", f"{days}d"]
+                [f"{savings_pct:.1f}%", f"${savings_amount:.2f}", _sv.window_label]
             )
         )
         return
@@ -3940,11 +3966,12 @@ def cmd_savings(args):
     print(
         fmt.kv(
             [
-                ("Savings", f"${report.savings_amount:.2f}"),
-                ("Savings %", f"{report.savings_pct:.1f}%"),
-                ("Actual Cost", f"${report.total_cost:.2f}"),
-                ("Baseline", f"${report.estimated_without_compression:.2f}"),
-                ("Cache Hit", f"{report.cache_hit_rate * 100:.1f}%"),
+                ("Window", _sv.window_label),
+                ("Savings", f"${savings_amount:.2f}"),
+                ("Savings %", f"{savings_pct:.1f}%"),
+                ("Actual Cost", f"${actual:.2f}"),
+                ("Baseline", f"${estimated_without:.2f}"),
+                ("Cache Hit", f"{cache_hit_rate * 100:.1f}%"),
             ]
         )
     )
@@ -5537,11 +5564,23 @@ def main():
                 uptime_str = "unknown"
             report = get_savings_report(days=1)
 
+            # Canonical conservative savings (TPK-SAVINGS-001): the bare
+            # `tokenpak` summary reports the SAME figure as `tokenpak status`
+            # for the same window, derived from the one `compute_savings`
+            # engine — not a separate receipt-backed number that could disagree.
+            from .telemetry.savings import compute_savings
+
+            _sv = compute_savings(window="today")
+
             # Compact savings summary
             print(f"TokenPak — {uptime_str} uptime")
-            print(
-                f"💰 ${report.savings_amount:.2f} saved today ({report.savings_pct:.0f}% reduction)"
-            )
+            if _sv.error or _sv.requests == 0:
+                print("💰 savings unavailable (no telemetry yet)")
+            else:
+                print(
+                    f"💰 ${_sv.saved_cost:.2f} saved {_sv.window_label} "
+                    f"({_sv.savings_pct:.0f}% reduction)"
+                )
 
             # Get request count from recent events
             from .telemetry.query import get_recent_events
@@ -6224,6 +6263,16 @@ def cmd_cost(args):
 
     print(f"TokenPak Cost Summary — {label}")
     print(f"  Spent:  ${total:.4f}")
+
+    # Canonical conservative savings (TPK-SAVINGS-001) — agrees with
+    # status/doctor/savings; explicit window label, never a passthrough
+    # over-claim. Derived from the one `compute_savings` engine.
+    from .telemetry.savings import compute_savings
+
+    _cost_win = {"daily": "today", "weekly": "week", "monthly": "month"}[period]
+    _sv = compute_savings(window=_cost_win)
+    if not _sv.error:
+        print(f"  Saved:  ${_sv.saved_cost:.4f} ({_sv.savings_pct:.1f}%)  [{_sv.window_label}]")
 
     # Show live proxy session cost if available
     stats = _proxy_get("/stats")
