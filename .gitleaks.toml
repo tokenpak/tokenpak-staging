@@ -1,0 +1,18 @@
+# gitleaks configuration for tokenpak.
+#
+# The committed-secret scan (.github/workflows/secret-scan.yml) runs gitleaks
+# with the default ruleset over the incoming commit range. The redaction test
+# suite must embed realistic, sk-* shaped strings so it can prove that the
+# logging / config sinks actually mask credentials. Those strings are synthetic
+# and non-live; allowlist the dedicated redaction-test file so intentional
+# fixtures do not register as committed secrets, while every default rule stays
+# active for the rest of the tree.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic, non-live credential fixtures that exist solely to exercise the log/secret redaction filters."
+paths = [
+  '''tokenpak/tests/test_security\.py''',
+]
