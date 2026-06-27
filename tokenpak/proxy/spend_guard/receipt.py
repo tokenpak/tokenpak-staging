@@ -34,8 +34,8 @@ and an optional debug-capture pointer. It introduces no new persistence and
 makes no LLM/network call; it is fully deterministic given the same inputs.
 
 The module deliberately declares ``__all__ = []``: Receipt v1 is a v1 surface
-that may evolve, so it is intentionally NOT yet part of the frozen public-API
-snapshot (Std 21 §11 / Std 30 §7). Consumers import the names directly.
+that may evolve, so it is intentionally not yet part of the frozen public-API
+snapshot. Consumers import the names directly.
 """
 
 from __future__ import annotations
