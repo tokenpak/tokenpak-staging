@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.request
 
@@ -111,8 +112,10 @@ def test_health_uptime_is_int(proxy):
 def test_health_version_string(proxy):
     _, data = _get_health()
     assert isinstance(data["version"], str)
-    parts = data["version"].split(".")
-    assert len(parts) == 3, "version should be X.Y.Z"
+    assert re.fullmatch(
+        r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|\.dev\d+)?(?:\.post\d+)?",
+        data["version"],
+    ), "version should be a PEP 440-compatible release or prerelease marker"
 
 
 # ---------------------------------------------------------------------------
