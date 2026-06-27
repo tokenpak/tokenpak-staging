@@ -371,6 +371,18 @@ class TelemetryDB:
             _add_col(_tbl, "avg_final_tokens", "REAL NOT NULL DEFAULT 0")
             _add_col(_tbl, "avg_cost", "REAL NOT NULL DEFAULT 0")
 
+        # ----------------------------------------------------------------
+        # tp_events — flat event columns (token pipeline, retry, cost fields).
+        # These back the integrity/operational readers (anomaly detection,
+        # health checks, pruning, reconciliation). Wire in the canonical
+        # event-schema migration so the flat column list has a single source
+        # of truth instead of being duplicated here. Idempotent: ALTER TABLE
+        # adds are guarded by PRAGMA table_info inside migrate_tp_events().
+        # ----------------------------------------------------------------
+        from tokenpak.telemetry.event_schema import migrate_tp_events
+
+        migrate_tp_events(self._conn)
+
     def close(self) -> None:
         """Close the underlying database connection."""
         self._conn.close()
