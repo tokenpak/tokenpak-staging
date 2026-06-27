@@ -250,6 +250,82 @@ fi
 COST_MICRO=$((TOKENS * 3 / 1000))
 COST_DOLLARS="$(( COST_MICRO / 1000 )).$(printf '%04d' $(( COST_MICRO % 1000 )) )"
 
+# ── Budget ledger backend (sqlite3 CLI or bundled Python) ─────────────────
+# The companion budget ledger (companion_costs) is a SQLite DB. bash can only
+# reach it through the host `sqlite3` CLI, which is not installed on every
+# host — when it is absent the gate could neither read accumulated spend nor
+# record this prompt, so the budget never accumulated and the gate was inert.
+# These helpers prefer the CLI when present and fall back to the bundled Python
+# sqlite3 module otherwise, so enforcement works without a host CLI dependency.
+# Pinned interpreter (TOKENPAK_COMPANION_PYTHON, set by the launcher) keeps the
+# fallback on the same venv interpreter as the MCP server.
+_companion_daily_total() {
+    # $1=db $2=date → today's SUM(estimated_cost); prints 0.0 on any error.
+    local out
+    if [ -f "$1" ] && command -v sqlite3 >/dev/null 2>&1; then
+        out=$(sqlite3 "$1" \
+            "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = '$2';" \
+            2>/dev/null)
+        # A working CLI always returns a value (COALESCE → at least 0). Empty
+        # output means the CLI failed; fall through to the bundled Python path
+        # rather than silently reading 0 and failing the gate open.
+        if [ -n "$out" ]; then printf '%s' "$out"; return; fi
+    fi
+    "${TOKENPAK_COMPANION_PYTHON:-python3}" -c '
+import os, sqlite3, sys
+db, day = sys.argv[1], sys.argv[2]
+if not os.path.exists(db):
+    print(0.0)
+else:
+    try:
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = ?",
+            (day,),
+        ).fetchone()
+        conn.close()
+        print(row[0] if row else 0.0)
+    except Exception:
+        print(0.0)
+' "$1" "$2" 2>/dev/null || printf '0.0'
+}
+
+_companion_record_cost() {
+    # $1=db $2=date $3=session_id $4=input_tokens $5=est_microdollars.
+    # Records the pre-send estimate so the daily total accumulates (the basis
+    # for the gate). Bundled Python sqlite3 — no host CLI dependency.
+    # Best-effort; never fails the hook. All columns are supplied on INSERT, so
+    # the table is created without per-column DEFAULTs (schema-compatible with
+    # companion/budget/tracker.py, which also uses CREATE TABLE IF NOT EXISTS).
+    "${TOKENPAK_COMPANION_PYTHON:-python3}" -c '
+import os, sqlite3, sys, time
+db, day, sid = sys.argv[1], sys.argv[2], sys.argv[3]
+toks, micro = int(sys.argv[4]), int(sys.argv[5])
+try:
+    d = os.path.dirname(db)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS companion_costs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL, "
+        "date TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL, "
+        "input_tokens INTEGER NOT NULL, cached_tokens INTEGER NOT NULL, "
+        "output_tokens INTEGER NOT NULL, estimated_cost REAL NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO companion_costs (timestamp, date, session_id, model, "
+        "input_tokens, cached_tokens, output_tokens, estimated_cost) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (time.time(), day, sid, "", toks, 0, 0, round(micro / 1_000_000, 6)),
+    )
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
+' "$1" "$2" "$3" "$4" "$5" 2>/dev/null || true
+}
+
 # Budget check (only if TOKENPAK_COMPANION_BUDGET is set and > 0)
 BUDGET="${TOKENPAK_COMPANION_BUDGET:-0}"
 BUDGET_TAG=""
@@ -258,12 +334,10 @@ if [ "$BUDGET" != "0" ] && [ -n "$BUDGET" ]; then
     JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
     BUDGET_DB="$JOURNAL_DIR/budget.db"
     TODAY=$(date +%Y-%m-%d)
-    DAILY_TOTAL="0.0"
 
-    if [ -f "$BUDGET_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-        DAILY_TOTAL=$(sqlite3 "$BUDGET_DB" \
-            "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = '$TODAY';" 2>/dev/null || echo "0.0")
-    fi
+    # Accumulated spend today — reads via sqlite3 CLI or bundled Python so the
+    # gate sees real accumulated spend even on hosts without the sqlite3 CLI.
+    DAILY_TOTAL=$(_companion_daily_total "$BUDGET_DB" "$TODAY")
 
     # Compare using integer microdollars
     BUDGET_MICRO=$(echo "$BUDGET * 1000000" | bc 2>/dev/null | cut -d. -f1 || echo 0)
@@ -275,6 +349,11 @@ if [ "$BUDGET" != "0" ] && [ -n "$BUDGET" ]; then
         printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","decision":"block","reason":"budget exceeded"}}\n'
         exit 2
     fi
+
+    # Allowed: record this prompt's estimate so the daily total accumulates
+    # across prompts (otherwise the gate above could never read prior spend and
+    # would be inert). Recorded after the gate read, so no double-count.
+    _companion_record_cost "$BUDGET_DB" "$TODAY" "$SESSION_ID" "$TOKENS" "$EST_MICRO"
 
     # Budget percentage tag
     if [ "${BUDGET_MICRO:-0}" -gt 0 ] 2>/dev/null; then

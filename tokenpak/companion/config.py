@@ -47,6 +47,23 @@ class CompanionConfig:
     """
 
     enabled: bool = True
+
+    # Companion daily budget in USD (TOKENPAK_COMPANION_BUDGET; 0 = unlimited).
+    #
+    # This is surface (c) of THREE distinct budget surfaces — keep them apart:
+    #   (a) Proxy dollar budget (/tpk/v1/budget, TOKENPAK_BUDGET_DAILY_LIMIT_USD)
+    #       — a server-side dollar cap, disabled by default. The MCP
+    #       `check_budget` tool reads this; its dormant reading when the cap is
+    #       off is correct, not a defect. Not enabled here.
+    #   (b) Spend-guard token rolling caps — the active proxy-side limiter on
+    #       actual traffic.
+    #   (c) THIS field — a prompt-side ESTIMATE gate. The pre-send hook
+    #       accumulates per-prompt estimates in companion_costs
+    #       (~/.tokenpak/companion/budget.db) and blocks before send when the
+    #       day's running estimate would exceed this budget. It is an estimate,
+    #       NOT the proxy telemetry DB, which remains the source of truth for
+    #       actual billed spend. Never read (c) as if it were (a)/(b) or vice
+    #       versa.
     budget_daily_usd: float = 0.0
     profile: str = "balanced"
     journal_dir: Path = field(default_factory=lambda: Path.home() / ".tokenpak" / "companion")

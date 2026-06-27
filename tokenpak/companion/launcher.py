@@ -295,6 +295,12 @@ def _write_mcp_config(config: CompanionConfig) -> str:
 
 def _mcp_env_vars(config: CompanionConfig) -> dict[str, str]:
     env: dict[str, str] = {}
+    # Pin the interpreter the pre-send hook uses for its budget path. When a
+    # companion budget is set, hooks/pre_send.sh reaches the SQLite cost ledger
+    # via the bundled Python sqlite3 module (the host `sqlite3` CLI is not
+    # guaranteed installed). Pinning sys.executable keeps that on the same
+    # (venv-correct) interpreter as the MCP server instead of a bare `python3`.
+    env["TOKENPAK_COMPANION_PYTHON"] = sys.executable
     if config.session_id and config.session_id_source == "env":
         env["TOKENPAK_COMPANION_SESSION_ID"] = config.session_id
     if config.project_dir:
