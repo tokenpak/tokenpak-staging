@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Canonical savings-metric agreement guard (TPK-SAVINGS-001).
+"""Canonical savings-metric agreement guard.
 
 P0 trust linchpin: a single install must never report different savings numbers
 across ``doctor`` / ``savings`` / ``status`` / ``cost``. These tests pin the

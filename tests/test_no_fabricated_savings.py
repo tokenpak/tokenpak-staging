@@ -69,8 +69,8 @@ def test_trust_surface_has_no_fabricated_savings(path: Path) -> None:
 
 
 def test_savings_command_routes_through_honest_engine() -> None:
-    """``tokenpak savings`` must read receipt-backed data from get_savings_report,
-    never the corrupt monitor.db ``compressed_tokens`` path."""
+    """``tokenpak savings`` must route through the canonical conservative
+    compute_savings engine, never the corrupt monitor.db ``compressed_tokens`` path."""
     core = (_REPO_ROOT / "tokenpak" / "_cli_core.py").read_text(encoding="utf-8")
 
     # Isolate the cmd_savings function body.

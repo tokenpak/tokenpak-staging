@@ -3910,7 +3910,7 @@ def cmd_savings(args):
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Canonical conservative savings (TPK-SAVINGS-001): the live `savings`
+    # Canonical conservative savings: the live `savings`
     # command reports the SAME proxy-attributed figure as `status`/`doctor`,
     # derived from the one `compute_savings` engine — no separate receipt-backed
     # path that could disagree on the same install. The window is labelled
@@ -5564,7 +5564,7 @@ def main():
                 uptime_str = "unknown"
             report = get_savings_report(days=1)
 
-            # Canonical conservative savings (TPK-SAVINGS-001): the bare
+            # Canonical conservative savings: the bare
             # `tokenpak` summary reports the SAME figure as `tokenpak status`
             # for the same window, derived from the one `compute_savings`
             # engine — not a separate receipt-backed number that could disagree.
@@ -6264,7 +6264,7 @@ def cmd_cost(args):
     print(f"TokenPak Cost Summary — {label}")
     print(f"  Spent:  ${total:.4f}")
 
-    # Canonical conservative savings (TPK-SAVINGS-001) — agrees with
+    # Canonical conservative savings — agrees with
     # status/doctor/savings; explicit window label, never a passthrough
     # over-claim. Derived from the one `compute_savings` engine.
     from .telemetry.savings import compute_savings

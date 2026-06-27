@@ -177,7 +177,7 @@ def _get_version() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fleet savings calculation (inline — TPK-SAVINGS-001 not yet available)
+# Fleet savings calculation (inline — canonical metric not yet available)
 # ---------------------------------------------------------------------------
 
 
@@ -258,8 +258,8 @@ def _calculate_fleet_savings(
     Returns:
         Dict with keys: models (list), totals (dict), period (str)
     """
-    # Delegate the actual computation to the canonical savings engine
-    # (TPK-SAVINGS-001) so ``status``, ``doctor``, and the live ``savings`` /
+    # Delegate the actual computation to the canonical savings engine so
+    # ``status``, ``doctor``, and the live ``savings`` /
     # ``cost`` surfaces all derive from ONE source and can never disagree on the
     # same install. ``compute_savings`` mirrors ``_window_clause`` for the period
     # tokens status passes, so this delegation is behaviour-preserving and the

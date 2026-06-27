@@ -273,7 +273,7 @@ def attribution_to_row(
 
 
 # ---------------------------------------------------------------------------
-# Canonical savings metric (TPK-SAVINGS-001) — single source of truth
+# Canonical conservative savings metric — single source of truth
 #
 # One computation shared by ``doctor``, ``savings``, ``status``, and ``cost``
 # so a single install can never report three different savings numbers.
@@ -575,7 +575,7 @@ def compute_savings(window: Any = "all", db_path: Optional[str] = None) -> Savin
 
 # NOTE: ``compute_savings`` / ``SavingsResult`` are intentionally NOT exported in
 # ``__all__`` below. Consumers import them by explicit name; keeping them out of
-# ``__all__`` leaves the Std 21 public-API snapshot unchanged (no regen needed).
+# ``__all__`` leaves the public-API snapshot unchanged (no regen needed).
 __all__ = [
     "parse_openai_usage",
     "parse_anthropic_usage",
