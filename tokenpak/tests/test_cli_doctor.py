@@ -281,3 +281,75 @@ def test_lifecycle_flag_renders_only_panel(tmp_path, monkeypatch, capsys):
     # The full suite's section header must NOT appear under --lifecycle.
     assert "Monitor DB" not in out
     assert "Env var conflicts" not in out
+
+
+# ---------------------------------------------------------------------------
+# Credential-exposure check — promoted from `creds doctor` (d3 spec gap #5)
+# v2.0-d3-credential-security §7.6 / §10 #6 / AC #6
+# ---------------------------------------------------------------------------
+
+
+def _run_doctor_json(capsys) -> dict:
+    """Run the full doctor in JSON mode and return the parsed payload."""
+    doc.run_doctor(output_json=True)
+    out = capsys.readouterr().out
+    return json.loads(out)
+
+
+def _find_check(payload: dict, name: str):
+    for c in payload.get("checks", []):
+        if c.get("check") == name:
+            return c
+    return None
+
+
+def test_doctor_surfaces_credential_check(tmp_path, monkeypatch, capsys):
+    """`tokenpak doctor` includes the promoted credential-exposure check (gap #5).
+
+    Exercises the real wiring end-to-end: the primary verb invokes the same
+    ``creds.doctor.run()`` engine the sub-verb does.
+    """
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "home"))
+    check = _find_check(_run_doctor_json(capsys), "credential_exposure")
+    assert check is not None, "doctor must surface the promoted credential check"
+
+
+def test_doctor_credential_check_clean_when_no_hazards(tmp_path, monkeypatch, capsys):
+    """No hazards → pass (parity with `creds doctor` printing 'no issues')."""
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("tokenpak.creds.doctor.run", lambda *a, **k: [])
+    check = _find_check(_run_doctor_json(capsys), "credential_exposure")
+    assert check is not None
+    assert check["status"] == "pass"
+
+
+def test_doctor_credential_check_parity_with_creds_doctor(tmp_path, monkeypatch, capsys):
+    """An error-severity hazard from creds.doctor surfaces as a doctor failure,
+    carrying the same subject/detail the `creds doctor` sub-verb would print."""
+    from tokenpak.creds.doctor import Issue
+
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "home"))
+    fake = [
+        Issue("error", "credentials.toml", "perms are not 0600 — run chmod 600"),
+        Issue("warn", "codex-9f05", "OAuth expires in ~30 min"),
+    ]
+    monkeypatch.setattr("tokenpak.creds.doctor.run", lambda *a, **k: fake)
+    check = _find_check(_run_doctor_json(capsys), "credential_exposure")
+    assert check is not None
+    assert check["status"] == "fail"
+    assert "credentials.toml" in check["detail"]
+    assert "perms are not 0600" in check["detail"]
+
+
+def test_doctor_credential_check_never_crashes_doctor(tmp_path, monkeypatch, capsys):
+    """A throwing credential probe degrades to a warn, never aborts doctor
+    (Std 47 — a security probe must not fail unrelated checks)."""
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "home"))
+
+    def _boom(*a, **k):
+        raise RuntimeError("discover blew up")
+
+    monkeypatch.setattr("tokenpak.creds.doctor.run", _boom)
+    check = _find_check(_run_doctor_json(capsys), "credential_exposure")
+    assert check is not None
+    assert check["status"] == "warn"
