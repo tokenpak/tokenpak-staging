@@ -18,7 +18,7 @@ Prompt Packing. The proxy listens on localhost:PORT and forwards
 compressed requests to your configured LLM providers.
 
 Example:
-  tokenpak start --port 8888 --workers 4
+  tokenpak start --port 8888
 
 (See also `tokenpak serve` for telemetry/ingest variants.)
 The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
@@ -26,7 +26,6 @@ The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
 **Flags:**
 
 - `--port` — Port to listen on (default: 8766) (default: 8766)
-- `--workers` — Number of worker processes (default: 2) (default: 2)
 - `--log-level` — Logging level (default: info) (default: info) — choices: `debug`, `info`, `warning`, `error`
 
 ### `tokenpak stop`
@@ -1085,6 +1084,20 @@ Test search retrieval
 
 - `KEY` — Your license key (default: )
 - `--email` — Optional email for the license (default: )
+
+### `tokenpak cache`
+
+**Flags:**
+
+- `--json`
+
+**Subcommands:**
+
+- `status`
+  - `--json`
+- `clear`
+  - `--id` — Clear only this fingerprint ID (default: all)
+  - `--yes`, `-y` — Skip confirmation prompt
 
 ### `tokenpak check-alerts`
 

@@ -17,7 +17,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 
 def compress_prose():
