@@ -224,8 +224,8 @@ PAK_RELATION_TYPES: frozenset[str] = frozenset({"supersedes", "conflicts_with"})
 
 # --- OSS recall preview + apply (baseline same-store) ------------------------
 #
-# Boundary (Std 32): OSS recall is *single-source, same-store* metadata
-# retrieval over the local recall db. It is deterministic — newest-first
+# Boundary: OSS recall is *single-source, same-store* metadata retrieval
+# over the local recall db. It is deterministic — newest-first
 # order with optional byte-literal (``project`` / ``pak_type``) and
 # case-insensitive substring (``query``) metadata filters — and *unscored*:
 # every candidate's ``score`` is ``None``. ``rank`` is the position in the

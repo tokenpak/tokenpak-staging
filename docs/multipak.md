@@ -63,7 +63,7 @@ Exit codes follow the relevant standard: `0` success, `1` user-facing error (mis
 
 ### Pak ID format
 
-Vault Paks: `vault:<source-path>#<sha256-prefix>` — for example, `vault:/home/me/proj/README.md#abc12345`. The `#` is significant — when used in URLs (e.g., `/pak/v1/inspect/<pak-id>`), percent-encode it as `%23`.
+Vault Paks: `vault:<source-path>#<sha256-prefix>` — for example, `vault:<project>/README.md#abc12345`. The `#` is significant — when used in URLs (e.g., `/pak/v1/inspect/<pak-id>`), percent-encode it as `%23`.
 
 Other subtypes (Pro): `interaction:<session>:<entry>`, `decision:<id>`, `recall:<query-hash>`, `handoff:<target>:<id>`.
 

@@ -1293,6 +1293,23 @@ Read-only consumer surface over the PAKPlan recall foundation. Scoring + capture
   - `--json` — Emit JSON
 - `report`
   - `--json` — Emit JSON
+- `recall`
+  - `--query`, `-q` — Case-insensitive substring match over title + summary
+  - `--project` — Byte-literal project filter
+  - `--type` — Byte-literal pak_type filter
+  - `--limit` — Max candidates (default: 20) (default: 20)
+  - `--json` — Emit JSON
+- `apply`
+  - `--query`, `-q` — Case-insensitive substring match over title + summary
+  - `--project` — Byte-literal project filter
+  - `--type` — Byte-literal pak_type filter
+  - `--limit` — Max candidates (default: 20) (default: 20)
+  - `--include` — Include only these pak_ids (repeatable); others are dropped
+  - `--exclude` — Exclude these pak_ids (repeatable); the rest are included
+  - `--reason` — Free-text note recorded in the proof
+  - `--out` — Write the proof JSON here (default: alongside the recall db)
+  - `--dry-run` — Build and show the proof without writing it
+  - `--json` — Emit JSON
 
 ### `tokenpak plan`
 
