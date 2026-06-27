@@ -96,8 +96,9 @@ def _db_writer_worker():
                             ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
                             ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
                             ssrm_progress_signal,ssrm_signals_json,skip_reason,
-                            dispatch_job_id,dispatch_station_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            dispatch_job_id,dispatch_station_id,
+                            request_class,request_class_reason)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -303,6 +304,23 @@ class Monitor:
                     conn.execute(_alter)
                 except sqlite3.OperationalError:
                     pass
+            # Traffic classification columns (Standard 29 §13.4). Additive +
+            # idempotent — guarded by PRAGMA table_info so re-running is a no-op.
+            # Pre-§13 rows default to 'external_untagged' / 'no_marker' and so are
+            # filtered OUT of managed-agent cap denominators (§13.5); the failure
+            # mode of "managed traffic accidentally attributed to managed caps" is
+            # the invariant the default deliberately avoids.
+            _req_cols = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
+            if "request_class" not in _req_cols:
+                conn.execute(
+                    "ALTER TABLE requests ADD COLUMN request_class "
+                    "TEXT NOT NULL DEFAULT 'external_untagged'"
+                )
+            if "request_class_reason" not in _req_cols:
+                conn.execute(
+                    "ALTER TABLE requests ADD COLUMN request_class_reason "
+                    "TEXT NOT NULL DEFAULT 'no_marker'"
+                )
             conn.commit()
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS budget_alerts (
@@ -393,6 +411,8 @@ class Monitor:
         skip_reason="",
         dispatch_job_id="",
         dispatch_station_id="",
+        request_class="external_untagged",
+        request_class_reason="no_marker",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -445,6 +465,8 @@ class Monitor:
             skip_reason or "",
             dispatch_job_id or "",
             dispatch_station_id or "",
+            request_class or "external_untagged",
+            request_class_reason or "no_marker",
         )
         _queued = False
         try:
@@ -463,9 +485,10 @@ class Monitor:
                     "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
                     "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
                     "ssrm_progress_signal, ssrm_signals_json, skip_reason, "
-                    "dispatch_job_id, dispatch_station_id) "
+                    "dispatch_job_id, dispatch_station_id, "
+                    "request_class, request_class_reason) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     insert_params,
                 )
                 _conn.commit()

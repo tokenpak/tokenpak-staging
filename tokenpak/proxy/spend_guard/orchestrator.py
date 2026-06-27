@@ -13,6 +13,7 @@ optional layer is imported lazily so the core runs whether or not it is present.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from typing import Optional
 
@@ -40,6 +41,17 @@ from .pending import PendingStore, hash_request
 from .policy import SpendGuardConfig, decide, load_config
 
 _log = logging.getLogger(__name__)
+
+# Standard 29 §13.2: the traffic class + detection reason of the request being
+# evaluated, set once at the top of :func:`evaluate` and read by :func:`_audit`
+# so EVERY audit row carries the attribution — including rows written by the
+# grant/reservation helpers — without threading it through each call site. A
+# ContextVar is per-execution-context, so concurrent requests on different
+# threads never see each other's class. Defaults to the pre-classifier sentinels
+# (literal here to avoid importing the classifier at module load).
+_REQUEST_CLASS: contextvars.ContextVar = contextvars.ContextVar(
+    "spend_guard_request_class", default=("external_untagged", "no_marker")
+)
 
 
 # Provider hostnames keyed off the target_url for audit/store metadata.
@@ -74,6 +86,22 @@ def evaluate(
     # Disabled → forward unchanged. This is the soft-launch path.
     if not cfg.enabled:
         return GuardOutcome.passthrough(body)
+
+    # Standard 29 §13: classify this request's traffic up front so audit
+    # attribution (§13.4), cap denominators (§13.5), and 402 block copy (§13.6)
+    # all agree on one class. Stored in _REQUEST_CLASS so every _audit() row
+    # below — including those written by the grant/reservation helpers — carries
+    # the class + detection reason. Read-only on headers; fails to the default
+    # sentinels on any classifier error.
+    request_class = "external_untagged"
+    try:
+        from .classifier import classify as _classify
+        _cls = _classify(headers)
+        request_class = _cls.request_class
+        _REQUEST_CLASS.set((_cls.request_class, _cls.reason))
+    except Exception as e:
+        _log.debug("spend_guard: classify failed (external_untagged): %s", e)
+        _REQUEST_CLASS.set(("external_untagged", "no_marker"))
 
     # TIP-header layer: parse + strip. Imported lazily so the core runs even
     # before this layer is present. Until tip_header.py exists, treat as no-op.
@@ -282,7 +310,9 @@ def evaluate(
                            projected_cost=est.projected_cost_usd, tip=tip_directive)
                     return GuardOutcome(
                         kind="block",
-                        response_body=build_rolling_cap_block(breach),
+                        response_body=build_rolling_cap_block(
+                            breach, request_class=request_class
+                        ),
                         http_status=402,
                         audit_event="rolling_cap_block",
                     )
@@ -533,9 +563,17 @@ def _synthetic_decision(recent: PendingRequest):
 
 
 def _audit(cfg, event_type, session_id, **fields) -> None:
-    """Best-effort audit-log write. Never raises into the hot path."""
+    """Best-effort audit-log write. Never raises into the hot path.
+
+    Stamps the Standard 29 §13 request class + detection reason onto every row
+    from the per-request _REQUEST_CLASS context (a caller may still override via
+    explicit ``request_class`` / ``request_class_reason`` fields).
+    """
     try:
         from .audit import write_audit
+        _rc, _rr = _REQUEST_CLASS.get()
+        fields.setdefault("request_class", _rc)
+        fields.setdefault("request_class_reason", _rr)
         write_audit(cfg.audit_db_path, event_type=event_type,
                     session_id=session_id, **fields)
     except ImportError:

@@ -165,12 +165,20 @@ def estimate_only(risk: RiskEstimate) -> bytes:
     return json.dumps(payload).encode()
 
 
-def build_rolling_cap_block(breach) -> bytes:
+def build_rolling_cap_block(breach, *, request_class: str | None = None) -> bytes:
     """Build the JSON response body for a rolling-cap block.
 
     `breach` is a :class:`rolling_caps.CapBreach` dataclass instance.
     Returns the structured 402 body bytes; the caller wraps the HTTP
     status and headers.
+
+    ``request_class`` is the Standard 29 §13.1 class of the triggering request
+    (one of the three canonical literals). When supplied it is cited verbatim in
+    the body (§13.6). When the triggering request is ``raw_claude_observed`` or
+    ``external_untagged`` the copy additionally clarifies that this request is NOT
+    counted against the managed-agent denominator (the §13.5 exclusion). Any
+    non-zero ``excluded_observed_spend`` / ``managed_unattributed_spend`` carried
+    on the breach is surfaced so the caller sees the spend the cap math ignored.
 
     Attribution clarity: for **per_fleet** breaches, ``agent_id`` is the
     *triggering caller* (the request that tripped the cap), and ``used`` is the
@@ -199,9 +207,20 @@ def build_rolling_cap_block(breach) -> bytes:
             f"{breach.cap:.4g} (this IS {breach.agent_id}'s rolling usage), "
             f"would_add={breach.projected_add:.4g}, window={breach.window_seconds}s."
         )
+    # §13.6 — cite the triggering request's class verbatim; for non-managed
+    # classes, clarify the §13.5 exclusion (this request is NOT in the managed
+    # denominator the cap is computed over).
+    class_note = ""
+    if request_class:
+        class_note = f" request_class={request_class}."
+        if request_class in ("raw_claude_observed", "external_untagged"):
+            class_note += (
+                f" This request is classified {request_class} and is NOT counted "
+                "against the managed-agent cap denominator (Std 29 §13.5)."
+            )
     message = (
         f"TIP Spend Guard rolling cap exceeded: {breach.cap_dimension} [{scope}]. "
-        f"{attribution} "
+        f"{attribution}{class_note} "
         "Reply 'yes' or prepend '[TIP: allow=once]' to bypass; "
         "wait ~30 min for usage to age out, or operator may raise "
         "the cap in spend_guard.rolling_caps."
@@ -226,6 +245,18 @@ def build_rolling_cap_block(breach) -> bytes:
             "bypass_directive": "[TIP: allow=once]",
         }
     }
+    # §13.6 — canonical class literal of the triggering request.
+    if request_class:
+        payload["error"]["request_class"] = request_class
+    # §13.5 — surface the spend the managed denominator deliberately excluded
+    # (non-managed traffic) and the managed-but-unattributed sub-bucket, but only
+    # when non-zero (the exclusion is information for the caller, not a cap input).
+    excluded = float(getattr(breach, "excluded_observed_spend", 0.0) or 0.0)
+    if excluded > 0:
+        payload["error"]["excluded_observed_spend"] = excluded
+    unattributed = float(getattr(breach, "managed_unattributed_spend", 0.0) or 0.0)
+    if unattributed > 0:
+        payload["error"]["managed_unattributed_spend"] = unattributed
     # Optional per-agent breakdown — included only when the breach carries it
     # (top-N by spend in the window). Full population is a separate slice.
     contributing = getattr(breach, "contributing_agents", None)

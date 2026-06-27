@@ -103,6 +103,24 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_audit_event_ts "
             "ON spend_guard_audit(event_type, ts)"
         )
+        # Traffic classification columns (Standard 29 §13.4). Additive +
+        # idempotent — PRAGMA table_info guard so re-running is a no-op. Every
+        # audit row carries both the §13.1 class and the §13.2 detection reason;
+        # the class alone is not sufficient for forensic reconstruction. Pre-§13
+        # rows default to 'external_untagged' / 'no_marker'.
+        _audit_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(spend_guard_audit)")
+        }
+        if "request_class" not in _audit_cols:
+            conn.execute(
+                "ALTER TABLE spend_guard_audit ADD COLUMN request_class "
+                "TEXT NOT NULL DEFAULT 'external_untagged'"
+            )
+        if "request_class_reason" not in _audit_cols:
+            conn.execute(
+                "ALTER TABLE spend_guard_audit ADD COLUMN request_class_reason "
+                "TEXT NOT NULL DEFAULT 'no_marker'"
+            )
         conn.commit()
         if schema_key is not None:
             _SCHEMA_READY.add(schema_key)
@@ -120,8 +138,15 @@ def write_audit(
     request_hash: Optional[str] = None,
     tip=None,                   # TIPDirective | None
     extra: Optional[dict] = None,
+    request_class: str = "external_untagged",
+    request_class_reason: str = "no_marker",
 ) -> None:
-    """Insert one audit row. Best-effort — never raises into caller."""
+    """Insert one audit row. Best-effort — never raises into caller.
+
+    ``request_class`` / ``request_class_reason`` are the Standard 29 §13.1/§13.2
+    traffic class + detection reason of the request that produced this decision;
+    they default to the pre-classifier sentinels so legacy callers stay valid.
+    """
     try:
         path = _db_path(audit_db_path)
         conn = _secure_sqlite_connect(path, timeout=30.0)
@@ -144,8 +169,9 @@ def write_audit(
                 """INSERT INTO spend_guard_audit
                        (ts, session_id, event_type, decision, reason,
                         projected_tokens, projected_cost_usd,
-                        pending_id, request_hash, tip_directive_json, extra_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        pending_id, request_hash, tip_directive_json, extra_json,
+                        request_class, request_class_reason)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     time.time(),
                     session_id or "",
@@ -158,6 +184,8 @@ def write_audit(
                     request_hash or "",
                     tip_json,
                     extra_json,
+                    request_class or "external_untagged",
+                    request_class_reason or "no_marker",
                 ),
             )
             conn.commit()

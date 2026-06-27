@@ -1743,6 +1743,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if _client_auth:
             _strip_proxy_auth_for_upstream(fwd_headers, _client_auth)
 
+        # ── Std 29 §13.3 / Std 23 §8.4 — strip TokenPak-internal managed markers
+        # (X-Tokenpak-Managed / -Agent / -Managed-Env) before ANY upstream
+        # forward. They are tokenpak_internal-classed: re-synthesised at each hop,
+        # NEVER passed through — even to a TokenPak-managed downstream proxy.
+        try:
+            from .spend_guard.classifier import strip_managed_headers as _strip_managed
+            _strip_managed(fwd_headers)
+        except Exception:
+            pass
+
         # ── Router-based credential injection (feature-flagged) ──────
         # When TOKENPAK_CREDS_ROUTER_ENABLED=1, select a credential via
         # the creds router and inject it. On any failure this is a
@@ -2172,6 +2182,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _mon_dispatch_station_id = (
                     (_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _hdrs else ""
                 )
+                # Std 29 §13 — classify this request's traffic class for the
+                # monitor row (drives §13.5 cap denominators + §13.6 402 copy).
+                try:
+                    from .spend_guard.classifier import classify as _classify_req
+                    _mon_cls = _classify_req(self.headers)
+                    _mon_request_class = _mon_cls.request_class
+                    _mon_request_class_reason = _mon_cls.reason
+                except Exception:
+                    _mon_request_class = "external_untagged"
+                    _mon_request_class_reason = "no_marker"
                 if ps.monitor is not None:
                     # SSRM Phase 1: pull the advisory decision computed earlier
                     # in the request flow (see the SSRM hook above the DLP scan)
@@ -2243,6 +2263,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             skip_reason=_skip_reason,
                             dispatch_job_id=_mon_dispatch_job_id,
                             dispatch_station_id=_mon_dispatch_station_id,
+                            request_class=_mon_request_class,
+                            request_class_reason=_mon_request_class_reason,
                             **_ssrm_kwargs,
                         )
                     except Exception:
@@ -2479,6 +2501,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _cx_dispatch_station_id = (
                         (_cx_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _cx_hdrs else ""
                     )
+                    # Std 29 §13 — traffic class for the monitor row.
+                    try:
+                        from .spend_guard.classifier import classify as _classify_cx
+                        _cx_cls = _classify_cx(self.headers)
+                        _cx_request_class = _cx_cls.request_class
+                        _cx_request_class_reason = _cx_cls.reason
+                    except Exception:
+                        _cx_request_class = "external_untagged"
+                        _cx_request_class_reason = "no_marker"
                     ps.monitor.log(
                         model=_cx_model,
                         input_tokens=_cx_in,
@@ -2490,6 +2521,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         user_id=getattr(self, "_tokenpak_user_id", "") or "",
                         dispatch_job_id=_cx_dispatch_job_id,
                         dispatch_station_id=_cx_dispatch_station_id,
+                        request_class=_cx_request_class,
+                        request_class_reason=_cx_request_class_reason,
                     )
                 except Exception:
                     pass  # DB errors must never break the request

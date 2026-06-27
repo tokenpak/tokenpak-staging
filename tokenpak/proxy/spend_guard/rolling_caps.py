@@ -86,6 +86,11 @@ class CapBreach:
     cap: float  # configured cap
     projected_add: float  # what THIS request would add
     retry_after_seconds: int  # seconds until enough usage ages out
+    # Standard 29 §13.5 surfacing — spend the managed denominator excluded
+    # (non-managed traffic) and the managed-but-unattributed sub-bucket. Both
+    # default 0.0 so existing constructors / tests are unaffected.
+    excluded_observed_spend: float = 0.0
+    managed_unattributed_spend: float = 0.0
 
 
 def record_session_agent(session_id: str, agent_id: str) -> None:
@@ -113,9 +118,23 @@ def _blank_usage(*, degraded_reason: Optional[str] = None) -> dict:
         "fleet_cost_usd": 0.0,
         "fleet_tokens_total": 0,
         "fleet_cache_read_tokens": 0,
+        "managed_unattributed_cost_usd": 0.0,
+        "excluded_observed_spend_usd": 0.0,
         "degraded": degraded_reason is not None,
         "degraded_reason": degraded_reason,
     }
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """True iff ``table`` has ``column`` (Standard 29 §13 migration guard).
+
+    A pre-§13 monitor.db lacks ``request_class``; callers fall back to the
+    conservative count-all-rows behaviour rather than fail-open to zero.
+    """
+    try:
+        return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+    except Exception:
+        return False
 
 
 def _cache_usage(cache_key: str, usage: dict, now: float) -> dict:
@@ -212,24 +231,65 @@ def compute_rolling_usage(
     )
     try:
         conn = sqlite3.connect(str(p), timeout=2.0)
-        # Fleet-wide totals.
+        # Standard 29 §13.5 — managed-cap denominators count ONLY request_class
+        # = 'managed' traffic. raw_claude_observed / external_untagged rows (and
+        # pre-§13 rows, which default to external_untagged) live in their own
+        # buckets and MUST NOT inflate any managed-agent / fleet denominator. On
+        # a pre-§13 DB without the column, fall back to counting all rows (the
+        # conservative, never-under-block posture).
+        managed = _has_column(conn, "requests", "request_class")
+        managed_clause = " AND request_class = 'managed'" if managed else ""
+        # Fleet-wide MANAGED totals.
         # tokens_total = input + output (cache_read EXCLUDED
         # 2026-05-15: Anthropic bills cache_read ~90% cheaper, so cache_read
         # inflation should not trip the rolling tokens cap. cache_read is
         # still recorded for observability + its own dedicated cap.
         row = conn.execute(
-            """SELECT COALESCE(SUM(estimated_cost), 0.0),
+            f"""SELECT COALESCE(SUM(estimated_cost), 0.0),
                       COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0),
                       COALESCE(SUM(cache_read_tokens), 0)
                FROM requests
-               WHERE timestamp >= ?""",
+               WHERE timestamp >= ?{managed_clause}""",
             (cutoff_iso,),
         ).fetchone()
         fleet_cost, fleet_tokens, fleet_cache_read = float(row[0]), int(row[1]), int(row[2])
 
-        # Per-agent totals — restrict to sessions the proxy has mapped
-        # to this agent. Sessions with no mapping count toward the aggregate
-        # only (handled by the aggregate query above).
+        # §13.5 surfacing — spend the managed denominator deliberately ignored
+        # (non-managed traffic), and the managed-but-unattributed sub-bucket
+        # (managed traffic with no agent attribution: counts toward the fleet
+        # aggregate above, never toward a per-agent denominator below).
+        excluded_observed_spend = 0.0
+        managed_unattributed_cost = 0.0
+        if managed:
+            total_cost = conn.execute(
+                "SELECT COALESCE(SUM(estimated_cost), 0.0) FROM requests WHERE timestamp >= ?",
+                (cutoff_iso,),
+            ).fetchone()[0]
+            excluded_observed_spend = max(0.0, float(total_cost) - fleet_cost)
+            attributed = [
+                s
+                for sessions in _get_agents_for_window(window_seconds).values()
+                for s in sessions
+            ]
+            if attributed:
+                ph = ",".join("?" for _ in attributed)
+                managed_unattributed_cost = float(
+                    conn.execute(
+                        f"""SELECT COALESCE(SUM(estimated_cost), 0.0)
+                            FROM requests
+                            WHERE timestamp >= ?{managed_clause}
+                              AND COALESCE(session_id, '') NOT IN ({ph})""",
+                        (cutoff_iso, *attributed),
+                    ).fetchone()[0]
+                )
+            else:
+                # No mapped sessions in-window → all managed spend is unattributed.
+                managed_unattributed_cost = fleet_cost
+
+        # Per-agent MANAGED totals — restrict to sessions the proxy has mapped
+        # to this agent. Managed-without-agent rows have no mapping and so are
+        # excluded here (per §13.5 they belong to the fleet aggregate +
+        # managed-unattributed sub-bucket, never a per-agent denominator).
         agent_cost = 0.0
         agent_tokens = 0
         agent_cache_read = 0
@@ -243,7 +303,7 @@ def compute_rolling_usage(
                               COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0),
                               COALESCE(SUM(cache_read_tokens), 0)
                        FROM requests
-                       WHERE timestamp >= ?
+                       WHERE timestamp >= ?{managed_clause}
                          AND session_id IN ({placeholders})""",
                     (cutoff_iso, *sessions),
                 ).fetchone()
@@ -260,6 +320,8 @@ def compute_rolling_usage(
             "fleet_cost_usd": fleet_cost,
             "fleet_tokens_total": fleet_tokens,
             "fleet_cache_read_tokens": fleet_cache_read,
+            "managed_unattributed_cost_usd": managed_unattributed_cost,
+            "excluded_observed_spend_usd": excluded_observed_spend,
             "degraded": False,
             "degraded_reason": None,
         }
@@ -313,6 +375,18 @@ def check_rolling_caps(
     if not config.enabled:
         return None
     usage = compute_rolling_usage(agent_id, config.window_seconds, monitor_db_path=monitor_db_path)
+    # §13.5 surfacing — stamp every breach this evaluation produces with the
+    # excluded / managed-unattributed spend so the 402 copy can show it.
+    _excl = float(usage.get("excluded_observed_spend_usd", 0.0) or 0.0)
+    _unattr = float(usage.get("managed_unattributed_cost_usd", 0.0) or 0.0)
+
+    def _breach(**kw) -> CapBreach:
+        return CapBreach(
+            excluded_observed_spend=_excl,
+            managed_unattributed_spend=_unattr,
+            **kw,
+        )
+
     # tokens_total = input + output only (cache_read EXCLUDED
     # 2026-05-15: cache_read is ~90% cheaper and inflates the count without
     # reflecting real cost. cache_read keeps its own dedicated cap dimension.
@@ -331,7 +405,7 @@ def check_rolling_caps(
             config.per_agent_max_cost_usd > 0
             and a_cost + projected_cost_usd > config.per_agent_max_cost_usd
         ):
-            return CapBreach(
+            return _breach(
                 cap_dimension="per_agent_cost_usd",
                 agent_id=agent_id,
                 window_seconds=config.window_seconds,
@@ -345,7 +419,7 @@ def check_rolling_caps(
             config.per_agent_max_tokens_total > 0
             and a_tok + projected_tokens_total > config.per_agent_max_tokens_total
         ):
-            return CapBreach(
+            return _breach(
                 cap_dimension="per_agent_tokens_total",
                 agent_id=agent_id,
                 window_seconds=config.window_seconds,
@@ -359,7 +433,7 @@ def check_rolling_caps(
             config.per_agent_max_cache_read_tokens > 0
             and a_cr + projected_cache_read_tokens > config.per_agent_max_cache_read_tokens
         ):
-            return CapBreach(
+            return _breach(
                 cap_dimension="per_agent_cache_read_tokens",
                 agent_id=agent_id,
                 window_seconds=config.window_seconds,
@@ -375,7 +449,7 @@ def check_rolling_caps(
         config.per_fleet_max_cost_usd > 0
         and f_cost + projected_cost_usd > config.per_fleet_max_cost_usd
     ):
-        return CapBreach(
+        return _breach(
             cap_dimension="per_fleet_cost_usd",
             agent_id=agent_id or "unknown",
             window_seconds=config.window_seconds,
@@ -389,7 +463,7 @@ def check_rolling_caps(
         config.per_fleet_max_tokens_total > 0
         and f_tok + projected_tokens_total > config.per_fleet_max_tokens_total
     ):
-        return CapBreach(
+        return _breach(
             cap_dimension="per_fleet_tokens_total",
             agent_id=agent_id or "unknown",
             window_seconds=config.window_seconds,
@@ -403,7 +477,7 @@ def check_rolling_caps(
         config.per_fleet_max_cache_read_tokens > 0
         and f_cr + projected_cache_read_tokens > config.per_fleet_max_cache_read_tokens
     ):
-        return CapBreach(
+        return _breach(
             cap_dimension="per_fleet_cache_read_tokens",
             agent_id=agent_id or "unknown",
             window_seconds=config.window_seconds,
