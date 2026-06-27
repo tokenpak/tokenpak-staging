@@ -75,6 +75,76 @@ def redact_pii(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# Structural redaction at the logging sink (d3 spec gap #6)
+# ---------------------------------------------------------------------------
+#
+# ``redact_pii`` above is opt-in: it only redacts if the *caller* remembers to
+# call it before logging. The d3 credential-security spec (§10 #6, §8) calls
+# that out as a hazard — "nothing structurally prevents a future logger from
+# receiving raw headers". The filter below closes the gap by moving redaction
+# from caller discipline to the *emission sink*: attached to a logger/handler,
+# every record is scrubbed before it reaches any handler, so a caller that logs
+# a raw ``Authorization`` header still cannot leak it.
+
+import logging as _logging
+
+
+class RedactingLogFilter(_logging.Filter):
+    """Scrub credential values from every log record before emission.
+
+    Installed on a handler (or logger), this enforces redaction structurally
+    rather than relying on each call site to pre-scrub. Implemented as a
+    :class:`logging.Filter` because a filter sees the record on the way out and
+    may mutate it; returning ``True`` always lets the (now-redacted) record
+    through.
+    """
+
+    def filter(self, record: _logging.LogRecord) -> bool:  # noqa: A003 - logging API
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            # A record we cannot even render is not one we can safely redact;
+            # let logging handle it rather than swallowing the message.
+            return True
+        redacted = redact_pii(rendered)
+        if redacted != rendered:
+            # Replace the fully-rendered message and drop args so the handler's
+            # formatter re-renders the redacted text verbatim (no re-%-format).
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+def install_log_redaction(
+    target: "_logging.Logger | _logging.Handler | None" = None,
+) -> RedactingLogFilter:
+    """Attach the structural redaction filter to *target*.
+
+    *target* may be a :class:`logging.Handler`, a :class:`logging.Logger`, or
+    ``None`` (the root logger). When a logger is given the filter is attached to
+    the logger *and* each of its current handlers, since handler-level filters
+    are what catch records propagated from child loggers. Idempotent — a second
+    call never stacks a duplicate filter. Returns the installed filter.
+    """
+    if target is None:
+        target = _logging.getLogger()
+
+    def _attach(obj: "_logging.Logger | _logging.Handler") -> RedactingLogFilter:
+        for existing in getattr(obj, "filters", []):
+            if isinstance(existing, RedactingLogFilter):
+                return existing
+        flt = RedactingLogFilter()
+        obj.addFilter(flt)
+        return flt
+
+    flt = _attach(target)
+    if isinstance(target, _logging.Logger):
+        for handler in list(target.handlers):
+            _attach(handler)
+    return flt
+
+
 def sanitize_cli_arg(value: str, name: str = "argument") -> str:
     """Reject CLI string inputs that contain obvious injection patterns."""
     if not isinstance(value, str):
