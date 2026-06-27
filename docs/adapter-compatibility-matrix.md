@@ -225,7 +225,7 @@ Adapters in `AdapterRegistry.build_default()` (`tokenpak/telemetry/adapters/regi
 ## Offline Smoke Commands
 
 These commands validate the main adapters without live credentials.
-Run from the workbench root (`/home/cali/tokenpak` or `/home/sue/workspace/tokenpak-dev`).
+Run from the repository root.
 
 ```bash
 # Full offline adapter smoke suite
