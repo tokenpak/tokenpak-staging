@@ -11,7 +11,7 @@ Maps tests to the packet's acceptance criteria:
 3. Unused reserved amount is released after settlement (reserved-vs-actual
    reconciliation recorded).
 4. Abandoned reservations expire and stop counting.
-5. Reuses existing Std 29 structures (CapBreach vocabulary, EVENT_TYPES
+5. Reuses existing spend-guard structures (CapBreach vocabulary, EVENT_TYPES
    registry, same spend_guard.db, rolling-cap budget — no parallel ledger).
 6. Pessimistic interim default when max_tokens is unset:
    min(model_context_window - projected_input, 32000).
@@ -26,7 +26,7 @@ from tokenpak.proxy.spend_guard import rolling_caps as rc
 from tokenpak.proxy.spend_guard.audit import EVENT_TYPES, query_recent
 from tokenpak.proxy.spend_guard.contracts import TIPDirective
 from tokenpak.proxy.spend_guard.orchestrator import evaluate
-from tokenpak.proxy.spend_guard.policy import SpendGuardConfig
+from tokenpak.proxy.spend_guard.policy import SpendGuardConfig, load_config
 from tokenpak.proxy.spend_guard.reservation import (
     DENIED,
     INTERIM_MAX_OUTPUT_RESERVATION,
@@ -284,7 +284,7 @@ class TestExpiry:
 
 
 # ---------------------------------------------------------------------------
-# Acceptance 5 — reuse of existing Std 29 structures
+# Acceptance 5 — reuse of existing spend-guard structures
 # ---------------------------------------------------------------------------
 
 class TestStructureReuse:
@@ -344,6 +344,28 @@ def _evaluate(cfg, session: str):
 
 
 class TestEvaluateIntegration:
+    def test_reservations_are_default_enabled_after_settle_wiring(self, tmp_path, tmp_monitor_db):
+        cfg = load_config({"spend_guard": {"audit_db_path": str(tmp_path / "spend_guard.db")}})
+        assert cfg.reservations_enabled is True
+
+    def test_explicit_config_can_still_disable_reservations(self, tmp_path, tmp_monitor_db):
+        cfg = load_config(
+            {
+                "spend_guard": {
+                    "audit_db_path": str(tmp_path / "spend_guard.db"),
+                    "reservations_enabled": False,
+                }
+            }
+        )
+        assert cfg.reservations_enabled is False
+
+    def test_env_override_can_still_disable_reservations(
+        self, monkeypatch, tmp_path, tmp_monitor_db
+    ):
+        monkeypatch.setenv("TOKENPAK_SPEND_GUARD_RESERVATIONS_ENABLED", "0")
+        cfg = load_config({"spend_guard": {"audit_db_path": str(tmp_path / "spend_guard.db")}})
+        assert cfg.reservations_enabled is False
+
     def test_reject_returns_block_and_never_forwards(self, tmp_path, tmp_monitor_db):
         cfg = _cfg(tmp_path)
         first = _evaluate(cfg, "s1")
