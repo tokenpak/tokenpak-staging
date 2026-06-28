@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).parent.parent
 # not these env vars). They were kept here only because the gate could never
 # fail; with the gate now failing closed, leaving retired keys would red the
 # baseline. Re-add (with a corresponding source reference) if either env var is
-# reinstated. See submission note for Suki ratification of this contract trim.
+# reinstated. See the submission note for ratification of this contract trim.
 CONFIG_KEYS_WITH_DEFAULTS = {
     # ProxyServer defaults
     "TOKENPAK_PORT": "8766",

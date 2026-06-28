@@ -61,6 +61,7 @@ View API spend
 - `--month` — Show monthly totals
 - `--by-model` — Break down by model
 - `--export-csv` — Export as CSV
+- `--json` — Emit the cost summary as a single JSON document
 
 **Subcommands:**
 
@@ -447,7 +448,8 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show public URL with token (accessible from any machine)
+- `--public` — Show guided sharing options with a dashboard token
+- `--tunnel` — With --public, start a temporary Cloudflare quick tunnel
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
 
@@ -660,6 +662,8 @@ Examples:
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
   tokenpak codex clean             # reclaim orphaned isolated codex homes
+  tokenpak codex usage --latest --json
+  tokenpak codex exec --capture -- codex exec --json "summarize this repo"
   TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
   TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
@@ -1346,6 +1350,7 @@ Show compression savings summary.
 **Flags:**
 
 - `--days` — Rolling window in days (default: 30)
+- `--json` — Emit the savings summary as a single JSON document
 
 ### `tokenpak telemetry`
 
