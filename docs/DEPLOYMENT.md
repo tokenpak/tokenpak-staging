@@ -19,7 +19,7 @@ This guide covers production deployment of the TokenPak LLM proxy — from a sin
 | Python | 3.10+ | 3.11+ |
 | OS | Linux / macOS / Windows | Linux (Ubuntu 22.04 LTS+) |
 
-RAM is low because TokenPak is a lightweight async proxy. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
+RAM is low because TokenPak runs a lightweight threaded HTTP proxy by default. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
 
 ### Network Requirements
 
@@ -361,15 +361,13 @@ tokenpak savings --lifetime
 
 ### Single Instance (default)
 
-TokenPak is async (uvicorn + starlette) and handles concurrent requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
+TokenPak's default proxy uses a threaded HTTP server and handles concurrent local requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
 
-Tune uvicorn workers:
+For high-concurrency proxy deployments, run multiple TokenPak instances behind a trusted local or private load balancer. The `--workers` flag is for the ASGI ingest/telemetry surfaces and is not the default proxy scaling knob.
 
 ```bash
-tokenpak serve --port 8766 --workers 4
+tokenpak serve --port 8766
 ```
-
-Rule of thumb: `workers = (2 × CPU cores) + 1`.
 
 ### Multi-Instance (load-balanced)
 

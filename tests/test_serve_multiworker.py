@@ -41,6 +41,19 @@ pytestmark = pytest.mark.needs_proxy
 BASE_PORT = 18766  # test port base — avoid clashing with real serve (8766)
 
 
+def _serve_args(**overrides) -> argparse.Namespace:
+    values = {
+        "port": BASE_PORT,
+        "telemetry": False,
+        "ingest": False,
+        "workers": 1,
+        "shutdown_timeout": None,
+        "safe": True,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
 def _get(url: str, timeout: float = 5.0) -> dict:
     with urllib.request.urlopen(url, timeout=timeout) as r:
         import json
@@ -80,54 +93,61 @@ def _post_json(url: str, payload: dict, timeout: float = 5.0) -> dict:
 class TestWorkersFlag:
     """AC1: --workers N flag is accepted and wired through."""
 
-    def test_default_workers_value(self):
-        """Default workers = max(1, cpu_count // 2) — at least 1."""
-        from tokenpak.cli.commands.serve import _default_workers
+    def test_parser_dispatches_to_active_cmd_serve(self):
+        """Parser dispatch reaches the active cmd_serve implementation."""
+        from tokenpak._cli_core import build_parser, cmd_serve
 
-        result = _default_workers()
-        cpu = os.cpu_count() or 1
-        assert result == max(1, cpu // 2)
-        assert result >= 1
+        args = build_parser().parse_args([
+            "serve",
+            "--port", str(BASE_PORT),
+            "--workers", "1",
+            "--shutdown-timeout", "2.5",
+            "--safe",
+        ])
+
+        assert args.func is cmd_serve
+        assert args.port == BASE_PORT
+        assert args.workers == 1
+        assert args.shutdown_timeout == 2.5
+        assert args.safe is True
 
     def test_workers_less_than_one_rejected(self, tmp_path, capsys):
         """--workers 0 exits with error."""
-        from tokenpak.cli.commands.serve import run_serve_cmd
+        from tokenpak._cli_core import cmd_serve
 
-        args = argparse.Namespace(host="127.0.0.1", port=BASE_PORT, workers=0)
+        args = _serve_args(port=BASE_PORT, workers=0)
         with pytest.raises(SystemExit) as exc_info:
-            run_serve_cmd(args)
+            cmd_serve(args)
         assert exc_info.value.code == 1
 
     def test_workers_one_uses_single_mode(self, monkeypatch):
-        """workers=1 calls uvicorn.run with the app object (not a string)."""
-        import uvicorn
+        """workers=1 keeps the default proxy path intact."""
+        from tokenpak._cli_core import cmd_serve
+        from tokenpak.proxy import server as proxy_server
 
         calls = []
 
-        def fake_run(app, **kwargs):
-            calls.append({"app": app, "kwargs": kwargs})
+        def fake_start_proxy(**kwargs):
+            calls.append(kwargs)
 
-        monkeypatch.setattr(uvicorn, "run", fake_run)
+        monkeypatch.setattr(proxy_server, "start_proxy", fake_start_proxy)
 
-        # Stub create_combined_app so fastapi/ingest imports aren't required
-        fake_app = object()
+        args = _serve_args(port=BASE_PORT + 1, workers=1, shutdown_timeout=2.5)
+        cmd_serve(args)
 
-        import tokenpak.dashboard.app as dashboard_app_mod
-        monkeypatch.setattr(dashboard_app_mod, "create_combined_app", lambda: fake_app)
-
-        from tokenpak.cli.commands.serve import run_serve_cmd
-
-        args = argparse.Namespace(host="127.0.0.1", port=BASE_PORT + 1, workers=1)
-        run_serve_cmd(args)
-
-        assert len(calls) == 1
-        # Single-worker: app object (not a string)
-        assert not isinstance(calls[0]["app"], str), "Single-worker must pass app object"
+        assert calls == [{
+            "host": "127.0.0.1",
+            "port": BASE_PORT + 1,
+            "blocking": True,
+            "shutdown_timeout": 2.5,
+        }]
 
     def test_workers_multi_uses_import_string(self, monkeypatch):
         """workers=2 calls uvicorn.run with an import string + factory=True."""
         import uvicorn
 
+        from tokenpak._cli_core import cmd_serve
+
         calls = []
 
         def fake_run(app, **kwargs):
@@ -135,10 +155,8 @@ class TestWorkersFlag:
 
         monkeypatch.setattr(uvicorn, "run", fake_run)
 
-        from tokenpak.cli.commands.serve import run_serve_cmd
-
-        args = argparse.Namespace(host="127.0.0.1", port=BASE_PORT + 2, workers=2)
-        run_serve_cmd(args)
+        args = _serve_args(port=BASE_PORT + 2, workers=2)
+        cmd_serve(args)
 
         assert len(calls) == 1
         assert isinstance(calls[0]["app"], str), "Multi-worker must pass import string"
@@ -151,32 +169,32 @@ class TestWorkersFlag:
 # ---------------------------------------------------------------------------
 
 class TestDefaultWorkers:
-    def test_default_matches_cpu_formula(self):
-        from tokenpak.cli.commands.serve import _default_workers
+    def test_parser_default_is_single_worker_proxy_mode(self):
+        from tokenpak._cli_core import build_parser
 
-        cpu = os.cpu_count() or 1
-        assert _default_workers() == max(1, cpu // 2)
+        args = build_parser().parse_args(["serve"])
+
+        assert args.workers == 1
 
     def test_default_never_zero(self, monkeypatch):
-        """Even on a 1-core machine the default is at least 1."""
+        """Even on a 1-core machine the parser default is still at least 1."""
         monkeypatch.setattr(os, "cpu_count", lambda: 1)
-        from tokenpak.cli.commands import serve as serve_mod
-        # Reload to pick up monkeypatched cpu_count
-        assert serve_mod._default_workers() == 1
+        from tokenpak._cli_core import build_parser
+
+        assert build_parser().parse_args(["serve"]).workers == 1
 
     def test_none_workers_uses_default(self, monkeypatch):
-        """workers=None in args triggers default calculation."""
-        import uvicorn
+        """workers=None in args triggers the default proxy path."""
+        from tokenpak._cli_core import cmd_serve
+        from tokenpak.proxy import server as proxy_server
 
         calls = []
-        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append(kw))
+        monkeypatch.setattr(proxy_server, "start_proxy", lambda **kw: calls.append(kw))
 
-        from tokenpak.cli.commands.serve import run_serve_cmd
+        args = _serve_args(port=BASE_PORT + 3, workers=None)
+        cmd_serve(args)
 
-        args = argparse.Namespace(host="127.0.0.1", port=BASE_PORT + 3, workers=None)
-        run_serve_cmd(args)
-
-        # The invocation happened (we don't care about exact worker count — could be 1 or N)
+        # The proxy invocation happened with the default single-worker route.
         assert len(calls) == 1
 
 
@@ -320,10 +338,10 @@ class TestArgparse:
         )
 
     def test_workers_arg_passed_to_run(self, monkeypatch):
-        """Verify workers=4 is forwarded through main() → run_serve_cmd."""
+        """Verify workers=4 is forwarded through parser dispatch to cmd_serve."""
         import uvicorn
 
-        from tokenpak.cli.commands import serve as serve_mod
+        from tokenpak._cli_core import build_parser, cmd_serve
 
         received = {}
 
@@ -332,7 +350,13 @@ class TestArgparse:
 
         monkeypatch.setattr(uvicorn, "run", fake_run)
 
-        args = argparse.Namespace(host="127.0.0.1", port=BASE_PORT + 4, workers=4)
-        serve_mod.run_serve_cmd(args)
+        args = build_parser().parse_args([
+            "serve",
+            "--port", str(BASE_PORT + 4),
+            "--workers", "4",
+            "--safe",
+        ])
+        assert args.func is cmd_serve
+        args.func(args)
 
         assert received.get("workers") == 4

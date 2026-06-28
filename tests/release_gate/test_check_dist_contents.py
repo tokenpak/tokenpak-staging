@@ -27,6 +27,9 @@ SHIPPED_NAMES = {
     "tokenpak/__init__.py",
     "tokenpak/budget_config.yaml",
     "tokenpak/term_cards.json",
+    "tokenpak/dashboard/index.html",
+    "tokenpak/dashboard/metrics.js",
+    "tokenpak/dashboard/styles.css",
     "tokenpak/orchestration/dispatch/registry/worker.builder.default.v1.yaml",
     "tokenpak/orchestration/dispatch/registry/worker.reviewer.default.v1.yaml",
     "tokenpak/orchestration/dispatch/registry/routes/route.code_task.v1.yaml",
@@ -86,6 +89,14 @@ def test_dispatch_globs_cover_all_declared_pyproject_entries():
     }
 
 
+def test_dashboard_globs_cover_top_level_dashboard_assets():
+    assert set(cdc.REQUIRED_DASHBOARD_DATA_GLOBS) == {
+        "tokenpak/dashboard/*.html",
+        "tokenpak/dashboard/*.js",
+        "tokenpak/dashboard/*.css",
+    }
+
+
 # --- the core G4 assertion: gate fails when a dispatch glob ships nothing ---
 
 
@@ -107,6 +118,16 @@ def test_routes_only_does_not_satisfy_registry_glob():
     with pytest.raises(AssertionError) as excinfo:
         cdc._assert_required_dispatch_data(names, "sdist")
     assert "tokenpak/orchestration/dispatch/registry/*.yaml" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("glob", cdc.REQUIRED_DASHBOARD_DATA_GLOBS)
+def test_missing_dashboard_glob_fails(glob):
+    names = _names_dropping_glob(glob)
+    with pytest.raises(AssertionError) as excinfo:
+        cdc._assert_required_dashboard_data(names, "wheel")
+    msg = str(excinfo.value)
+    assert "dashboard package data" in msg
+    assert glob in msg
 
 
 # --- existing generic-data assertion still behaves -------------------------

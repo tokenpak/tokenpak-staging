@@ -3524,18 +3524,24 @@ class ProxyServer:
         if deep:
             import shutil
 
-            import psutil  # optional; fall back gracefully
+            try:
+                import psutil  # type: ignore[import-not-found]
+            except ImportError:
+                psutil = None
             # providers: list active providers with their circuit-breaker status
             providers = [
                 {"name": name, "status": info.get("state", "unknown")}
                 for name, info in cb_statuses.items()
             ]
             # memory usage in MB
-            try:
-                proc = psutil.Process()
-                mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
-            except Exception:
+            if psutil is None:
                 mem_mb = None
+            else:
+                try:
+                    proc = psutil.Process()
+                    mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+                except Exception:
+                    mem_mb = None
             # disk available in GB
             try:
                 disk = shutil.disk_usage("/")
