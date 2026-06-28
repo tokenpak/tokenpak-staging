@@ -16,11 +16,18 @@ Usage in proxy.py:
     _shadow.record_response(txn_id, response_text, response_tokens, latency_ms)
 """
 
+import os
 import threading
 import time
 from typing import Optional
 
 from tokenpak.routing.routing_ledger import DEFAULT_LEDGER_PATH, RoutingLedger
+
+
+def shadow_enabled_from_env() -> bool:
+    """Return whether shadow logging is enabled for this process."""
+    raw = os.environ.get("TOKENPAK_SHADOW_ENABLED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 class ShadowHook:

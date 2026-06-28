@@ -15,7 +15,6 @@ Modes:
 from __future__ import annotations
 
 import json
-import os
 import random
 import sqlite3
 import sys
@@ -23,6 +22,8 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from tokenpak import _paths
 
 try:
     import click
@@ -47,7 +48,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Meme lines — 28 curated by Kevin, random pick per invocation
+# Meme lines — curated taglines, random pick per invocation
 # ---------------------------------------------------------------------------
 
 MEME_LINES = [
@@ -633,7 +634,7 @@ def _query_rollup_daily_tip_attribution(
 
 def _query_companion_enrichment(days: int = 0, hours: int = 0) -> tuple[int, float]:
     """Aggregate companion-side prompt savings from the local journal."""
-    journal_path = Path(os.path.expanduser("~/.tokenpak/companion/journal.db"))
+    journal_path = _paths.under("companion", "journal.db")
     if not journal_path.exists():
         return 0, 0.0
 
@@ -892,7 +893,13 @@ def run(
         since_days = _parse_since(since) if since else (days if days > 0 else 7)
         return run_fleet(since_days=since_days, as_json=as_json, db_path=db_path)
     if as_json:
-        return _run_json(proxy_base=proxy_base, db_path=db_path, days=days, hours=hours)
+        return _run_json(
+            proxy_base=proxy_base,
+            db_path=db_path,
+            days=days,
+            hours=hours,
+            all_time=all_time,
+        )
     if minimal:
         return _run_minimal(proxy_base=proxy_base, db_path=db_path, no_meme=no_meme)
     if by_source:
@@ -1011,8 +1018,7 @@ def run(
     companion_tokens_avoided = 0
     companion_usd = 0.0
     try:
-        from pathlib import Path as _P
-        _companion_db = _P(os.path.expanduser("~/.tokenpak/companion/journal.db"))
+        _companion_db = _paths.under("companion", "journal.db")
         if _companion_db.exists() and session.get("start_time"):
             _since = float(session["start_time"])
             _c = sqlite3.connect(str(_companion_db))
@@ -1397,33 +1403,56 @@ def _run_json(
     db_path: Optional[str] = None,
     days: int = 0,
     hours: int = 0,
+    all_time: bool = False,
 ) -> None:
     """Dump all status data as JSON."""
     health = _fetch(f"{proxy_base}/health")
     stats = _fetch(f"{proxy_base}/stats")
     cache = _fetch(f"{proxy_base}/cache-stats")
+    proxy_reachable = health is not None
 
     savings_24h = _calculate_fleet_savings(db_path=db_path, period="24h")
     savings_1h = _calculate_fleet_savings(db_path=db_path, period="1h")
-    savings_all = _calculate_fleet_savings(db_path=db_path, period=None)
+    savings_all = _calculate_fleet_savings(db_path=db_path, period=None) if all_time else None
     tip_cache = _query_tip_cache_attribution(db_path=db_path, days=days, hours=hours)
+    resolved_db = db_path or _get_db_path()
+
+    def _with_source(value: Dict[str, Any], period: str) -> Dict[str, Any]:
+        out = dict(value)
+        out["source"] = {
+            "kind": "monitor_db",
+            "path": resolved_db,
+            "freshness": "historical",
+            "period": period,
+        }
+        return out
 
     output = {
         "version": _get_version(),
         "proxy": {
-            "reachable": health is not None,
+            "reachable": proxy_reachable,
             "health": health,
             "stats": stats,
             "cache": cache,
+            "source": {
+                "kind": "proxy_http",
+                "base_url": proxy_base,
+                "freshness": "live" if proxy_reachable else "unreachable",
+            },
         },
         "savings": {
-            "last_24h": savings_24h if not savings_24h.get("error") else None,
-            "last_1h": savings_1h if not savings_1h.get("error") else None,
-            "all_time": savings_all if not savings_all.get("error") else None,
+            "last_24h": _with_source(savings_24h, "24h") if not savings_24h.get("error") else None,
+            "last_1h": _with_source(savings_1h, "1h") if not savings_1h.get("error") else None,
         },
         "tip_cache": tip_cache,
         "meme_lines": MEME_LINES,
     }
+    if all_time:
+        output["savings"]["all_time"] = (
+            _with_source(savings_all or {}, "all_time")
+            if savings_all is not None and not savings_all.get("error")
+            else None
+        )
     print(json.dumps(output, indent=2, default=str))
 
 

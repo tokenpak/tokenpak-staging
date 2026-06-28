@@ -1,0 +1,167 @@
+# Existing legacy-home callsites allowed during the incremental home migration.
+# Format: relative/path.py:source line without line number.
+tokenpak/licensing/__init__.py:    ``Path.home() / ".tokenpak" / "license.json"``, which silently
+tokenpak/licensing/daemon_probe.py:_SOCK_INFO_PATH = Path.home() / ".tokenpak" / "pro" / "daemon.sock-info"
+tokenpak/licensing/usage_meter.py:        str(Path.home() / ".tokenpak" / "usage_spool"),
+tokenpak/cli/aggregate.py:REQUESTS_PATH = Path.home() / ".tokenpak" / "requests.jsonl"
+tokenpak/cli/goals.py:        self.goals_path = Path(goals_path or (Path.home() / ".tokenpak" / "goals.yaml"))
+tokenpak/cli/goals.py:        self.state_path = Path(state_path or (Path.home() / ".tokenpak" / "goal_state.json"))
+tokenpak/cli/cli_doctor.py:    config_path = Path.home() / ".tokenpak" / "config.json"
+tokenpak/cli/cli_doctor.py:    index_path = Path.home() / ".tokenpak" / "index.json"
+tokenpak/cli/cli_doctor.py:    tokenpak_dir = Path.home() / ".tokenpak"
+tokenpak/cli/cli_doctor.py:    log_path = Path.home() / ".tokenpak" / "debug.log"
+tokenpak/dashboard/settings_persistence.py:    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
+tokenpak/routing/rules.py:DEFAULT_ROUTES_PATH = str(Path.home() / ".tokenpak" / "routes.yaml")
+tokenpak/_paths.py:this module rather than building ``Path.home() / ".tokenpak"`` ad hoc.
+tokenpak/_cli_core.py:_FIRST_RUN_FLAG = Path.home() / ".tokenpak" / ".seen_intro"
+tokenpak/_cli_core.py:    config_dir = _Path.home() / ".tokenpak"
+tokenpak/_cli_core.py:    config_dir = Path.home() / ".tokenpak"
+tokenpak/_cli_core.py:    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
+tokenpak/_cli_core.py:        Path.home() / ".tokenpak" / "proxy.log",
+tokenpak/_cli_core.py:    _marker = Path.home() / ".tokenpak" / ".compression-default-notice-shown"
+tokenpak/_cli_core.py:        str(Path.home() / ".tokenpak" / "data" / "session.jsonl")
+tokenpak/_cli_core.py:    token_path = Path.home() / ".tokenpak" / "dashboard_token"
+tokenpak/_cli_core.py:        results_dir = __import__("pathlib").Path.home() / ".tokenpak" / "prove" / "results"
+tokenpak/_cli_core.py:    scenarios_dir = Path.home() / ".tokenpak" / "prove" / "scenarios"
+tokenpak/_cli_core.py:            _db_path = pathlib.Path.home() / ".tokenpak" / "telemetry.db"
+tokenpak/_cli_core.py:    json_path = Path(getattr(args, "config_json", str(Path.home() / ".tokenpak" / "config.json")))
+tokenpak/_cli_core.py:        default=str(Path.home() / ".tokenpak" / "config.json"),
+tokenpak/_cli_core.py:    return str(Path.home() / ".tokenpak" / "replay.db")
+tokenpak/compression/dictionary.py:_DEFAULT_DICT_PATH = Path.home() / ".tokenpak" / "compression_dict.json"
+tokenpak/companion/mcp/tools.py:            str(Path.home() / ".tokenpak" / "companion"),
+tokenpak/models/_discovery.py:CACHE_PATH = Path.home() / ".tokenpak" / "data" / "discovered_models.json"
+tokenpak/compression/precompute.py:DEFAULT_ARTIFACTS_DIR = Path.home() / ".tokenpak" / "artifacts"
+tokenpak/cli/fleet.py:    return Path.home() / ".tokenpak" / "fleet.yaml"
+tokenpak/compression/fingerprinting/sync.py:_DEFAULT_CACHE_DIR = Path.home() / ".tokenpak" / "fingerprint_cache"
+tokenpak/prove/runner.py:    log_dir = Path.home() / ".tokenpak" / "prove" / "logs"
+tokenpak/prove/reporter.py:        output_dir = Path.home() / ".tokenpak" / "prove" / "results"
+tokenpak/prove/adapter.py:_USER_CONFIG_PATH = Path.home() / ".tokenpak" / "prove" / "providers.yaml"
+tokenpak/cli/commands/doctor.py:FLEET_CONFIG_FILE = Path.home() / ".tokenpak" / "fleet.yaml"
+tokenpak/prove/scenario.py:_USER_DIR = Path.home() / ".tokenpak" / "prove" / "scenarios"
+tokenpak/cli/commands/replay.py:    return str(Path.home() / ".tokenpak" / "replay.db")
+tokenpak/cache/cache_store.py:_DEFAULT_PATH = Path.home() / ".tokenpak" / "cache_store.json"
+tokenpak/cli/commands/doctor_claude_code.py:    return Path.home() / ".tokenpak" / "proxy.pid"
+tokenpak/cli/commands/debug.py:    debug_dir = Path.home() / ".tokenpak" / "debug"
+tokenpak/cli/commands/index.py:        os.path.expanduser("~/.tokenpak/vault_index.json"),
+tokenpak/cli/commands/budget.py:_BUDGET_CONFIG = Path("~/.tokenpak/budget_config.yaml").expanduser()
+tokenpak/cli/commands/prune.py:_PINS_PATH = os.path.expanduser("~/.tokenpak/pinned_blocks.json")
+tokenpak/cli/commands/prune.py:    os.path.expanduser("~/.tokenpak/vault_index.json"),
+tokenpak/telemetry/error_logger.py:            log_dir = os.path.expanduser("~/.tokenpak/logs")
+tokenpak/telemetry/error_logger.py:LOGS_DIR = str(_Path(os.path.expanduser("~/.tokenpak/logs")))
+tokenpak/cli/commands/test.py:    user_cfg = Path.home() / ".tokenpak" / "prove" / "providers.yaml"
+tokenpak/cli/commands/test.py:    log_dir = Path.home() / ".tokenpak" / "test" / "logs"
+tokenpak/cli/commands/test.py:    results_dir = Path.home() / ".tokenpak" / "test" / "results"
+tokenpak/cli/commands/dashboard.py:AUTH_PROFILES_FILE = Path.home() / ".tokenpak" / "auth-profiles.json"
+tokenpak/cli/commands/dashboard.py:FLEET_CONFIG_FILE = Path.home() / ".tokenpak" / "fleet.yaml"
+tokenpak/cli/commands/dashboard.py:    pid_file = Path.home() / ".tokenpak" / "proxy.pid"
+tokenpak/cli/commands/retain.py:_PINS_PATH = os.path.expanduser("~/.tokenpak/pinned_blocks.json")
+tokenpak/cli/commands/retain.py:    os.path.expanduser("~/.tokenpak/vault_index.json"),
+tokenpak/telemetry/anon_metrics.py:METRICS_DB = Path(os.path.expanduser("~/.tokenpak/metrics.db"))
+tokenpak/services/optimization/telemetry_sink.py:_DEFAULT_DB_PATH = Path.home() / ".tokenpak" / "telemetry.db"
+tokenpak/cli/commands/uninstall.py:    for base in (_paths.home(), Path.home() / ".tokenpak"):
+tokenpak/cli/demo.py:    db_path = Path.home() / ".tokenpak" / "telemetry.db"
+tokenpak/cli/request_explorer.py:REQUESTS_PATH = Path.home() / ".tokenpak" / "requests.jsonl"
+tokenpak/companion/hooks/pre_send.py:            str(Path.home() / ".tokenpak" / "companion"),
+tokenpak/companion/hooks/pre_send.py:        str(Path.home() / ".tokenpak" / "companion"),
+tokenpak/companion/memory/decision_memory.py:            db_path = os.path.expanduser("~/.tokenpak/memory.db")
+tokenpak/cli/cli_diagnose.py:    config_path = Path.home() / ".tokenpak" / "config.yaml"
+tokenpak/cli/cli_diagnose.py:    alt_path = Path.home() / ".tokenpak" / "config.json"
+tokenpak/cli/cli_diagnose.py:    alt_index = Path.home() / ".tokenpak" / "index.json"
+tokenpak/cli/cli_diagnose.py:        "cache": Path.home() / ".tokenpak",
+tokenpak/companion/config.py:    journal_dir: Path = field(default_factory=lambda: Path.home() / ".tokenpak" / "companion")
+tokenpak/companion/config.py:        return Path.home() / ".tokenpak" / "companion" / "run"
+tokenpak/companion/config.py:                str(Path.home() / ".tokenpak" / "companion"),
+tokenpak/companion/config.py:    default = Path.home() / ".tokenpak" / "companion" / "run" / "current-session"
+tokenpak/creds/router.py:ROUTES_PATH = Path.home() / ".tokenpak" / "routes.toml"
+tokenpak/sdk/openclaw.py:_SESSION_MAP_PATH = Path.home() / ".tokenpak" / "openclaw_sessions.json"
+tokenpak/companion/codex/hooks_pre_send.py:    return Path(raw) if raw else (Path.home() / ".tokenpak" / "companion")
+tokenpak/companion/codex/hooks_pre_send.py:    return Path.home() / ".tokenpak" / "companion" / "run" / "model_rates.tsv"
+tokenpak/creds/store.py:CONFIG_PATH = Path.home() / ".tokenpak" / "credentials.toml"
+tokenpak/core/auth/oauth_manager.py:AUTH_PROFILES_FILE = Path.home() / ".tokenpak" / "auth-profiles.json"
+tokenpak/companion/codex/rates_snapshot.py:DEFAULT_SNAPSHOT_PATH = Path.home() / ".tokenpak" / "companion" / "run" / "model_rates.tsv"
+tokenpak/companion/codex/hooks_session_start.py:    return Path(raw) if raw else (Path.home() / ".tokenpak" / "companion")
+tokenpak/orchestration/macros/hooks.py:DEFAULT_TRIGGERS_PATH = Path.home() / ".tokenpak" / "triggers.json"
+tokenpak/orchestration/macros/hooks.py:DEFAULT_LOG_PATH = Path.home() / ".tokenpak" / "trigger_log.json"
+tokenpak/companion/codex/hooks_stop.py:    return Path(raw) if raw else (Path.home() / ".tokenpak" / "companion")
+tokenpak/companion/codex/hooks_stop.py:    return Path.home() / ".tokenpak" / "companion" / "run" / "model_rates.tsv"
+tokenpak/orchestration/macros/script_hooks.py:DEFAULT_HOOKS_DIR = Path.home() / ".tokenpak" / "hooks"
+tokenpak/companion/codex/session_home.py:    return Path.home() / ".tokenpak"
+tokenpak/creds/providers/user_config.py:CONFIG_PATH = Path.home() / ".tokenpak" / "credentials.toml"
+tokenpak/companion/codex/hooks_pre_tool_use.py:    return Path(raw) if raw else (Path.home() / ".tokenpak" / "companion")
+tokenpak/orchestration/macros/engine.py:MACROS_DIR = Path.home() / ".tokenpak" / "macros"
+tokenpak/orchestration/macros/premade_macros.py:INSTALL_DIR = Path.home() / ".tokenpak" / "macros"
+tokenpak/orchestration/macros/scheduler.py:DEFAULT_SCHEDULE_PATH = Path.home() / ".tokenpak" / "scheduled.json"
+tokenpak/vault/__init__.py:_VAULT_TOKENPAK: str = _os.path.expanduser("~/.tokenpak/vault")
+tokenpak/core/config_loader.py:        return Path.home() / ".tokenpak" / "config.yaml"
+tokenpak/core/config_loader.py:        homes = [Path.home() / ".tokenpak"]
+tokenpak/orchestration/locks.py:DEFAULT_LOCK_DIR = Path.home() / ".tokenpak" / "locks"
+tokenpak/orchestration/skill_compiler.py:DEFAULT_SKILLS_DIR = Path.home() / ".tokenpak" / "skills"
+tokenpak/orchestration/precondition_gates.py:DEFAULT_GATES_PATH = Path.home() / ".tokenpak" / "preconditions.json"
+tokenpak/orchestration/precondition_gates.py:DEFAULT_FAILURES_PATH = Path.home() / ".tokenpak" / "precondition_failures.jsonl"
+tokenpak/core/paths.py:    dot_dir = Path.home() / ".tokenpak" / name
+tokenpak/core/debug.py:_DEFAULT_LOG = Path.home() / ".tokenpak" / "debug.log"
+tokenpak/core/debug.py:_DEFAULT_PATH = Path.home() / ".tokenpak" / "debug.json"
+tokenpak/core/debug.py:        log_path = Path.home() / ".tokenpak" / "debug.log"
+tokenpak/orchestration/calibration.py:PROFILE_PATH = Path.home() / ".tokenpak" / "calibration.json"
+tokenpak/core/cooldown.py:COOLDOWNS_FILE = Path.home() / ".tokenpak" / "cooldowns.json"
+tokenpak/core/cooldown.py:AUTH_PROFILES_FILE = Path.home() / ".tokenpak" / "auth-profiles.json"
+tokenpak/orchestration/case_memory.py:DEFAULT_CASE_MEMORY_PATH = Path.home() / ".tokenpak" / "case_memory.json"
+tokenpak/core/version_check.py:MEMORY_DIR = Path.home() / ".tokenpak" / "data" / "memory"
+tokenpak/core/config.py:        return Path(os.path.expanduser("~/.tokenpak/config.json"))
+tokenpak/orchestration/failure_memory.py:DEFAULT_SIGNATURES_PATH = Path.home() / ".tokenpak" / "failure_signatures.json"
+tokenpak/orchestration/retry.py:        state_dir=Path("~/.tokenpak/retry_state"),
+tokenpak/orchestration/retry.py:DEFAULT_STATE_DIR = Path.home() / ".tokenpak" / "retry_state"
+tokenpak/orchestration/retry.py:RETRY_EVENT_LOG = Path.home() / ".tokenpak" / "retry_events.jsonl"
+tokenpak/orchestration/retry.py:CONFIG_PATH = Path.home() / ".tokenpak" / "config.json"
+tokenpak/companion/codex/hooks_post_tool_use.py:    return Path(raw) if raw else (Path.home() / ".tokenpak" / "companion")
+tokenpak/orchestration/learning.py:DEFAULT_LEARNING_PATH = os.path.expanduser("~/.tokenpak/learning.json")
+tokenpak/orchestration/error_normalizer.py:    return Path.home() / ".tokenpak" / "error_patterns.json"
+tokenpak/vault/config.py:    return Path.home() / ".tokenpak" / "vault.yaml"
+tokenpak/orchestration/handoff.py:DEFAULT_HANDOFF_DIR = Path.home() / ".tokenpak" / "handoffs"
+tokenpak/telemetry/budget.py:    return Path("~/.tokenpak/budget_config.yaml").expanduser()
+tokenpak/telemetry/budget.py:        db = Path("~/.tokenpak/budget.db").expanduser()
+tokenpak/orchestration/workflow_performance.py:STATS_PATH = Path.home() / ".tokenpak" / "workflow_stats.json"
+tokenpak/telemetry/monitoring/server.py:LOGS_DIR = os.path.expanduser("~/.tokenpak/logs")
+tokenpak/telemetry/artifact_store.py:            db_path = str(Path.home() / ".tokenpak" / "artifacts.db")
+tokenpak/telemetry/timeline.py:HISTORY_PATH = Path.home() / ".tokenpak" / "history.jsonl"
+tokenpak/orchestration/workflow.py:DEFAULT_WORKFLOW_DIR = Path(os.path.expanduser("~/.tokenpak/workflows"))
+tokenpak/telemetry/monitoring/swap_alert.py:    os.path.expanduser("~/.tokenpak/scripts/self-heal-memory.sh"),
+tokenpak/telemetry/monitoring/swap_alert.py:    config_path = os.path.expanduser("~/.tokenpak/config.json")
+tokenpak/telemetry/regression/stability_scorer.py:            store_path = str(Path.home() / ".tokenpak" / "stability_scores.json")
+tokenpak/orchestration/triggers/daemon.py:        db_path = Path.home() / ".tokenpak" / "telemetry.db"
+tokenpak/telemetry/regression/baseline_registry.py:            registry_path = str(Path.home() / ".tokenpak" / "baselines.json")
+tokenpak/telemetry/install_reporter.py:BUFFER_PATH = Path(os.path.expanduser("~/.tokenpak/metrics_buffer.jsonl"))
+tokenpak/telemetry/install_reporter.py:INSTALL_ID_PATH = Path(os.path.expanduser("~/.tokenpak/install_id"))
+tokenpak/telemetry/install_reporter.py:        db_path = Path(os.path.expanduser("~/.tokenpak/telemetry.db"))
+tokenpak/orchestration/triggers/store.py:DEFAULT_CONFIG = Path.home() / ".tokenpak" / "triggers.yaml"
+tokenpak/telemetry/monitoring/request_logger.py:_LOG_DIR = Path(os.path.expanduser("~/.tokenpak/logs"))
+tokenpak/telemetry/regression/retrieval_watchdog.py:            history_path or str(Path.home() / ".tokenpak" / "retrieval_watchdog_history.json")
+tokenpak/orchestration/runbook_generator.py:DEFAULT_RUNBOOKS_DIR = Path.home() / ".tokenpak" / "runbooks"
+tokenpak/telemetry/local_exporter.py:_DEFAULT_TELEMETRY_DIR = Path(os.path.expanduser("~/.tokenpak/telemetry"))
+tokenpak/orchestration/memory_promoter.py:DEFAULT_PROMOTER_PATH = Path.home() / ".tokenpak" / "memory_promoter.json"
+tokenpak/telemetry/attribution.py:ATTRIBUTION_PATH = Path.home() / ".tokenpak" / "attribution_history.json"
+tokenpak/telemetry/token_manager.py:TOKEN_FILE = Path.home() / ".tokenpak" / "dashboard_token"
+tokenpak/telemetry/request_ledger.py:REQUESTS_PATH = Path.home() / ".tokenpak" / "requests.jsonl"
+tokenpak/security/auth_guard.py:    os.environ.get("TOKENPAK_INCIDENT_LOG", os.path.expanduser("~/.tokenpak/incidents.log"))
+tokenpak/orchestration/registry.py:REGISTRY_PATH = Path.home() / ".tokenpak" / "agents.json"
+tokenpak/telemetry/metering.py:            db_path = Path.home() / ".tokenpak" / "usage.db"
+tokenpak/telemetry/demo.py:        log_dir = os.path.expanduser("~/.tokenpak")
+tokenpak/telemetry/demo.py:    log_dir = os.path.expanduser("~/.tokenpak")
+tokenpak/telemetry/demo.py:    log_path = Path(os.path.expanduser("~/.tokenpak")) / "compression_events.jsonl"
+tokenpak/proxy/config.py:    cfg_path = Path.home() / ".tokenpak" / "config.json"
+tokenpak/proxy/shadow_reader.py:        "TOKENPAK_SHADOW_LOG", str(Path.home() / ".tokenpak" / "shadow_observations.jsonl")
+tokenpak/proxy/startup.py:    tokenpak_dir = Path.home() / ".tokenpak"
+tokenpak/proxy/app_endpoints.py:        str(Path.home() / ".tokenpak" / "companion"),
+tokenpak/proxy/app_endpoints.py:                os.path.expanduser("~/.tokenpak/monitor.db"),
+tokenpak/proxy/app_endpoints.py:    pak_store_dir = Path.home() / ".tokenpak" / "pro" / "state" / "multipak"
+tokenpak/proxy/app_endpoints.py:    db_path = Path.home() / ".tokenpak" / "companion" / "journal.db"
+tokenpak/proxy/ssrm/policy.py:        path = os.path.expanduser("~/.tokenpak/config.yaml")
+tokenpak/proxy/stats.py:DEFAULT_LOG_PATH = _pathlib.Path.home() / ".tokenpak" / "compression.log"
+tokenpak/proxy/server.py:            else os.path.expanduser("~/.tokenpak/monitor.db")
+tokenpak/proxy/proxy_watchdog.py:PROXY_PID_FILE = Path.home() / ".tokenpak" / "proxy.pid"
+tokenpak/proxy/proxy_watchdog.py:WATCHDOG_LOG = Path.home() / ".tokenpak" / "watchdog.log"
+tokenpak/proxy/proxy_watchdog.py:COOLDOWNS_FILE = Path.home() / ".tokenpak" / "cooldowns.json"
+tokenpak/proxy/proxy_watchdog.py:AUTH_PROFILES_FILE = Path.home() / ".tokenpak" / "auth-profiles.json"
+tokenpak/proxy/failover.py:_CONFIG_PATH = Path(os.path.expanduser("~/.tokenpak/config.yaml"))
+tokenpak/proxy/intelligence/deep_health.py:        db_path = os.path.expanduser("~/.tokenpak/data/monitor.db")
+tokenpak/proxy/intelligence/deep_health.py:        index_path = os.path.expanduser("~/.tokenpak/data/pricing_index.json")

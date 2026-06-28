@@ -21,10 +21,29 @@ logger = logging.getLogger(__name__)
 # --- Shadow hook + intent classifier (fail-silent) ---
 try:
     from tokenpak.proxy.shadow_hook import ShadowHook as _ShadowHookClass
+    from tokenpak.proxy.shadow_hook import shadow_enabled_from_env as _shadow_enabled_from_env
 
-    _shadow_hook = _ShadowHookClass()
 except Exception:
-    _shadow_hook = None  # type: ignore
+    _ShadowHookClass = None  # type: ignore
+    _shadow_enabled_from_env = None  # type: ignore
+
+_shadow_hook = None  # type: ignore
+
+
+def _get_shadow_hook():
+    """Lazily construct the routing ledger hook only when shadow mode is enabled."""
+    global _shadow_hook
+    if _shadow_hook is not None:
+        return _shadow_hook
+    if _ShadowHookClass is None:
+        return None
+    try:
+        if _shadow_enabled_from_env is not None and not _shadow_enabled_from_env():
+            return None
+        _shadow_hook = _ShadowHookClass()
+    except Exception:
+        _shadow_hook = None  # type: ignore
+    return _shadow_hook
 
 try:
     from tokenpak.compression.complexity import classify_intent as _classify_intent  # type: ignore
@@ -223,9 +242,10 @@ class TelemetryPipeline:
 
         # Shadow hook: pre-store (fail-silent)
         _txn_key = None
-        if _shadow_hook is not None:
+        shadow_hook = _get_shadow_hook()
+        if shadow_hook is not None:
             try:
-                _txn_key = _shadow_hook.record_request(
+                _txn_key = shadow_hook.record_request(
                     model=model,
                     query=str(event.get("query", ""))[:500],
                     context_tokens=normalized.get("input_tokens", 0),
@@ -320,9 +340,9 @@ class TelemetryPipeline:
             pass
 
         # Shadow hook: post-store (fail-silent)
-        if _shadow_hook is not None and _txn_key is not None:
+        if shadow_hook is not None and _txn_key is not None:
             try:
-                _shadow_hook.record_response(
+                shadow_hook.record_response(
                     txn_key=_txn_key,
                     response_text=str(event.get("response", ""))[:200],
                     response_tokens=normalized.get("output_tokens", 0),
