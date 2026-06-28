@@ -6,8 +6,11 @@ Enables usage-based pricing for Team/Enterprise tiers.
 """
 
 import logging
+import queue
 import sqlite3
 import threading
+import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -23,6 +26,12 @@ sqlite3.register_adapter(date, lambda d: d.isoformat())
 sqlite3.register_adapter(datetime, lambda dt: dt.isoformat())
 sqlite3.register_converter("date", lambda b: date.fromisoformat(b.decode()))
 sqlite3.register_converter("datetime", lambda b: datetime.fromisoformat(b.decode()))
+
+# Bounded background-writer queue size.  When the queue is full the writer
+# path falls back to a synchronous write so records are never dropped and the
+# in-flight footprint stays bounded (no unreaped per-request threads).
+_WRITE_QUEUE_MAX_SIZE = 10000
+_WRITE_BATCH_SIZE = 256
 
 
 @dataclass
@@ -70,25 +79,40 @@ class UsageMeter:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._lock = threading.Lock()
+        # Retained for backward compatibility; the single bounded-queue writer
+        # below means this list no longer grows on the per-request path.
         self._pending_threads: list = []
         self._pending_lock = threading.Lock()
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        """Open a SQLite connection with WAL mode and 30-second timeout.
+        # Single bounded-queue background writer replaces the previous
+        # one-daemon-thread-per-record() design, which grew unbounded because
+        # _pending_threads was only ever cleared in flush().
+        self._write_queue: "queue.Queue" = queue.Queue(maxsize=_WRITE_QUEUE_MAX_SIZE)
+        self._writer_stop = threading.Event()
+        self._writer_thread = threading.Thread(
+            target=self._writer_worker,
+            daemon=True,
+            name=f"UsageMeter-writer-{key_id}",
+        )
+        self._writer_thread.start()
 
-        WAL (Write-Ahead Logging) prevents read/write conflicts under
-        concurrent thread access.  NORMAL synchronous is safe with WAL
-        and avoids a full fsync on every commit.
+    def _connect(self) -> sqlite3.Connection:
+        """Open a SQLite connection with a 30-second busy timeout.
+
+        WAL mode is initialized once in ``_init_schema``. It persists at the
+        database level, while ``synchronous=NORMAL`` is connection-local and is
+        applied to each connection.
         """
         conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
     def _init_schema(self):
         """Create SQLite schema if not exists."""
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
+            # WAL prevents read/write conflicts under concurrent thread access.
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,6 +136,63 @@ class UsageMeter:
                 CREATE INDEX IF NOT EXISTS idx_reported ON usage(reported);
             """)
             conn.commit()
+
+    def _write_rows(self, rows: list[tuple]) -> None:
+        """Persist usage rows in one short-lived SQLite transaction.
+
+        Serialized via ``self._lock``; the connection is always closed via
+        ``contextlib.closing`` so no descriptor leaks on the write path.
+        """
+        if not rows:
+            return
+        with self._lock:
+            with closing(self._connect()) as conn:
+                for row in rows:
+                    conn.execute(
+                        """
+                        INSERT INTO usage
+                        (key_id, timestamp, model, input_tokens, output_tokens, saved_tokens, request_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        row,
+                    )
+                conn.commit()
+
+    def _write_row(self, row: tuple) -> None:
+        """Persist a single usage row."""
+        self._write_rows([row])
+
+    def _writer_worker(self) -> None:
+        """Drain the bounded write queue on a single long-lived daemon thread."""
+        while not self._writer_stop.is_set():
+            try:
+                row = self._write_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if row is None:  # poison pill
+                self._write_queue.task_done()
+                break
+            rows = [row]
+            stop_after_batch = False
+            while len(rows) < _WRITE_BATCH_SIZE:
+                try:
+                    row = self._write_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if row is None:
+                    self._write_queue.task_done()
+                    stop_after_batch = True
+                    break
+                rows.append(row)
+            try:
+                self._write_rows(rows)
+            except Exception:  # pragma: no cover — defensive
+                logger.debug("usage write failed", exc_info=True)
+            finally:
+                for _ in rows:
+                    self._write_queue.task_done()
+            if stop_after_batch:
+                break
 
     def record(
         self,
@@ -139,33 +220,23 @@ class UsageMeter:
             request_type: Type of request (e.g., "chat", "completion")
         """
         timestamp = datetime.now(timezone.utc).isoformat()
+        row = (
+            self.key_id,
+            timestamp,
+            model,
+            input_tokens,
+            output_tokens,
+            saved_tokens,
+            request_type,
+        )
 
-        def _insert():
-            with self._lock:
-                with self._connect() as conn:
-                    conn.execute(
-                        """
-                        INSERT INTO usage
-                        (key_id, timestamp, model, input_tokens, output_tokens, saved_tokens, request_type)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            self.key_id,
-                            timestamp,
-                            model,
-                            input_tokens,
-                            output_tokens,
-                            saved_tokens,
-                            request_type,
-                        ),
-                    )
-                    conn.commit()
-
-        # Insert asynchronously in background thread to avoid blocking
-        thread = threading.Thread(target=_insert, daemon=True)
-        with self._pending_lock:
-            self._pending_threads.append(thread)
-        thread.start()
+        # Hand the row to the single background writer (non-blocking).  If the
+        # bounded queue is full, write synchronously rather than spawn an
+        # unreaped thread or drop the record — keeps the footprint bounded.
+        try:
+            self._write_queue.put_nowait(row)
+        except queue.Full:
+            self._write_row(row)
 
         # License bridge: forward the event to the license-server usage meter
         # so tokens reach the central /usage endpoint keyed by license_id.
@@ -183,16 +254,39 @@ class UsageMeter:
         except Exception:  # pragma: no cover — defensive
             logger.debug("license usage_meter forwarding skipped", exc_info=True)
 
-    def flush(self, timeout: float = 5.0) -> None:
-        """Wait for all pending background write threads to complete.
+    def _drain_pending_writes(self, timeout: float = 5.0) -> None:
+        """Block until the background writer has committed every row queued so
+        far, giving readers read-after-write consistency.
 
-        Useful in tests to ensure all records are committed before assertions.
+        ``record()`` is non-blocking — it hands the row to the bounded queue
+        and returns — so a read issued right after a record could otherwise
+        race the still-pending write and under-count.  Read paths call this
+        first to wait out any in-flight writes.  Bounded by ``timeout`` so a
+        stuck writer can never hang a reader indefinitely.
         """
+        q = self._write_queue
+        deadline = time.monotonic() + timeout
+        with q.all_tasks_done:
+            while q.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                q.all_tasks_done.wait(remaining)
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Wait for queued background writes to be committed.
+
+        Useful in tests to ensure all records are persisted before assertions.
+        """
+        deadline = time.monotonic() + timeout
+        self._drain_pending_writes(timeout)
+        # Legacy path: join any straggler threads (defensive; normally empty).
         with self._pending_lock:
             threads = list(self._pending_threads)
             self._pending_threads.clear()
         for t in threads:
-            t.join(timeout=timeout)
+            remaining = max(0.0, deadline - time.monotonic())
+            t.join(timeout=remaining)
 
     def get_daily_summary(self, date: str) -> Dict[str, Any]:
         """
@@ -230,7 +324,11 @@ class UsageMeter:
                 }
             }
         """
-        with self._connect() as conn:
+        # Read-after-write consistency: ensure any rows queued by record() are
+        # committed before we aggregate, so a summary read right after a
+        # request does not under-count still-pending background writes.
+        self._drain_pending_writes()
+        with closing(self._connect()) as conn:
             conn.row_factory = sqlite3.Row
 
             # Get all records for the day
@@ -336,8 +434,12 @@ class UsageMeter:
             True if upload successful (or no data to report)
             False if network error or server error
         """
+        # Drain pending background writes first so a report issued right after
+        # a request includes those rows rather than racing the writer.
+        self._drain_pending_writes()
+
         # Get all unreported rows, grouped by date
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             cursor = conn.execute(
                 """
                 SELECT DISTINCT DATE(timestamp) as date FROM usage
@@ -375,7 +477,7 @@ class UsageMeter:
             response.raise_for_status()
 
             # Mark as reported
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 conn.execute(
                     """
                     UPDATE usage SET reported = 1
@@ -401,7 +503,7 @@ class UsageMeter:
 
         Returns: Number of rows deleted
         """
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             cursor = conn.execute(
                 """
                 DELETE FROM usage

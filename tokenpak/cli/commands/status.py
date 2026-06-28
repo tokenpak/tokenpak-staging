@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 try:
     import click
@@ -177,7 +177,7 @@ def _get_version() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fleet savings calculation (inline — TPK-SAVINGS-001 not yet available)
+# Fleet savings calculation (inline — canonical metric not yet available)
 # ---------------------------------------------------------------------------
 
 
@@ -258,198 +258,43 @@ def _calculate_fleet_savings(
     Returns:
         Dict with keys: models (list), totals (dict), period (str)
     """
-    conn = _connect_db(db_path)
-    if conn is None:
-        return {"error": "db_not_found", "db_path": db_path or _get_db_path()}
+    # Delegate the actual computation to the canonical savings engine so
+    # ``status``, ``doctor``, and the live ``savings`` /
+    # ``cost`` surfaces all derive from ONE source and can never disagree on the
+    # same install. ``compute_savings`` mirrors ``_window_clause`` for the period
+    # tokens status passes, so this delegation is behaviour-preserving and the
+    # return shape below is unchanged for existing consumers. DB resolution is
+    # done here exactly as ``_connect_db`` did (``db_path or _get_db_path()`` +
+    # existence check) so the resolved DB cannot drift.
+    from tokenpak.telemetry.savings import compute_savings
 
-    # Build time filter (single source of truth — supports today/window units)
-    where_clause, params = _window_clause(period)
+    resolved_path = db_path or _get_db_path()
+    if not Path(resolved_path).exists():
+        return {"error": "db_not_found", "db_path": resolved_path}
 
-    # Cache attribution: prefer the new `cache_origin` column (platform-agnostic).
-    # Legacy DBs without it get conservative treatment in the per-row math below.
-    col_names = {r[1] for r in conn.execute("PRAGMA table_info(requests)").fetchall()}
-    has_origin = "cache_origin" in col_names
-
-    # Proxy-owned cache reads (tokenpak gets credit only for these)
-    proxy_cr_expr = (
-        "COALESCE(SUM(CASE WHEN COALESCE(cache_origin, 'unknown') = 'proxy' THEN cache_read_tokens ELSE 0 END), 0)"
-        if has_origin
-        else "0"
-    )
-    # Client-owned cache reads (upstream client placed cache_control)
-    client_cr_expr = (
-        "COALESCE(SUM(CASE WHEN COALESCE(cache_origin, 'unknown') = 'client' THEN cache_read_tokens ELSE 0 END), 0)"
-        if has_origin
-        else "0"
-    )
-
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT
-                model,
-                COUNT(*) AS requests,
-                COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-                COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
-                -- Attribute compressed_tokens only to proxy-caused compression.
-                -- For byte-preserved passthrough traffic (cache_origin='client' or
-                -- NULL/unknown) the stored compressed_tokens is legacy accounting
-                -- that reflects input-minus-sent delta, not real savings — per the
-                -- project_tokenpak_status_attribution contract.
-                {("COALESCE(SUM(CASE WHEN cache_origin = 'proxy' "
-                  "THEN compressed_tokens ELSE 0 END), 0)"
-                  if has_origin else "0")
-                } AS compressed_tokens,
-                COALESCE(SUM(protected_tokens), 0) AS protected_tokens,
-                COALESCE(SUM(estimated_cost), 0.0) AS estimated_cost,
-                {proxy_cr_expr}  AS proxy_managed_cache_read,
-                {client_cr_expr} AS client_managed_cache_read
-            FROM requests
-            {where_clause}
-            GROUP BY model
-            ORDER BY SUM(input_tokens) DESC
-            """,
-            params,
-        ).fetchall()
-    except Exception as e:
-        conn.close()
-        return {"error": str(e)}
-
-    # Also get total row count
-    try:
-        total_rows = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
-    except Exception:
-        total_rows = 0
-
-    conn.close()
-
-    if not rows:
-        return {
-            "error": "no_data",
-            "period": period,
-            "db_path": db_path or _get_db_path(),
-        }
-
-    # Calculate per-model savings using real rates
-    models: List[Dict[str, Any]] = []
-    total_without = 0.0
-    total_with = 0.0
-    total_cache_savings = 0.0
-    total_compression_savings = 0.0
-    total_requests = 0
-
-    total_claude_code_savings = 0.0
-
-    for row in rows:
-        model_name = row["model"]
-        rates = get_rates(model_name)
-        input_rate = rates["input"]
-        cached_rate = rates["cached"]
-        output_rate = rates["output"]
-
-        req_count = row["requests"]
-        input_tok = row["input_tokens"]      # post-compression tokens actually sent
-        output_tok = row["output_tokens"]
-        cache_read = row["cache_read_tokens"]
-        cache_create = row["cache_creation_tokens"]
-        compressed_tok = row["compressed_tokens"]  # tokens removed by compression
-
-        # Attribution is platform-agnostic: rows log `cache_origin` as
-        # 'proxy' (tokenpak placed the cache_control markers), 'client' (upstream
-        # client did — any passthrough platform), or 'unknown' (pre-migration
-        # rows; conservatively treated as client so we never over-claim).
-        if has_origin:
-            proxy_managed_cr = row["proxy_managed_cache_read"] if "proxy_managed_cache_read" in row.keys() else 0
-            client_managed_cr = max(0, cache_read - proxy_managed_cr)
-        else:
-            # Legacy rows without origin → all observed cache attributed to client
-            proxy_managed_cr = 0
-            client_managed_cr = cache_read
-
-        # "Without TokenPak" cost: what you'd pay if tokenpak hadn't compressed.
-        # - Compressed tokens would have been sent at full input rate
-        # - Proxy-managed cache reads would have been full-price input (tokenpak caused the discount)
-        # - Client-managed cache reads stay at cached rate (Claude Code does this regardless)
-        # - Output at output rate
-        raw_input = input_tok + compressed_tok  # pre-compression input
-        baseline_input = raw_input + proxy_managed_cr  # only proxy-managed cache was tokenpak's doing
-        without_cost = (
-            (baseline_input / 1_000_000) * input_rate
-            + (client_managed_cr / 1_000_000) * cached_rate
-            + (output_tok / 1_000_000) * output_rate
-        )
-
-        # "With TokenPak" cost:
-        # Fresh input at input rate + all cache reads at cached rate + output at output rate
-        with_cost = (
-            (input_tok / 1_000_000) * input_rate
-            + (cache_read / 1_000_000) * cached_rate
-            + (output_tok / 1_000_000) * output_rate
-        )
-
-        saved = without_cost - with_cost
-        pct = (saved / without_cost * 100) if without_cost > 0 else 0.0
-
-        # Breakdown: only proxy-managed cache counts as tokenpak savings
-        cache_saving = (proxy_managed_cr / 1_000_000) * (input_rate - cached_rate)
-        compression_saving = (compressed_tok / 1_000_000) * input_rate
-
-        # Claude Code cache savings (observability — not tokenpak's doing)
-        claude_code_cache_saving = (client_managed_cr / 1_000_000) * (input_rate - cached_rate)
-
-        # Cache hit rate: all cache_read / total input handled (observability, not attribution)
-        total_input_handled = cache_read + input_tok
-        cache_hit_rate = (cache_read / total_input_handled * 100) if total_input_handled > 0 else 0.0
-
-        models.append({
-            "model": model_name,
-            "requests": req_count,
-            "without_cost": round(without_cost, 2),
-            "with_cost": round(with_cost, 2),
-            "saved": round(saved, 2),
-            "savings_pct": round(pct, 1),
-            "cache_hit_rate": round(cache_hit_rate, 1),
-            "cache_savings": round(cache_saving, 2),
-            "compression_savings": round(compression_saving, 2),
-            "claude_code_cache_savings": round(claude_code_cache_saving, 2),
-            "input_tokens": input_tok,
-            "output_tokens": output_tok,
-            "cache_read_tokens": cache_read,
-            "proxy_managed_cache_read": proxy_managed_cr,
-            "client_managed_cache_read": client_managed_cr,
-            "compressed_tokens": compressed_tok,
-        })
-
-        total_without += without_cost
-        total_with += with_cost
-        total_cache_savings += cache_saving
-        total_compression_savings += compression_saving
-        total_claude_code_savings += claude_code_cache_saving
-        total_requests += req_count
-
-    total_saved = total_without - total_with
-    total_pct = (total_saved / total_without * 100) if total_without > 0 else 0.0
-
-    # Smart routing savings = total_saved - cache - compression (remainder)
-    routing_savings = max(0.0, total_saved - total_cache_savings - total_compression_savings)
+    result = compute_savings(window=period, db_path=resolved_path)
+    if result.error == "db_not_found":
+        return {"error": "db_not_found", "db_path": resolved_path}
+    if result.error:
+        return {"error": result.error}
+    if not result.models:
+        return {"error": "no_data", "period": period, "db_path": resolved_path}
 
     return {
         "period": period,
-        "models": models,
+        "models": result.models,
         "totals": {
-            "requests": total_requests,
-            "without_cost": round(total_without, 2),
-            "with_cost": round(total_with, 2),
-            "saved": round(total_saved, 2),
-            "savings_pct": round(total_pct, 1),
-            "cache_savings": round(total_cache_savings, 2),
-            "compression_savings": round(total_compression_savings, 2),
-            "routing_savings": round(routing_savings, 2),
-            "claude_code_cache_savings": round(total_claude_code_savings, 2),
+            "requests": result.requests,
+            "without_cost": round(result.baseline_cost, 2),
+            "with_cost": round(result.actual_cost, 2),
+            "saved": round(result.saved_cost, 2),
+            "savings_pct": round(result.savings_pct, 1),
+            "cache_savings": round(result.cache_savings, 2),
+            "compression_savings": round(result.compression_savings, 2),
+            "routing_savings": round(result.routing_savings, 2),
+            "claude_code_cache_savings": round(result.claude_code_cache_savings, 2),
         },
-        "db_rows": total_rows,
+        "db_rows": result.db_rows,
     }
 
 
