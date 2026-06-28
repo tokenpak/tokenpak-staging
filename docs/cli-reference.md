@@ -61,6 +61,7 @@ View API spend
 - `--month` — Show monthly totals
 - `--by-model` — Break down by model
 - `--export-csv` — Export as CSV
+- `--json` — Emit the cost summary as a single JSON document
 
 **Subcommands:**
 
@@ -1349,6 +1350,7 @@ Show compression savings summary.
 **Flags:**
 
 - `--days` — Rolling window in days (default: 30)
+- `--json` — Emit the savings summary as a single JSON document
 
 ### `tokenpak telemetry`
 

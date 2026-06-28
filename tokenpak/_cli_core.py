@@ -3940,6 +3940,35 @@ def cmd_usage(args):
             )
 
 
+def _savings_json_payload(report, days):
+    """Build the machine-readable savings summary.
+
+    Mirrors the receipt definition used by the human ``tokenpak savings``
+    output. When no receipt-backed data exists the result is reported as an
+    explicit no-data state rather than a confident zero, so consumers never
+    mistake "nothing recorded yet" for "zero savings achieved".
+    """
+    has_data = not (report.total_cost == 0.0 and report.savings_amount == 0.0)
+    payload = {"section": "savings", "days": days, "available": has_data}
+    if has_data:
+        payload.update(
+            {
+                "savings_amount": round(report.savings_amount, 6),
+                "savings_pct": round(report.savings_pct, 4),
+                "actual_cost": round(report.total_cost, 6),
+                "baseline_cost": round(report.estimated_without_compression, 6),
+                "cache_hit_rate": round(report.cache_hit_rate, 6),
+            }
+        )
+    else:
+        payload["state"] = "no_data"
+        payload["message"] = (
+            "No receipt-backed savings data yet. "
+            "Run requests through the proxy to start tracking."
+        )
+    return payload
+
+
 def cmd_savings(args):
     """Show compression savings summary."""
     mode = resolve_mode(args)
@@ -3966,6 +3995,11 @@ def cmd_savings(args):
         cache_hit_rate = (_cr / (_cr + _in)) if (_cr + _in) > 0 else 0.0
     else:
         cache_hit_rate = 0.0
+
+    if getattr(args, "as_json", False):
+        # Machine-readable mode: emit only the JSON document on stdout.
+        print(json.dumps(_savings_json_payload(report, days), indent=2, sort_keys=True))
+        return
 
     if mode == OutputMode.RAW:
         print(
@@ -4253,6 +4287,10 @@ def _build_usage_parser(sub):
 def _build_savings_parser(sub):
     p_savings = sub.add_parser("savings", help="Show savings summary")
     p_savings.add_argument("--days", type=int, default=30, help="Rolling window in days")
+    p_savings.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the savings summary as a single JSON document",
+    )
     p_savings.set_defaults(func=cmd_savings)
 
 
@@ -6267,10 +6305,76 @@ def _budget_tracker():
     return get_budget_tracker()
 
 
+def _cost_json_payload(args, tracker, period):
+    """Build the machine-readable cost summary.
+
+    Mirrors the data shown by the human ``tokenpak cost`` summary: the spend
+    for the period, an optional per-model breakdown, the live proxy session
+    (when running), and any configured budget status. Best-effort lookups are
+    guarded so the JSON contract never leaks a traceback.
+    """
+    label = {"daily": "Today", "weekly": "This week", "monthly": "This month"}[period]
+    monitor_total = _monitor_db_cost(period)
+    total = monitor_total if monitor_total > 0 else tracker.total_spent(period)
+    payload = {
+        "section": "cost",
+        "period": period,
+        "label": label,
+        "spent_usd": round(total, 6),
+    }
+
+    if getattr(args, "by_model", False):
+        payload["by_model"] = [
+            {
+                "model": r["model"] or "unknown",
+                "requests": r["requests"],
+                "input_tokens": r["tokens_input"],
+                "output_tokens": r["tokens_output"],
+                "cost_usd": round(r["cost_usd"], 6),
+            }
+            for r in tracker.by_model_summary(period=period)
+        ]
+
+    # Live proxy session (best-effort; absent when the proxy is not running).
+    live_session = None
+    try:
+        stats = _proxy_get("/stats")
+    except Exception:
+        stats = None
+    if stats:
+        session = stats.get("session", {}) or {}
+        if session.get("cost", 0) or session.get("saved_tokens", 0):
+            live_session = {
+                "cost_usd": round(session.get("cost", 0) or 0, 6),
+                "cost_saved_usd": round(session.get("cost_saved", 0) or 0, 6),
+                "saved_tokens": session.get("saved_tokens", 0) or 0,
+            }
+    payload["live_session"] = live_session
+
+    # Budget status (only present when a budget is configured).
+    budgets = {}
+    for p in ("daily", "monthly"):
+        status = tracker.get_status(p)
+        if status:
+            budgets[p] = {
+                "spent_usd": round(status.spent_usd, 6),
+                "limit_usd": round(status.limit_usd, 6),
+                "percent_used": round(status.percent_used, 4),
+                "alert_triggered": bool(status.alert_triggered),
+            }
+    payload["budgets"] = budgets
+    return payload
+
+
 def cmd_cost(args):
     """Show cost summary for a time period."""
     tracker = _budget_tracker()
     period = "monthly" if args.month else ("weekly" if args.week else "daily")
+
+    if getattr(args, "as_json", False):
+        # Machine-readable mode: emit only the JSON document on stdout.
+        print(json.dumps(_cost_json_payload(args, tracker, period), indent=2, sort_keys=True))
+        return
 
     if args.by_model:
         rows = tracker.by_model_summary(period=period)
@@ -6795,6 +6899,10 @@ def _build_cost_parser(sub):
     p_cost.add_argument("--month", action="store_true", help="Show monthly totals")
     p_cost.add_argument("--by-model", action="store_true", help="Break down by model")
     p_cost.add_argument("--export-csv", action="store_true", help="Export as CSV")
+    p_cost.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the cost summary as a single JSON document",
+    )
     p_cost.set_defaults(func=cmd_cost)
 
     # Subcommands for cost
