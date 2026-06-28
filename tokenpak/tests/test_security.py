@@ -5,14 +5,18 @@ Unit tests for tokenpak.security
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import os
 import stat
 
 import pytest
 
 from tokenpak.security import (
+    RedactingLogFilter,
     ensure_config_permissions,
+    install_log_redaction,
     redact_pii,
     safe_temp_file,
     sanitize_cli_arg,
@@ -221,3 +225,96 @@ class TestSafeTempFile:
         os.close(fd)
         assert path.endswith(".json")
         os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Structural redaction at the logging sink (d3 spec gap #6)
+# v2.0-d3-credential-security §8 / §10 #6 / AC #10
+# ---------------------------------------------------------------------------
+
+
+def _logger_with_capture(name: str):
+    """A logger wired to an in-memory StreamHandler. Returns (logger, handler, buf)."""
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = logging.getLogger(name)
+    logger.handlers = []
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    return logger, handler, buf
+
+
+class TestRedactionAtSink:
+    def test_raw_authorization_header_redacted_without_caller_discipline(self):
+        """AC #10 / gap #6: a logger handed a raw Authorization header emits
+        ``[REDACTED]`` even though the caller never scrubbed it."""
+        logger, handler, buf = _logger_with_capture("tpk.test.sink1")
+        install_log_redaction(handler)
+        secret = "sk-livesecretABCDEF1234567890"  # gitleaks:allow (synthetic test fixture, not a real key)
+        # Caller does NOT pre-scrub — redaction must be structural at the sink.
+        logger.warning("upstream call Authorization: Bearer %s", secret)
+        out = buf.getvalue()
+        assert secret not in out, "raw credential leaked past the sink"
+        assert "[REDACTED]" in out
+
+    def test_format_args_path_is_redacted(self):
+        """The secret arriving via %-args (not the literal msg) is still caught,
+        because the filter redacts the fully-rendered record."""
+        logger, handler, buf = _logger_with_capture("tpk.test.sink2")
+        install_log_redaction(handler)
+        logger.info("token=%s", "sk-anotherSECRET0987654321")  # gitleaks:allow (synthetic test fixture, not a real key)
+        out = buf.getvalue()
+        assert "sk-anotherSECRET0987654321" not in out  # gitleaks:allow (synthetic test fixture, not a real key)
+        assert "[REDACTED-SK]" in out
+
+    def test_safe_message_passes_through_unchanged(self):
+        logger, handler, buf = _logger_with_capture("tpk.test.sink3")
+        install_log_redaction(handler)
+        logger.info("proxy started on port 8766")
+        assert buf.getvalue().strip() == "proxy started on port 8766"
+
+    def test_install_is_idempotent(self):
+        handler = logging.StreamHandler(io.StringIO())
+        install_log_redaction(handler)
+        install_log_redaction(handler)
+        filters = [f for f in handler.filters if isinstance(f, RedactingLogFilter)]
+        assert len(filters) == 1, "second install must not stack a duplicate filter"
+
+    def test_install_on_logger_covers_existing_handlers(self):
+        logger, handler, _buf = _logger_with_capture("tpk.test.sink4")
+        install_log_redaction(logger)
+        assert any(isinstance(f, RedactingLogFilter) for f in logger.filters)
+        assert any(isinstance(f, RedactingLogFilter) for f in handler.filters)
+
+    def test_default_target_is_root_logger(self):
+        root = logging.getLogger()
+        had = [f for f in root.filters if isinstance(f, RedactingLogFilter)]
+        try:
+            flt = install_log_redaction()
+            assert flt in root.filters
+        finally:
+            if not had:
+                root.removeFilter(flt)
+
+
+def test_configure_logging_installs_redaction_on_handlers():
+    """Integration: ``configure_logging`` wires the structural filter onto the
+    tokenpak logger's handler, so the gap-#6 guarantee holds in production."""
+    from tokenpak.core import logging_config
+
+    saved_handlers = list(logging.getLogger(logging_config.TPK_LOGGER_NAME).handlers)
+    saved_configured = logging_config._CONFIGURED
+    try:
+        logging_config._CONFIGURED = False
+        logging.getLogger(logging_config.TPK_LOGGER_NAME).handlers = []
+        logging_config.configure_logging(level="DEBUG", fmt="text")
+        handlers = logging.getLogger(logging_config.TPK_LOGGER_NAME).handlers
+        assert handlers, "configure_logging must attach at least one handler"
+        assert all(
+            any(isinstance(f, RedactingLogFilter) for f in h.filters) for h in handlers
+        ), "every tokenpak handler must carry the structural redaction filter"
+    finally:
+        logging.getLogger(logging_config.TPK_LOGGER_NAME).handlers = saved_handlers
+        logging_config._CONFIGURED = saved_configured

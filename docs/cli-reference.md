@@ -18,7 +18,7 @@ Prompt Packing. The proxy listens on localhost:PORT and forwards
 compressed requests to your configured LLM providers.
 
 Example:
-  tokenpak start --port 8888 --workers 4
+  tokenpak start --port 8888
 
 (See also `tokenpak serve` for telemetry/ingest variants.)
 The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
@@ -26,7 +26,6 @@ The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
 **Flags:**
 
 - `--port` — Port to listen on (default: 8766) (default: 8766)
-- `--workers` — Number of worker processes (default: 2) (default: 2)
 - `--log-level` — Logging level (default: info) (default: info) — choices: `debug`, `info`, `warning`, `error`
 
 ### `tokenpak stop`
@@ -185,6 +184,8 @@ Manage compression recipes
 
 **Subcommands:**
 
+- `list`
+  - `--category` — Filter by category (general, python, javascript, markdown, config, common_patterns)
 - `create`
   - `NAME` — Recipe name (e.g. my-legal-cleanup)
   - `--output-dir` — Directory to write the recipe file (default: current dir) (default: .)
@@ -446,7 +447,8 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show public URL with token (accessible from any machine)
+- `--public` — Show guided sharing options with a dashboard token
+- `--tunnel` — With --public, start a temporary Cloudflare quick tunnel
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
 
@@ -659,6 +661,8 @@ Examples:
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
   tokenpak codex clean             # reclaim orphaned isolated codex homes
+  tokenpak codex usage --latest --json
+  tokenpak codex exec --capture -- codex exec --json "summarize this repo"
   TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
   TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
@@ -1083,6 +1087,20 @@ Test search retrieval
 
 - `KEY` — Your license key (default: )
 - `--email` — Optional email for the license (default: )
+
+### `tokenpak cache`
+
+**Flags:**
+
+- `--json`
+
+**Subcommands:**
+
+- `status`
+  - `--json`
+- `clear`
+  - `--id` — Clear only this fingerprint ID (default: all)
+  - `--yes`, `-y` — Skip confirmation prompt
 
 ### `tokenpak check-alerts`
 

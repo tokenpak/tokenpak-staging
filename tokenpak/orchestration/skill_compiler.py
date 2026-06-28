@@ -10,7 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tokenpak.orchestration.macros.engine import MacroEngine, MacroResult
+from tokenpak.orchestration.macros.engine import (
+    MacroEngine,
+    MacroResult,
+    _warn_file_integrity,
+)
 
 DEFAULT_SKILLS_DIR = Path.home() / ".tokenpak" / "skills"
 DEFAULT_SKILL_INDEX = DEFAULT_SKILLS_DIR / "_index.json"
@@ -162,6 +166,7 @@ class SkillStore:
     def _load_index(self) -> Dict[str, Dict[str, Any]]:
         if not self.index_path.exists():
             return {}
+        _warn_file_integrity(self.index_path)
         try:
             raw = json.loads(self.index_path.read_text())
         except (json.JSONDecodeError, OSError):
@@ -190,21 +195,30 @@ class SkillStore:
                 # Already in correct format
                 macro_steps.append(step)
             elif "tool" in step:
-                # Convert from tool format to macro format
+                # Convert from tool format to macro format. The command is
+                # assembled from structured parts, so emit a structured argv
+                # (runs shell=False - no shell interpretation of generated
+                # tokens) alongside the human-readable cmd string. The cmd
+                # string is retained for display and YAML command-string parity.
                 tool = step.get("tool", "unknown_tool")
                 args = step.get("args", {})
                 cmd_parts = [tool]
+                argv = [tool]
                 if isinstance(args, dict):
                     for k, v in args.items():
                         cmd_parts.append(f"--{k} {v}")
+                        argv.extend([f"--{k}", str(v)])
                 elif isinstance(args, list):
                     cmd_parts.extend(str(a) for a in args)
+                    argv.extend(str(a) for a in args)
                 else:
                     cmd_parts.append(str(args))
+                    argv.append(str(args))
                 macro_steps.append(
                     {
                         "name": tool.replace("-", "_").replace(".", "_").lower()[:32],
                         "cmd": " ".join(cmd_parts),
+                        "argv": argv,
                         "label": step.get("label", tool),
                         "timeout": step.get("timeout", 60),
                     }
@@ -253,6 +267,7 @@ class SkillStore:
         path = self._skill_path(skill_id)
         if not path.exists():
             return None
+        _warn_file_integrity(path)
         try:
             data = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
@@ -265,6 +280,7 @@ class SkillStore:
             if skill_path.name == self.index_path.name:
                 continue
             try:
+                _warn_file_integrity(skill_path)
                 skills.append(ExtractedSkill.from_dict(json.loads(skill_path.read_text())))
             except (json.JSONDecodeError, OSError, TypeError):
                 continue
