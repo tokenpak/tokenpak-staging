@@ -615,6 +615,18 @@ def _is_first_run() -> bool:
     return not _FIRST_RUN_FLAG.exists()
 
 
+# Per-subcommand --json flags register under varying dest names (status uses
+# `as_json`, preview/others use `json`, etc.). Machine/JSON output must stay a
+# single parseable document, so human first-run/welcome prose is suppressed when
+# any of these are set rather than tied to a single global flag.
+_MACHINE_OUTPUT_FLAGS = ("json", "as_json", "json_output", "json_out")
+
+
+def _is_machine_output(args) -> bool:
+    """True when the resolved command requested machine-readable (JSON) output."""
+    return any(bool(getattr(args, attr, False)) for attr in _MACHINE_OUTPUT_FLAGS)
+
+
 def _print_quick_help():
     """Print the beginner-friendly --help output."""
     print(
@@ -925,7 +937,7 @@ def cmd_setup(args):
 
             print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
         except Exception:
-            print("    export ANTHROPIC_API_KEY='sk-...'")
+            print("    Set ANTHROPIC_API_KEY in your shell before starting TokenPak.")
         return
 
     # Auto-detect primary provider
@@ -2251,23 +2263,32 @@ def cmd_dashboard(args):
 
     # --public: show public URL with token
     if getattr(args, "public", False):
+        from tokenpak.cli.commands.dashboard_share import (
+            build_share_plan,
+            render_share_plan,
+            run_quick_tunnel,
+        )
         from tokenpak.core.config_loader import get as _cfg  # noqa: F401
 
         port = int(_cfg("port", 8766, "TOKENPAK_PORT", int))
         token = load_or_create_token()
-        hostname = socket.gethostname()
-        try:
-            ip = socket.gethostbyname(hostname)
-        except Exception:
-            ip = "localhost"
-        url = f"http://{ip}:{port}/dashboard?token={token}"
-        print("\n✅ TokenPak Dashboard (Public)")
-        print("─────────────────────────────────")
-        print(f"URL:   {url}")
-        print(f"Token: {token}")
-        print("\n⚠️  Share this URL only with trusted users.")
-        print("Regenerate token: tokenpak dashboard --new-token\n")
-        webbrowser.open(url)
+        plan = build_share_plan(port=port, token=token)
+        if getattr(args, "tunnel", False):
+            if not plan.proxy_running:
+                print()
+                print(render_share_plan(plan))
+                print()
+                raise SystemExit(1)
+            rc = run_quick_tunnel(port=port, token=token)
+            if rc:
+                raise SystemExit(rc)
+            return
+
+        print()
+        print(render_share_plan(plan))
+        print()
+        if plan.proxy_running and sys.stdout.isatty():
+            webbrowser.open(plan.local_url)
         return
 
     # Default: TUI dashboard
@@ -2395,6 +2416,14 @@ def cmd_codex(args):
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     forwarded = list(args.args)
+    if forwarded and forwarded[0] == "usage":
+        from .companion.codex.usage import main_usage
+
+        sys.exit(main_usage(forwarded[1:]))
+    if forwarded and forwarded[0] == "exec" and "--capture" in forwarded[1:]:
+        from .companion.codex.usage import main_exec_capture
+
+        sys.exit(main_exec_capture(forwarded[1:]))
     if forwarded and forwarded[0] == "doctor":
         from .companion.codex.doctor import main as doctor_main
 
@@ -2676,6 +2705,8 @@ def _build_codex_parser(sub):
             "  tokenpak codex uninstall         # reverse installation\n"
             "  tokenpak codex statusline        # enable native status modules (additive)\n"
             "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
+            "  tokenpak codex usage --latest --json\n"
+            "  tokenpak codex exec --capture -- codex exec --json \"summarize this repo\"\n"
             "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
             "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
             "  tokenpak codex --budget 5.00\n"
@@ -3437,7 +3468,12 @@ def build_parser():
     p_dashboard.add_argument(
         "--public",
         action="store_true",
-        help="Show public URL with token (accessible from any machine)",
+        help="Show guided sharing options with a dashboard token",
+    )
+    p_dashboard.add_argument(
+        "--tunnel",
+        action="store_true",
+        help="With --public, start a temporary Cloudflare quick tunnel",
     )
     p_dashboard.add_argument(
         "--show-token",
@@ -3906,33 +3942,93 @@ def cmd_usage(args):
             )
 
 
+def _savings_json_payload(report, days):
+    """Build the machine-readable savings summary.
+
+    Mirrors the receipt definition used by the human ``tokenpak savings``
+    output. When no receipt-backed data exists the result is reported as an
+    explicit no-data state rather than a confident zero, so consumers never
+    mistake "nothing recorded yet" for "zero savings achieved".
+    """
+    has_data = not (report.total_cost == 0.0 and report.savings_amount == 0.0)
+    payload = {"section": "savings", "days": days, "available": has_data}
+    if has_data:
+        payload.update(
+            {
+                "savings_amount": round(report.savings_amount, 6),
+                "savings_pct": round(report.savings_pct, 4),
+                "actual_cost": round(report.total_cost, 6),
+                "baseline_cost": round(report.estimated_without_compression, 6),
+                "cache_hit_rate": round(report.cache_hit_rate, 6),
+            }
+        )
+    else:
+        payload["state"] = "no_data"
+        payload["message"] = (
+            "No receipt-backed savings data yet. "
+            "Run requests through the proxy to start tracking."
+        )
+    return payload
+
+
 def cmd_savings(args):
     """Show compression savings summary."""
     mode = resolve_mode(args)
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Savings are read only from the receipt-backed telemetry engine, which
-    # counts proxy-attributable savings from real cost records. There is no
-    # estimated/derived path: when no receipt-backed data exists, a neutral
-    # "no data yet" state is shown rather than an invented figure.
-    from .telemetry.query import get_savings_report
+    # Canonical conservative savings: the live `savings`
+    # command reports the SAME proxy-attributed figure as `status`/`doctor`,
+    # derived from the one `compute_savings` engine — no separate receipt-backed
+    # path that could disagree on the same install. The window is labelled
+    # explicitly; when there is no data a neutral "no data yet" state is shown
+    # rather than an invented figure.
+    from .telemetry.savings import compute_savings
 
-    report = get_savings_report(days=days)
+    _sv = compute_savings(window=f"{int(days)}d_custom")
+    _has = (not _sv.error) and _sv.requests > 0
+    actual = _sv.actual_cost if _has else 0.0
+    estimated_without = _sv.baseline_cost if _has else 0.0
+    savings_amount = _sv.saved_cost if _has else 0.0
+    savings_pct = _sv.savings_pct if _has else 0.0
+    if _has:
+        _cr = sum(m["cache_read_tokens"] for m in _sv.models)
+        _in = sum(m["input_tokens"] for m in _sv.models)
+        cache_hit_rate = (_cr / (_cr + _in)) if (_cr + _in) > 0 else 0.0
+    else:
+        cache_hit_rate = 0.0
+
+    if getattr(args, "as_json", False):
+        # Machine-readable mode: emit only the JSON document on stdout.
+        print(json.dumps(_savings_json_payload(report, days), indent=2, sort_keys=True))
+        return
 
     if mode == OutputMode.RAW:
-        print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
+        print(
+            fmt.raw(
+                {
+                    "section": "savings",
+                    "days": days,
+                    "window": _sv.window_label,
+                    "actual_cost": actual,
+                    "savings_amount": savings_amount,
+                    "savings_pct": savings_pct,
+                    "cache_hit_rate": cache_hit_rate,
+                    "estimated_without_compression": estimated_without,
+                }
+            )
+        )
         return
 
     # Check for empty database
-    if report.total_cost == 0.0 and report.savings_amount == 0.0:
+    if not _has:
         print("No savings data yet. Run your first request through the proxy to start tracking.")
         return
 
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{report.savings_pct:.1f}%", f"${report.savings_amount:.2f}", f"{days}d"]
+                [f"{savings_pct:.1f}%", f"${savings_amount:.2f}", _sv.window_label]
             )
         )
         return
@@ -3942,11 +4038,12 @@ def cmd_savings(args):
     print(
         fmt.kv(
             [
-                ("Savings", f"${report.savings_amount:.2f}"),
-                ("Savings %", f"{report.savings_pct:.1f}%"),
-                ("Actual Cost", f"${report.total_cost:.2f}"),
-                ("Baseline", f"${report.estimated_without_compression:.2f}"),
-                ("Cache Hit", f"{report.cache_hit_rate * 100:.1f}%"),
+                ("Window", _sv.window_label),
+                ("Savings", f"${savings_amount:.2f}"),
+                ("Savings %", f"{savings_pct:.1f}%"),
+                ("Actual Cost", f"${actual:.2f}"),
+                ("Baseline", f"${estimated_without:.2f}"),
+                ("Cache Hit", f"{cache_hit_rate * 100:.1f}%"),
             ]
         )
     )
@@ -4192,6 +4289,10 @@ def _build_usage_parser(sub):
 def _build_savings_parser(sub):
     p_savings = sub.add_parser("savings", help="Show savings summary")
     p_savings.add_argument("--days", type=int, default=30, help="Rolling window in days")
+    p_savings.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the savings summary as a single JSON document",
+    )
     p_savings.set_defaults(func=cmd_savings)
 
 
@@ -5539,11 +5640,23 @@ def main():
                 uptime_str = "unknown"
             report = get_savings_report(days=1)
 
+            # Canonical conservative savings: the bare
+            # `tokenpak` summary reports the SAME figure as `tokenpak status`
+            # for the same window, derived from the one `compute_savings`
+            # engine — not a separate receipt-backed number that could disagree.
+            from .telemetry.savings import compute_savings
+
+            _sv = compute_savings(window="today")
+
             # Compact savings summary
             print(f"TokenPak — {uptime_str} uptime")
-            print(
-                f"💰 ${report.savings_amount:.2f} saved today ({report.savings_pct:.0f}% reduction)"
-            )
+            if _sv.error or _sv.requests == 0:
+                print("💰 savings unavailable (no telemetry yet)")
+            else:
+                print(
+                    f"💰 ${_sv.saved_cost:.2f} saved {_sv.window_label} "
+                    f"({_sv.savings_pct:.0f}% reduction)"
+                )
 
             # Get request count from recent events
             from .telemetry.query import get_recent_events
@@ -5574,7 +5687,10 @@ def main():
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    if _is_first_run() and args.command not in ("help",):
+    # Skip entirely in machine/JSON mode: the welcome must never contaminate a
+    # machine stream, and the first-run flag is left unconsumed so a later
+    # interactive run still greets the human.
+    if _is_first_run() and args.command not in ("help",) and not _is_machine_output(args):
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
             "   Run `tokenpak demo` to see compression in action.\n"
@@ -6191,10 +6307,76 @@ def _budget_tracker():
     return get_budget_tracker()
 
 
+def _cost_json_payload(args, tracker, period):
+    """Build the machine-readable cost summary.
+
+    Mirrors the data shown by the human ``tokenpak cost`` summary: the spend
+    for the period, an optional per-model breakdown, the live proxy session
+    (when running), and any configured budget status. Best-effort lookups are
+    guarded so the JSON contract never leaks a traceback.
+    """
+    label = {"daily": "Today", "weekly": "This week", "monthly": "This month"}[period]
+    monitor_total = _monitor_db_cost(period)
+    total = monitor_total if monitor_total > 0 else tracker.total_spent(period)
+    payload = {
+        "section": "cost",
+        "period": period,
+        "label": label,
+        "spent_usd": round(total, 6),
+    }
+
+    if getattr(args, "by_model", False):
+        payload["by_model"] = [
+            {
+                "model": r["model"] or "unknown",
+                "requests": r["requests"],
+                "input_tokens": r["tokens_input"],
+                "output_tokens": r["tokens_output"],
+                "cost_usd": round(r["cost_usd"], 6),
+            }
+            for r in tracker.by_model_summary(period=period)
+        ]
+
+    # Live proxy session (best-effort; absent when the proxy is not running).
+    live_session = None
+    try:
+        stats = _proxy_get("/stats")
+    except Exception:
+        stats = None
+    if stats:
+        session = stats.get("session", {}) or {}
+        if session.get("cost", 0) or session.get("saved_tokens", 0):
+            live_session = {
+                "cost_usd": round(session.get("cost", 0) or 0, 6),
+                "cost_saved_usd": round(session.get("cost_saved", 0) or 0, 6),
+                "saved_tokens": session.get("saved_tokens", 0) or 0,
+            }
+    payload["live_session"] = live_session
+
+    # Budget status (only present when a budget is configured).
+    budgets = {}
+    for p in ("daily", "monthly"):
+        status = tracker.get_status(p)
+        if status:
+            budgets[p] = {
+                "spent_usd": round(status.spent_usd, 6),
+                "limit_usd": round(status.limit_usd, 6),
+                "percent_used": round(status.percent_used, 4),
+                "alert_triggered": bool(status.alert_triggered),
+            }
+    payload["budgets"] = budgets
+    return payload
+
+
 def cmd_cost(args):
     """Show cost summary for a time period."""
     tracker = _budget_tracker()
     period = "monthly" if args.month else ("weekly" if args.week else "daily")
+
+    if getattr(args, "as_json", False):
+        # Machine-readable mode: emit only the JSON document on stdout.
+        print(json.dumps(_cost_json_payload(args, tracker, period), indent=2, sort_keys=True))
+        return
 
     if args.by_model:
         rows = tracker.by_model_summary(period=period)
@@ -6226,6 +6408,16 @@ def cmd_cost(args):
 
     print(f"TokenPak Cost Summary — {label}")
     print(f"  Spent:  ${total:.4f}")
+
+    # Canonical conservative savings — agrees with
+    # status/doctor/savings; explicit window label, never a passthrough
+    # over-claim. Derived from the one `compute_savings` engine.
+    from .telemetry.savings import compute_savings
+
+    _cost_win = {"daily": "today", "weekly": "week", "monthly": "month"}[period]
+    _sv = compute_savings(window=_cost_win)
+    if not _sv.error:
+        print(f"  Saved:  ${_sv.saved_cost:.4f} ({_sv.savings_pct:.1f}%)  [{_sv.window_label}]")
 
     # Show live proxy session cost if available
     stats = _proxy_get("/stats")
@@ -6709,6 +6901,10 @@ def _build_cost_parser(sub):
     p_cost.add_argument("--month", action="store_true", help="Show monthly totals")
     p_cost.add_argument("--by-model", action="store_true", help="Break down by model")
     p_cost.add_argument("--export-csv", action="store_true", help="Export as CSV")
+    p_cost.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the cost summary as a single JSON document",
+    )
     p_cost.set_defaults(func=cmd_cost)
 
     # Subcommands for cost

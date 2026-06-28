@@ -1,6 +1,7 @@
 """Tests for tokenpak preview command."""
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,6 +48,28 @@ class TestPreviewCommand:
         assert data["output_tokens"] is None
         assert data["saved_tokens"] is None
         assert data["compression_ratio"] is None
+
+    def test_preview_json_clean_home_is_pure_json(self):
+        """On a first run, preview --json stdout must still start with '{'.
+
+        The top-level dispatcher prints a human welcome on first run; in machine
+        mode it must be suppressed so the JSON stream is not contaminated. An
+        isolated HOME/TOKENPAK_HOME makes the first-run path live (the other JSON
+        test reuses the runner's HOME, which already has the first-run flag set).
+        """
+        with tempfile.TemporaryDirectory() as home:
+            env = {**os.environ, "HOME": home, "TOKENPAK_HOME": home}
+            result = subprocess.run(
+                [sys.executable, "-m", "tokenpak", "preview", "hello world", "--json"],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout[:1] == "{", repr(result.stdout[:80])
+        assert "Welcome to TokenPak" not in result.stdout
+        data = json.loads(result.stdout)
+        assert data["savings_available"] is False
 
     def test_preview_raw_output(self):
         """Test preview raw output is honest about unavailable savings."""
