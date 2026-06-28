@@ -5,7 +5,7 @@ The **TIP Spend Guard** is TokenPak's proxy-side circuit breaker. It blocks risk
 This is the canonical defense; the older companion-side **advisory budget** is fail-open and stays as a soft hint.
 
 > **Status:** Available since TokenPak v1.5.1.
-> **Authoritative contract:** [Standard 29 — TIP Spend Guard Agent Contract](https://github.com/tokenpak/docs/blob/main/standards/29-spend-guard-agent-contract.md)
+> **Wire contract:** The proxy enforces spend-guard holds before forwarding requests upstream.
 
 ---
 
@@ -223,7 +223,7 @@ Refactor the auth flow.
 
 ## For headless cycles / agents
 
-Background agents (cron jobs, scheduled cycles, automated pipelines) have no human at the prompt. They MUST follow Standard 29 §6:
+Background agents (cron jobs, scheduled cycles, automated pipelines) have no human at the prompt. They must use the headless-cycle contract:
 
 1. **Pre-declare for known-large cycles.** Prepend the first prompt of any cycle expected to exceed $5 with:
  ```text
@@ -283,7 +283,7 @@ The 2026-05-07 v1.5.1 ship-defaults are intentionally conservative. The 7-day so
 
 - **Day 1–2:** monitor `spend_guard_audit` for `block` rows. If false-positive rate > 5%, raise `session_block_cost_usd` to 15.0.
 - **Day 3–7:** review `tip_bypass` rows for repeating patterns that justify a permanent ceiling raise; or recommend per-cycle declared ceilings.
-- **Day 8+:** thresholds locked unless a new Standard 29 review is invoked.
+- **Day 8+:** thresholds locked unless a new threshold review is invoked.
 
 To override locally without waiting for the next default-tuning rollout: set the `TOKENPAK_SPEND_GUARD_*` env vars in your shell, or the `spend_guard:` block in `~/.tokenpak/config.yaml`.
 
@@ -310,7 +310,6 @@ The session window reads from `~/.tokenpak/monitor.db`, which is the proxy's wir
 
 ## See also
 
-- **Standard 29:** [`29-spend-guard-agent-contract.md`](https://github.com/tokenpak/docs/blob/main/standards/29-spend-guard-agent-contract.md) — wire contract.
 - **Reference implementation:** `tokenpak/proxy/spend_guard/`
 - **Tests:** `tokenpak/tests/test_spend_guard_*.py` (149 tests including the canonical 2026-05-07 spike-replay).
 - **Design:** the TIP spend-guard initiative (project history).
