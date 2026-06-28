@@ -35,6 +35,11 @@ REQUIRED_DISPATCH_DATA_GLOBS = (
     "tokenpak/orchestration/dispatch/registry/overlays/*.yaml",
     "tokenpak/orchestration/dispatch/schemas/*.json",
 )
+REQUIRED_DASHBOARD_DATA_GLOBS = (
+    "tokenpak/dashboard/*.html",
+    "tokenpak/dashboard/*.js",
+    "tokenpak/dashboard/*.css",
+)
 PACKAGE_TEST_PATH_RE = re.compile(r"^tokenpak/(?:tests/|.+/tests/)")
 BYTECODE_PATH_RE = re.compile(r"(^|/)__pycache__/|\.py[cod]$")
 
@@ -122,6 +127,19 @@ def _assert_required_dispatch_data(names: set[str], artifact_label: str) -> None
         )
 
 
+def _assert_required_dashboard_data(names: set[str], artifact_label: str) -> None:
+    missing = [
+        glob
+        for glob in REQUIRED_DASHBOARD_DATA_GLOBS
+        if not any(_matches_glob(name, glob) for name in names)
+    ]
+    if missing:
+        raise AssertionError(
+            f"{artifact_label} is missing required dashboard package data "
+            f"(no shipped file matches): {', '.join(missing)}"
+        )
+
+
 def _assert_no_development_artifacts(names: set[str], artifact_label: str) -> None:
     offenders = sorted(
         name
@@ -154,6 +172,8 @@ def main() -> int:
     _assert_required_data(sdist_names, "sdist")
     _assert_required_dispatch_data(wheel_names, "wheel")
     _assert_required_dispatch_data(sdist_names, "sdist")
+    _assert_required_dashboard_data(wheel_names, "wheel")
+    _assert_required_dashboard_data(sdist_names, "sdist")
     _assert_no_development_artifacts(wheel_names, "wheel")
     _assert_no_development_artifacts(sdist_names, "sdist")
     print("distribution contents are clean")

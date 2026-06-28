@@ -13,10 +13,10 @@ Your goal today: install TokenPak, start the proxy, send one request, and confir
 ### Install
 
 ```bash
-pip install "tokenpak[serve]"
+pip install tokenpak
 ```
 
-The `[serve]` extra installs FastAPI, required for the proxy server. If you only want the compression SDK (no proxy), use plain `pip install tokenpak`.
+Plain `pip install tokenpak` includes the local HTTP proxy used by `tokenpak serve`. Install `tokenpak[serve]` only when you also need the FastAPI dashboard, telemetry, or ingest ASGI surfaces.
 
 Confirm it installed:
 

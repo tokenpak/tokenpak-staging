@@ -569,10 +569,6 @@
     },
     {
       "module": "tokenpak.cli.commands",
-      "name": "serve"
-    },
-    {
-      "module": "tokenpak.cli.commands",
       "name": "setup"
     },
     {
@@ -1434,10 +1430,6 @@
     {
       "module": "tokenpak.cli.commands.savings",
       "name": "run_savings_cmd"
-    },
-    {
-      "module": "tokenpak.cli.commands.serve",
-      "name": "run_serve_cmd"
     },
     {
       "module": "tokenpak.cli.commands.setup",
