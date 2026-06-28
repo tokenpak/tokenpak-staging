@@ -2959,7 +2959,28 @@ def _build_stub_parsers(sub):
         "activate",
         help="Store a Pro/Team/Enterprise license key",
     )
-    p_activate.add_argument("key", nargs="?", default="", help="Your license key")
+    p_activate.add_argument(
+        "key",
+        nargs="?",
+        default="",
+        metavar="KEY",
+        help="License key (legacy; prefer --key-file, --key-stdin, or --prompt-key)",
+    )
+    p_activate.add_argument(
+        "--key-file",
+        metavar="PATH",
+        help="Read the license key from a file",
+    )
+    p_activate.add_argument(
+        "--key-stdin",
+        action="store_true",
+        help="Read the license key from standard input",
+    )
+    p_activate.add_argument(
+        "--prompt-key",
+        action="store_true",
+        help="Prompt for the license key without echo",
+    )
     p_activate.add_argument("--email", default="", help="Optional email for the license")
     p_activate.set_defaults(
         func=lambda args: __import__(

@@ -1086,7 +1086,10 @@ Test search retrieval
 
 **Flags:**
 
-- `KEY` — Your license key (default: )
+- `KEY` — License key (legacy; prefer --key-file, --key-stdin, or --prompt-key) (default: )
+- `--key-file` — Read the license key from a file
+- `--key-stdin` — Read the license key from standard input
+- `--prompt-key` — Prompt for the license key without echo
 - `--email` — Optional email for the license (default: )
 
 ### `tokenpak cache`
