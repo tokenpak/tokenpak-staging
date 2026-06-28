@@ -35,7 +35,7 @@ Design notes:
   verbs over ``DispatchDecision`` records. Cards render human-readable with a
   ``--json`` fallback for scripting (§13 item 17).
 * User-facing output uses plain **Worker / Route / Station** terminology. The
-  literal string "Fleet Worker" never appears (§11 verification gate).
+  legacy worker-alias bigram is excluded by the §11 verification gate.
 * Receipt + Delivery output is run through the public-safe sanitizer
   (:func:`tokenpak.orchestration.dispatch.public_safe.sanitize_public_text`)
   before display — these surfaces are public-export-eligible (§10).
@@ -48,6 +48,22 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+# ---------------------------------------------------------------------------
+# Preview-honesty boundary (v0.1-alpha)
+# ---------------------------------------------------------------------------
+# Station execution — the LLM execution boundary — is intentionally NOT wired
+# into the CLI in this preview build, so ``dispatch run`` stops at the dispatch
+# decision and no station runs execute. Delivery packages and receipts are
+# therefore never produced through the CLI alone in this build. That absence is
+# expected for the preview; it is not a failed or incomplete job. The receipt /
+# delivery / inspect verbs surface this note so an empty receipt does not read
+# as a defect. (Wiring station execution is a separate, post-alpha scope.)
+_ALPHA_PREVIEW_NO_RECEIPT_NOTE = (
+    "Preview build (v0.1-alpha): station execution is not wired into the CLI, "
+    "so no station runs execute and no receipt is produced in this build. "
+    "This is expected for the preview — not a failed job."
+)
 
 # ---------------------------------------------------------------------------
 # Parser registration
@@ -397,6 +413,8 @@ def cmd_dispatch_inspect(args: Any) -> int:
         ],
         "receipts": [r["id"] for r in receipts],
     }
+    if not receipts:
+        payload["note"] = _ALPHA_PREVIEW_NO_RECEIPT_NOTE
     if include_late:
         payload["late_results"] = [
             {"id": r["id"], "station_run_id": r.get("station_run_id")} for r in late
@@ -421,6 +439,8 @@ def cmd_dispatch_inspect(args: Any) -> int:
         if not p["decisions"]:
             print("    (none)")
         print(f"  Receipts   : {', '.join(p['receipts']) or '(none)'}")
+        if not p["receipts"]:
+            print(f"  Note       : {_ALPHA_PREVIEW_NO_RECEIPT_NOTE}")
         if include_late:
             print("  Late results:")
             for r in p.get("late_results", []):
@@ -662,7 +682,7 @@ def cmd_dispatch_receipt(args: Any) -> int:
 
     if not receipts:
         return _err(
-            f"no receipt for job {args.job_id} (job not yet delivered)",
+            f"no receipt for job {args.job_id}. {_ALPHA_PREVIEW_NO_RECEIPT_NOTE}",
             as_json, code="no_receipt",
         )
 
@@ -729,9 +749,11 @@ def cmd_dispatch_delivery(args: Any) -> int:
         "summary": (
             f"Delivery for {job.detected_intent} job {job.id}: "
             f"{len(runs)} run(s), "
-            f"{'receipt available' if receipts else 'no receipt yet'}."
+            f"{'receipt available' if receipts else 'no receipt in this build'}."
         ),
     }
+    if not receipts:
+        raw["note"] = _ALPHA_PREVIEW_NO_RECEIPT_NOTE
     payload = sanitize_public_obj(raw)
 
     def render(p: dict) -> int:
@@ -746,6 +768,8 @@ def cmd_dispatch_delivery(args: Any) -> int:
             print(f"  Receipt  : {p['receipt_id']}  "
                   f"(tokenpak dispatch receipt {p['job_id']})")
         print(f"  Summary  : {p['summary']}")
+        if p.get("note"):
+            print(f"  Note     : {p['note']}")
         return 0
 
     return _emit(payload, as_json, render)
