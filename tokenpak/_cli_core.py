@@ -4000,6 +4000,19 @@ def cmd_savings(args):
 
     if getattr(args, "as_json", False):
         # Machine-readable mode: emit only the JSON document on stdout.
+        # Project the conservative ``compute_savings`` figures onto the
+        # ``SavingsReport`` shape consumed by ``_savings_json_payload``. When
+        # there is no receipt-backed data the derived values are all 0.0, so the
+        # payload reports an explicit no-data state rather than a confident zero.
+        from .telemetry.query_models import SavingsReport
+
+        report = SavingsReport(
+            total_cost=actual,
+            estimated_without_compression=estimated_without,
+            savings_amount=savings_amount,
+            savings_pct=savings_pct,
+            cache_hit_rate=cache_hit_rate,
+        )
         print(json.dumps(_savings_json_payload(report, days), indent=2, sort_keys=True))
         return
 
