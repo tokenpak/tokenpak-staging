@@ -8,7 +8,6 @@ Supports:
 """
 
 import json
-import subprocess
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tokenpak.orchestration.macros.engine import _emit_trusted_user_code_notice
+from tokenpak.platform import service
 
 DEFAULT_SCHEDULE_PATH = Path.home() / ".tokenpak" / "scheduled.json"
 CRON_COMMENT_TAG = "# tokenpak-schedule"
@@ -75,23 +75,18 @@ class MacroScheduler:
         self.schedule_path.write_text(json.dumps(data, indent=2))
 
     def _crontab_lines(self) -> List[str]:
-        """Read current crontab lines."""
-        try:
-            result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-            if result.returncode == 0:
-                return result.stdout.splitlines()
-            return []
-        except FileNotFoundError:
-            return []
+        """Read current crontab lines.
+
+        Delegates to the platform service adapter, which returns None on hosts
+        without a usable ``crontab`` (e.g. native Windows); we normalize that to
+        an empty list so callers see "no entries" rather than a traceback.
+        """
+        lines = service.cron_read()
+        return lines if lines is not None else []
 
     def _write_crontab(self, lines: List[str]) -> bool:
-        """Write lines to crontab."""
-        try:
-            content = "\n".join(lines) + "\n"
-            proc = subprocess.run(["crontab", "-"], input=content, text=True, capture_output=True)
-            return proc.returncode == 0
-        except FileNotFoundError:
-            return False
+        """Write lines to crontab (no-op returning False where cron is unavailable)."""
+        return service.cron_write(lines)
 
     def _add_cron_entry(self, schedule_id: str, cron_expr: str, command: str) -> bool:
         """Add a cron entry tagged with schedule_id."""
@@ -187,17 +182,12 @@ class MacroScheduler:
         return scheduled
 
     def _schedule_at_command(self, run_at: str, command: str) -> bool:
-        """Submit a one-shot job via system 'at' command."""
-        try:
-            proc = subprocess.run(
-                ["at", run_at],
-                input=command + "\n",
-                text=True,
-                capture_output=True,
-            )
-            return proc.returncode == 0
-        except FileNotFoundError:
-            return False  # 'at' not available
+        """Submit a one-shot job via the system 'at' command.
+
+        Returns False on hosts without a usable ``at`` binary (e.g. native
+        Windows) rather than raising.
+        """
+        return service.at_submit(run_at, command)
 
     def list_scheduled(self) -> List[ScheduledMacro]:
         """List all scheduled macros."""
