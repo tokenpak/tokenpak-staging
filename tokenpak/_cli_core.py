@@ -1843,6 +1843,13 @@ def cmd_serve(args):
     # First-run compression notice (stderr only, once per install)
     _maybe_show_compression_notice(safe=getattr(args, "safe", False))
 
+    workers = getattr(args, "workers", 1)
+    if workers is None:
+        workers = 1
+    if workers < 1:
+        print("--workers must be >= 1", file=sys.stderr)
+        sys.exit(1)
+
     if getattr(args, "telemetry", False):
         import uvicorn
 
@@ -1857,7 +1864,6 @@ def cmd_serve(args):
             app.include_router(ingest_router)
         except Exception as _ingest_err:
             print(f"[warn] Ingest router not loaded: {_ingest_err}")
-        workers = getattr(args, "workers", 1)
         print(f"Starting TokenPak telemetry server on port {args.port} (workers={workers})")
         uvicorn.run(app, host="127.0.0.1", port=args.port, workers=workers)
         return
@@ -1875,7 +1881,6 @@ def cmd_serve(args):
         uvicorn.run(app, host="127.0.0.1", port=port)
         return
     # Multi-worker mode: route to ingest API via uvicorn (proxy doesn't support workers)
-    workers = getattr(args, "workers", 1) or 1
     if workers > 1:
         import uvicorn
 

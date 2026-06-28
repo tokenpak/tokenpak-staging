@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-25T01:13:42Z",
+  "generated_at": "2026-06-28T21:52:14Z",
   "package_version": "1.7.1",
   "symbols": [
     {
@@ -818,10 +818,6 @@
     {
       "module": "tokenpak.cli.commands",
       "name": "savings"
-    },
-    {
-      "module": "tokenpak.cli.commands",
-      "name": "serve"
     },
     {
       "module": "tokenpak.cli.commands",
@@ -1730,10 +1726,6 @@
     {
       "module": "tokenpak.cli.commands.savings",
       "name": "run_savings_cmd"
-    },
-    {
-      "module": "tokenpak.cli.commands.serve",
-      "name": "run_serve_cmd"
     },
     {
       "module": "tokenpak.cli.commands.setup",

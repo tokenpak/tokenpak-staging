@@ -56,7 +56,7 @@ MultiPak Pro Phase 1 status
 |---|---|---|
 | `tokenpak pak inspect <pak-id-or-file>` | Vault: ✅, others: ❌ | `--json` for machine output |
 | `tokenpak pak export <pak-id> -o <dir>` | Vault: ✅, others: ❌ | Vault Paks export to `pak.json` |
-| `tokenpak pak import <dir> -o <pak>` | ❌ Pro | Capture pipeline is Pro-only |
+| `tokenpak pak import <pak-file>` | ✅ always | Copies a Pak file into the local store with checksum verification |
 | `tokenpak pak status` | ✅ always | Diagnostic; never errors |
 
 Exit codes follow the relevant standard: `0` success, `1` user-facing error (missing Pak, Pro required), `2` argparse usage error.
