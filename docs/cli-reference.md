@@ -309,11 +309,11 @@ View and edit config
 - `init`
   - `--force` — Overwrite existing config
   - `--with-env-stub` — Also drop a placeholders-only .env.example under the TokenPak home
-- `doctor`
+- `doctor` — Read-only diagnostics on the configuration subsystem. Runs eight checks (D1–D8) covering config home location, load-order precedence, env var presence, `.env` file hygiene, and user/system file boundary integrity. Surfaces misconfigurations without writing any file. Complements `tokenpak doctor` (which covers the broader system); `config doctor` focuses only on config.
   - `--json` — Output as JSON
   - `--quiet` — Print only the worst finding
   - `--verbose`, `-v` — Include per-check detail
-- `env`
+- `env` — Show all TOKENPAK_* environment variables that are currently active, their values, and their provenance (where each value comes from: process environment, config file, or built-in default). Values matching secret-class key patterns (API_KEY, _TOKEN, _SECRET, etc.) are **always masked**; use `--no-mask` to reveal low-classification values.
   - `--json` — Output as JSON
   - `--no-mask` — Show low-class values unmasked (secret-class values are still masked)
 - `path`
@@ -1225,6 +1225,32 @@ Examples:
 - `--revert` — Restore the most recent backup for the given client (undoes --apply)
 - `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). 'fleet' is launcher-scoped and never persists into client config — see `tokenpak permissions --help`. — choices: `strict`, `standard`, `auto`, `fleet`
 - `--yes` — Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)
+
+**Guided mode vs print-only:**
+
+When you name a specific client (`tokenpak integrate <client>`) on a TTY (both stdin and stdout are TTYs) without `--apply` or `--no-tui`, the command launches a **guided interactive form**:
+
+1. Detects whether the client is installed on this host.
+2. Shows the exact configuration change it will make (the preview).
+3. For `claude-code` and `codex`, prompts you to pick a permission tier (`strict`, `standard`, `auto`, or `fleet`).
+4. Asks for confirmation before writing any file.
+5. Backs up the existing config automatically; prints a `tokenpak integrate <client> --revert` command to undo.
+
+On a **non-TTY** (CI, piped output, `TOKENPAK_NONINTERACTIVE=1`, or `TERM=dumb`) the guided form is suppressed and `integrate` prints setup instructions only — the same output as `--all` for the named client.
+
+**Shell detection:**
+
+The guided form activates when `sys.stdin.isatty() and sys.stdout.isatty()` are both true. If either stream is redirected (common in CI pipelines or when piping to a file), `integrate` automatically runs in print-only mode. This means `tokenpak integrate claude-code > setup.txt` always writes plain text, never launches a form.
+
+**`--no-tui` escape hatch:**
+
+Pass `--no-tui` anywhere on the command line to force print-only mode even on a fully interactive TTY:
+
+```
+tokenpak --no-tui integrate claude-code
+```
+
+`--no-tui` is a **global flag** — it is stripped from `sys.argv` before subcommand parsers run and does **not** appear in any subcommand's `--help` output. It is honored on `tokenpak integrate <target>` (without `--apply`); when `--apply` is set the flag has no effect (apply is always headless). Use `TOKENPAK_NONINTERACTIVE=1` as the environment-variable equivalent for scripts where the command line cannot be controlled.
 
 ### `tokenpak last`
 
