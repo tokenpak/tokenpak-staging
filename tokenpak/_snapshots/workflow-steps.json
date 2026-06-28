@@ -1,6 +1,6 @@
 {
   "version": "1.1",
-  "generated_at": "2026-06-23T23:00:17Z",
+  "generated_at": "2026-06-28T17:50:51Z",
   "guarded_globs": [
     "release*.yml",
     "release-rehearsal.yml"
@@ -202,13 +202,13 @@
       "workflow": "release-rehearsal.yml",
       "job": "release-gate-snapshots",
       "id": "",
-      "name": "Install (dev shape)"
+      "name": "Install (all extras for canonical snapshot reproduction)"
     },
     {
       "workflow": "release-rehearsal.yml",
       "job": "release-gate-snapshots",
       "id": "",
-      "name": "Install (dev shape)"
+      "name": "Install (all extras for canonical snapshot reproduction)"
     },
     {
       "workflow": "release-rehearsal.yml",
