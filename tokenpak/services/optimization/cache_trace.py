@@ -28,6 +28,7 @@ class CacheMissReason:
     FIDELITY_LOSSLESS_REQUIRED = "fidelity_lossless_required"
     STREAMING_NOT_SUPPORTED = "streaming_not_supported"
     NO_SCOPE_KEY = "no_scope_key"
+    NO_STABLE_SCOPE = "no-stable-scope"
     BELOW_SIMILARITY_THRESHOLD = "below_similarity_threshold"
     TTL_EXPIRED = "ttl_expired"
     TOOL_SCHEMA_DIGEST_MISMATCH = "tool_schema_digest_mismatch"

@@ -4,12 +4,13 @@
 Three helpers:
 
     extract_query_text(ctx)  — pull normalized text from context; never stores raw prompts
-    make_scope_key(ctx)      — session-scoped key for SemanticCache
+    make_scope_key(ctx)      — stable session-scoped key for SemanticCache
     is_streaming(ctx)        — True when the request asks for a streaming response
 
 Design constraints (per proposal Component C):
 - Do not store raw prompt text; only hashed/normalized forms.
-- Scope defaults to session; fall back to platform or request_id.
+- Scope requires a stable session-style header; request IDs are per-request
+  and must not become semantic-cache scopes.
 - Key is stable across semantically equivalent requests.
 """
 
@@ -85,8 +86,11 @@ def make_scope_key(ctx: "OptimizationContext") -> str:
 
     Priority:
     1. X-Session-Id / X-Claude-Code-Session-Id / X-OpenClaw-Session header.
-    2. ``ctx.platform`` + ``ctx.request_id`` composite (weak isolation).
-    3. ``ctx.request_id`` alone (request-scoped; every request is a miss).
+    2. Empty string when no stable scope identity exists.
+
+    ``request_id`` is deliberately excluded: it is minted per request, so using
+    it as a semantic-cache scope guarantees misses and unbounded per-request
+    cache creation.
     """
     headers = ctx.headers or {}
     for h in (
@@ -99,10 +103,7 @@ def make_scope_key(ctx: "OptimizationContext") -> str:
         if val:
             return val
 
-    if ctx.platform:
-        return f"{ctx.platform}:{ctx.request_id}"
-
-    return ctx.request_id
+    return ""
 
 
 def is_streaming(ctx: "OptimizationContext") -> bool:
