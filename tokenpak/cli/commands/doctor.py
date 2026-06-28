@@ -57,6 +57,21 @@ def _claude_settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
+def _api_key_setup_detail() -> str:
+    """Detailed no-key setup guidance shared by default and verbose output."""
+    try:
+        from tokenpak.cli.commands.setup import env_var_help
+
+        examples = env_var_help("ANTHROPIC_API_KEY", "sk-...")
+    except Exception:
+        examples = "    export ANTHROPIC_API_KEY=sk-..."
+    return (
+        "Claude Code OAuth/session auth can use the local proxy with no direct API key.\n"
+        "To add a direct provider key, set one before launching TokenPak:\n"
+        f"{examples}"
+    )
+
+
 def _route_state() -> tuple[str, str | None]:
     """Resolve Claude Code → TokenPak proxy routing state, honestly.
 
@@ -207,9 +222,9 @@ def build_lifecycle_summary(
     elif proxy_state == "starting":
         rows.append(("Proxy", "yellow", "starting", "wait for boot to finish"))
     elif proxy_state == "stopped":
-        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak proxy restart"))
+        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak restart"))
     else:  # unknown
-        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak proxy restart"))
+        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak restart"))
 
     # Update — from the cached L1 check only.
     if update_state == "available":
@@ -458,7 +473,7 @@ def run_doctor(
                 _record(
                     "proxy_health",
                     "warn",
-                    f"Proxy not running   port {proxy_port} — start with: tokenpak proxy restart",
+                    f"Proxy not running   port {proxy_port} — start with: tokenpak restart",
                 )
         except Exception:
             _record(
@@ -1008,7 +1023,7 @@ def run_doctor(
     # credential-hazard checks on the primary `tokenpak doctor` verb, not only
     # the `creds doctor` sub-verb. Reuses the same creds.doctor.run() engine so
     # the two surfaces can never drift. Never let a credential probe crash the
-    # wider doctor run — degrade to a warn (Std 47 security-posture, Std 60
+    # wider doctor run — degrade to a warn (security-posture and routing
     # credential-lifecycle).
     try:
         from tokenpak.creds import doctor as _creds_doctor
@@ -1176,12 +1191,17 @@ def run_doctor(
                 "(no direct API key needed)",
             )
         else:
+            detail = _api_key_setup_detail()
             _record(
                 "api_keys",
                 "warn",
                 "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
                 "or GOOGLE_API_KEY",
+                detail=detail,
             )
+            if not output_json and not verbose:
+                for line in detail.splitlines():
+                    print(f"         {line}")
 
     # Proxy degradation check
     try:

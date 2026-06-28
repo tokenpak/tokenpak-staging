@@ -131,3 +131,21 @@ def test_only_launchers_nudge(monkeypatch):
         Namespace(check=True, force=False, core_only=False, dry_run=False)
     )
     assert nudge.call_count == 2  # unchanged — update did not nudge
+
+
+def test_claude_launcher_prints_orientation_and_home_tip(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_cli_core, "_maybe_update_nudge", lambda: None)
+    launch = mock.Mock()
+    monkeypatch.setattr("tokenpak.companion.launch", launch, raising=False)
+
+    _cli_core.cmd_claude(Namespace(args=[], budget=None))
+
+    out = capsys.readouterr().out
+    assert "Launching Claude Code through TokenPak." in out
+    assert "trust this folder" in out
+    assert "launch from your project directory" in out
+    launch.assert_called_once_with(args=[])

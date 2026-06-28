@@ -931,6 +931,20 @@ def cmd_setup(args):
         print("⚠️  No API keys detected in environment variables.")
         print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY,")
         print("   or sign in with Claude Code (OAuth) — no API key required.")
+        if _interactive_menu_allowed():
+            try:
+                response = input("   Open the guided TokenPak menu now? [Y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                response = "n"
+                print()
+            if response in ("", "y", "yes"):
+                try:
+                    from tokenpak.cli.commands.menu import run_menu
+
+                    run_menu()
+                    return
+                except Exception as exc:
+                    print(f"   Guided menu unavailable: {exc}")
         print("   Example (set ANTHROPIC_API_KEY for your shell):")
         try:
             from tokenpak.cli.commands.setup import env_var_help
@@ -2399,6 +2413,13 @@ def cmd_claude(args):
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     _maybe_update_nudge()
+    print("Launching Claude Code through TokenPak.")
+    print("Claude Code may ask you to trust this folder on first launch; keep using its normal prompt.")
+    try:
+        if Path.cwd().resolve() == Path.home().resolve():
+            print("Tip: launch from your project directory so Claude Code scopes context to that project.")
+    except Exception:
+        pass
     from .companion import launch
 
     launch(args=list(args.args))

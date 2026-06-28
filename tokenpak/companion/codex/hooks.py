@@ -29,6 +29,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .guidance import _codex_cli_missing_message
+
 _HOOKS_DIR = Path(__file__).parent
 
 # Python-native hook scripts — the default installed command path. These
@@ -234,8 +236,17 @@ def ensure_hooks_feature_enabled() -> bool:
             text=True,
             timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        print(f"tokenpak: codex not available: {exc}", file=sys.stderr)
+    except FileNotFoundError:
+        print(
+            f"tokenpak: {_codex_cli_missing_message('Hooks feature setup skipped')}",
+            file=sys.stderr,
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        print(
+            "tokenpak: hooks feature setup skipped: codex features enable timed out",
+            file=sys.stderr,
+        )
         return False
     if result.returncode != 0:
         print(
