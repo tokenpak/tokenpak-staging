@@ -24,7 +24,7 @@ from typing import Optional
 from tokenpak.routing.routing_ledger import DEFAULT_LEDGER_PATH, RoutingLedger
 
 
-def shadow_enabled_from_env() -> bool:
+def _shadow_enabled_from_env() -> bool:
     """Return whether shadow logging is enabled for this process."""
     raw = os.environ.get("TOKENPAK_SHADOW_ENABLED", "true").strip().lower()
     return raw not in {"0", "false", "no", "off"}
