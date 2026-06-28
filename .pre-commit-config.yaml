@@ -73,6 +73,11 @@ repos:
         language: system
         entry: python scripts/release_gate/public_safety_scan.py --root . --annotation error --paths
         types_or: [markdown, python, yaml, toml, shell, javascript, ts, json, text]
+      - id: forbidden-license
+        name: No superseded first-party license declarations
+        language: system
+        entry: python3 scripts/release_gate/license_policy_scan.py --ledger decisions/ledger/license.md --root . --annotation none --paths
+        types_or: [markdown, python, yaml, toml, shell, javascript, ts, json, text]
       - id: forbidden-files
         name: No backup / corrupt-DB / typecheck artifact files
         language: pygrep

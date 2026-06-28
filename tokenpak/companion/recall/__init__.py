@@ -20,13 +20,15 @@ References:
 
 from __future__ import annotations
 
-from tokenpak.companion.recall.schema import SCHEMA_VERSION
+from tokenpak.companion.recall.schema import PAK_STATUS_VALUES, SCHEMA_VERSION
 from tokenpak.companion.recall.store import (
     LIST_LIMIT_DEFAULT,
     LIST_LIMIT_MAX,
+    PAK_RELATION_TYPES,
     RISK_FLAG_SEVERITIES,
     PakListFilters,
     PakListResult,
+    PakRelationEntry,
     PakRow,
     ReasonCodeEntry,
     RecallStore,
@@ -40,7 +42,10 @@ __all__ = [
     "LIST_LIMIT_MAX",
     "PakListFilters",
     "PakListResult",
+    "PakRelationEntry",
     "PakRow",
+    "PAK_RELATION_TYPES",
+    "PAK_STATUS_VALUES",
     "ReasonCodeEntry",
     "RecallStore",
     "RISK_FLAG_SEVERITIES",

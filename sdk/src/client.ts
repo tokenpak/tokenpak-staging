@@ -12,8 +12,13 @@ import {
   HealthStatus,
 } from './types';
 
-const DEFAULT_BASE_URL = 'http://localhost:8000';
+const DEFAULT_BASE_URL = 'http://127.0.0.1:8766';
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+interface RawHealthStatus {
+  version: string;
+  uptime_s?: number;
+}
 
 export class TokenPakHttpClient {
   private readonly http: AxiosInstance;
@@ -27,7 +32,7 @@ export class TokenPakHttpClient {
       timeout: config.timeout ?? DEFAULT_TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',
-        ...(config.apiKey ? { 'X-API-Key': config.apiKey } : {}),
+        ...(config.apiKey ? { 'X-TPK-Key': config.apiKey } : {}),
         ...config.headers,
       },
     });
@@ -52,7 +57,17 @@ export class TokenPakHttpClient {
   }
 
   async health(): Promise<HealthStatus> {
-    return this.get<HealthStatus>('/health');
+    const raw = await this.get<RawHealthStatus>('/tpk/v1/health');
+    return {
+      status: 'ok',
+      version: raw.version,
+      uptimeSeconds: raw.uptime_s ?? 0,
+      stats: {
+        requests: 0,
+        tokensSaved: 0,
+        cacheHits: 0,
+      },
+    };
   }
 
   private wrapError(err: unknown): TokenPakError {

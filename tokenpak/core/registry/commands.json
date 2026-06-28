@@ -42,6 +42,26 @@
       "related": ["start", "logs", "doctor"]
     },
     {
+      "command": "cache",
+      "tier": "oss",
+      "category": "Control",
+      "description": "Show or clear local cache status",
+      "aliases": [],
+      "usage": "/tokenpak cache [status|clear] [--json]",
+      "detail": "Shows local directive-cache location, TTL, entry count, and expiry state; use cache clear --yes to clear cached directives non-interactively.",
+      "related": ["status", "fingerprint"]
+    },
+    {
+      "command": "upgrade",
+      "tier": "oss",
+      "category": "Control",
+      "description": "Open the TokenPak Pro upgrade page",
+      "aliases": [],
+      "usage": "/tokenpak upgrade [--print-url]",
+      "detail": "Opens the public Pro upgrade page in your default browser. Use --print-url for non-interactive scripts.",
+      "related": ["license", "plan", "activate"]
+    },
+    {
       "command": "logs",
       "tier": "oss",
       "category": "Control",

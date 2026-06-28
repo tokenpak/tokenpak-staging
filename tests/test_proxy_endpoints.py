@@ -17,9 +17,12 @@ Uses unittest.mock to simulate the HTTP request handler.
 
 import json
 import os
+import tempfile
 import time
 import unittest
 from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 
@@ -672,6 +675,157 @@ class TestCORSContentRoutes(unittest.TestCase):
             env={"TOKENPAK_PROXY_CORS_ORIGINS": "https://dash.local"},
         )
         self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+
+class TestVaultBlockPathLookup(unittest.TestCase):
+    """Real app endpoint coverage for block-id and source-path retrieval."""
+
+    def _make_index(self, root: Path, blocks: dict, search_results=None):
+        return SimpleNamespace(
+            available=True,
+            blocks=blocks,
+            tokenpak_dir=root,
+            search=Mock(return_value=search_results or []),
+        )
+
+    def _call(self, path: str, vi):
+        from tokenpak.proxy import app_endpoints
+
+        handler = MockRequestHandler(path)
+        with patch("tokenpak.proxy.vault_bridge.get_vault_index", return_value=vi):
+            handled = app_endpoints.try_handle_get(handler)
+        self.assertTrue(handled)
+        return handler, json.loads(handler.wfile.getvalue().decode())
+
+    def test_block_id_lookup_still_returns_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blocks").mkdir()
+            (root / "blocks" / "block-a.txt").write_text("alpha", encoding="utf-8")
+            vi = self._make_index(
+                root,
+                {
+                    "block-a": {
+                        "path": "docs/a.md",
+                        "source_path": "docs/a.md",
+                        "tokens": 5,
+                    }
+                },
+            )
+
+            handler, body = self._call("/tpk/v1/vault/block/block-a", vi)
+
+        self.assertEqual(handler.sent_response_code, 200)
+        self.assertEqual(body["block_id"], "block-a")
+        self.assertEqual(body["content"], "alpha")
+        self.assertEqual(body["resolution"], "exact_block_id")
+        vi.search.assert_not_called()
+
+    def test_exact_path_lookup_wins_without_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blocks").mkdir()
+            (root / "blocks" / "block-a.txt").write_text("alpha", encoding="utf-8")
+            vi = self._make_index(
+                root,
+                {
+                    "block-a": {
+                        "path": "docs/a.md",
+                        "source_path": "./docs/a.md",
+                        "tokens": 5,
+                    },
+                    "block-b": {
+                        "path": "docs/archive/a.md",
+                        "source_path": "docs/archive/a.md",
+                        "tokens": 8,
+                    },
+                },
+            )
+
+            handler, body = self._call("/tpk/v1/vault/block/?path=docs/a.md", vi)
+
+        self.assertEqual(handler.sent_response_code, 200)
+        self.assertEqual(body["block_id"], "block-a")
+        self.assertEqual(body["resolution"], "exact_path")
+        vi.search.assert_not_called()
+
+    def test_casefold_path_lookup_is_explicit_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blocks").mkdir()
+            (root / "blocks" / "block-a.txt").write_text("alpha", encoding="utf-8")
+            vi = self._make_index(
+                root,
+                {
+                    "block-a": {
+                        "path": "Docs/A.md",
+                        "source_path": "Docs/A.md",
+                        "tokens": 5,
+                    }
+                },
+            )
+
+            handler, body = self._call("/tpk/v1/vault/block/?path=docs/a.md", vi)
+
+        self.assertEqual(handler.sent_response_code, 200)
+        self.assertEqual(body["block_id"], "block-a")
+        self.assertEqual(body["resolution"], "exact_path_casefold")
+        vi.search.assert_not_called()
+
+    def test_ambiguous_suffix_path_returns_candidates_without_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blocks").mkdir()
+            vi = self._make_index(
+                root,
+                {
+                    "block-a": {
+                        "path": "docs/a.md",
+                        "source_path": "docs/a.md",
+                        "tokens": 5,
+                    },
+                    "block-b": {
+                        "path": "notes/a.md",
+                        "source_path": "notes/a.md",
+                        "tokens": 8,
+                    },
+                },
+            )
+
+            handler, body = self._call("/tpk/v1/vault/block/?path=a.md", vi)
+
+        self.assertEqual(handler.sent_response_code, 409)
+        self.assertEqual(body["error"], "ambiguous_path")
+        self.assertEqual(body["resolution"], "suffix_path_ambiguous")
+        self.assertEqual({c["block_id"] for c in body["candidates"]}, {"block-a", "block-b"})
+        vi.search.assert_not_called()
+
+    def test_path_lookup_uses_bm25_only_after_path_miss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blocks").mkdir()
+            (root / "blocks" / "block-b.txt").write_text("bravo", encoding="utf-8")
+            blocks = {
+                "block-b": {
+                    "path": "docs/bravo.md",
+                    "source_path": "docs/bravo.md",
+                    "tokens": 8,
+                }
+            }
+            vi = self._make_index(
+                root,
+                blocks,
+                search_results=[({"block_id": "block-b"}, 0.4242)],
+            )
+
+            handler, body = self._call("/tpk/v1/vault/block/?path=missing.md", vi)
+
+        self.assertEqual(handler.sent_response_code, 200)
+        self.assertEqual(body["block_id"], "block-b")
+        self.assertEqual(body["content"], "bravo")
+        self.assertEqual(body["resolution"], "bm25_fallback")
+        self.assertEqual(body["score"], 0.424)
+        vi.search.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-22T05:46:26Z",
+  "generated_at": "2026-06-22T23:54:22Z",
   "package_version": "1.7.1",
   "symbols": [
     {
@@ -841,6 +841,10 @@
     },
     {
       "module": "tokenpak.cli.commands",
+      "name": "upgrade"
+    },
+    {
+      "module": "tokenpak.cli.commands",
       "name": "validate_config"
     },
     {
@@ -1321,6 +1325,10 @@
     },
     {
       "module": "tokenpak.cli.commands.license_cmd",
+      "name": "DEFAULT_UPGRADE_URL"
+    },
+    {
+      "module": "tokenpak.cli.commands.license_cmd",
       "name": "run_activate"
     },
     {
@@ -1761,6 +1769,10 @@
     },
     {
       "module": "tokenpak.cli.commands.status",
+      "name": "DEFAULT_UPGRADE_URL"
+    },
+    {
+      "module": "tokenpak.cli.commands.status",
       "name": "HAS_CLICK"
     },
     {
@@ -1838,6 +1850,26 @@
     {
       "module": "tokenpak.cli.commands.uninstall",
       "name": "run_uninstall"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "DEFAULT_UPGRADE_URL"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "UPGRADE_URL_ENV"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "build_parser"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "cmd_upgrade"
+    },
+    {
+      "module": "tokenpak.cli.commands.upgrade",
+      "name": "resolve_upgrade_url"
     },
     {
       "module": "tokenpak.cli.commands.validate_config",
@@ -2793,11 +2825,23 @@
     },
     {
       "module": "tokenpak.companion.recall",
+      "name": "PAK_RELATION_TYPES"
+    },
+    {
+      "module": "tokenpak.companion.recall",
+      "name": "PAK_STATUS_VALUES"
+    },
+    {
+      "module": "tokenpak.companion.recall",
       "name": "PakListFilters"
     },
     {
       "module": "tokenpak.companion.recall",
       "name": "PakListResult"
+    },
+    {
+      "module": "tokenpak.companion.recall",
+      "name": "PakRelationEntry"
     },
     {
       "module": "tokenpak.companion.recall",
@@ -2865,11 +2909,19 @@
     },
     {
       "module": "tokenpak.companion.recall.schema",
+      "name": "ALL_DDL_V4"
+    },
+    {
+      "module": "tokenpak.companion.recall.schema",
       "name": "EXPECTED_INDEXES_V1"
     },
     {
       "module": "tokenpak.companion.recall.schema",
       "name": "EXPECTED_INDEXES_V3"
+    },
+    {
+      "module": "tokenpak.companion.recall.schema",
+      "name": "EXPECTED_INDEXES_V4"
     },
     {
       "module": "tokenpak.companion.recall.schema",
@@ -2885,7 +2937,19 @@
     },
     {
       "module": "tokenpak.companion.recall.schema",
+      "name": "PAK_STATUS_VALUES"
+    },
+    {
+      "module": "tokenpak.companion.recall.schema",
       "name": "SCHEMA_VERSION"
+    },
+    {
+      "module": "tokenpak.companion.recall.schema",
+      "name": "SQL_ALTER_PAKS_ADD_STATUS"
+    },
+    {
+      "module": "tokenpak.companion.recall.schema",
+      "name": "SQL_BACKFILL_PAKS_STATUS_FROM_SUPERSEDED"
     },
     {
       "module": "tokenpak.companion.recall.schema",
@@ -2936,6 +3000,10 @@
       "name": "SQL_CREATE_V3_INDEXES"
     },
     {
+      "module": "tokenpak.companion.recall.schema",
+      "name": "SQL_CREATE_V4_INDEXES"
+    },
+    {
       "module": "tokenpak.companion.recall.store",
       "name": "LIST_LIMIT_DEFAULT"
     },
@@ -2945,11 +3013,23 @@
     },
     {
       "module": "tokenpak.companion.recall.store",
+      "name": "PAK_RELATION_TYPES"
+    },
+    {
+      "module": "tokenpak.companion.recall.store",
+      "name": "PAK_STATUS_VALUES"
+    },
+    {
+      "module": "tokenpak.companion.recall.store",
       "name": "PakListFilters"
     },
     {
       "module": "tokenpak.companion.recall.store",
       "name": "PakListResult"
+    },
+    {
+      "module": "tokenpak.companion.recall.store",
+      "name": "PakRelationEntry"
     },
     {
       "module": "tokenpak.companion.recall.store",
@@ -12173,6 +12253,10 @@
     },
     {
       "module": "tokenpak.sdk.autogen",
+      "name": "compress_messages"
+    },
+    {
+      "module": "tokenpak.sdk.autogen",
       "name": "context"
     },
     {
@@ -12221,7 +12305,11 @@
     },
     {
       "module": "tokenpak.sdk.autogen.examples.basic_usage",
-      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'autogen_tokenpak'>"
+      "name": "compress_messages"
+    },
+    {
+      "module": "tokenpak.sdk.autogen.examples.basic_usage",
+      "name": "example"
     },
     {
       "module": "tokenpak.sdk.autogen.groupchat",
@@ -12321,7 +12409,11 @@
     },
     {
       "module": "tokenpak.sdk.crewai.examples.basic_usage",
-      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'crewai_tokenpak'>"
+      "name": "TokenPakContext"
+    },
+    {
+      "module": "tokenpak.sdk.crewai.examples.basic_usage",
+      "name": "example"
     },
     {
       "module": "tokenpak.sdk.crewai.handoff",
@@ -12549,7 +12641,15 @@
     },
     {
       "module": "tokenpak.sdk.langchain.examples.basic_rag",
-      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'langchain_tokenpak'>"
+      "name": "TokenPakContextManager"
+    },
+    {
+      "module": "tokenpak.sdk.langchain.examples.basic_rag",
+      "name": "TokenPakMemory"
+    },
+    {
+      "module": "tokenpak.sdk.langchain.examples.basic_rag",
+      "name": "example"
     },
     {
       "module": "tokenpak.sdk.langchain.langgraph",
@@ -12717,7 +12817,47 @@
     },
     {
       "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
-      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'llamaindex_tokenpak'>"
+      "name": "MockEngine"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "MultiIndexFusion"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "TokenPakQueryEngine"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "TokenPakSynthesizer"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "example_multi_index_fusion"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "example_node_conversion"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "example_query_engine"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "example_synthesizer"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "llamaindex_node_to_block"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "main"
+    },
+    {
+      "module": "tokenpak.sdk.llamaindex.examples.basic_usage",
+      "name": "make_engine"
     },
     {
       "module": "tokenpak.sdk.llamaindex.fusion",

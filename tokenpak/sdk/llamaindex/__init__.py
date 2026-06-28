@@ -6,7 +6,7 @@ TokenPak integration for LlamaIndex — automatic context compression for RAG pi
 Reduces token costs on retrieved nodes while preserving structure; measure your savings with `tokenpak savings`.
 
 Quick Start:
-    from llamaindex_tokenpak import TokenPakSynthesizer, TokenPakQueryEngine
+    from tokenpak.sdk.llamaindex import TokenPakSynthesizer, TokenPakQueryEngine
 
     # Compress query engine results
     synthesizer = TokenPakSynthesizer(budget=4000)
@@ -17,7 +17,7 @@ Quick Start:
     pack = tp_engine.query_as_tokenpak("What is context compression?")
 
     # Fuse multiple indexes
-    from llamaindex_tokenpak import MultiIndexFusion
+    from tokenpak.sdk.llamaindex import MultiIndexFusion
     fusion = MultiIndexFusion({"docs": docs_engine, "code": code_engine}, budget=6000)
     result = fusion.query("How does compression work?")
 """
