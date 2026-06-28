@@ -122,6 +122,66 @@ def test_empty_record_marks_everything_unavailable():
     assert d["receipt_id"].startswith("rcpt_")  # still has a stable shape
 
 
+# --- conservative / proxy-only savings attribution -------------------------
+# The surfaced per-request saving must never exceed what the canonical savings
+# aggregate (which credits only ``cache_origin == 'proxy'``) would credit. By
+# construction a positive ``would_have_saved`` is proxy-compression, but a row
+# that *explicitly* attributes itself to a non-proxy origin must not surface a
+# positive saving — that is the regression this gate locks out.
+
+
+def _saved_row(**over) -> dict:
+    row = {"id": "55", "model": "claude-sonnet", "would_have_saved": 0.006}
+    row.update(over)
+    return row
+
+
+def test_positive_savings_on_proxy_row_is_proven():
+    d = build_request_receipt(_saved_row(cache_origin="proxy"), clock=_clock).to_dict()
+    assert d["optimization"]["would_have_saved_usd"] == {"available": True, "value": 0.006}
+
+
+def test_positive_savings_without_cache_origin_is_proven():
+    # Production rows do not carry cache_origin; the conservative-by-construction
+    # invariant (positive saving => proxy compression) keeps this honest, so a
+    # recorded positive saving is still surfaced — the gate must NOT hide it.
+    d = build_request_receipt(_saved_row(), clock=_clock).to_dict()
+    assert d["optimization"]["would_have_saved_usd"] == {"available": True, "value": 0.006}
+
+
+def test_positive_savings_on_client_row_is_unavailable_not_raw():
+    # A non-proxy-attributed (byte-preserved / client-cached) request must NOT
+    # surface the raw would_have_saved as a saving — explicit-unavailable, never
+    # the raw value, never a fabricated 0.
+    d = build_request_receipt(
+        _saved_row(would_have_saved=5, cache_origin="client"), clock=_clock
+    ).to_dict()
+    savings = d["optimization"]["would_have_saved_usd"]
+    assert savings == {"available": False, "reason": "savings_not_proxy_attributed"}
+    assert "value" not in savings
+
+
+def test_positive_savings_on_unknown_origin_is_unavailable():
+    d = build_request_receipt(
+        _saved_row(would_have_saved=12, cache_origin="unknown"), clock=_clock
+    ).to_dict()
+    assert d["optimization"]["would_have_saved_usd"]["available"] is False
+    assert (
+        d["optimization"]["would_have_saved_usd"]["reason"]
+        == "savings_not_proxy_attributed"
+    )
+
+
+def test_zero_savings_on_client_row_is_proven_zero():
+    # A byte-preserved row records would_have_saved == 0 (no compression); a
+    # present 0 carries no saving claim, so it stays proven — distinct from the
+    # positive-non-proxy case above and from a genuinely-absent saving.
+    d = build_request_receipt(
+        _saved_row(would_have_saved=0, cache_origin="client"), clock=_clock
+    ).to_dict()
+    assert d["optimization"]["would_have_saved_usd"] == {"available": True, "value": 0}
+
+
 # --- dropped-context reasons (AC-5) ----------------------------------------
 
 

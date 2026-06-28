@@ -248,6 +248,61 @@ def _field_from_record(
     return ProofField.unavailable(missing_reason)
 
 
+def _conservative_savings_field(record: Mapping[str, Any]) -> ProofField:
+    """Surface the per-request optimization saving under conservative,
+    proxy-only attribution — consistent with the canonical savings aggregate.
+
+    The recorded ``would_have_saved`` is the per-request input-token reduction the
+    proxy achieved by compressing the request body
+    (``max(0, input_tokens - sent_input_tokens)``). The byte-preserved
+    (client-cached) path skips compression, so by construction a *positive*
+    ``would_have_saved`` implies the proxy compressed the body and the row is
+    attributed ``cache_origin == 'proxy'``. The canonical savings aggregate
+    (``status`` / ``cache_stats``) credits a saving only when
+    ``cache_origin == 'proxy'`` — everything else (``'client'`` / ``'unknown'`` /
+    absent) is not credited. This builder gates the *surfaced* per-request saving
+    the same way so the receipt never publishes a saving the aggregate would not:
+
+      * an absent saving stays explicit-unavailable (``savings_not_recorded``);
+      * a recorded saving of 0 (or a non-positive value) is proven — an honest
+        "no saving", not an over-claim;
+      * a *positive* saving is proven only when proxy-attributable — ``cache_origin``
+        absent (the conservative-by-construction invariant holds on real rows) or
+        explicitly ``'proxy'``;
+      * a *positive* saving on a row explicitly attributed to a non-proxy origin
+        (e.g. ``'client'`` / ``'unknown'``) is marked **unavailable**
+        (``savings_not_proxy_attributed``) — never the raw value, never a
+        fabricated 0. This locks out any future regression that would record a
+        non-proxy positive ``would_have_saved`` from leaking into a surfaced
+        saving.
+
+    Note: the production ``requests``-row projection
+    (:mod:`tokenpak.cli.request_explorer`) does not yet surface ``cache_origin``,
+    so on today's real rows this gate is a forward regression-lock rather than an
+    active filter — the invariant already keeps the receipt conservative. Gating
+    arbitrary records on genuine proxy attribution would require threading
+    ``cache_origin`` through that projection (a separate change).
+    """
+    field = _field_from_record(
+        record,
+        "would_have_saved",
+        "saved_cost",
+        missing_reason="savings_not_recorded",
+    )
+    if not field.available:
+        return field
+    try:
+        positive = float(field.value) > 0
+    except (TypeError, ValueError):
+        return field  # non-numeric recorded value: surface as-is, never reinterpret
+    if not positive:
+        return field  # 0 / negative carries no saving claim — proven, not over-claim
+    origin = record.get("cache_origin")
+    if origin is not None and origin != "proxy":
+        return ProofField.unavailable("savings_not_proxy_attributed")
+    return field
+
+
 def build_request_receipt(
     record: Optional[Mapping[str, Any]] = None,
     *,
@@ -376,13 +431,10 @@ def build_request_receipt(
         )
 
     # --- optimization ---------------------------------------------------
+    # Conservative/proxy-only attribution: never surface a per-request saving the
+    # canonical aggregate would not credit (see _conservative_savings_field).
     optimization = ReceiptOptimization(
-        would_have_saved_usd=_field_from_record(
-            rec,
-            "would_have_saved",
-            "saved_cost",
-            missing_reason="savings_not_recorded",
-        ),
+        would_have_saved_usd=_conservative_savings_field(rec),
         methods=(
             ProofField.known(optimization_methods)
             if optimization_methods is not None
