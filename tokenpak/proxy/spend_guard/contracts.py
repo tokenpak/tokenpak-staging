@@ -148,6 +148,10 @@ class GuardOutcome:
     decision: Optional[PreflightDecision] = None
     pending_id: Optional[str] = None
     audit_event: Optional[str] = None         # event_type for audit row
+    # Active budget-reservation hold for this forward (Standard 29 §15). The
+    # proxy response path settles it via reservation.settle_reservation();
+    # unsettled holds expire at their TTL.
+    reservation_id: Optional[str] = None
 
     @classmethod
     def passthrough(cls, body: bytes) -> "GuardOutcome":

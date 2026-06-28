@@ -10,6 +10,7 @@ on:
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
+      - 'scripts/check-dist-contents.py'
       - 'scripts/slim-install-smoke.sh'
   pull_request:
     branches: [main, develop]
@@ -19,6 +20,7 @@ on:
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
+      - 'scripts/check-dist-contents.py'
       - 'scripts/slim-install-smoke.sh'
   workflow_dispatch:
 
@@ -35,7 +37,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -72,7 +74,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: 'pip'
@@ -80,7 +82,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
+          # Pin Ruff so lint is reproducible. `pip install ruff` (unpinned)
+          # silently tracks the latest release; a patch-version skew between
+          # CI and a contributor's local Ruff can flag previously-clean code
+          # (isort/I001 grouping differs by version). 0.15.17 is the known-good
+          # version: `ruff check tokenpak/ tests/` passes on this tree.
+          pip install ruff==0.15.17
 
       - name: Lint with Ruff
         run: |
@@ -94,13 +101,34 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: 'pip'
 
       - name: Run slim install smoke
         run: bash scripts/slim-install-smoke.sh
+
+  package-contents:
+    name: Package Contents
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Check distribution contents
+        run: python scripts/check-dist-contents.py
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -114,7 +142,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
@@ -179,7 +207,7 @@ jobs:
           }
 
       - name: Upload coverage (Tier-1)
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         if: matrix.python-version == '3.11'
         with:
           files: ./coverage.xml,./coverage-tier1.xml
@@ -214,7 +242,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: 'pip'
@@ -227,3 +255,25 @@ jobs:
       - name: Run headline benchmark
         run: |
           python -m pytest tests/benchmarks/test_headline_claim.py -v -s
+
+  release-gate-snapshots:
+    name: Release-gate snapshot ratchets (PR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (all extras for canonical snapshot reproduction)
+        # MUST mirror release.yml's release-gate install EXACTLY or
+        # api-snapshot-check fires phantom-removal noise (release-gate R3
+        # install-shape parity — the local/CI symbol-set skew that bit
+        # the v1.7.0 release).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,full,serve,telemetry,tokens,otel]"
+          pip install python-multipart
+      - name: release-gate-check (api + workflow-steps + telemetry + taxonomy)
+        run: make release-gate-check
+      - name: migration-multihop (release-gate multihop / Std 10 §E9)
+        run: make migration-multihop

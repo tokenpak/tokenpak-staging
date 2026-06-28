@@ -17,6 +17,11 @@ import re
 
 from .fingerprint import canonicalize_user_turn
 
+# Public surface of this module. ``canonicalize_user_turn`` is a re-import from
+# ``.fingerprint`` (its owning module) and is internal-but-authored here — it is
+# scoped out so the API snapshot records it only under its owner.
+__all__ = ["drift_for_body", "drift_score", "jaccard"]
+
 _TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
 
 

@@ -1,4 +1,4 @@
-from langchain_tokenpak.memory import TokenPakMemory
+from tokenpak.sdk.langchain.memory import TokenPakMemory
 
 
 def test_memory_add_and_get():

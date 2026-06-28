@@ -88,8 +88,7 @@ def scaffold_card(
         return _scaffold_pak(name, project_root)
     if card_type == "worker":
         raise CardError(
-            "--type worker is Phase 2 — WorkerProfile has no canonical "
-            "contract yet (Std 54 §B)"
+            "--type worker is Phase 2 — WorkerProfile has no canonical contract yet (Std 54 §B)"
         )
     raise CardError(f"unknown --type {card_type!r} (expected tip|pak)")
 
@@ -102,7 +101,10 @@ def _scaffold_tip(name: str, project_root: Path) -> list[Path]:
     fixtures_dir = base / "fixtures"
     for p in (card_path, adapter_path):
         if p.exists():
-            raise CardError(f"refusing to overwrite existing file: {p}")
+            raise CardError(
+                f"refusing to overwrite existing file: {p}. "
+                "Choose a different --name, or remove the file first."
+            )
 
     base.mkdir(parents=True, exist_ok=True)
     fixtures_dir.mkdir(parents=True, exist_ok=True)
@@ -117,7 +119,10 @@ def _scaffold_pak(name: str, project_root: Path) -> list[Path]:
     assert_outside_package_tree(base)
     card_path = base / f"{name}.pak.md"
     if card_path.exists():
-        raise CardError(f"refusing to overwrite existing file: {card_path}")
+        raise CardError(
+            f"refusing to overwrite existing file: {card_path}. "
+            "Choose a different --name, or remove the file first."
+        )
     base.mkdir(parents=True, exist_ok=True)
     card_path.write_text(_pak_card_template(name), encoding="utf-8")
     return [card_path]

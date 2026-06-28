@@ -15,7 +15,12 @@ Architectural contract (per Kevin's 2026-04-17 design call):
 Authentication (localhost-only by default):
     - Requests must arrive from 127.0.0.1 / ::1 unless ``TOKENPAK_PROXY_KEY``
       is set, in which case an ``X-TPK-Key`` header must match.
-    - No CORS / cross-origin story today; GTM is single-host dev use.
+    - CORS is default-deny: no ``Access-Control-Allow-Origin`` header is
+      emitted unless ``TOKENPAK_PROXY_CORS_ORIGINS`` (a comma-separated list
+      of exact origins) is configured, in which case a matching request
+      ``Origin`` is echoed back verbatim — never ``*``. This keeps browser
+      JS served from another origin (DNS-rebinding / localhost-fetch) from
+      reading proxy-owned content such as ``/tpk/v1/vault/*``.
 
 Error shape:
     {"error": "<code>", "detail": "<human message>"}
@@ -29,6 +34,7 @@ import datetime as _dt
 import json
 import os
 import time
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, urlparse
@@ -64,6 +70,28 @@ def _is_authorized(handler: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _cors_allow_origin(handler: Any) -> Optional[str]:
+    """Return the request ``Origin`` iff it is in the configured allowlist.
+
+    Default-deny: with no ``TOKENPAK_PROXY_CORS_ORIGINS`` set, returns ``None``
+    and no ``Access-Control-Allow-Origin`` header is emitted, so browsers
+    enforce same-origin and cross-origin JS cannot read proxy-owned content
+    (the ``/tpk/v1/vault/*`` routes return full indexed content). When the env
+    var holds a comma-separated list of exact origins, an exact match is
+    echoed back; anything else (no/unknown ``Origin``) yields ``None``. The
+    wildcard ``*`` is never returned for these content-bearing routes.
+    """
+    allowlist = os.environ.get("TOKENPAK_PROXY_CORS_ORIGINS", "")
+    if not allowlist.strip():
+        return None
+    headers = getattr(handler, "headers", None)
+    origin = headers.get("Origin", "").strip() if headers is not None else ""
+    if not origin:
+        return None
+    allowed = {o.strip() for o in allowlist.split(",") if o.strip()}
+    return origin if origin in allowed else None
+
+
 def _send_json(handler: Any, status: int, payload: dict[str, Any]) -> None:
     # allow_nan=False → strict JSON; NaN/Infinity raise ValueError. Callers
     # must sanitize unbounded floats before passing to this helper.
@@ -71,7 +99,12 @@ def _send_json(handler: Any, status: int, payload: dict[str, Any]) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    # CORS default-deny — never wildcard on these content-bearing routes.
+    # Opt in to an exact-origin allowlist via TOKENPAK_PROXY_CORS_ORIGINS.
+    allow_origin = _cors_allow_origin(handler)
+    if allow_origin is not None:
+        handler.send_header("Access-Control-Allow-Origin", allow_origin)
+        handler.send_header("Vary", "Origin")
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -122,10 +155,13 @@ def try_handle_get(handler: Any) -> bool:
         _handle_vault_search(handler, qs)
         return True
 
-    # ── /tpk/v1/vault/block/{block_id} ───────────────────────────────────
+    # ── /tpk/v1/vault/block/{block_id} or ?path=<source path> ───────────
+    if path in {"/tpk/v1/vault/block", "/tpk/v1/vault/block/"}:
+        _handle_vault_block(handler, "", qs)
+        return True
     if path.startswith("/tpk/v1/vault/block/"):
         block_id = path[len("/tpk/v1/vault/block/"):]
-        _handle_vault_block(handler, block_id)
+        _handle_vault_block(handler, block_id, qs)
         return True
 
     # ── /tpk/v1/budget ────────────────────────────────────────────────────
@@ -324,11 +360,99 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
     _send_json(handler, 200, {"query": query, "count": len(out), "results": out})
 
 
-def _handle_vault_block(handler: Any, block_id: str) -> None:
-    if not block_id:
-        _send_error(handler, 400, "missing_block_id")
-        return
+def _normalize_vault_path(value: str) -> str:
+    path = unicodedata.normalize("NFC", str(value or "")).replace("\\", "/").strip()
+    while path.startswith("./"):
+        path = path[2:]
+    return path
 
+
+def _vault_source_path(meta: dict[str, Any]) -> str:
+    return str(meta.get("source_path") or meta.get("path") or "")
+
+
+def _vault_candidate(block_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "block_id": block_id,
+        "path": meta.get("path") or meta.get("source_path", ""),
+        "source_path": meta.get("source_path") or meta.get("path", ""),
+        "tokens": int(meta.get("tokens", 0) or meta.get("raw_tokens", 0) or 0),
+    }
+
+
+def _vault_path_matches(
+    blocks: dict[str, dict[str, Any]],
+    path_hint: str,
+    *,
+    suffix: bool,
+    casefold: bool,
+) -> list[str]:
+    needle = path_hint.casefold() if casefold else path_hint
+    matches: list[str] = []
+    for block_id, meta in blocks.items():
+        source_path = _normalize_vault_path(_vault_source_path(meta))
+        haystack = source_path.casefold() if casefold else source_path
+        if suffix:
+            if haystack == needle or haystack.endswith("/" + needle):
+                matches.append(block_id)
+        elif haystack == needle:
+            matches.append(block_id)
+    return matches
+
+
+def _send_vault_path_ambiguity(
+    handler: Any,
+    *,
+    path_hint: str,
+    resolution: str,
+    block_ids: list[str],
+    blocks: dict[str, dict[str, Any]],
+) -> None:
+    _send_json(
+        handler,
+        409,
+        {
+            "error": "ambiguous_path",
+            "detail": "path matched multiple vault blocks",
+            "path": path_hint,
+            "resolution": resolution,
+            "candidates": [_vault_candidate(bid, blocks[bid]) for bid in block_ids],
+        },
+    )
+
+
+def _send_vault_block(
+    handler: Any,
+    *,
+    block_id: str,
+    meta: dict[str, Any],
+    tokenpak_dir: Any,
+    resolution: str,
+    score: Optional[float] = None,
+) -> None:
+    content = ""
+    if tokenpak_dir:
+        try:
+            content_path = Path(tokenpak_dir) / "blocks" / f"{block_id}.txt"
+            if content_path.exists():
+                content = content_path.read_text(errors="replace")
+        except Exception:
+            pass
+
+    payload: dict[str, Any] = {
+        "block_id": block_id,
+        "path": meta.get("path") or meta.get("source_path", ""),
+        "source_path": meta.get("source_path") or meta.get("path", ""),
+        "tokens": int(meta.get("tokens", 0) or meta.get("raw_tokens", 0) or 0),
+        "content": content,
+        "resolution": resolution,
+    }
+    if score is not None:
+        payload["score"] = round(float(score), 3)
+    _send_json(handler, 200, payload)
+
+
+def _handle_vault_block(handler: Any, block_id: str, qs: Optional[dict[str, list[str]]] = None) -> None:
     try:
         from tokenpak.proxy.vault_bridge import get_vault_index
         vi = get_vault_index()
@@ -340,27 +464,74 @@ def _handle_vault_block(handler: Any, block_id: str) -> None:
         return
 
     blocks = getattr(vi, "blocks", {}) or {}
-    if block_id not in blocks:
-        _send_error(handler, 404, "block_not_found", block_id)
+    tokenpak_dir = getattr(vi, "tokenpak_dir", None)
+    path_hint = _normalize_vault_path((qs or {}).get("path", [""])[0])
+
+    if block_id and block_id in blocks:
+        _send_vault_block(
+            handler,
+            block_id=block_id,
+            meta=blocks[block_id],
+            tokenpak_dir=tokenpak_dir,
+            resolution="exact_block_id",
+        )
         return
 
-    meta = blocks[block_id]
-    tokenpak_dir = getattr(vi, "tokenpak_dir", None)
-    content = ""
-    if tokenpak_dir:
-        try:
-            content_path = Path(tokenpak_dir) / "blocks" / f"{block_id}.txt"
-            if content_path.exists():
-                content = content_path.read_text(errors="replace")
-        except Exception:
-            pass
+    if not path_hint:
+        if block_id:
+            _send_error(handler, 404, "block_not_found", block_id)
+        else:
+            _send_error(handler, 400, "missing_block_id", "provide a block id or ?path=<source path>")
+        return
 
-    _send_json(handler, 200, {
-        "block_id": block_id,
-        "path": meta.get("path", ""),
-        "tokens": int(meta.get("tokens", 0) or 0),
-        "content": content,
-    })
+    for resolution, suffix, casefold in (
+        ("exact_path", False, False),
+        ("exact_path_casefold", False, True),
+        ("suffix_path", True, False),
+        ("suffix_path_casefold", True, True),
+    ):
+        matches = _vault_path_matches(blocks, path_hint, suffix=suffix, casefold=casefold)
+        if len(matches) == 1:
+            matched_id = matches[0]
+            _send_vault_block(
+                handler,
+                block_id=matched_id,
+                meta=blocks[matched_id],
+                tokenpak_dir=tokenpak_dir,
+                resolution=resolution,
+            )
+            return
+        if len(matches) > 1:
+            _send_vault_path_ambiguity(
+                handler,
+                path_hint=path_hint,
+                resolution=f"{resolution}_ambiguous",
+                block_ids=matches,
+                blocks=blocks,
+            )
+            return
+
+    if hasattr(vi, "search"):
+        try:
+            results = vi.search(path_hint, top_k=1)
+        except Exception as exc:
+            _send_error(handler, 500, "search_failed", str(exc))
+            return
+        if results:
+            block, score = results[0]
+            matched_id = block.get("block_id") or block.get("id") or ""
+            if matched_id and matched_id in blocks:
+                _send_vault_block(
+                    handler,
+                    block_id=matched_id,
+                    meta=blocks[matched_id],
+                    tokenpak_dir=tokenpak_dir,
+                    resolution="bm25_fallback",
+                    score=float(score),
+                )
+                return
+
+    _send_error(handler, 404, "block_not_found", path_hint)
 
 
 # ---------------------------------------------------------------------------
@@ -1309,6 +1480,7 @@ def _pak_row_to_dict(row: "PakRow") -> dict[str, Any]:
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "superseded_by": row.superseded_by,
+        "status": row.status,
     }
 
 
@@ -1355,8 +1527,8 @@ def _handle_pak_status(handler: Any) -> None:
 
     state = detect_daemon_state()
 
-    # multipak.enabled config flag — read dynamically per
-    # ``feedback_always_dynamic.md``. The flag lives under ``pro.multipak.
+    # multipak.enabled config flag — read dynamically (discovery stays
+    # dynamic). The flag lives under ``pro.multipak.
     # enabled`` in ``~/.tokenpak/config.yaml``. Default false until soak.
     multipak_enabled = _read_multipak_enabled()
 

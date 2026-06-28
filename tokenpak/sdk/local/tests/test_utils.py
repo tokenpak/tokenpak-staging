@@ -1,6 +1,6 @@
 """Tests for utils module."""
 
-from tokenpak_local.utils import (
+from tokenpak.sdk.local.utils import (
     Block,
     TokenPak,
     blocks_from_texts,

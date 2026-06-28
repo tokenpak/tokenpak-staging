@@ -1,4 +1,4 @@
-"""DispatchRoute registry + loader (Standards Delta v0 §4.3 + §11 + §16).
+"""DispatchRoute registry + loader (Dispatch contract §4.3 + §11 + §16).
 
 This module turns the packaged route YAML profiles into validated,
 registry-bound :class:`~tokenpak.orchestration.dispatch.models.route.DispatchRoute`
@@ -114,7 +114,7 @@ def is_worker_station(station: RouteStation) -> bool:
 
     A station is either a worker station (``required_role`` set) or a
     system-component station (``system_component`` set, e.g. ``delivery_dock``);
-    only worker stations bind to the worker registry (Standards Delta v0 §4.3).
+    only worker stations bind to the worker registry (Dispatch contract §4.3).
     """
 
     return station.required_role is not None
@@ -193,7 +193,7 @@ class DispatchRouteRegistry:
         """Return every route declaring ``intent`` in its triggers (sorted by id).
 
         This is the exact-route_trigger lookup used by the dispatch precedence
-        layer (Standards Delta v0 §5.8 step 3).
+        layer (Dispatch contract §5.8 step 3).
         """
 
         return [r for r in self.all() if intent in r.triggers.intents]
@@ -203,7 +203,7 @@ def resolve_station_workers(
     station: RouteStation,
     worker_registry: DispatchWorkerRegistry,
 ) -> list[DispatchWorker]:
-    """Resolve the workers eligible for a worker ``station`` (Standards Delta v0 §11).
+    """Resolve the workers eligible for a worker ``station`` (Dispatch contract §11).
 
     Dynamic capability binding: a worker is eligible iff it declares the
     station's ``required_role`` AND possesses **every** capability in the

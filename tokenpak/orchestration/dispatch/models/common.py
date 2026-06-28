@@ -1,7 +1,7 @@
 """Shared / nested models for Dispatch records.
 
 These are the supporting structures referenced by the twelve top-level
-Dispatch records (Standards Delta v0 §4–§5). Where the Standards Delta names a
+Dispatch records (Dispatch contract §4–§5). Where the Dispatch contract names a
 type but does not fully specify its fields (``AcceptanceCriterion``,
 ``Constraint``, ``Deliverable``), a minimal faithful shape is provided and
 marked as a supporting sketch — these are NOT among the twelve canonical
@@ -24,7 +24,7 @@ from .enums import (
     LoopStopCondition,
 )
 
-# Standards Delta v0 §4.2: denied_paths ALWAYS includes these four globs.
+# Dispatch contract §4.2: denied_paths ALWAYS includes these four globs.
 MANDATORY_DENIED_PATHS: tuple[str, ...] = (
     ".env",
     ".git/**",
@@ -40,14 +40,14 @@ class DispatchBaseModel(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Manifest sub-structures (Standards Delta v0 §4.2)
+# Manifest sub-structures (Dispatch contract §4.2)
 # ---------------------------------------------------------------------------
 
 
 class AcceptanceCriterion(DispatchBaseModel):
     """Supporting sketch — referenced by DispatchManifest / Reviewer I/O.
 
-    The Standards Delta references ``AcceptanceCriterion`` as a type but does
+    The Dispatch contract references ``AcceptanceCriterion`` as a type but does
     not specify its fields; this minimal shape is the supporting sketch.
     """
 
@@ -96,7 +96,7 @@ class PathPolicy(DispatchBaseModel):
 
 
 class ManifestPermissions(DispatchBaseModel):
-    """DispatchManifest.permissions block (Standards Delta v0 §4.2)."""
+    """DispatchManifest.permissions block (Dispatch contract §4.2)."""
 
     autonomy_mode: AutonomyMode
     allowed_actions: list[str] = Field(default_factory=list)
@@ -105,7 +105,7 @@ class ManifestPermissions(DispatchBaseModel):
 
 
 class QualityRequirements(DispatchBaseModel):
-    """DispatchManifest.quality_requirements block (Standards Delta v0 §4.2)."""
+    """DispatchManifest.quality_requirements block (Dispatch contract §4.2)."""
 
     test_required: bool
     review_required: bool
@@ -114,12 +114,12 @@ class QualityRequirements(DispatchBaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Station loop policy (Standards Delta v0 §5.4)
+# Station loop policy (Dispatch contract §5.4)
 # ---------------------------------------------------------------------------
 
 
 class StationLoopPolicy(DispatchBaseModel):
-    """Loop budget + stop conditions for a station (Standards Delta v0 §5.4).
+    """Loop budget + stop conditions for a station (Dispatch contract §5.4).
 
     Precedence (resolved by the runner, not this schema):
     ``station_override > route_default > worker_default > system_default``.
@@ -139,7 +139,7 @@ class StationLoopPolicy(DispatchBaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Worker loop default + permission profile (Standards Delta v0 §5.1)
+# Worker loop default + permission profile (Dispatch contract §5.1)
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ class WorkerLoopDefault(DispatchBaseModel):
 
 
 def _validate_capability_list(value: list[str]) -> list[str]:
-    """Shared registry-bound capability validator (Standards Delta v0 §5.2)."""
+    """Shared registry-bound capability validator (Dispatch contract §5.2)."""
 
     return validate_capabilities(value)
 

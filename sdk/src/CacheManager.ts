@@ -1,10 +1,10 @@
 /**
  * TokenPak CacheManager
- * Wraps the /cache/* HTTP endpoints.
+ * Wraps experimental /cache/* HTTP endpoints when a custom server provides them.
  */
 
 import { TokenPakHttpClient } from './client';
-import { CacheEntry, CacheStats, TokenPakConfig } from './types';
+import { CacheEntry, CacheStats, TokenPakConfig, TokenPakUnsupportedEndpointError } from './types';
 
 interface RawCacheEntry {
   key: string;
@@ -24,9 +24,17 @@ interface RawCacheStats {
 
 export class CacheManager {
   private readonly client: TokenPakHttpClient;
+  private readonly experimentalEndpoints: boolean;
 
   constructor(config?: TokenPakConfig) {
     this.client = new TokenPakHttpClient(config);
+    this.experimentalEndpoints = config?.experimentalEndpoints ?? false;
+  }
+
+  private requireExperimentalEndpoint(path: string): void {
+    if (!this.experimentalEndpoints) {
+      throw new TokenPakUnsupportedEndpointError('CacheManager', path);
+    }
   }
 
   /**
@@ -34,6 +42,7 @@ export class CacheManager {
    * Returns null if the key is not found or has expired.
    */
   async get(key: string): Promise<string | null> {
+    this.requireExperimentalEndpoint('/cache/{key}');
     try {
       const raw = await this.client.get<RawCacheEntry>(`/cache/${encodeURIComponent(key)}`);
       return raw.value;
@@ -50,6 +59,7 @@ export class CacheManager {
    * @param ttl   Time-to-live in seconds (0 = no expiry)
    */
   async set(key: string, value: string, ttl = 0): Promise<void> {
+    this.requireExperimentalEndpoint('/cache');
     await this.client.post('/cache', { key, value, ttl });
   }
 
@@ -57,6 +67,7 @@ export class CacheManager {
    * Delete a cached entry by key.
    */
   async delete(key: string): Promise<boolean> {
+    this.requireExperimentalEndpoint('/cache/{key}/delete');
     try {
       await this.client.post(`/cache/${encodeURIComponent(key)}/delete`, {});
       return true;
@@ -69,6 +80,7 @@ export class CacheManager {
    * Clear all cached entries.
    */
   async clear(): Promise<void> {
+    this.requireExperimentalEndpoint('/cache/clear');
     await this.client.post('/cache/clear', {});
   }
 
@@ -76,6 +88,7 @@ export class CacheManager {
    * Retrieve cache statistics (hit rate, entry count, memory usage).
    */
   async stats(): Promise<CacheStats> {
+    this.requireExperimentalEndpoint('/cache/stats');
     const raw = await this.client.get<RawCacheStats>('/cache/stats');
     return {
       totalEntries: raw.total_entries,

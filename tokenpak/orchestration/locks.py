@@ -7,7 +7,7 @@ Lock registry: ~/.tokenpak/locks/<sha256(path)>.json
 Each lock record:
   {
     "path":       "/abs/path/to/file",
-    "agent":      "cali",
+    "agent":      "agent-a",
     "acquired":   1234567890.0,   # epoch float
     "expires":    1234568490.0,   # acquired + timeout
     "pid":        12345
@@ -61,7 +61,7 @@ class FileLockManager:
     Parameters
     ----------
     agent_id : str
-        Identifier for the agent claiming locks (default: $TOKENPAK_AGENT or 'cali').
+        Identifier for the agent claiming locks (default: $TOKENPAK_AGENT or 'default').
     lock_dir : Path | str | None
         Directory where lock files are stored.
     timeout_s : int
@@ -74,7 +74,7 @@ class FileLockManager:
         lock_dir: Optional[Path | str] = None,
         timeout_s: int = DEFAULT_TIMEOUT_S,
     ):
-        self.agent_id = agent_id or os.environ.get("TOKENPAK_AGENT", "cali")
+        self.agent_id = agent_id or os.environ.get("TOKENPAK_AGENT", "default")
         self.lock_dir = Path(lock_dir or DEFAULT_LOCK_DIR)
         self.timeout_s = timeout_s
         self.lock_dir.mkdir(parents=True, exist_ok=True)

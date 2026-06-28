@@ -42,6 +42,7 @@ _COSTS = {
     "haiku": 0.80,
 }
 _DEFAULT_INPUT_RATE = 3.0  # sonnet as default
+_SQLITE_TIMEOUT_SECONDS = 0.05
 
 
 def main() -> int:
@@ -173,7 +174,7 @@ def _get_daily_total() -> float:
     try:
         if not db_path.exists():
             return 0.0
-        conn = sqlite3.connect(str(db_path))
+        conn = _connect_db(db_path)
         today = datetime.date.today().isoformat()
         row = conn.execute(
             "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = ?",
@@ -201,7 +202,7 @@ def _journal_savings(
     )) / "journal.db"
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path))
+        conn = _connect_db(db_path)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,7 +238,7 @@ def _journal_write(session_id: str, tokens_est: int, cost_est: float) -> None:
     )) / "journal.db"
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path))
+        conn = _connect_db(db_path)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,7 +276,7 @@ def _record_cost(session_id: str, tokens_est: int, cost_est: float) -> None:
     )) / "budget.db"
     try:
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path))
+        conn = _connect_db(db_path)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS companion_costs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -300,6 +301,13 @@ def _record_cost(session_id: str, tokens_est: int, cost_est: float) -> None:
         conn.close()
     except Exception:
         pass  # never fail the hook
+
+
+def _connect_db(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), timeout=_SQLITE_TIMEOUT_SECONDS)
+    conn.execute(f"PRAGMA busy_timeout = {int(_SQLITE_TIMEOUT_SECONDS * 1000)}")
+    conn.execute("PRAGMA synchronous = OFF")
+    return conn
 
 
 if __name__ == "__main__":

@@ -99,17 +99,13 @@ Workers: 8 → 3.3s ← auto-selected on this machine
 Throughput: ~2,738 files/sec
 ```
 
-### Zero-token search
+### Vault index health
 
-The vault registry enables semantic search without any LLM calls:
+Check and repair your vault index if entries become stale:
 
 ```bash
-tokenpak vault search "compression benchmark results"
-# Returns top-k matching files by relevance score
-# 0 tokens, 22.7ms average latency
+tokenpak vault repair
 ```
-
-Search uses BM25 term matching over indexed symbols and file paths. No embeddings, no external service.
 
 ### File watching
 

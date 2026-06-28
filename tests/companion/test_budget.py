@@ -37,10 +37,10 @@ def test_estimate_sonnet_full_model_name(tmp_path):
 
 
 def test_estimate_opus_1m_input(tmp_path):
-    """1M input tokens at opus rate = $15.00."""
+    """1M input tokens at opus rate = $5.00."""
     t = _tracker(tmp_path)
     est = t.estimate(input_tokens=1_000_000, model="claude-opus-4-6")
-    assert est.estimated_cost_usd == pytest.approx(15.0, abs=1e-6)
+    assert est.estimated_cost_usd == pytest.approx(5.0, abs=1e-6)
 
 
 def test_estimate_haiku_1m_input(tmp_path):
@@ -77,10 +77,10 @@ def test_estimate_cache_read_10pct_sonnet(tmp_path):
 
 
 def test_estimate_cache_read_10pct_opus(tmp_path):
-    """Cached tokens at opus rate = 10% of $15 = $1.50/1M."""
+    """Cached tokens at opus rate = 10% of $5 = $0.50/1M."""
     t = _tracker(tmp_path)
     est = t.estimate(input_tokens=1_000_000, cached_tokens=1_000_000, model="claude-opus-4-6")
-    assert est.estimated_cost_usd == pytest.approx(1.50, abs=1e-6)
+    assert est.estimated_cost_usd == pytest.approx(0.50, abs=1e-6)
 
 
 def test_estimate_cache_read_10pct_haiku(tmp_path):
@@ -115,6 +115,18 @@ def test_record_persists_to_db(tmp_path):
     rows = conn.execute("SELECT * FROM companion_costs").fetchall()
     conn.close()
     assert len(rows) == 1
+
+
+def test_budget_tracker_sqlite_pragmas_enabled(tmp_path):
+    """Budget DB connections enable WAL, busy timeout, and foreign keys."""
+    t = _tracker(tmp_path)
+    conn = t._connect()
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
 
 
 def test_record_cross_instance_retrieval(tmp_path):

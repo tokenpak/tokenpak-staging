@@ -26,6 +26,13 @@ from .drift import drift_score
 from .fingerprint import canonicalize_user_turn, record_and_count
 from .state import open_state_db
 
+# Public surface of this module. ``Signals``, ``drift_score``,
+# ``canonicalize_user_turn``, ``record_and_count`` and ``open_state_db`` are
+# re-imports from sibling SSRM modules (their owning modules) — internal-but-
+# authored here. They are scoped out so the API snapshot records each only
+# under its owner; ``compute_signals`` is this module's sole public entrypoint.
+__all__ = ["compute_signals"]
+
 # ----- model_max_context (reuse spend_guard helper if available) ---------
 
 def _get_model_max_context(model: str) -> int:

@@ -2,7 +2,7 @@
 
 When a run is resumed, the FulfillmentLine runner asks :func:`reconcile_run` what
 to do about the *last* station of the run. The four cases are transcribed
-verbatim from Standards Delta v0 §5.5:
+verbatim from Dispatch contract §5.5:
 
 1. **last station completed** → continue with the next station.
 2. **last station running, NO effects** → mark ``failed_interrupted``; rerun the
@@ -127,7 +127,7 @@ def reconcile_run(
     workspace_root: Path | str,
     now: Optional[datetime] = None,
 ) -> ResumeOutcome:
-    """Reconcile the last station of a resumed run (Standards Delta v0 §5.5).
+    """Reconcile the last station of a resumed run (Dispatch contract §5.5).
 
     ``station_runs`` is the run's station runs in execution order (the ledger's
     :meth:`RunLedger.read_station_runs_for_run`); ``effects_for_last_station`` is
@@ -420,7 +420,7 @@ def _build_drift_decision(
             "how to reconcile." + rollback_note
         ),
         reason=(
-            "Resume reconciliation (Standards Delta v0 §5.5) found drift between "
+            "Resume reconciliation (Dispatch contract §5.5) found drift between "
             f"{len(drifted)} applied effect(s) and the current workspace. "
             "Automatic multi-effect rollback is disabled (§4.8/§5.5 step 5)."
         ),
@@ -458,7 +458,7 @@ def _build_planned_unknown_decision(
             "proceed."
         ),
         reason=(
-            "Resume reconciliation (Standards Delta v0 §5.5 case 4) found a "
+            "Resume reconciliation (Dispatch contract §5.5 case 4) found a "
             f"planned-but-unfinalized effect among {len(planned)} effect(s) in a "
             "partial/unknown state; a user decision is required."
         ),

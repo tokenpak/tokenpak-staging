@@ -1,6 +1,6 @@
 # Dispatch integration fixture — quick_answer golden path (P-FIXTURES-01).
 #
-# Standards Delta v0 §15 fixture acceptance contract — all 8 required elements:
+# Dispatch contract §15 fixture acceptance contract — all 8 required elements:
 #   1. input_request                — the raw request text
 #   2. expected_manifest            — assertable DispatchManifest fields
 #   3. expected_route               — DispatchRoute selection

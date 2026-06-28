@@ -1,11 +1,11 @@
 /**
  * TokenPak BlockRegistry
- * Wraps the /blocks/* HTTP endpoints.
+ * Wraps experimental /blocks/* HTTP endpoints when a custom server provides them.
  * Blocks are reusable named content fragments that can be injected into prompts.
  */
 
 import { TokenPakHttpClient } from './client';
-import { Block, BlockRegistryStats, TokenPakConfig } from './types';
+import { Block, BlockRegistryStats, TokenPakConfig, TokenPakUnsupportedEndpointError } from './types';
 
 interface RawBlock {
   id: string;
@@ -33,9 +33,17 @@ function toBlock(raw: RawBlock): Block {
 
 export class BlockRegistry {
   private readonly client: TokenPakHttpClient;
+  private readonly experimentalEndpoints: boolean;
 
   constructor(config?: TokenPakConfig) {
     this.client = new TokenPakHttpClient(config);
+    this.experimentalEndpoints = config?.experimentalEndpoints ?? false;
+  }
+
+  private requireExperimentalEndpoint(path: string): void {
+    if (!this.experimentalEndpoints) {
+      throw new TokenPakUnsupportedEndpointError('BlockRegistry', path);
+    }
   }
 
   /**
@@ -49,6 +57,7 @@ export class BlockRegistry {
    * });
    */
   async register(block: Omit<Block, 'tokenCount'>): Promise<Block> {
+    this.requireExperimentalEndpoint('/blocks');
     const raw = await this.client.post<RawBlock>('/blocks', block);
     return toBlock(raw);
   }
@@ -57,6 +66,7 @@ export class BlockRegistry {
    * Retrieve a block by id.
    */
   async get(id: string): Promise<Block | null> {
+    this.requireExperimentalEndpoint('/blocks/{id}');
     try {
       const raw = await this.client.get<RawBlock>(`/blocks/${encodeURIComponent(id)}`);
       return toBlock(raw);
@@ -70,6 +80,7 @@ export class BlockRegistry {
    */
   async list(type?: string): Promise<Block[]> {
     const path = type ? `/blocks?type=${encodeURIComponent(type)}` : '/blocks';
+    this.requireExperimentalEndpoint(path);
     const raws = await this.client.get<RawBlock[]>(path);
     return raws.map(toBlock);
   }
@@ -78,6 +89,7 @@ export class BlockRegistry {
    * Delete a block by id.
    */
   async delete(id: string): Promise<boolean> {
+    this.requireExperimentalEndpoint('/blocks/{id}/delete');
     try {
       await this.client.post(`/blocks/${encodeURIComponent(id)}/delete`, {});
       return true;
@@ -90,6 +102,7 @@ export class BlockRegistry {
    * Registry statistics (block counts, token totals).
    */
   async stats(): Promise<BlockRegistryStats> {
+    this.requireExperimentalEndpoint('/blocks/stats');
     const raw = await this.client.get<RawBlockRegistryStats>('/blocks/stats');
     return {
       totalBlocks: raw.total_blocks,

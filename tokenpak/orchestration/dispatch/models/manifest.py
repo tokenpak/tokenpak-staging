@@ -1,4 +1,4 @@
-"""DispatchManifest record (Standards Delta v0 §4.2)."""
+"""DispatchManifest record (Dispatch contract §4.2)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .enums import ManifestStatus
 
 
 class DispatchManifest(DispatchBaseModel):
-    """Scoped work contract derived from a DispatchJob (Standards Delta v0 §4.2).
+    """Scoped work contract derived from a DispatchJob (Dispatch contract §4.2).
 
     ``path_policy`` is consumed by the ``apply_patch`` tool (round-6 §4.2) and
     always carries the four mandatory denied globs (see :class:`PathPolicy`).

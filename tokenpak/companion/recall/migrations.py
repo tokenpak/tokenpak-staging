@@ -33,6 +33,7 @@ from tokenpak.companion.recall.schema import (
     ALL_DDL_V1,
     ALL_DDL_V2_TRIGGERS,
     ALL_DDL_V3,
+    ALL_DDL_V4,
     SCHEMA_VERSION,
 )
 
@@ -64,6 +65,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=3,
         name="pak_reason_codes_and_risk_flags",
         statements=ALL_DDL_V3,
+    ),
+    Migration(
+        version=4,
+        name="paks_status_lifecycle",
+        statements=ALL_DDL_V4,
     ),
 )
 """Ordered tuple of all known migrations. New entries APPEND; never edit

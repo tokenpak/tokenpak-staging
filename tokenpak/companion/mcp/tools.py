@@ -60,6 +60,10 @@ class CompanionState:
     _budget_tracker: Any = None
     _journal_store: Any = None
 
+    def __post_init__(self) -> None:
+        if not self.session_id:
+            self.session_id = self.config.session_id
+
     @property
     def budget_tracker(self) -> Any:
         if self._budget_tracker is None:
@@ -413,15 +417,13 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
     if not block_id and not path_hint:
         return json.dumps({"error": "provide block_id or path"})
 
-    # If only a path hint is given, resolve via search first to get an exact id.
     if not block_id and path_hint:
-        status, body = _proxy_get("/tpk/v1/vault/search", {"q": path_hint, "limit": 1})
+        status, body = _proxy_get("/tpk/v1/vault/block/", {"path": path_hint})
         if status == 0:
             return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
-        results = body.get("results") or []
-        if not results:
-            return json.dumps({"error": "block_not_found", "path": path_hint})
-        block_id = results[0].get("block_id") or ""
+        if status >= 400:
+            return json.dumps(body)
+        return json.dumps(body, indent=2)
 
     status, body = _proxy_get(f"/tpk/v1/vault/block/{_url_parse.quote(block_id, safe='')}")
     if status == 0:

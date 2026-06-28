@@ -20,6 +20,15 @@ import os
 from .model import KIND_API_KEY
 from .providers import discover_all
 
+# Public surface of this module. ``KIND_API_KEY`` is a re-import from
+# ``.model`` (its owning module) and is internal-but-authored here — scoped out
+# so the API snapshot records it only under its owner.
+__all__ = [
+    "direct_api_key_warning_warranted",
+    "discover_all",
+    "non_direct_key_auth_available",
+]
+
 # OAuth-token env vars the proxy treats as interchangeable with a direct
 # API key when building its Anthropic key pool. Their presence means the
 # platform can authenticate without a direct ``*_API_KEY``.

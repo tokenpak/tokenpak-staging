@@ -12,16 +12,13 @@ Setup: pip install tokenpak flask
 
 import sys
 import os
-import json
 import functools
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from flask import Flask, request, jsonify, g
 
 from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
 
 
 app = Flask(__name__)

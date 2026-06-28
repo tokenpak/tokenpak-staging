@@ -1086,6 +1086,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Request ID: honour X-Request-ID from client, else generate UUID
         _req_id = _new_request_id(dict(self.headers))
         ps = self.server.proxy_server  # type: ignore[attr-defined]
+        # Per-request reset of the concurrent-reservation carrier:
+        # a hold created at this request's admission (only when reservations are
+        # enabled) is settled/released on the response path below. Reset here so
+        # a reused keep-alive handler never settles a stale id from a prior
+        # request.
+        self._tokenpak_reservation_id: Optional[str] = None
         parsed = urlparse(target_url)
 
         should_log = any(h in target_url for h in INTERCEPT_HOSTS)
@@ -1245,15 +1251,30 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
                         body = _sg_outcome.body
+                    # Carry any concurrent-reservation hold to the
+                    # response path so it is settled on success / released on
+                    # failure. None unless reservations are enabled at admission.
+                    self._tokenpak_reservation_id = _sg_outcome.reservation_id
                 elif _sg_outcome.kind == "replay":
                     # Held request is being replayed — substitute body
                     # and headers, then continue down the normal forward path.
                     if _sg_outcome.body is not None:
                         body = _sg_outcome.body
                     if _sg_outcome.headers:
-                        # Merge replayed headers (but don't drop incoming
-                        # auth — the replay headers ARE the original auth).
-                        for _hk, _hv in _sg_outcome.headers.items():
+                        # Re-apply only the held request's NON-credential
+                        # headers (content-type, api-version, etc.). Credential
+                        # headers are never persisted to disk; the held
+                        # request replays with the live approving request's own
+                        # auth, already on self.headers — so we must not let a
+                        # stale/absent stored value clobber it.
+                        try:
+                            from tokenpak.proxy.spend_guard.pending import (
+                                redact_headers as _sg_redact,
+                            )
+                            _replay_hdrs = _sg_redact(_sg_outcome.headers)
+                        except Exception:
+                            _replay_hdrs = {}
+                        for _hk, _hv in _replay_hdrs.items():
                             try:
                                 self.headers[_hk] = _hv  # type: ignore[index]
                             except Exception:
@@ -2227,6 +2248,47 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass  # DB errors must never break the request
 
+                # ── Reservation settlement (completion) ──────────────────────
+                # A forward that carried a concurrent-budget reservation (only
+                # when reservations are enabled at admission) converts its hold
+                # HERE — after the settled-usage row above is written — so there
+                # is never a window in which the request is uncounted. On a 2xx
+                # settle with the actual usage: the hold stops counting as
+                # "reserved" and the monitor.db row becomes the single
+                # settled-truth record (no double count). On a non-2xx release:
+                # a failed forward never burns budget and a retry can re-admit.
+                # Best-effort and idempotent — a settle/release after TTL expiry
+                # is a harmless no-op and must never raise on the response path.
+                _resv_id = getattr(self, "_tokenpak_reservation_id", None)
+                if _resv_id:
+                    self._tokenpak_reservation_id = None  # settle/release once
+                    try:
+                        from tokenpak.proxy.spend_guard.policy import (
+                            load_config as _resv_cfg,
+                        )
+                        _resv_db = _resv_cfg().audit_db_path
+                        if _resp_status == 200:
+                            from tokenpak.proxy.spend_guard.reservation import (
+                                settle_reservation as _resv_settle,
+                            )
+                            _resv_settle(
+                                _resv_db, _resv_id,
+                                actual_cost_usd=cost,
+                                actual_tokens=input_tokens + output_tokens,
+                            )
+                        else:
+                            from tokenpak.proxy.spend_guard.reservation import (
+                                ReservationStore as _resv_store,
+                            )
+                            _resv_store(_resv_db).release(_resv_id)
+                    except Exception as _resv_exc:
+                        import logging as _resv_log
+                        _resv_log.getLogger(__name__).debug(
+                            "spend_guard: reservation settle/release skipped "
+                            "(passthrough): %s: %s",
+                            type(_resv_exc).__name__, _resv_exc,
+                        )
+
                 # Record cache telemetry
                 try:
                     _stable_tokens = max(0, input_tokens - (input_tokens - sent_input_tokens))
@@ -2442,6 +2504,24 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             # ── Circuit breaker: record failure ───────────────────────────
             if _cb_registry is not None and _cb_provider is not None:
                 _cb_registry.record_failure(_cb_provider)
+
+            # Reservation release on forward failure: a hold from an
+            # enabled admission must not survive a provider connect/timeout/
+            # protocol error — free it so a retry can admit. Best-effort,
+            # idempotent, never re-raises on the error path.
+            _resv_id = getattr(self, "_tokenpak_reservation_id", None)
+            if _resv_id:
+                self._tokenpak_reservation_id = None
+                try:
+                    from tokenpak.proxy.spend_guard.policy import (
+                        load_config as _resv_cfg,
+                    )
+                    from tokenpak.proxy.spend_guard.reservation import (
+                        ReservationStore as _resv_store,
+                    )
+                    _resv_store(_resv_cfg().audit_db_path).release(_resv_id)
+                except Exception:
+                    pass
 
             with ps._session_lock:
                 ps.session["errors"] += 1

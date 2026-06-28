@@ -1,4 +1,4 @@
-"""Dispatch capability registry (Standards Delta v0 §5.2).
+"""Dispatch capability registry (Dispatch contract §5.2).
 
 The capability enum is the single source of truth for the strings that may
 appear in ``DispatchWorker.capabilities`` and ``DispatchRoute.stations[].
@@ -6,7 +6,7 @@ required_capabilities``. Per the §5.2 governance rule, the worker registry
 loader MUST reject unknown capability strings **at load time** (fail-loud, not
 skip-silently); :func:`validate_capabilities` implements that contract.
 
-Adding a capability requires a one-line Standards Delta update + maintainer
+Adding a capability requires a one-line Dispatch contract update + maintainer
 review; do not extend ``DISPATCH_CAPABILITIES`` without that change landing first.
 
 Note: ``registry`` is a PEP 420 namespace package (no ``__init__.py``) so this
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-# v0.1-alpha capability enum — Standards Delta v0 §5.2 (11 entries, verbatim).
+# v0.1-alpha capability enum — Dispatch contract §5.2 (11 entries, verbatim).
 DISPATCH_CAPABILITIES: frozenset[str] = frozenset(
     {
         "answer_generation",
@@ -48,7 +48,7 @@ class UnknownCapabilityError(ValueError):
         known = ", ".join(sorted(DISPATCH_CAPABILITIES))
         super().__init__(
             "unknown Dispatch capability string(s): "
-            f"{self.unknown!r}. Known capabilities (Standards Delta v0 §5.2): {known}."
+            f"{self.unknown!r}. Known capabilities (Dispatch contract §5.2): {known}."
         )
 
 
@@ -65,7 +65,7 @@ def validate_capabilities(capabilities: Iterable[str]) -> list[str]:
     known. Raises :class:`UnknownCapabilityError` listing *all* offending
     strings when any entry is not in :data:`DISPATCH_CAPABILITIES`.
 
-    This is the load-time rejection mandated by Standards Delta v0 §5.2.
+    This is the load-time rejection mandated by Dispatch contract §5.2.
     """
 
     caps = list(capabilities)

@@ -1,11 +1,17 @@
 """
 TokenPak Config Loader
 
-Single source of truth: ~/.tokenpak/config.yaml
-Env vars override config file values.
+Single source of truth: <tpk-home>/config.yaml, where <tpk-home> is the
+canonical home resolver (``tokenpak._paths.home()``: $TOKENPAK_HOME override,
+else ~/.tpk when present, else legacy ~/.tokenpak). $TOKENPAK_CONFIG names an
+explicit file and wins (load-order layer 6). Drift-respect: on a split-home
+host whose config.yaml only exists under the legacy dir, the legacy file keeps
+being read until ``tokenpak config migrate`` reconciles — the loader never
+moves files across homes. Env vars override config file values.
 
-Auto-migration: if ~/.tokenpak/config.json exists but config.yaml does not,
-the JSON is converted to YAML and the original renamed to config.json.migrated.
+Auto-migration: if config.json exists in a home but config.yaml does not, the
+JSON is converted to YAML in place and the original renamed to
+config.json.migrated (same-directory rename only).
 """
 
 import json as _json
@@ -31,22 +37,70 @@ except ImportError:
             return _json.load(f)
 
 
-CONFIG_PATH = Path(os.environ.get("TOKENPAK_CONFIG", str(Path.home() / ".tokenpak" / "config.yaml")))
+def _resolve_config_path() -> Path:
+    """Resolve the active config.yaml path (fresh, at call time).
+
+    $TOKENPAK_CONFIG (explicit file, layer 6) → <resolved-home>/config.yaml
+    when present → <legacy-home>/config.yaml when present (drift-respect: a
+    split-home host keeps reading its legacy config until `config migrate`)
+    → <resolved-home>/config.yaml as the default/init target.
+    """
+    override = os.environ.get("TOKENPAK_CONFIG", "").strip()
+    if override:
+        return Path(override).expanduser()
+    try:
+        from tokenpak import _paths
+    except Exception:
+        return Path.home() / ".tokenpak" / "config.yaml"
+    resolved = _paths.home() / "config.yaml"
+    if resolved.exists():
+        return resolved
+    legacy = _paths.legacy_home() / "config.yaml"
+    if legacy != resolved and legacy.exists():
+        return legacy
+    return resolved
+
+
+def _config_home_candidates() -> list[Path]:
+    """Directories the JSON auto-migration may act on, in resolution order."""
+    try:
+        from tokenpak import _paths
+
+        homes = [_paths.home(), _paths.legacy_home()]
+    except Exception:
+        homes = [Path.home() / ".tokenpak"]
+    out: list[Path] = []
+    for h in homes:
+        if h not in out:
+            out.append(h)
+    return out
+
+
+def __getattr__(name: str):
+    # Back-compat (PEP 562): CONFIG_PATH stays importable but resolves freshly
+    # per access through the canonical home resolver, so every consumer
+    # (config show/init in _cli_core, tests) repoints without code changes.
+    if name == "CONFIG_PATH":
+        return _resolve_config_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _maybe_migrate_json_to_yaml() -> None:
-    """Auto-migrate ~/.tokenpak/config.json -> config.yaml (one-shot).
+    """Auto-migrate config.json -> config.yaml (one-shot, in place).
 
-    Runs only when config.yaml does NOT exist and config.json DOES.
-    After writing config.yaml the original is renamed to config.json.migrated
-    so it is preserved but no longer picked up by any loader.
+    Probes the resolved home first, then the legacy home, and acts on the
+    first directory holding a config.json without a config.yaml. The rename
+    stays within that directory — the loader never moves files across homes
+    (cross-home reconciliation is ``tokenpak config migrate``'s job).
     """
-    yaml_path = CONFIG_PATH
-    json_path = CONFIG_PATH.parent / "config.json"
-    migrated_path = CONFIG_PATH.parent / "config.json.migrated"
-
-    if yaml_path.exists() or not json_path.exists():
+    for home_dir in _config_home_candidates():
+        yaml_path = home_dir / "config.yaml"
+        json_path = home_dir / "config.json"
+        if not yaml_path.exists() and json_path.exists():
+            break
+    else:
         return  # nothing to do
+    migrated_path = home_dir / "config.json.migrated"
 
     try:
         data = _json.loads(json_path.read_text(encoding="utf-8"))
@@ -71,11 +125,14 @@ def _maybe_migrate_json_to_yaml() -> None:
     try:
         json_path.rename(migrated_path)
     except Exception as exc:
-        print(f"tokenpak: migrated config.yaml written but failed to rename config.json: {exc}",
-              file=sys.stderr)
+        print(
+            f"tokenpak: migrated config.yaml written but failed to rename config.json: {exc}",
+            file=sys.stderr,
+        )
         return
 
     print("tokenpak: migrated config.json \u2192 config.yaml")
+
 
 # Cached config
 _config: Optional[Dict[str, Any]] = None
@@ -112,11 +169,15 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     if path is None:
         _maybe_migrate_json_to_yaml()
 
-    config_path = Path(path) if path else CONFIG_PATH
+    config_path = Path(path) if path else _resolve_config_path()
     if config_path.exists():
         try:
             _config = _load_yaml(str(config_path))
-        except Exception:
+        except Exception as exc:
+            print(
+                f"tokenpak: WARN failed to parse config {config_path}: {exc}; using defaults",
+                file=sys.stderr,
+            )
             _config = {}
     else:
         _config = {}
@@ -262,14 +323,24 @@ def get_all() -> Dict[str, Any]:
     # Logging (merged from legacy config.json)
     result["logging.enabled"] = get("logging.enabled", True, "TOKENPAK_LOG_ENABLED", bool)
     result["logging.level"] = get("logging.level", "info", "TOKENPAK_LOG_LEVEL", str)
-    result["logging.destination"] = get("logging.destination", "file", "TOKENPAK_LOG_DESTINATION", str)
-    result["logging.retention_days"] = get("logging.retention_days", 30, "TOKENPAK_LOG_RETENTION_DAYS", int)
-    result["logging.include_request_body"] = get("logging.include_request_body", False, "TOKENPAK_LOG_REQUEST_BODY", bool)
-    result["logging.include_response_body"] = get("logging.include_response_body", False, "TOKENPAK_LOG_RESPONSE_BODY", bool)
+    result["logging.destination"] = get(
+        "logging.destination", "file", "TOKENPAK_LOG_DESTINATION", str
+    )
+    result["logging.retention_days"] = get(
+        "logging.retention_days", 30, "TOKENPAK_LOG_RETENTION_DAYS", int
+    )
+    result["logging.include_request_body"] = get(
+        "logging.include_request_body", False, "TOKENPAK_LOG_REQUEST_BODY", bool
+    )
+    result["logging.include_response_body"] = get(
+        "logging.include_response_body", False, "TOKENPAK_LOG_RESPONSE_BODY", bool
+    )
 
     # Validation (merged from legacy config.json)
     result["validation.mode"] = get("validation.mode", "warn", "TOKENPAK_REQUEST_VALIDATION", str)
-    result["validation.strict"] = get("validation.strict", False, "TOKENPAK_VALIDATION_STRICT", bool)
+    result["validation.strict"] = get(
+        "validation.strict", False, "TOKENPAK_VALIDATION_STRICT", bool
+    )
 
     # Plugins (merged from legacy config.json)
     result["plugins.enabled"] = get("plugins.enabled", [], None, list)

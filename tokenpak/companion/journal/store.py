@@ -55,7 +55,7 @@ class JournalStore:
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect(ensure_wal=True)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -86,6 +86,15 @@ class JournalStore:
         conn.commit()
         conn.close()
 
+    def _connect(self, *, ensure_wal: bool = False) -> sqlite3.Connection:
+        """Open the journal DB with hook/MCP-safe SQLite pragmas."""
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        if ensure_wal:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
     def start_session(
         self,
         session_id: str,
@@ -93,7 +102,7 @@ class JournalStore:
         model: str = "",
     ) -> None:
         """Record a new session start."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.execute(
             """INSERT OR REPLACE INTO sessions
                (session_id, started_at, project_dir, model)
@@ -105,7 +114,7 @@ class JournalStore:
 
     def end_session(self, session_id: str) -> None:
         """Record session end and update totals."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.execute(
             "UPDATE sessions SET ended_at = ? WHERE session_id = ?",
             (time.time(), session_id),
@@ -122,7 +131,7 @@ class JournalStore:
     ) -> None:
         """Append a journal entry to a session."""
         import json
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.execute(
             """INSERT INTO entries (session_id, timestamp, entry_type, content, metadata_json)
                VALUES (?, ?, ?, ?, ?)""",
@@ -134,7 +143,7 @@ class JournalStore:
 
     def get_session(self, session_id: str) -> Optional[SessionRecord]:
         """Retrieve a session record."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
@@ -167,7 +176,7 @@ class JournalStore:
     ) -> list[JournalEntry]:
         """Retrieve journal entries for a session."""
         import json
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         if entry_type:
             rows = conn.execute(
@@ -229,7 +238,7 @@ class JournalStore:
         Reads from entries table; no caching — caller decides frequency.
         """
         import json
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         try:
             rows = conn.execute(
                 "SELECT metadata_json FROM entries "
@@ -263,7 +272,7 @@ class JournalStore:
 
     def recent_sessions(self, limit: int = 10) -> list[SessionRecord]:
         """List recent sessions, newest first."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)

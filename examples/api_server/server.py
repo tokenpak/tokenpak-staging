@@ -23,7 +23,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from tokenpak import HeuristicEngine, CacheManager
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ app = FastAPI(
 )
 
 engine = HeuristicEngine()
-cache = CacheManager(default_ttl=300)  # Cache compressed results for 5 min
+cache = CacheManager()  # Cache compressed results for 5 min
 
 # Track stats
 stats = {"requests": 0, "tokens_saved": 0, "cache_hits": 0}
@@ -95,8 +95,8 @@ def compress_text(req: CompressRequest):
     # Check cache
     cache_key = hashlib.sha256(req.text.encode()).hexdigest()[:16]
     if req.cache:
-        hit, cached = cache.get(cache_key)
-        if hit:
+        cached = cache.get(cache_key)
+        if cached is not None:
             compressed = cached
             cache_hit = True
             stats["cache_hits"] += 1

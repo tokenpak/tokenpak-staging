@@ -339,6 +339,17 @@ def evaluate(
 
     # ── Allow / warn → forward
     if decision.decision in ("allow", "warn"):
+        # Concurrent-reservation admission (Standard 29 §15): atomically hold
+        # this request's projection against the shared rolling-cap budget so
+        # simultaneous sub-cap requests can't jointly exceed it. A denial
+        # returns 402 here — the provider is never called. TIP-approved sends
+        # are recorded as forced holds (accounted, never denied).
+        reservation_id, resv_block = _try_reserve(
+            cfg, session_id, fleet_id, agent_id, est,
+            forward_body, tip_directive, model_max_context_tokens,
+        )
+        if resv_block is not None:
+            return resv_block
         if decision.decision == "warn":
             _audit(cfg, "warn", session_id, decision_str="warn",
                    projected_cost=est.projected_cost_usd, tip=tip_directive)
@@ -356,7 +367,8 @@ def evaluate(
             _create_grant(cfg, session_id, fleet_id, agent_id,
                           tip_directive, "", count=tip_directive.allow_count)
         kind = "forward_modified" if forward_body is not body else "forward"
-        return GuardOutcome(kind=kind, body=forward_body, decision=decision)
+        return GuardOutcome(kind=kind, body=forward_body, decision=decision,
+                            reservation_id=reservation_id)
 
     # ── Hard-block → return immediately, no pending stored
     if decision.decision == "hard_block":
@@ -405,6 +417,96 @@ def evaluate(
         pending_id=pending.pending_id,
         audit_event="block",
     )
+
+
+def _try_reserve(cfg, session_id, fleet_id, agent_id, est, forward_body,
+                 tip, model_max_context_tokens):
+    """Concurrent-reservation admission for one about-to-forward request
+    (Standard 29 §15). Returns ``(reservation_id, block_outcome)`` — at most
+    one is set; ``(None, None)`` when reservations are disabled or on any
+    internal error (fail-open, same posture as the rolling-cap plane —
+    fleet protection must never take the hot path down)."""
+    if not getattr(cfg, "reservations_enabled", False):
+        return None, None
+    try:
+        import json as _json
+
+        from .block_response import build_reservation_block
+        from .reservation import (
+            DENIED,
+            ReservationStore,
+            pessimistic_output_reservation,
+        )
+        from .rolling_caps import RollingCapsConfig, compute_rolling_usage
+
+        # Settled rolling baseline (blank-on-failure inside the helper).
+        settled = compute_rolling_usage(agent_id, cfg.rolling_caps_window_seconds)
+        caps = RollingCapsConfig(
+            enabled=True,
+            window_seconds=cfg.rolling_caps_window_seconds,
+            per_agent_max_cost_usd=cfg.rolling_caps_per_agent_max_cost_usd,
+            per_agent_max_tokens_total=cfg.rolling_caps_per_agent_max_tokens_total,
+            per_agent_max_cache_read_tokens=cfg.rolling_caps_per_agent_max_cache_read_tokens,
+            per_fleet_max_cost_usd=cfg.rolling_caps_per_fleet_max_cost_usd,
+            per_fleet_max_tokens_total=cfg.rolling_caps_per_fleet_max_tokens_total,
+            per_fleet_max_cache_read_tokens=cfg.rolling_caps_per_fleet_max_cache_read_tokens,
+        )
+
+        # Output reservation: the caller's max_tokens when set, else the
+        # pessimistic interim default (Packet-2 capability registry refines).
+        max_tokens = None
+        try:
+            v = _json.loads(forward_body).get("max_tokens")
+            if isinstance(v, int) and v > 0:
+                max_tokens = v
+        except Exception:
+            pass
+        reserved_output = pessimistic_output_reservation(
+            max_tokens, model_max_context_tokens, est.projected_input_tokens
+        )
+
+        # Operator-approved sends (TIP bypass/allow) are never denied but
+        # still hold budget so other admissions see them.
+        tip_approved = tip is not None and (
+            tip.bypass or tip.allow_scope is not None
+            or getattr(tip, "allow_count", None)
+        )
+        status, reservation, breach = ReservationStore(cfg.audit_db_path).reserve(
+            session_id=session_id,
+            fleet_id=fleet_id,
+            agent_id=agent_id,
+            projected_input_tokens=est.projected_input_tokens,
+            reserved_output_tokens=reserved_output,
+            projected_cost_usd=est.projected_cost_usd,
+            settled_usage=settled,
+            caps=caps,
+            ttl_seconds=cfg.reservation_ttl_seconds,
+            force=tip_approved,
+        )
+        if status == DENIED:
+            _audit(cfg, "reservation_block", session_id,
+                   decision_str="reservation_block",
+                   projected_cost=est.projected_cost_usd, tip=tip,
+                   extra={"cap_dimension": breach.cap_dimension,
+                          "settled_used": breach.settled_used,
+                          "reserved_active": breach.reserved_active})
+            return None, GuardOutcome(
+                kind="block",
+                response_body=build_reservation_block(breach),
+                http_status=402,
+                audit_event="reservation_block",
+            )
+        if tip_approved:
+            _audit(cfg, "reservation_tip_bypass", session_id,
+                   decision_str="allow",
+                   projected_cost=est.projected_cost_usd, tip=tip,
+                   extra={"reservation_id": reservation.reservation_id})
+        return reservation.reservation_id, None
+    except ImportError:
+        return None, None
+    except Exception as e:
+        _log.debug("spend_guard: reservation admission failed (passthrough): %s", e)
+        return None, None
 
 
 def _synthetic_decision(recent: PendingRequest):

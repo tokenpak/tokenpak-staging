@@ -252,7 +252,7 @@
                 <div class="card-value" id="mode-total-cost">—</div>
             </div>
             <div class="card">
-                <div class="card-title">Cache Hit Rate</div>
+                <div class="card-title">TokenPak Cache Hit Rate</div>
                 <div class="card-value" id="mode-cache-hit-rate">—</div>
             </div>
             <div class="card">
@@ -300,7 +300,7 @@
 
             <!-- Cache Performance -->
             <div class="card">
-                <div class="card-title">Cache Hit Rate</div>
+                <div class="card-title">TokenPak Cache Hit Rate</div>
                 <div class="card-value" id="cache-hit-rate">—</div>
                 <div class="card-subtext" id="cache-info"></div>
             </div>
@@ -360,6 +360,7 @@
     <script src="sessions.js"></script>
     <script>
         const STATS_URL = '/stats/session';
+        const CACHE_STATS_URL = '/cache-stats';
         const REFRESH_INTERVAL = 30000;
 
         let costCtx, cacheCtx;
@@ -403,8 +404,82 @@
             document.getElementById('active-profile').textContent = `claude-code-${activeMode}`;
             document.getElementById('mode-total-cost').textContent = formatCost(stats?.total_cost || 0);
             document.getElementById('mode-request-count').textContent = formatNumber(stats?.session_requests || 0);
-            const cachePct = Math.min((stats?.uptime_hours || 0) / 24, 1);
-            document.getElementById('mode-cache-hit-rate').textContent = formatPercent(cachePct);
+            renderCacheHitRate(stats, 'mode-cache-hit-rate');
+        }
+
+        function normalizeCacheHitRate(value) {
+            const rate = Number(value);
+            if (!Number.isFinite(rate) || rate < 0) return null;
+            if (rate <= 1) return rate;
+            if (rate <= 100) return rate / 100;
+            return null;
+        }
+
+        function cacheHitRateFromStats(stats) {
+            if (!stats) return { rate: null, hits: null, decisions: null };
+
+            const hits = Number(stats.cache_hits);
+            const misses = Number(stats.cache_misses);
+            if (Number.isFinite(hits) && Number.isFinite(misses) && hits >= 0 && misses >= 0) {
+                const decisions = hits + misses;
+                if (decisions > 0) return { rate: hits / decisions, hits, decisions };
+            }
+
+            const reportedRate = normalizeCacheHitRate(stats.cache_hit_rate);
+            if (reportedRate !== null) return { rate: reportedRate, hits: null, decisions: null };
+
+            return { rate: null, hits: null, decisions: null };
+        }
+
+        function mergeCacheStats(stats, cacheStats) {
+            if (!stats || !cacheStats) return stats;
+
+            const merged = { ...stats };
+            const candidates = [
+                cacheStats,
+                cacheStats.last_24h,
+                cacheStats.last_1h,
+                cacheStats.last_7d,
+            ].filter(Boolean);
+
+            for (const candidate of candidates) {
+                const hits = Number(candidate.cache_hits);
+                const misses = Number(candidate.cache_misses);
+                const total = Number(candidate.total_cache_decisions ?? candidate.total_requests);
+                const rate = normalizeCacheHitRate(candidate.hit_rate ?? candidate.cache_hit_rate);
+
+                if (Number.isFinite(hits) && hits >= 0) merged.cache_hits = hits;
+                if (Number.isFinite(misses) && misses >= 0) merged.cache_misses = misses;
+                else if (Number.isFinite(total) && Number.isFinite(hits) && total >= hits && hits >= 0) {
+                    merged.cache_misses = total - hits;
+                }
+                if (rate !== null) merged.cache_hit_rate = rate;
+
+                if (cacheHitRateFromStats(merged).rate !== null) return merged;
+            }
+
+            return merged;
+        }
+
+        function renderCacheHitRate(stats, valueId, infoId) {
+            const valueEl = document.getElementById(valueId);
+            const infoEl = infoId ? document.getElementById(infoId) : null;
+            const cache = cacheHitRateFromStats(stats);
+
+            if (cache.rate === null) {
+                valueEl.textContent = 'not yet measured';
+                if (infoEl) infoEl.textContent = 'No cache hit evidence in session stats';
+                return;
+            }
+
+            valueEl.textContent = formatPercent(cache.rate);
+            if (!infoEl) return;
+
+            if (cache.decisions !== null) {
+                infoEl.textContent = `${formatNumber(cache.hits)} hits of ${formatNumber(cache.decisions)} cache decisions`;
+            } else {
+                infoEl.textContent = 'reported by session stats';
+            }
         }
 
         function buildModeSections(activeMode, stats, dashboard) {
@@ -486,6 +561,22 @@
             }
         }
 
+        async function fetchCacheStats() {
+            try {
+                const response = await fetch(CACHE_STATS_URL);
+                if (!response.ok) return null;
+                return await response.json();
+            } catch (error) {
+                return null;
+            }
+        }
+
+        async function fetchStatsWithCacheEvidence() {
+            const [stats, cacheStats] = await Promise.all([fetchStats(), fetchCacheStats()]);
+            if (!stats) return null;
+            return mergeCacheStats(stats, cacheStats);
+        }
+
         function formatNumber(num) {
             if (num >= 1e6) return (num / 1e6).toFixed(1) + 'M';
             if (num >= 1e3) return (num / 1e3).toFixed(1) + 'K';
@@ -531,10 +622,8 @@
             document.getElementById('cost').textContent = formatCost(s.total_cost || 0);
             document.getElementById('cost-info').textContent = `${formatNumber(s.session_requests || 0)} requests`;
 
-            // Uptime (approximation for cache health indicator)
-            const uptime = s.uptime_hours || 0;
-            document.getElementById('cache-hit-rate').textContent = formatPercent(Math.min(uptime / 24, 1));
-            document.getElementById('cache-info').textContent = `${uptime.toFixed(2)} hours uptime`;
+            // Cache hit rate is shown only when session stats carry cache evidence.
+            renderCacheHitRate(s, 'cache-hit-rate', 'cache-info');
 
             // Error rate
             const errorRate = (s.session_requests || 0) > 0 ? (s.errors || 0) / (s.session_requests || 0) : 0;
@@ -655,7 +744,7 @@
         }
 
         async function init() {
-            const stats = await fetchStats();
+            const stats = await fetchStatsWithCacheEvidence();
             const dashboardPayload = await fetchMetricsDashboard();
             updateDashboard(stats);
             updateModeDashboard(stats, dashboardPayload);
@@ -664,7 +753,7 @@
             }
 
             setInterval(async () => {
-                const stats = await fetchStats();
+                const stats = await fetchStatsWithCacheEvidence();
                 const dashboardPayload = await fetchMetricsDashboard();
                 updateDashboard(stats);
                 updateModeDashboard(stats, dashboardPayload);
@@ -675,7 +764,7 @@
 
             setInterval(async () => {
                 if (activeModeFromQuery() !== 'tui') return;
-                const stats = await fetchStats();
+                const stats = await fetchStatsWithCacheEvidence();
                 const liveCost = document.getElementById('tui-live-cost');
                 if (liveCost) liveCost.textContent = formatCost(stats?.total_cost || 0);
             }, 5000);

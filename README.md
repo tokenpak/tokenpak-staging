@@ -5,7 +5,9 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 ![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)
 
-TokenPak is a local-first proxy that applies **Prompt Packing** to your LLM context before it reaches the provider — fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+> **The open logistics layer for AI context.**
+
+TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
 
 **Status:** Beta — APIs and CLI may change between releases.
 
@@ -80,8 +82,12 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 ## What's included (OSS)
 
-- **Prompt Packing** — fewer tokens on real agent workloads.
-  Reproduce on your own workload: `make benchmark-headline`
+- **Prompt Packing** — fewer tokens on real agent workloads. Savings are
+  route-specific: direct API, CLI, and uncached repeated-agent loops are the
+  best fit, while Claude Code/TUI routes may show lower incremental savings
+  when the provider cache already handled repeated context. Reproduce on your
+  own workload with `make benchmark-headline`; inspect attribution with
+  `tokenpak status --tip-cache`.
 - **Client integration** — one command wires Claude Code and other clients to the proxy
 - **Model routing** — send requests to the right model automatically, with fallback rules
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
