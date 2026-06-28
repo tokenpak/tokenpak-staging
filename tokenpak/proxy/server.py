@@ -2102,16 +2102,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
 
+            if should_log and is_messages and _resp_status == 429 and _cb_provider:
+                get_rate_limit_registry().record_429(_cb_provider)
+
             if should_log and is_messages and input_tokens > 0:
                 if _resp_status != 200:
                     # Non-200 responses generate no tokens; log cost=0 to avoid
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
                     cost = 0.0
                     cost_without = 0.0
-                    # Record 429 in the rate-limit circuit breaker so repeated
-                    # rate-limit bursts trip the circuit and stop upstream hammering.
-                    if _resp_status == 429 and _cb_provider:
-                        get_rate_limit_registry().record_429(_cb_provider)
                 else:
                     cost = estimate_cost(model, sent_input_tokens, output_tokens,
                                          cache_read_tokens, cache_creation_tokens)
