@@ -85,5 +85,62 @@ def test_no_key_no_oauth_shows_cross_platform_guidance(tmp_path, capsys, monkeyp
     assert "No API keys detected" in out
     # Per-OS env syntax is shown, not bash-only.
     assert "export ANTHROPIC_API_KEY=sk-..." in out
-    assert '$env:ANTHROPIC_API_KEY="sk-..."' in out
+    assert 'setx ANTHROPIC_API_KEY "sk-..."' in out
     assert "set ANTHROPIC_API_KEY=sk-..." in out
+    assert '$env:ANTHROPIC_API_KEY="sk-..."' in out
+
+
+def test_no_key_no_oauth_tty_can_launch_guided_menu(tmp_path, capsys, monkeypatch):
+    home = tmp_path
+    calls: list[str] = []
+    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    monkeypatch.setattr(cli_core, "_interactive_menu_allowed", lambda: True)
+
+    def accept_menu(prompt: str) -> str:
+        print(prompt, end="")
+        return ""
+
+    monkeypatch.setattr("builtins.input", accept_menu)
+    monkeypatch.setattr(
+        "tokenpak.cli.commands.menu.run_menu",
+        lambda: calls.append("menu"),
+    )
+
+    with patch.object(Path, "home", return_value=home), patch(
+        "tokenpak.creds.auth_mode.non_direct_key_auth_available", return_value=False
+    ):
+        _run_setup(home)
+
+    out = capsys.readouterr().out
+    assert "No API keys detected" in out
+    assert "Open the guided TokenPak menu now" in out
+    assert calls == ["menu"]
+    assert "Example (set ANTHROPIC_API_KEY" not in out
+
+
+def test_no_key_no_oauth_tty_decline_keeps_text_guidance(
+    tmp_path, capsys, monkeypatch
+):
+    home = tmp_path
+    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    monkeypatch.setattr(cli_core, "_interactive_menu_allowed", lambda: True)
+
+    def decline_menu(prompt: str) -> str:
+        print(prompt, end="")
+        return "n"
+
+    monkeypatch.setattr("builtins.input", decline_menu)
+
+    with patch.object(Path, "home", return_value=home), patch(
+        "tokenpak.creds.auth_mode.non_direct_key_auth_available", return_value=False
+    ):
+        _run_setup(home)
+
+    out = capsys.readouterr().out
+    assert "Open the guided TokenPak menu now" in out
+    assert "Example (set ANTHROPIC_API_KEY" in out
+    assert 'setx ANTHROPIC_API_KEY "sk-..."' in out

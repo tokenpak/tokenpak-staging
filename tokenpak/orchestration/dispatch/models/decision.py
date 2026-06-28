@@ -1,4 +1,4 @@
-"""DispatchDecision record (Standards Delta v0 §4.6)."""
+"""DispatchDecision record (Dispatch contract §4.6)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from .enums import AutoApplyAfter, DecisionScope, DecisionStatus, ResolvedBy, Ri
 
 
 class DecisionOption(DispatchBaseModel):
-    """A single selectable option on a decision (Standards Delta v0 §4.6)."""
+    """A single selectable option on a decision (Dispatch contract §4.6)."""
 
     id: str
     label: str
@@ -20,14 +20,14 @@ class DecisionOption(DispatchBaseModel):
 
 
 class DecisionRecommendation(DispatchBaseModel):
-    """System recommendation among the options (Standards Delta v0 §4.6)."""
+    """System recommendation among the options (Dispatch contract §4.6)."""
 
     option_id: str
     rationale: str
 
 
 class DecisionDefaultAction(DispatchBaseModel):
-    """Default action if unresolved (Standards Delta v0 §4.6).
+    """Default action if unresolved (Dispatch contract §4.6).
 
     v0.1-alpha always uses ``auto_apply_after = never``.
     """
@@ -37,7 +37,7 @@ class DecisionDefaultAction(DispatchBaseModel):
 
 
 class DecisionResolution(DispatchBaseModel):
-    """Resolution state of a decision (Standards Delta v0 §4.6)."""
+    """Resolution state of a decision (Dispatch contract §4.6)."""
 
     selected_option_id: str | None = None
     resolved_by: ResolvedBy | None = None

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from typing import Final
 
-SCHEMA_VERSION: Final[int] = 3
+SCHEMA_VERSION: Final[int] = 4
 """Latest schema version applied by the current code."""
 
 
@@ -278,3 +278,47 @@ EXPECTED_INDEXES_V3: Final[frozenset[str]] = frozenset(
     }
 )
 """Named indexes that must exist after v3 is applied."""
+
+
+# v4 — Pak lifecycle status --------------------------------------------------
+#
+# Adds a nullable authored lifecycle field to ``paks``. NULL means the row has
+# no authored lifecycle state. The migration backfills only rows that already
+# carried an explicit ``superseded_by`` projection; conflict state is relation
+# data and is not inferred into this column.
+
+PAK_STATUS_VALUES: Final[frozenset[str]] = frozenset(
+    {"proposed", "accepted", "superseded", "deprecated", "conflicted"}
+)
+
+
+SQL_ALTER_PAKS_ADD_STATUS: Final[str] = """
+ALTER TABLE paks ADD COLUMN status TEXT CHECK (
+    status IN ('proposed', 'accepted', 'superseded', 'deprecated', 'conflicted')
+)
+""".strip()
+
+
+SQL_BACKFILL_PAKS_STATUS_FROM_SUPERSEDED: Final[str] = """
+UPDATE paks
+SET status = 'superseded'
+WHERE superseded_by IS NOT NULL
+  AND status IS NULL
+""".strip()
+
+
+SQL_CREATE_V4_INDEXES: Final[tuple[str, ...]] = (
+    "CREATE INDEX IF NOT EXISTS idx_paks_status ON paks(status)",
+)
+
+
+ALL_DDL_V4: Final[tuple[str, ...]] = (
+    SQL_ALTER_PAKS_ADD_STATUS,
+    SQL_BACKFILL_PAKS_STATUS_FROM_SUPERSEDED,
+    *SQL_CREATE_V4_INDEXES,
+)
+"""Statements introduced by the v4 migration (nullable Pak lifecycle status)."""
+
+
+EXPECTED_INDEXES_V4: Final[frozenset[str]] = frozenset({"idx_paks_status"})
+"""Named indexes that must exist after v4 is applied."""

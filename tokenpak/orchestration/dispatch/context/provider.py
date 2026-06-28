@@ -1,4 +1,4 @@
-"""ContextProvider interface + Local/Paid implementations (Standards Delta v0 §5.9).
+"""ContextProvider interface + Local/Paid implementations (Dispatch contract §5.9).
 
 The Dispatch ``ContextProvider`` is the seam between *how context is assembled*
 and *what consumes it* (a station run). v0.1-alpha ships exactly one working
@@ -6,7 +6,7 @@ provider — :class:`LocalContextProvider` — plus a deliberately-inert
 :class:`PaidContextProvider` stub so the Pro-tier boundary is visible
 from day one and Pro activation is a constructor swap, not a rewrite.
 
-Contract (Standards Delta v0 §5.9)::
+Contract (Dispatch contract §5.9)::
 
     class ContextProvider(Protocol):
         def build_context(self, manifest, station) -> ContextBundle: ...
@@ -18,7 +18,7 @@ station definition that actually carries declared files / role / overlay is
 therefore types ``build_context``'s ``station`` parameter against
 ``RouteStation``, which is the real merged contract.
 
-:class:`LocalContextProvider` guarantees (Standards Delta v0 §5.9):
+:class:`LocalContextProvider` guarantees (Dispatch contract §5.9):
 
 * deterministic given the same inputs (same repo tree + same manifest/station +
   same attachments → byte-identical :class:`ContextBundle`);
@@ -36,11 +36,11 @@ deterministic):
 5. ``repo_scan`` — a simple, gitignore-aware repo scan (lowest precedence;
    only fills remaining budget).
 
-Budgets (Standards Delta v0 §5.9 filters): a per-station **size budget**
+Budgets (Dispatch contract §5.9 filters): a per-station **size budget**
 (bytes) and a per-station **token budget**. The token budget *inherits the
 Spend Guard cap* — in v0.1-alpha it is an injected config value
 (:class:`ContextBudget`) with a sane default; the runtime wires the live cap
-from Spend Guard through TIP (Standards Delta v0 §8). Both budgets are enforced
+from Spend Guard through TIP (Dispatch contract §8). Both budgets are enforced
 greedily in source-precedence order: once adding a file would exceed either
 budget the file is **skipped** (not partially included) and recorded in
 :attr:`ContextBundle.skipped`, so the bundle always reports exactly what was
@@ -68,11 +68,11 @@ from ..models.manifest import DispatchManifest
 from ..models.route import RouteStation
 
 # ---------------------------------------------------------------------------
-# Budget defaults (Standards Delta v0 §5.9)
+# Budget defaults (Dispatch contract §5.9)
 # ---------------------------------------------------------------------------
 
 # Sane per-station defaults. The token budget is the value that, at runtime,
-# the Spend Guard cap overrides (Standards Delta v0 §8). These are deliberately
+# the Spend Guard cap overrides (Dispatch contract §8). These are deliberately
 # conservative placeholders, NOT a Spend Guard policy: this module never reads
 # or enforces Spend Guard itself.
 DEFAULT_SIZE_BUDGET_BYTES: int = 256 * 1024  # 256 KiB of assembled file content
@@ -80,7 +80,7 @@ DEFAULT_TOKEN_BUDGET: int = 64_000  # inherits the live Spend Guard cap at runti
 
 # Deterministic, network-free token estimate. ~4 chars/token is the standard
 # rough heuristic; a fixed divisor keeps the estimate reproducible (no
-# tokenizer download, no LLM, no network — Standards Delta v0 §5.9 guarantee).
+# tokenizer download, no LLM, no network — Dispatch contract §5.9 guarantee).
 _CHARS_PER_TOKEN: int = 4
 
 
@@ -88,7 +88,7 @@ def estimate_tokens(text: str) -> int:
     """Deterministic, offline token estimate for ``text`` (~4 chars/token).
 
     Ceiling division so any non-empty text costs at least one token. This is a
-    reproducible heuristic, not a real tokenizer — Standards Delta v0 §5.9
+    reproducible heuristic, not a real tokenizer — Dispatch contract §5.9
     forbids network/LLM calls in the local provider.
     """
 
@@ -171,7 +171,7 @@ class ContextBudget(DispatchBaseModel):
     """Per-station size + token budget for context assembly (§5.9 filters).
 
     ``token_budget`` inherits the Spend Guard cap at runtime
-    (Standards Delta v0 §8); the default here is a placeholder the runtime
+    (Dispatch contract §8); the default here is a placeholder the runtime
     overrides with the live cap. Both budgets are hard ceilings: a file that
     would push a running total over either ceiling is skipped, not truncated.
     """
@@ -352,7 +352,7 @@ class GitignoreFilter:
 
 @runtime_checkable
 class ContextProvider(Protocol):
-    """Dispatch context-assembly interface (Standards Delta v0 §5.9).
+    """Dispatch context-assembly interface (Dispatch contract §5.9).
 
     A provider turns a manifest + station into a :class:`ContextBundle`. The
     OSS implementation is :class:`LocalContextProvider`; the Pro implementation
@@ -375,7 +375,7 @@ class ContextProvider(Protocol):
 
 
 class LocalContextProvider:
-    """Deterministic, offline OSS context provider (Standards Delta v0 §5.9).
+    """Deterministic, offline OSS context provider (Dispatch contract §5.9).
 
     Construction:
 
@@ -383,7 +383,7 @@ class LocalContextProvider:
       every file path is resolved/relativized against. ``None`` disables the
       repo scan and disables resolving relative declared paths.
     * ``budget`` — per-station :class:`ContextBudget`. The ``token_budget``
-      inherits the Spend Guard cap at runtime (Standards Delta v0 §8); pass the
+      inherits the Spend Guard cap at runtime (Dispatch contract §8); pass the
       live cap here. Defaults to the conservative module placeholders.
     * ``explicit_files`` — extra explicit files (highest precedence) beyond
       anything the manifest declares. Paths may be absolute or repo-relative.
@@ -662,7 +662,7 @@ class LocalContextProvider:
 
 
 class PaidContextProvider:
-    """Pro context provider — NOT implemented in v0.1-alpha (Standards Delta v0 §5.9).
+    """Pro context provider — NOT implemented in v0.1-alpha (Dispatch contract §5.9).
 
     Exists from day one so the OSS/Pro boundary is visible and
     Phase D activation is a constructor swap, not a rewrite. The real
@@ -676,7 +676,7 @@ class PaidContextProvider:
     """
 
     _MESSAGE = (
-        "PaidContextProvider is a Pro-tier stub (Standards Delta v0 §5.9): it "
+        "PaidContextProvider is a Pro-tier stub (Dispatch contract §5.9): it "
         "delegates to the tokenpak-paid Context Package Builder and is not "
         "available in OSS v0.1-alpha. Use LocalContextProvider."
     )

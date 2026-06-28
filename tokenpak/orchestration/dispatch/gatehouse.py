@@ -1,4 +1,4 @@
-"""Deterministic Gatehouse — structural validation only (Standards Delta v0 §5.7).
+"""Deterministic Gatehouse — structural validation only (Dispatch contract §5.7).
 
 The Gatehouse validates **structure**, never **substance**. It runs a fixed set
 of deterministic checks (NO LLM call, NO network, no provider) over a dispatch
@@ -14,7 +14,7 @@ criteria exist, station outputs are schema-valid, permission constraints hold,
 the delivery package carries its required pieces). A green Gatehouse means
 "structurally shippable", not "correct".
 
-Reviewer → Gatehouse handoff (Standards Delta v0 §5.7 table):
+Reviewer → Gatehouse handoff (Dispatch contract §5.7 table):
 
 * Reviewer ``pass`` → Delivery Gate proceeds; package shipped.
 * Reviewer ``warning`` → Gatehouse creates a :class:`DispatchDecision`
@@ -59,7 +59,7 @@ from .stations.reviewer import (
     ReviewerStatus,
 )
 
-# Cost note (Standards Delta v0 §5.7): emitted on any delivery package whose
+# Cost note (Dispatch contract §5.7): emitted on any delivery package whose
 # route used a Reviewer Station. Single source of truth — both the package
 # builder and tests read this constant.
 REVIEWER_COST_NOTE = (
@@ -145,7 +145,7 @@ class DeliveryPackage(DispatchBaseModel):
 
 
 class Gatehouse:
-    """Deterministic structural validator + Delivery Gate (Standards Delta v0 §5.7).
+    """Deterministic structural validator + Delivery Gate (Dispatch contract §5.7).
 
     No LLM, no network, no semantic correctness claims. Each ``check_*`` method
     is a pure deterministic predicate returning a :class:`GatehouseCheckResult`.

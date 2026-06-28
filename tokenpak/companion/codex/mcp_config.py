@@ -33,6 +33,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from .guidance import _codex_cli_missing_message
+
 if TYPE_CHECKING:
     from tokenpak.companion.config import CompanionConfig
 
@@ -316,8 +318,14 @@ def register(
                 file=sys.stderr,
             )
             return False
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"tokenpak: codex not available: {e}", file=sys.stderr)
+    except FileNotFoundError:
+        print(
+            f"tokenpak: {_codex_cli_missing_message('MCP registration skipped')}",
+            file=sys.stderr,
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        print("tokenpak: MCP registration skipped: codex mcp add timed out", file=sys.stderr)
         return False
 
     ok, detail = apply_policy()
@@ -350,6 +358,10 @@ def get_env_vars(config: "CompanionConfig") -> dict[str, str]:
     """Build env vars to forward to the MCP server subprocess."""
 
     env: dict[str, str] = {}
+    if getattr(config, "session_id", "") and getattr(config, "session_id_source", "") == "env":
+        env["TOKENPAK_COMPANION_SESSION_ID"] = config.session_id
+    if getattr(config, "project_dir", ""):
+        env["TOKENPAK_COMPANION_PROJECT_DIR"] = config.project_dir
     if config.budget_daily_usd > 0:
         env["TOKENPAK_COMPANION_BUDGET"] = str(config.budget_daily_usd)
     if config.profile != "balanced":

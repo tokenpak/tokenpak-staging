@@ -103,6 +103,26 @@ def test_write_mcp_config_uses_safe_python_path(tmp_path):
     assert server["args"].index("-P") < server["args"].index("-m")
 
 
+def test_write_mcp_config_forwards_companion_env(tmp_path):
+    """Per-launch MCP config carries explicit session/project env."""
+    cfg = CompanionConfig(
+        journal_dir=tmp_path / "journal",
+        session_id="sess-env",
+        session_id_source="env",
+        project_dir="/repo/project",
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
+        launcher._write_mcp_config(cfg)
+    server = json.loads((run_dir / "mcp.json").read_text())["mcpServers"][
+        "tokenpak-companion"
+    ]
+    assert server["env"]["TOKENPAK_COMPANION_SESSION_ID"] == "sess-env"
+    assert server["env"]["TOKENPAK_COMPANION_PROJECT_DIR"] == "/repo/project"
+    assert server["env"]["TOKENPAK_COMPANION_JOURNAL_DIR"] == str(tmp_path / "journal")
+
+
 # ---------------------------------------------------------------------------
 # _write_settings
 # ---------------------------------------------------------------------------

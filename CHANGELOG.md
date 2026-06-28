@@ -7,14 +7,23 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-
+- **cli:** `tokenpak upgrade` opens the public Pro upgrade page, supports
+  `--print-url` for non-interactive use, and honors `TOKENPAK_UPGRADE_URL`.
 - Permission tier system for `tokenpak integrate` (strict/standard/auto/fleet)
   with a new `tokenpak permissions` verb, doctor rows, and launcher fleet
   mode — see `tokenpak permissions --help`.
 - TokenPak Dispatch (v0.1-alpha, **preview**) — scoped, station-based,
   resumable work packages with a Decision Inbox and delivery receipts.
-  Available on the main branch only; **not yet included in a released
+  The released `pip install tokenpak` package ships the `tokenpak dispatch`
+  command plus its registry and schema data files; the Dispatch runtime is
+  source-only in v0.1-alpha (available on the `main` branch), so the
+  dispatch runtime commands are **not yet usable from a released
   `pip install tokenpak` package**. See `tokenpak dispatch --help`.
+
+### Changed
+
+- **license/status:** Free-tier upgrade guidance now points to
+  `https://tokenpak.ai/pro`.
 
 ### Internal
 

@@ -7,6 +7,10 @@ _To update: edit `tokenpak/cli.py` then run `python scripts/generate-cli-docs.py
 
 ## Group: Getting Started
 
+### `tokenpak setup`
+
+Guided first-run setup
+
 ### `tokenpak start`
 
 Start the TokenPak proxy server, which routes LLM API requests through
@@ -14,7 +18,7 @@ Prompt Packing. The proxy listens on localhost:PORT and forwards
 compressed requests to your configured LLM providers.
 
 Example:
-  tokenpak start --port 8888 --workers 4
+  tokenpak start --port 8888
 
 (See also `tokenpak serve` for telemetry/ingest variants.)
 The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
@@ -22,7 +26,6 @@ The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
 **Flags:**
 
 - `--port` — Port to listen on (default: 8766) (default: 8766)
-- `--workers` — Number of worker processes (default: 2) (default: 2)
 - `--log-level` — Logging level (default: info) (default: info) — choices: `debug`, `info`, `warning`, `error`
 
 ### `tokenpak stop`
@@ -58,6 +61,7 @@ View API spend
 - `--month` — Show monthly totals
 - `--by-model` — Break down by model
 - `--export-csv` — Export as CSV
+- `--json` — Emit the cost summary as a single JSON document
 
 **Subcommands:**
 
@@ -74,6 +78,7 @@ Check proxy health
 - `--full` — Expanded view with all details
 - `--by-source` — Breakdown by request source (Claude Code, Codex, API, etc.)
 - `--by-provider` — Breakdown by provider (Anthropic, OpenAI, Google, etc.)
+- `--tip-cache` — Show compact TIP cache attribution only
 - `--minimal` — One-line savings summary
 - `--json` — Full JSON data dump
 - `--no-meme` — Suppress tagline
@@ -84,6 +89,14 @@ Check proxy health
 - `--fleet` — Fleet rollup view — reads rollup_daily
 - `--since` — With --fleet: window in days, e.g. '7d' (default: 7d)
 - `--explain` — Explain a request's savings/skip reasons by id; with no id, show value-tier notes
+
+### `tokenpak upgrade`
+
+Open the canonical TokenPak Pro upgrade page in your default browser. Target URL is https://tokenpak.ai/pro (override with TOKENPAK_UPGRADE_URL).
+
+**Flags:**
+
+- `--print-url` — Print the upgrade URL to stdout instead of opening a browser
 
 ### `tokenpak logs`
 
@@ -172,6 +185,8 @@ Manage compression recipes
 
 **Subcommands:**
 
+- `list`
+  - `--category` — Filter by category (general, python, javascript, markdown, config, common_patterns)
 - `create`
   - `NAME` — Recipe name (e.g. my-legal-cleanup)
   - `--output-dir` — Directory to write the recipe file (default: current dir) (default: .)
@@ -433,7 +448,8 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show public URL with token (accessible from any machine)
+- `--public` — Show guided sharing options with a dashboard token
+- `--tunnel` — With --public, start a temporary Cloudflare quick tunnel
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
 
@@ -646,6 +662,8 @@ Examples:
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
   tokenpak codex clean             # reclaim orphaned isolated codex homes
+  tokenpak codex usage --latest --json
+  tokenpak codex exec --capture -- codex exec --json "summarize this repo"
   TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
   TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
@@ -739,6 +757,7 @@ TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into ca
   - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
   - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--strict` — Require exact card == adapter capability equality
+  - `--json` — Emit JSON instead of text
 - `list`
   - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
   - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
@@ -758,6 +777,7 @@ TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into ca
   - `--type` — Card type to scaffold (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
   - `--kind` — tip_kind for tip cards (Phase 1: provider_adapter) (default: provider_adapter)
   - `--name` — Card name (lowercase slug)
+  - `--json` — Emit JSON instead of text
 - `doctor`
   - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--json` — Emit JSON instead of text
@@ -1069,6 +1089,20 @@ Test search retrieval
 - `KEY` — Your license key (default: )
 - `--email` — Optional email for the license (default: )
 
+### `tokenpak cache`
+
+**Flags:**
+
+- `--json`
+
+**Subcommands:**
+
+- `status`
+  - `--json`
+- `clear`
+  - `--id` — Clear only this fingerprint ID (default: all)
+  - `--yes`, `-y` — Skip confirmation prompt
+
 ### `tokenpak check-alerts`
 
 Evaluate alert rules and return exit code 1 if any fired.
@@ -1316,10 +1350,7 @@ Show compression savings summary.
 **Flags:**
 
 - `--days` — Rolling window in days (default: 30)
-
-### `tokenpak setup`
-
-Interactive wizard for first-time TokenPak configuration.
+- `--json` — Emit the savings summary as a single JSON document
 
 ### `tokenpak telemetry`
 

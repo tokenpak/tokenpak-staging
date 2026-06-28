@@ -19,7 +19,7 @@ Design notes:
   schema change.
 - Agent attribution comes from the X-Tokenpak-Agent request header set
   by agent-claude-worker.sh. Sessions-without-header are bucketed to
-  "unknown" and only the fleet-wide cap restrains them.
+  "unknown" and only the aggregate cap restrains them.
 - Session→agent mapping is maintained in-memory as requests flow.
   After proxy restart, the mapping resets — that's degraded but safe
   (fail-open: under-count briefly, never over-block).
@@ -33,15 +33,16 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-_log = logging.getLogger(__name__)
+from tokenpak import _paths
 
-_DEFAULT_MONITOR_DB = "~/.tokenpak/monitor.db"
+_log = logging.getLogger(__name__)
 
 # In-memory session→agent mapping. Populated as the proxy sees requests
 # (orchestrator calls record_session_agent at evaluate-time). Cleared
@@ -68,7 +69,7 @@ class RollingCapsConfig:
     per_agent_max_tokens_total: int = 5_000_000
     per_agent_max_cache_read_tokens: int = 4_000_000
 
-    # Per-fleet (all agents combined) caps
+    # Aggregate caps across all agents
     per_fleet_max_cost_usd: float = 60.0
     per_fleet_max_tokens_total: int = 15_000_000
     per_fleet_max_cache_read_tokens: int = 12_000_000
@@ -78,13 +79,13 @@ class RollingCapsConfig:
 class CapBreach:
     """A rolling-cap evaluation result indicating the request must block."""
 
-    cap_dimension: str          # e.g. "per_agent_cost_usd", "per_fleet_cache_read_tokens"
+    cap_dimension: str  # e.g. "per_agent_cost_usd", "per_fleet_cache_read_tokens"
     agent_id: str
     window_seconds: int
-    used: float                 # current usage (cost in USD or tokens as int)
-    cap: float                  # configured cap
-    projected_add: float        # what THIS request would add
-    retry_after_seconds: int    # seconds until enough usage ages out
+    used: float  # current usage (cost in USD or tokens as int)
+    cap: float  # configured cap
+    projected_add: float  # what THIS request would add
+    retry_after_seconds: int  # seconds until enough usage ages out
 
 
 def record_session_agent(session_id: str, agent_id: str) -> None:
@@ -99,8 +100,46 @@ def record_session_agent(session_id: str, agent_id: str) -> None:
         _SESSION_AGENT[session_id] = (agent_id.lower(), time.time())
 
 
-def _path(monitor_db_path: Optional[str]) -> Path:
-    return Path(os.path.expanduser(monitor_db_path or _DEFAULT_MONITOR_DB))
+def _warn_degraded(message: str) -> None:
+    _log.warning(message)
+    print(f"tokenpak: WARN {message}", file=sys.stderr)
+
+
+def _blank_usage(*, degraded_reason: Optional[str] = None) -> dict:
+    return {
+        "agent_cost_usd": 0.0,
+        "agent_tokens_total": 0,
+        "agent_cache_read_tokens": 0,
+        "fleet_cost_usd": 0.0,
+        "fleet_tokens_total": 0,
+        "fleet_cache_read_tokens": 0,
+        "degraded": degraded_reason is not None,
+        "degraded_reason": degraded_reason,
+    }
+
+
+def _cache_usage(cache_key: str, usage: dict, now: float) -> dict:
+    with _USAGE_CACHE_LOCK:
+        _USAGE_CACHE[cache_key] = (now + _USAGE_CACHE_TTL_SEC, usage)
+    return usage
+
+
+def _path(monitor_db_path: Optional[str]) -> Optional[Path]:
+    if monitor_db_path:
+        return Path(os.path.expanduser(monitor_db_path))
+    return _paths.monitor_db(mode="read")
+
+
+def _missing_db_reason() -> str:
+    try:
+        candidates = _paths.monitor_db_candidates()
+    except Exception:
+        return "monitor_db_unresolved"
+    return (
+        "monitor_db_invalid"
+        if any(candidate.get("exists") for candidate in candidates)
+        else "monitor_db_missing"
+    )
 
 
 def _get_agents_for_window(window_seconds: int) -> dict[str, list[str]]:
@@ -126,7 +165,7 @@ def compute_rolling_usage(
     *,
     monitor_db_path: Optional[str] = None,
 ) -> dict:
-    """Compute rolling-window usage for ONE agent + the whole fleet.
+    """Compute rolling-window usage for one agent plus aggregate traffic.
 
     Returns:
         {
@@ -141,7 +180,8 @@ def compute_rolling_usage(
     Cached for 30 seconds keyed by (agent_id, window_seconds, db_path).
     Returns all-zero on any failure (fail open).
     """
-    db_path = str(_path(monitor_db_path))
+    p = _path(monitor_db_path)
+    db_path = str(p) if p is not None else "<unresolved-monitor-db>"
     cache_key = f"{agent_id}|{window_seconds}|{db_path}"
 
     now = time.time()
@@ -150,17 +190,22 @@ def compute_rolling_usage(
         if cached and cached[0] > now:
             return cached[1]
 
-    blank = {
-        "agent_cost_usd": 0.0,
-        "agent_tokens_total": 0,
-        "agent_cache_read_tokens": 0,
-        "fleet_cost_usd": 0.0,
-        "fleet_tokens_total": 0,
-        "fleet_cache_read_tokens": 0,
-    }
-    p = _path(monitor_db_path)
+    if p is None:
+        reason = _missing_db_reason()
+        _warn_degraded(
+            "rolling caps degraded: no valid monitor.db resolved via "
+            f"tokenpak._paths.monitor_db(mode='read') ({reason}); returning unknown/zero usage"
+        )
+        return _cache_usage(cache_key, _blank_usage(degraded_reason=reason), now)
     if not p.exists():
-        return blank
+        _warn_degraded(
+            f"rolling caps degraded: monitor.db not found at {p}; returning unknown/zero usage"
+        )
+        return _cache_usage(
+            cache_key,
+            _blank_usage(degraded_reason="monitor_db_missing"),
+            now,
+        )
 
     cutoff_iso = time.strftime(
         "%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - float(window_seconds))
@@ -183,8 +228,8 @@ def compute_rolling_usage(
         fleet_cost, fleet_tokens, fleet_cache_read = float(row[0]), int(row[1]), int(row[2])
 
         # Per-agent totals — restrict to sessions the proxy has mapped
-        # to this agent. Sessions with no mapping count toward fleet
-        # only (handled by the fleet query above).
+        # to this agent. Sessions with no mapping count toward the aggregate
+        # only (handled by the aggregate query above).
         agent_cost = 0.0
         agent_tokens = 0
         agent_cache_read = 0
@@ -202,7 +247,11 @@ def compute_rolling_usage(
                          AND session_id IN ({placeholders})""",
                     (cutoff_iso, *sessions),
                 ).fetchone()
-                agent_cost, agent_tokens, agent_cache_read = float(row2[0]), int(row2[1]), int(row2[2])
+                agent_cost, agent_tokens, agent_cache_read = (
+                    float(row2[0]),
+                    int(row2[1]),
+                    int(row2[2]),
+                )
         conn.close()
         usage = {
             "agent_cost_usd": agent_cost,
@@ -211,16 +260,32 @@ def compute_rolling_usage(
             "fleet_cost_usd": fleet_cost,
             "fleet_tokens_total": fleet_tokens,
             "fleet_cache_read_tokens": fleet_cache_read,
+            "degraded": False,
+            "degraded_reason": None,
         }
         with _USAGE_CACHE_LOCK:
             _USAGE_CACHE[cache_key] = (now + _USAGE_CACHE_TTL_SEC, usage)
         return usage
     except sqlite3.OperationalError as e:
-        _log.debug("rolling_caps: monitor.db query failed: %s", e)
-        return blank
+        _warn_degraded(
+            f"rolling caps degraded: monitor.db query failed for {p}: {e}; "
+            "returning unknown/zero usage"
+        )
+        return _cache_usage(
+            cache_key,
+            _blank_usage(degraded_reason="monitor_db_query_failed"),
+            now,
+        )
     except Exception as e:
-        _log.debug("rolling_caps: unexpected error: %s", e)
-        return blank
+        _warn_degraded(
+            f"rolling caps degraded: unexpected monitor.db error for {p}: {e}; "
+            "returning unknown/zero usage"
+        )
+        return _cache_usage(
+            cache_key,
+            _blank_usage(degraded_reason="monitor_db_unexpected_error"),
+            now,
+        )
 
 
 def check_rolling_caps(
@@ -247,15 +312,11 @@ def check_rolling_caps(
     """
     if not config.enabled:
         return None
-    usage = compute_rolling_usage(
-        agent_id, config.window_seconds, monitor_db_path=monitor_db_path
-    )
+    usage = compute_rolling_usage(agent_id, config.window_seconds, monitor_db_path=monitor_db_path)
     # tokens_total = input + output only (cache_read EXCLUDED
     # 2026-05-15: cache_read is ~90% cheaper and inflates the count without
     # reflecting real cost. cache_read keeps its own dedicated cap dimension.
-    projected_tokens_total = (
-        int(projected_input_tokens) + int(projected_output_tokens)
-    )
+    projected_tokens_total = int(projected_input_tokens) + int(projected_output_tokens)
 
     def retry_after(cost_used: float, tokens_used: float, cap: float) -> int:
         # Coarse heuristic: time until the oldest in-window request ages
@@ -266,58 +327,88 @@ def check_rolling_caps(
     # Per-agent — only when agent_id is known
     if agent_id:
         a_cost = usage["agent_cost_usd"]
-        if config.per_agent_max_cost_usd > 0 and a_cost + projected_cost_usd > config.per_agent_max_cost_usd:
+        if (
+            config.per_agent_max_cost_usd > 0
+            and a_cost + projected_cost_usd > config.per_agent_max_cost_usd
+        ):
             return CapBreach(
                 cap_dimension="per_agent_cost_usd",
-                agent_id=agent_id, window_seconds=config.window_seconds,
-                used=a_cost, cap=config.per_agent_max_cost_usd,
+                agent_id=agent_id,
+                window_seconds=config.window_seconds,
+                used=a_cost,
+                cap=config.per_agent_max_cost_usd,
                 projected_add=projected_cost_usd,
                 retry_after_seconds=retry_after(a_cost, 0, config.per_agent_max_cost_usd),
             )
         a_tok = usage["agent_tokens_total"]
-        if config.per_agent_max_tokens_total > 0 and a_tok + projected_tokens_total > config.per_agent_max_tokens_total:
+        if (
+            config.per_agent_max_tokens_total > 0
+            and a_tok + projected_tokens_total > config.per_agent_max_tokens_total
+        ):
             return CapBreach(
                 cap_dimension="per_agent_tokens_total",
-                agent_id=agent_id, window_seconds=config.window_seconds,
-                used=float(a_tok), cap=float(config.per_agent_max_tokens_total),
+                agent_id=agent_id,
+                window_seconds=config.window_seconds,
+                used=float(a_tok),
+                cap=float(config.per_agent_max_tokens_total),
                 projected_add=float(projected_tokens_total),
                 retry_after_seconds=retry_after(0, a_tok, config.per_agent_max_tokens_total),
             )
         a_cr = usage["agent_cache_read_tokens"]
-        if config.per_agent_max_cache_read_tokens > 0 and a_cr + projected_cache_read_tokens > config.per_agent_max_cache_read_tokens:
+        if (
+            config.per_agent_max_cache_read_tokens > 0
+            and a_cr + projected_cache_read_tokens > config.per_agent_max_cache_read_tokens
+        ):
             return CapBreach(
                 cap_dimension="per_agent_cache_read_tokens",
-                agent_id=agent_id, window_seconds=config.window_seconds,
-                used=float(a_cr), cap=float(config.per_agent_max_cache_read_tokens),
+                agent_id=agent_id,
+                window_seconds=config.window_seconds,
+                used=float(a_cr),
+                cap=float(config.per_agent_max_cache_read_tokens),
                 projected_add=float(projected_cache_read_tokens),
                 retry_after_seconds=retry_after(0, a_cr, config.per_agent_max_cache_read_tokens),
             )
 
-    # Per-fleet — applies whether or not agent is known
+    # Aggregate cap applies whether or not agent is known
     f_cost = usage["fleet_cost_usd"]
-    if config.per_fleet_max_cost_usd > 0 and f_cost + projected_cost_usd > config.per_fleet_max_cost_usd:
+    if (
+        config.per_fleet_max_cost_usd > 0
+        and f_cost + projected_cost_usd > config.per_fleet_max_cost_usd
+    ):
         return CapBreach(
             cap_dimension="per_fleet_cost_usd",
-            agent_id=agent_id or "unknown", window_seconds=config.window_seconds,
-            used=f_cost, cap=config.per_fleet_max_cost_usd,
+            agent_id=agent_id or "unknown",
+            window_seconds=config.window_seconds,
+            used=f_cost,
+            cap=config.per_fleet_max_cost_usd,
             projected_add=projected_cost_usd,
             retry_after_seconds=retry_after(f_cost, 0, config.per_fleet_max_cost_usd),
         )
     f_tok = usage["fleet_tokens_total"]
-    if config.per_fleet_max_tokens_total > 0 and f_tok + projected_tokens_total > config.per_fleet_max_tokens_total:
+    if (
+        config.per_fleet_max_tokens_total > 0
+        and f_tok + projected_tokens_total > config.per_fleet_max_tokens_total
+    ):
         return CapBreach(
             cap_dimension="per_fleet_tokens_total",
-            agent_id=agent_id or "unknown", window_seconds=config.window_seconds,
-            used=float(f_tok), cap=float(config.per_fleet_max_tokens_total),
+            agent_id=agent_id or "unknown",
+            window_seconds=config.window_seconds,
+            used=float(f_tok),
+            cap=float(config.per_fleet_max_tokens_total),
             projected_add=float(projected_tokens_total),
             retry_after_seconds=retry_after(0, f_tok, config.per_fleet_max_tokens_total),
         )
     f_cr = usage["fleet_cache_read_tokens"]
-    if config.per_fleet_max_cache_read_tokens > 0 and f_cr + projected_cache_read_tokens > config.per_fleet_max_cache_read_tokens:
+    if (
+        config.per_fleet_max_cache_read_tokens > 0
+        and f_cr + projected_cache_read_tokens > config.per_fleet_max_cache_read_tokens
+    ):
         return CapBreach(
             cap_dimension="per_fleet_cache_read_tokens",
-            agent_id=agent_id or "unknown", window_seconds=config.window_seconds,
-            used=float(f_cr), cap=float(config.per_fleet_max_cache_read_tokens),
+            agent_id=agent_id or "unknown",
+            window_seconds=config.window_seconds,
+            used=float(f_cr),
+            cap=float(config.per_fleet_max_cache_read_tokens),
             projected_add=float(projected_cache_read_tokens),
             retry_after_seconds=retry_after(0, f_cr, config.per_fleet_max_cache_read_tokens),
         )

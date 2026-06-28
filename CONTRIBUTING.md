@@ -104,24 +104,20 @@ tokenpak/                     ← repo root
 ├── tokenpak/                 ← THE canonical package (install via pip)
 │   ├── proxy/                ← Proxy request pipeline, cache, routing
 │   ├── compression/          ← Compression algorithms and pipeline
-│   ├── engines/              ← Compaction engine implementations
+│   │   └── engines/          ← Compaction engine implementations
 │   ├── telemetry/            ← Usage tracking and cost analytics
 │   ├── agent/                ← Multi-agent coordination and handoff
 │   ├── agentic/              ← Agentic workflow primitives
 │   ├── adapters/             ← Provider adapters (OpenAI, Anthropic, etc.)
 │   ├── routing/              ← Route selection and fallback rules
 │   ├── cache/                ← Response caching
-│   ├── registry/             ← Block registry
+│   ├── core/                 ← Block registry and core primitives
 │   ├── cli/                  ← CLI subcommand implementations
 │   ├── runtime/              ← Runtime support (provider detection, cache spec)
 │   ├── plugins/              ← Plugin interface + examples
 │   ├── validation/           ← Schema and config validation
 │   ├── connectors/           ← External data source connectors
-│   ├── _internal/            ← Private internals (not public API — do not import directly)
-│   ├── cli.py                ← CLI entry point (`tokenpak <cmd>`)
-│   ├── budgeter.py           ← Token budget allocation
-│   ├── tokens.py             ← Token counting utilities
-│   ├── pack.py               ← Context packing (ContextPack, PackBlock)
+│   ├── _cli_core.py          ← CLI entry point (`tokenpak <cmd>`)
 │   └── ...
 ├── packages/                 ← Independently-published adapter packages
 │   ├── langchain-tokenpak/   ← LangChain integration
@@ -149,7 +145,7 @@ tokenpak/                     ← repo root
 | New compression algorithm | `tokenpak/compression/` |
 | New provider adapter | `tokenpak/adapters/` |
 | New routing rule | `tokenpak/routing/` |
-| New CLI subcommand | `tokenpak/cli/` + register in `tokenpak/cli.py` |
+| New CLI subcommand | `tokenpak/cli/` + register in `tokenpak/_cli_core.py` |
 | New proxy middleware | `tokenpak/proxy/` |
 | New agent primitive | `tokenpak/agent/` or `tokenpak/agentic/` |
 | New plugin | `tokenpak/plugins/` (see Plugin section below) |
@@ -167,7 +163,6 @@ The following paths exist for backward compatibility or are development artifact
 | `proxy.py` (repo root) | **Runtime entry point** — do not replace | The server process that `tokenpak start` launches. It imports from `tokenpak.proxy.*`. It's being incrementally migrated into the modular tree; add new proxy features to `tokenpak/proxy/` instead. |
 | `proxy.py.bak*` | **Development artifacts** — ignore | Working backups from active hot-patching sessions. Not part of the canonical tree. |
 | `tokenpak/runtime/proxy.py` | **Compatibility shim** — do not add to | Bridges the old monolith symbols to their new modular homes. New proxy code goes in `tokenpak/proxy/`. |
-| `tokenpak/_internal/` | **Private internals** — do not import | Implementation details used inside the package only. The public API is `tokenpak/__init__.py`. |
 | `packages/core/` | **Parallel extraction tree** — see note | Mirrors parts of `tokenpak/` during incremental extraction. If you're unsure whether to touch this, ask in an issue first. |
 | `tests.old/` | **Archived tests** — do not add to | Superseded by `tests/` (root) and `tokenpak/tests/`. |
 | `_archive/` and `archive/` | **Archived files** — do not add to | Historical reference only. |

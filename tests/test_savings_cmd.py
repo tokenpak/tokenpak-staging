@@ -70,22 +70,23 @@ def temp_db(tmp_path):
             injected_tokens INTEGER,
             injected_sources TEXT,
             cache_read_tokens INTEGER,
-            cache_creation_tokens INTEGER
+            cache_creation_tokens INTEGER,
+            cache_origin TEXT
         )
     """)
     today = date.today().isoformat()
     old = (date.today() - timedelta(days=10)).isoformat()
 
-    # Today: 2 requests, raw 10000/8000, compressed 4000/3200
+    # Today: raw 10000/8000/6000, sent 4000/3200/2400, saved 6000/4800/3600.
     conn.executemany(
-        "INSERT INTO requests (timestamp,model,input_tokens,compressed_tokens,estimated_cost)"
-        " VALUES (?,?,?,?,?)",
+        "INSERT INTO requests (timestamp,model,input_tokens,compressed_tokens,estimated_cost,cache_origin)"
+        " VALUES (?,?,?,?,?,?)",
         [
-            (f"{today} 10:00:00", "claude-sonnet-4-5", 10000, 4000, 0.30),
-            (f"{today} 11:00:00", "claude-sonnet-4-5", 8000,  3200, 0.24),
-            (f"{today} 12:00:00", "gpt-4o",            6000,  2400, 0.18),
-            # Old row (outside 24h but inside 7d and 30d)
-            (f"{old} 10:00:00",  "claude-sonnet-4-5", 5000,  2000, 0.15),
+            (f"{today} 10:00:00", "claude-sonnet-4-5", 4000, 6000, 0.30, "proxy"),
+            (f"{today} 11:00:00", "claude-sonnet-4-5", 3200, 4800, 0.24, "proxy"),
+            (f"{today} 12:00:00", "gpt-4o",            2400, 3600, 0.18, "proxy"),
+            # Old row (outside 24h and 7d, inside 30d)
+            (f"{old} 10:00:00",  "claude-sonnet-4-5", 2000, 3000, 0.15, "proxy"),
         ],
     )
     conn.commit()
@@ -161,6 +162,23 @@ def test_query_by_model_returns_breakdown(temp_db):
         assert "avg_compressed_tokens" in r
         assert "reduction_pct" in r
         assert "tokens_saved_total" in r
+
+
+def test_query_savings_model_filter_matches_breakdown(temp_db):
+    """Model-filtered aggregate must use the same receipt fields as the breakdown."""
+    with patch("tokenpak.cli.commands.savings._MONITOR_DB", temp_db):
+        summary = _query_savings(period="24h", model="claude-sonnet-4-5")
+        rows = _query_by_model(period="24h")
+
+    sonnet = next(r for r in rows if r["model"] == "claude-sonnet-4-5")
+    assert summary["requests"] == sonnet["requests"]
+    assert summary["avg_raw_tokens"] == sonnet["avg_raw_tokens"]
+    assert summary["avg_compressed_tokens"] == sonnet["avg_compressed_tokens"]
+    assert summary["tokens_saved_total"] == sonnet["tokens_saved_total"]
+    assert summary["reduction_pct"] == pytest.approx(sonnet["reduction_pct"], abs=0.1)
+    assert summary["cost_without_tokenpak"] == sonnet["cost_without_tokenpak"]
+    assert summary["cost_with_tokenpak"] == sonnet["cost_with_tokenpak"]
+    assert summary["cost_reduction_pct"] == pytest.approx(sonnet["cost_reduction_pct"], abs=0.1)
 
 
 # ---------------------------------------------------------------------------

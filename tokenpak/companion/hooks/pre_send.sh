@@ -19,12 +19,27 @@ INPUT=$(cat)
 # shell-quotes the values for safe ``eval`` (handles quotes/newlines/spaces).
 PROMPT=""
 if command -v jq >/dev/null 2>&1; then
-    eval "$(echo "$INPUT" | jq -r '@sh "TRANSCRIPT=\(.transcript_path // "") SESSION_ID=\(.session_id // "") PROMPT=\(.prompt // "")"' 2>/dev/null)"
+    eval "$(printf '%s' "$INPUT" | jq -r '@sh "TRANSCRIPT=\(.transcript_path // "") SESSION_ID=\(.session_id // "") PROMPT=\(.prompt // "")"' 2>/dev/null)"
 else
     # Portable sed extraction (no -P flag needed). PROMPT is jq-only (the
     # dynamic title is skipped without jq).
-    TRANSCRIPT=$(echo "$INPUT" | sed -n 's/.*"transcript_path"\s*:\s*"\([^"]*\)".*/\1/p')
-    SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p')
+    TRANSCRIPT=$(printf '%s' "$INPUT" | sed -n 's/.*"transcript_path"\s*:\s*"\([^"]*\)".*/\1/p')
+    SESSION_ID=$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p')
+fi
+
+if [ -n "$SESSION_ID" ]; then
+    JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
+    RUN_DIR="$JOURNAL_DIR/run"
+    if [ -d "$RUN_DIR" ] || mkdir -p "$RUN_DIR" 2>/dev/null; then
+        CURRENT_SESSION_FILE="$RUN_DIR/current-session"
+        OLD_SESSION_ID=""
+        if [ -f "$CURRENT_SESSION_FILE" ]; then
+            IFS= read -r OLD_SESSION_ID < "$CURRENT_SESSION_FILE" || true
+        fi
+        if [ "$OLD_SESSION_ID" != "$SESSION_ID" ]; then
+            printf '%s\n' "$SESSION_ID" > "$CURRENT_SESSION_FILE" 2>/dev/null || true
+        fi
+    fi
 fi
 
 # derive_title — turn a raw prompt into a short SEMANTIC task title (not a
@@ -219,7 +234,16 @@ fi
 [ "$TOKENS" -eq 0 ] && { emit_title; exit 0; }
 
 # Format token count with thousands separators (pure bash)
-TOKENS_FMT=$(printf '%d' "$TOKENS" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,//')
+TOKENS_FMT="$TOKENS"
+if [ "$TOKENS" -ge 1000 ]; then
+    TOKENS_FMT=""
+    REST="$TOKENS"
+    while [ "${#REST}" -gt 3 ]; do
+        TOKENS_FMT=",${REST: -3}$TOKENS_FMT"
+        REST="${REST:0:${#REST}-3}"
+    done
+    TOKENS_FMT="$REST$TOKENS_FMT"
+fi
 
 # Cost estimation (sonnet rate: $3/M tokens)
 # Integer math in microdollars to avoid float

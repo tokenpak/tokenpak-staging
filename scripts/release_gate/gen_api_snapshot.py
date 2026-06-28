@@ -45,6 +45,22 @@ os.environ.setdefault("TOKENPAK_SNAPSHOT_GEN", "1")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = REPO_ROOT / "tokenpak" / "_snapshots" / "public-api.json"
 
+# Third-party library re-exports that are NOT TokenPak public API. Their capture
+# by the package walk is environment-dependent (present only when an optional
+# extra is installed, e.g. faiss via [retrieval]), which makes the snapshot
+# non-deterministic ("phantom" add/remove noise). Exclude them explicitly so the
+# snapshot deterministically reflects the TokenPak-owned released surface.
+_THIRD_PARTY_REEXPORTS: set[tuple[str, str]] = {
+    ("tokenpak.vault.retrieval.vector_local", "faiss"),
+    # ``SentenceTransformer`` is a lazily-bound module global (``= None`` until
+    # first use, then assigned ``sentence_transformers.SentenceTransformer``).
+    # It is a third-party re-export kept for back-compat attribute access, NOT
+    # TokenPak public API — the same class as the ``faiss`` re-export in this
+    # very module. Exclude it so the snapshot reflects the TokenPak-owned surface.
+    ("tokenpak.vault.retrieval.vector_local", "SentenceTransformer"),
+    ("tokenpak.proxy.server_extra.websocket_proxy", "WebSocketServerProtocol"),
+}
+
 
 _ABS_PATH_PAREN_RE = None  # lazily compiled
 _SIDECAR_RE = None  # lazily compiled
@@ -96,11 +112,25 @@ def _format_import_error(e: BaseException, module_name: str = "") -> str:
             r"cannot import name '[^']+' from '([a-z_]+_tokenpak)'"
         )
 
-    # Walk-site sidecar normalization (transform 3 above)
+    # Walk-site sidecar normalization (transform 3 above).
+    #
+    # H6 hardening (L11b release-gate integrity): previously this rewrote ANY
+    # exception raised while importing a ``tokenpak.sdk.<sidecar>.*`` module to
+    # the canonical "optional sidecar absent" string, regardless of the real
+    # exception. That masked genuine regressions — a SyntaxError, an
+    # AttributeError, or a first-party ``tokenpak.*`` ModuleNotFoundError inside
+    # the sidecar walk — behind a benign placeholder, so the snapshot never
+    # drifted and the release gate never caught them. We now normalize ONLY the
+    # genuine case: a ``ModuleNotFoundError`` whose missing top-level module is
+    # the third-party sidecar package itself (e.g. ``crewai`` / ``crewai_tokenpak``),
+    # never a first-party ``tokenpak.*`` module. Every other exception falls
+    # through to the honest representation below and therefore drifts the snapshot.
     m_walk = re.match(r"^tokenpak\.sdk\.([a-z_]+)\.", module_name)
-    if m_walk:
-        sidecar = m_walk.group(1)
-        return f"<IMPORT_ERROR: ModuleNotFoundError: No module named '{sidecar}_tokenpak'>"
+    if m_walk and isinstance(e, ModuleNotFoundError):
+        missing_mod = getattr(e, "name", "") or ""
+        if missing_mod and not missing_mod.startswith("tokenpak"):
+            sidecar = m_walk.group(1)
+            return f"<IMPORT_ERROR: ModuleNotFoundError: No module named '{sidecar}_tokenpak'>"
 
     msg = _ABS_PATH_PAREN_RE.sub("", str(e))
     m = _SIDECAR_RE.search(msg)
@@ -144,7 +174,7 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
     try:
         pkg = importlib.import_module(package_name)
     except Exception as e:
-        return [{"module": package_name, "name": _format_import_error(e, name)}]
+        return [{"module": package_name, "name": _format_import_error(e, package_name)}]
 
     def harvest(mod_name: str, mod) -> None:
         explicit_all = getattr(mod, "__all__", None)
@@ -153,6 +183,8 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
                 if not isinstance(attr, str) or attr.startswith("_"):
                     continue
                 key = (mod_name, attr)
+                if key in _THIRD_PARTY_REEXPORTS:
+                    continue
                 if key in seen:
                     continue
                 seen.add(key)
@@ -168,6 +200,8 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
             if not _is_package_owned(value, package_name):
                 continue
             key = (mod_name, attr)
+            if key in _THIRD_PARTY_REEXPORTS:
+                continue
             if key in seen:
                 continue
             seen.add(key)
@@ -185,6 +219,23 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
         if any(p.startswith("_") for p in parts):
             continue
         if "tests" in parts:
+            continue
+        # Preview / internal orchestration subsystems are excluded from the
+        # public-API snapshot. The snapshot records the RELEASED public surface,
+        # so it must not record preview/source-only code as public released API:
+        #   * ``orchestration.dispatch*`` + ``cli.commands.dispatch_cmd`` —
+        #     the Dispatch subsystem (preview / main-only).
+        #   * ``orchestration.deliberation*`` — the Deliberation Engine, the
+        #     internal layer of Deliberation Dispatch (Std 69 Adaptive
+        #     Deliberation Policy: advisory-first, draft, "future product code",
+        #     publishes nothing / no new public claim). It is a sibling of the
+        #     dispatch subsystem and must be treated identically: its symbols are
+        #     NOT released public API.
+        if (
+            name == "tokenpak.cli.commands.dispatch_cmd"
+            or name.startswith("tokenpak.orchestration.dispatch")
+            or name.startswith("tokenpak.orchestration.deliberation")
+        ):
             continue
         try:
             mod = importlib.import_module(name)

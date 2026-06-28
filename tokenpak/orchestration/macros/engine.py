@@ -28,8 +28,11 @@ CLI commands:
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 import subprocess
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -41,6 +44,20 @@ except ImportError:
 
 MACROS_DIR = Path.home() / ".tokenpak" / "macros"
 
+# Opt-in environment variable acknowledging that user-authored / generated macro
+# command strings are executed as trusted user code (via a shell). When set to a
+# truthy value the per-run shell-execution notice is suppressed. Macros still run
+# either way - this gates the *warning*, never the functionality.
+_TRUSTED_USER_CODE_ENV = "TOKENPAK_MACRO_TRUSTED_USER_CODE"
+
+
+class _MacroTrustedCodeWarning(UserWarning):
+    """Surfaced once per real macro run when the trusted-user-code opt-in is unset."""
+
+
+class _MacroIntegrityWarning(UserWarning):
+    """Surfaced when a macro/skill file shows shared-home tamper indicators."""
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +67,73 @@ def _require_yaml() -> None:
         raise RuntimeError(
             "PyYAML is required for the macro engine. Install it: pip install pyyaml"
         )
+
+
+def _truthy(value: Optional[str]) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"} if value else False
+
+
+def _trusted_user_code_enabled(trusted: Optional[bool] = None) -> bool:
+    """Resolve the trusted-user-code opt-in.
+
+    An explicit ``trusted`` argument (from a caller) wins; otherwise fall back to
+    the ``TOKENPAK_MACRO_TRUSTED_USER_CODE`` environment opt-in.
+    """
+    if trusted is not None:
+        return bool(trusted)
+    return _truthy(os.environ.get(_TRUSTED_USER_CODE_ENV))
+
+
+def _emit_trusted_user_code_notice(context: str, *, trusted: Optional[bool] = None) -> bool:
+    """Warn that *context* will execute shell command strings as trusted user code.
+
+    Returns ``True`` when the opt-in is active (notice suppressed), ``False`` when
+    the notice was emitted. Never blocks execution - this is an explicit
+    confirmation/warning contract, not a gate.
+    """
+    if _trusted_user_code_enabled(trusted):
+        return True
+    warnings.warn(
+        f"{context} executes user-authored/generated command strings via a shell "
+        "(subprocess shell=True). Treat macro/skill files as trusted user code. "
+        f"Set {_TRUSTED_USER_CODE_ENV}=1 to acknowledge and silence this notice.",
+        _MacroTrustedCodeWarning,
+        stacklevel=3,
+    )
+    return False
+
+
+def _check_file_integrity(path: Path) -> List[str]:
+    """Return shared-home tamper indicators for *path* (stat-only, no mutation).
+
+    Mirrors the existing local-data hygiene idiom (looser-than-0600 -> warn): a
+    macro/skill file that is group/other-writable or a symlink can be rewritten
+    by another writer in a shared home, redirecting the shell commands that get
+    executed. Returns an empty list when the file is absent or clean.
+    """
+    indicators: List[str] = []
+    try:
+        if path.is_symlink():
+            indicators.append(f"{path} is a symlink (possible redirection)")
+        st = path.stat()
+    except OSError:
+        return indicators
+    mode = st.st_mode & 0o777
+    # World-writable -> any local user can rewrite the commands this file runs,
+    # the core shared-home/multi-writer tamper indicator. Group-write is
+    # intentionally not flagged: macro files are created under the operator's
+    # umask and a group-write bit is commonly the user's own private group.
+    if mode & stat.S_IWOTH:
+        indicators.append(f"{path} mode {oct(mode)} is world-writable (tamper risk)")
+    return indicators
+
+
+def _warn_file_integrity(path: Path) -> List[str]:
+    """Emit ``_MacroIntegrityWarning`` for each tamper indicator on *path*."""
+    indicators = _check_file_integrity(path)
+    for note in indicators:
+        warnings.warn(note, _MacroIntegrityWarning, stacklevel=3)
+    return indicators
 
 
 def _resolve_vars(text: str, variables: Dict[str, Any]) -> str:
@@ -70,21 +154,46 @@ def _resolve_vars(text: str, variables: Dict[str, Any]) -> str:
 
 
 class MacroStep:
-    """A single step within a macro."""
+    """A single step within a macro.
 
-    def __init__(self, name: str, cmd: str, label: str = "", timeout: int = 60):
+    A step runs either a shell command string (``cmd``, ``shell=True``) or, when
+    ``argv`` is provided, a structured argument vector (``shell=False``). The
+    YAML ``cmd`` capability is preserved; ``argv`` is the safer form used for
+    built-in/generated steps where the command is assembled from structured
+    parts.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        cmd: str = "",
+        label: str = "",
+        timeout: int = 60,
+        argv: Optional[List[str]] = None,
+    ):
         self.name = name
         self.cmd = cmd
         self.label = label or name
         self.timeout = timeout
+        self.argv = [str(part) for part in argv] if argv else None
+
+    @property
+    def uses_shell(self) -> bool:
+        """True when this step runs a shell command string rather than argv."""
+        return not self.argv and bool(self.cmd)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "name": self.name,
             "label": self.label,
             "cmd": self.cmd,
             "timeout": self.timeout,
         }
+        # Only serialize argv when present so existing cmd-only macros round-trip
+        # byte-for-byte through YAML.
+        if self.argv:
+            data["argv"] = list(self.argv)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MacroStep":
@@ -93,6 +202,7 @@ class MacroStep:
             cmd=data.get("cmd", ""),
             label=data.get("label", data["name"]),
             timeout=data.get("timeout", 60),
+            argv=data.get("argv"),
         )
 
 
@@ -335,6 +445,7 @@ class MacroEngine:
         path = self._path(name)
         if not path.exists():
             raise FileNotFoundError(f"Macro '{name}' not found at {path}")
+        _warn_file_integrity(path)
         return MacroDefinition.from_yaml(path.read_text())
 
     def list(self) -> List[MacroDefinition]:
@@ -345,6 +456,7 @@ class MacroEngine:
         macros = []
         for f in sorted(self.macros_dir.glob("*.yaml")):
             try:
+                _warn_file_integrity(f)
                 macros.append(MacroDefinition.from_yaml(f.read_text()))
             except Exception:
                 pass  # skip malformed files
@@ -374,6 +486,7 @@ class MacroEngine:
         variables: Optional[Dict[str, Any]] = None,
         dry_run: bool = False,
         continue_on_error: Optional[bool] = None,
+        trusted_user_code: Optional[bool] = None,
     ) -> MacroResult:
         """
         Execute a macro by name.
@@ -383,6 +496,9 @@ class MacroEngine:
             variables: Runtime variable overrides (merged with macro defaults).
             dry_run: If True, print commands without executing.
             continue_on_error: Override the macro's continue_on_error setting.
+            trusted_user_code: Explicit opt-in acknowledging that shell command
+                strings run as trusted user code. ``None`` falls back to the
+                ``TOKENPAK_MACRO_TRUSTED_USER_CODE`` environment opt-in.
 
         Returns:
             MacroResult with step results and summary.
@@ -393,6 +509,7 @@ class MacroEngine:
             variables=variables,
             dry_run=dry_run,
             continue_on_error=continue_on_error,
+            trusted_user_code=trusted_user_code,
         )
 
     def run_definition(
@@ -401,6 +518,7 @@ class MacroEngine:
         variables: Optional[Dict[str, Any]] = None,
         dry_run: bool = False,
         continue_on_error: Optional[bool] = None,
+        trusted_user_code: Optional[bool] = None,
     ) -> MacroResult:
         """
         Execute a MacroDefinition object.
@@ -410,6 +528,7 @@ class MacroEngine:
             variables: Runtime variable overrides.
             dry_run: If True, commands are printed but not run.
             continue_on_error: Override the macro's setting when provided.
+            trusted_user_code: Explicit opt-in acknowledging shell-backed steps.
 
         Returns:
             MacroResult
@@ -420,6 +539,14 @@ class MacroEngine:
         # Decide fail-fast vs continue-on-error
         keep_going = continue_on_error if continue_on_error is not None else macro.continue_on_error
 
+        # Surface the trusted-user-code contract before a real run that will
+        # shell-execute any user-authored/generated command string. argv-only
+        # macros run without a shell and need no notice.
+        if not dry_run and any(step.uses_shell for step in macro.steps):
+            _emit_trusted_user_code_notice(
+                f"macro '{macro.name}'", trusted=trusted_user_code
+            )
+
         started_at = datetime.now().isoformat()
         step_results: List[StepResult] = []
         overall_success = True
@@ -427,6 +554,9 @@ class MacroEngine:
         for step in macro.steps:
             resolved_cmd = _resolve_vars(step.cmd, merged_vars)
             resolved_label = _resolve_vars(step.label, merged_vars)
+            resolved_argv = (
+                [_resolve_vars(part, merged_vars) for part in step.argv] if step.argv else None
+            )
 
             if dry_run:
                 step_results.append(
@@ -443,7 +573,9 @@ class MacroEngine:
                 )
                 continue
 
-            result = self._run_step(step.name, resolved_label, resolved_cmd, step.timeout)
+            result = self._run_step(
+                step.name, resolved_label, resolved_cmd, step.timeout, argv=resolved_argv
+            )
             step_results.append(result)
 
             if not result.success:
@@ -465,20 +597,43 @@ class MacroEngine:
             dry_run=dry_run,
         )
 
-    def _run_step(self, name: str, label: str, cmd: str, timeout: int = 60) -> StepResult:
-        """Execute a single step command."""
+    def _run_step(
+        self,
+        name: str,
+        label: str,
+        cmd: str,
+        timeout: int = 60,
+        argv: Optional[List[str]] = None,
+    ) -> StepResult:
+        """Execute a single step.
+
+        When *argv* is supplied the command runs as a structured argument vector
+        (``shell=False``) with no shell interpretation; otherwise the *cmd*
+        string is executed via the shell (``shell=True``), preserving the YAML
+        command-string capability.
+        """
+        display = cmd or (" ".join(argv) if argv else "")
         try:
-            proc = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            if argv:
+                proc = subprocess.run(
+                    argv,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            else:
+                proc = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
             return StepResult(
                 name=name,
                 label=label,
-                cmd=cmd,
+                cmd=display,
                 output=proc.stdout.strip(),
                 error=proc.stderr.strip(),
                 success=proc.returncode == 0,
@@ -488,7 +643,7 @@ class MacroEngine:
             return StepResult(
                 name=name,
                 label=label,
-                cmd=cmd,
+                cmd=display,
                 output="",
                 error=f"Step timed out after {timeout}s",
                 success=False,
@@ -498,7 +653,7 @@ class MacroEngine:
             return StepResult(
                 name=name,
                 label=label,
-                cmd=cmd,
+                cmd=display,
                 output="",
                 error=str(exc),
                 success=False,

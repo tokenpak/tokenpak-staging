@@ -1,4 +1,4 @@
-"""StationRunner — bounded per-station loop execution (Standards Delta v0 §5.4–§5.8).
+"""StationRunner — bounded per-station loop execution (Dispatch contract §5.4–§5.8).
 
 The :class:`StationRunner` executes a single route station. It wires together the
 foundation pieces P-EXEC-01 orchestrates:
@@ -74,7 +74,7 @@ from .tools import (
 # ``station_output_schema`` check keys its validators off.
 STATION_RESULT_SCHEMA_VERSION = "station_result.v1"
 
-# Reason string for a Spend-Guard hard stop (Standards Delta v0 §8). The
+# Reason string for a Spend-Guard hard stop (Dispatch contract §8). The
 # FulfillmentLine runner matches on this exact string to raise the §8 decision.
 SPEND_GUARD_EXCEEDED_REASON = "spend_guard_exceeded"
 
@@ -224,7 +224,7 @@ class StationRunOutcome:
 
 
 class StationRunner:
-    """Runs one route station's bounded loop (Standards Delta v0 §5.4–§5.8).
+    """Runs one route station's bounded loop (Dispatch contract §5.4–§5.8).
 
     Construct with the injected :class:`WorkerLLM` (the TIP boundary), a
     :class:`ContextProvider`, a :class:`RunLedger`, and optional Spend Guard /

@@ -82,8 +82,14 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 
 ## What's included (OSS)
 
-- **Prompt Packing** — fewer tokens on real agent workloads.
-  Reproduce on your own workload: `make benchmark-headline`
+> **Dispatch (v0.1-alpha preview):** turn a request into a scoped, resumable, reviewable workflow from the CLI. It is a source/`main`-branch preview and is not yet part of a released `pip install tokenpak`; see the [Dispatch guide](docs/guides/dispatch.md).
+
+- **Prompt Packing** — fewer tokens on real agent workloads. Savings are
+  route-specific: direct API, CLI, and uncached repeated-agent loops are the
+  best fit, while Claude Code/TUI routes may show lower incremental savings
+  when the provider cache already handled repeated context. Reproduce on your
+  own workload with `make benchmark-headline`; inspect attribution with
+  `tokenpak status --tip-cache`.
 - **Client integration** — one command wires Claude Code and other clients to the proxy
 - **Model routing** — send requests to the right model automatically, with fallback rules
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud

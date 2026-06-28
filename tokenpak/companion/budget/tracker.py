@@ -47,7 +47,7 @@ class BudgetTracker:
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect(ensure_wal=True)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS companion_costs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +63,15 @@ class BudgetTracker:
         """)
         conn.commit()
         conn.close()
+
+    def _connect(self, *, ensure_wal: bool = False) -> sqlite3.Connection:
+        """Open the budget DB with hook/MCP-safe SQLite pragmas."""
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        if ensure_wal:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
 
     def estimate(
         self,
@@ -117,7 +126,7 @@ class BudgetTracker:
         import datetime
         date_str = datetime.date.today().isoformat()
 
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         conn.execute(
             """INSERT INTO companion_costs
                (timestamp, date, session_id, model, input_tokens, cached_tokens,
@@ -134,7 +143,7 @@ class BudgetTracker:
         import datetime
         today = datetime.date.today().isoformat()
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = self._connect()
             row = conn.execute(
                 "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = ?",
                 (today,),

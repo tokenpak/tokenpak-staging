@@ -11,7 +11,7 @@ are NOT directives — they're content the model should see.
 
 This module is the single source of truth for the v1 directive vocabulary.
 Adding a new directive means adding to ``DIRECTIVE_REGISTRY`` here and
-nowhere else (per ``feedback_always_dynamic``).
+nowhere else (discovery stays dynamic).
 """
 
 from __future__ import annotations

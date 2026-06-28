@@ -126,6 +126,8 @@ def main(args: list[str] | None = None) -> int:
     # Route through tokenpak proxy for compression/caching/dedup.
     # Auto-detect if proxy is running when no explicit proxy_url is set.
     env = os.environ.copy()
+    for key, value in _mcp_env_vars(config).items():
+        env[key] = value
 
     # Bare mode: strip Claude Code native context layers so an external
     # gateway (e.g. OpenClaw) can inject its own tools/history/memory.
@@ -148,9 +150,8 @@ def main(args: list[str] | None = None) -> int:
         env["ANTHROPIC_BASE_URL"] = proxy_url
 
     # Print styled startup banner
-    from tokenpak.cli.commands.status import MEME_LINES, _get_version
-    meme = random.choice(MEME_LINES)
-    version = _get_version()  # dynamic, e.g. "v1.8.0" (single source: tokenpak.__version__)
+    meme = random.choice(_MEME_LINES)
+    version = _get_version()
 
     print(file=sys.stderr)
     bare_tag = " \u2022 Bare: ON" if config.bare else ""
@@ -205,6 +206,11 @@ def main(args: list[str] | None = None) -> int:
 
 
 _SESSION_PREFIX = "\U0001f4e6"  # 📦
+_MEME_LINES = [
+    "Your API bill called. It's crying.",
+    "Context packed. Wallet intact.",
+    "Less token confetti. More useful work.",
+]
 # ANSI colors for the branded session label. A black background fill is
 # painted across the whole label so it reads as a solid TokenPak chip
 # regardless of the user's terminal background; the trailing reset clears
@@ -232,6 +238,15 @@ _DEFAULT_SESSION_LABEL = (
 )
 
 
+def _get_version() -> str:
+    try:
+        from tokenpak import __version__
+
+        return f"v{__version__}"
+    except Exception:
+        return "unknown"
+
+
 def _prefix_session_name(args: list[str]) -> list[str]:
     """Prefix the Claude Code session name with 📦.
 
@@ -256,22 +271,38 @@ def _prefix_session_name(args: list[str]) -> list[str]:
 
 def _write_mcp_config(config: CompanionConfig) -> str:
     """Write the MCP server configuration to fixed run_dir."""
+    server = {
+        "type": "stdio",
+        "command": sys.executable,
+        # -P keeps the launch directory off sys.path so a ``tokenpak``
+        # dir/symlink in the cwd can't shadow the installed package
+        # (which would resolve it as a namespace package and drop
+        # ``__version__``, crashing the server on import).
+        "args": ["-P", "-m", "tokenpak.companion.mcp.server"],
+    }
+    env = _mcp_env_vars(config)
+    if env:
+        server["env"] = env
     mcp_data = {
         "mcpServers": {
-            "tokenpak-companion": {
-                "type": "stdio",
-                "command": sys.executable,
-                # -P keeps the launch directory off sys.path so a ``tokenpak``
-                # dir/symlink in the cwd can't shadow the installed package
-                # (which would resolve it as a namespace package and drop
-                # ``__version__``, crashing the server on import).
-                "args": ["-P", "-m", "tokenpak.companion.mcp.server"],
-            }
+            "tokenpak-companion": server
         }
     }
     path = config.run_dir / "mcp.json"
     path.write_text(json.dumps(mcp_data, indent=2))
     return str(path)
+
+
+def _mcp_env_vars(config: CompanionConfig) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if config.session_id and config.session_id_source == "env":
+        env["TOKENPAK_COMPANION_SESSION_ID"] = config.session_id
+    if config.project_dir:
+        env["TOKENPAK_COMPANION_PROJECT_DIR"] = config.project_dir
+    default_journal_dir = str(config.journal_dir.__class__.home() / ".tokenpak" / "companion")
+    if str(config.journal_dir) != default_journal_dir:
+        env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
+    return env
 
 
 def _write_settings(config: CompanionConfig) -> str:
@@ -333,7 +364,11 @@ def _write_settings(config: CompanionConfig) -> str:
     if hook_sh.is_file():
         hook_cmd = f"bash {hook_sh}"
     elif hook_py.is_file():
-        hook_cmd = f"python3 {hook_py}"
+        # ``sys.executable`` is the companion's own interpreter; a bare
+        # ``python3`` literal is absent from native Windows PATH and may
+        # resolve to an unrelated interpreter. Mirrors the MCP config and
+        # the Codex hook commands (CP-01).
+        hook_cmd = f"{sys.executable} {hook_py}"
     else:
         hook_cmd = None
 

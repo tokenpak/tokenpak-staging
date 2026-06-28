@@ -1,10 +1,10 @@
-"""Dispatch runtime — deterministic route selection (Standards Delta v0 §5.8).
+"""Dispatch runtime — deterministic route selection (Dispatch contract §5.8).
 
 This is the runtime entry that wires FrontDock output → a *selected route*. It
 does **not** execute stations (that is P-EXEC-01's job): it answers the single
 question "given an intake bundle, which route runs, and may it auto-dispatch?".
 
-The decision is layered, and the order is the contract (Standards Delta v0 §5.8):
+The decision is layered, and the order is the contract (Dispatch contract §5.8):
 
     1. explicit user route   (--route flag / explicit_route arg)
     2. project rule          (.tpk/dispatch/project_rules.yaml, if present)
@@ -67,14 +67,14 @@ from .registry.routes import (
 from .registry.workers import DispatchWorkerRegistry, default_worker_registry
 
 # ---------------------------------------------------------------------------
-# Alpha scoring constants (Standards Delta v0 §5.8)
+# Alpha scoring constants (Dispatch contract §5.8)
 # ---------------------------------------------------------------------------
 #
 # status: alpha_placeholder
 # recalibrate_before: v0.1-beta
 #
 # These weights + thresholds are GUT-FEEL ALPHA PLACEHOLDERS, transcribed
-# verbatim from Standards Delta v0 §5.8. They MUST be replaced before v0.1-beta
+# verbatim from Dispatch contract §5.8. They MUST be replaced before v0.1-beta
 # with data-driven values from real Run Ledger data (routes chosen / overridden
 # / failed / user corrections / decision frequency / delivery acceptance — §5.8
 # "Beta recalibration inputs"). Do not treat any number here as tuned.
@@ -118,7 +118,7 @@ _AUTO_DISPATCH_MODES: frozenset[AutonomyMode] = frozenset(
 
 @dataclass(frozen=True)
 class RouteSuggestion:
-    """Schema-bound LLM route suggestion (Standards Delta v0 §5.8 step 5 input).
+    """Schema-bound LLM route suggestion (Dispatch contract §5.8 step 5 input).
 
     The LLM may *suggest* a route; it never dispatches. This is the strict,
     validated shape a suggestion must take: ``route_id`` + ``confidence`` +
@@ -249,7 +249,7 @@ class RouteSuggester:
 
 @dataclass(frozen=True)
 class ProjectRules:
-    """Project-level route overrides (Standards Delta v0 §5.8 step 2).
+    """Project-level route overrides (Dispatch contract §5.8 step 2).
 
     A thin, in-memory representation of ``.tpk/dispatch/project_rules.yaml``.
     v0.1-alpha supports the one rule the precedence contract names: a
@@ -300,7 +300,7 @@ def score_route(
     suggestion: Optional[RouteSuggestion] = None,
     has_material_missing_info: bool = False,
 ) -> RouteScore:
-    """Score one candidate ``route`` for ``job`` (Standards Delta v0 §5.8 weights).
+    """Score one candidate ``route`` for ``job`` (Dispatch contract §5.8 weights).
 
     ALPHA PLACEHOLDER scoring (status: alpha_placeholder; recalibrate_before:
     v0.1-beta). Applies the §5.8 weight table:
@@ -406,7 +406,7 @@ def _risk_compatible(job_risk: RiskLevel, route_risk: RiskLevel) -> bool:
 
 @dataclass(frozen=True)
 class SelectionOutcome:
-    """The result of route selection (Standards Delta v0 §5.8).
+    """The result of route selection (Dispatch contract §5.8).
 
     Exactly one of ``route`` (a selected, bound route) or ``decision`` (a
     DispatchDecision asking the user) is set, per ``status``:
@@ -447,7 +447,7 @@ class SelectionOutcome:
 
 
 class DispatchRuntime:
-    """Wires FrontDock output → a selected route (Standards Delta v0 §5.8).
+    """Wires FrontDock output → a selected route (Dispatch contract §5.8).
 
     Does NOT execute stations (P-EXEC-01). Construct with a route registry +
     worker registry (defaults load the packaged profiles) and an optional
@@ -783,7 +783,7 @@ class DispatchRuntime:
                 f"confidence. {reason} Choose a route to run, or cancel."
             ),
             reason=(
-                "Standards Delta v0 §5.8 precedence did not yield a confident "
+                "Dispatch contract §5.8 precedence did not yield a confident "
                 f"auto-dispatch (deciding layer: {layer})."
             ),
             risk_level=RiskLevel.MEDIUM,
@@ -851,7 +851,7 @@ class DispatchRuntime:
 
         A bare name with no ``route.`` prefix is resolved to the highest packaged
         ``route.<name>.v1`` form so ``--route=code_task`` works as the CLI signature
-        promises (Standards Delta v0 §14.1). A value already shaped like a full id
+        promises (Dispatch contract §14.1). A value already shaped like a full id
         is returned unchanged.
         """
 

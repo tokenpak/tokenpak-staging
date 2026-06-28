@@ -21,6 +21,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .._local_data import (
+    resolve_spend_guard_db_path as _resolve_spend_guard_db_path,
+)
+from .._local_data import (
+    secure_sqlite_connect as _secure_sqlite_connect,
+)
+
 _log = logging.getLogger(__name__)
 
 def _path() -> Path:
@@ -58,7 +65,7 @@ def session_cumulative_cost(
     import datetime as _dt
     cutoff_iso = _dt.datetime.fromtimestamp(cutoff_ts).isoformat()
     try:
-        conn = sqlite3.connect(str(p), timeout=2.0)
+        conn = _secure_sqlite_connect(p, timeout=2.0)
         try:
             row = conn.execute(
                 """SELECT COALESCE(SUM(estimated_cost), 0.0)
@@ -82,7 +89,7 @@ def session_cumulative_cost_from_audit(
     session_id: str,
     *,
     window_seconds: int = 3600,
-    audit_db_path: str = "~/.tokenpak/spend_guard.db",
+    audit_db_path: Optional[str] = None,
 ) -> float:
     """Alternative: sum projected cost from the spend_guard audit log.
 
@@ -93,12 +100,12 @@ def session_cumulative_cost_from_audit(
     """
     if not session_id:
         return 0.0
-    p = Path(os.path.expanduser(audit_db_path))
+    p = _resolve_spend_guard_db_path(audit_db_path)
     if not p.exists():
         return 0.0
     cutoff_ts = time.time() - window_seconds
     try:
-        conn = sqlite3.connect(str(p), timeout=2.0)
+        conn = _secure_sqlite_connect(p, timeout=2.0)
         try:
             row = conn.execute(
                 """SELECT COALESCE(SUM(projected_cost_usd), 0.0)

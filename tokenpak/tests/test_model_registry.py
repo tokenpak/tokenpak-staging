@@ -27,9 +27,15 @@ from tokenpak.models import (
 class TestKnownModels:
     def test_opus_4_6_rates(self):
         rates = get_rates("claude-opus-4-6")
-        assert rates["input"] == 15.0
-        assert rates["output"] == 75.0
-        assert rates["cached"] == 1.5
+        assert rates["input"] == 5.0
+        assert rates["output"] == 25.0
+        assert rates["cached"] == 0.5
+
+    def test_fable_5_rates(self):
+        rates = get_rates("claude-fable-5")
+        assert rates["input"] == 10.0
+        assert rates["output"] == 50.0
+        assert rates["cached"] == 1.0
 
     def test_sonnet_4_6_rates(self):
         rates = get_rates("claude-sonnet-4-6")
@@ -74,23 +80,29 @@ class TestUnknownModels:
     the system dynamic.
     """
 
-    def test_opus_4_7_rates(self):
+    def test_opus_4_8_rates(self):
+        rates = get_rates("claude-opus-4-8")
+        assert rates["input"] == 5.0
+        assert rates["output"] == 25.0
+        assert rates["cached"] == 0.5
+
+    def test_future_opus_rates(self):
         """A future Opus release should get Opus-family pricing."""
-        rates = get_rates("claude-opus-4-7")
-        assert rates["input"] == 15.0
-        assert rates["output"] == 75.0
-        assert rates["cached"] == 1.5
+        rates = get_rates("claude-opus-4-9")
+        assert rates["input"] == 5.0
+        assert rates["output"] == 25.0
+        assert rates["cached"] == 0.5
 
     def test_opus_4_7_tier(self):
         assert get_tier("claude-opus-4-7") == 4
 
     def test_opus_4_7_bedrock(self):
         result = translate_model("claude-opus-4-7", "bedrock")
-        assert result == "anthropic.claude-opus-4-7-v1:0"
+        assert result == "anthropic.claude-opus-4-7"
 
     def test_opus_4_7_vertex(self):
         result = translate_model("claude-opus-4-7", "vertex")
-        assert result == "claude-opus-4-7@latest"
+        assert result == "claude-opus-4-7"
 
     def test_sonnet_5_0_rates(self):
         """A future Sonnet release should get Sonnet-family pricing."""
@@ -140,13 +152,13 @@ class TestResolution:
     def test_date_suffix_stripping(self):
         """Model IDs with date suffixes resolve to the base model."""
         rates = get_rates("claude-opus-4-6-20260515")
-        assert rates["input"] == 15.0
+        assert rates["input"] == 5.0
 
     def test_prefix_match(self):
         """Models sharing a prefix with a known model resolve via prefix matching."""
         info = get_pricing("claude-opus-4-6-extended")
         assert info is not None
-        assert info.input_per_mtok == 15.0
+        assert info.input_per_mtok == 5.0
 
     def test_empty_string(self):
         assert get_pricing("") is None
@@ -305,19 +317,17 @@ class TestThreadSafety:
 
 
 # ---------------------------------------------------------------------------
-# Regression: verify existing model data matches old hardcoded values
+# Regression: verify existing model data matches current catalog values
 # ---------------------------------------------------------------------------
 
 
 class TestRegressionValues:
-    """Ensure the registry returns the same values that were previously
-    hardcoded in the various inline dicts.
-    """
+    """Ensure the registry returns the expected current catalog values."""
 
-    def test_opus_4_6_matches_old_proxy(self):
+    def test_opus_4_6_matches_current_catalog(self):
         costs = get_model_costs("claude-opus-4-6")
-        assert costs["input"] == 15.0
-        assert costs["output"] == 75.0
+        assert costs["input"] == 5.0
+        assert costs["output"] == 25.0
 
     def test_sonnet_4_6_matches_old_proxy(self):
         costs = get_model_costs("claude-sonnet-4-6")
