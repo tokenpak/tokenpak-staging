@@ -264,8 +264,8 @@ rm ~/.tokenpak/stats.db # nuclear option
 Run calibration first:
 
 ```bash
-tokenpak calibrate ~/vault --max-workers 8 --rounds 2
-tokenpak index ~/vault --auto-workers
+tokenpak calibrate ~/notes --max-workers 8 --rounds 2
+tokenpak index ~/notes --auto-workers
 ```
 
 ### Vault search returns irrelevant results
@@ -273,7 +273,7 @@ tokenpak index ~/vault --auto-workers
 Re-index your vault:
 
 ```bash
-tokenpak index ~/vault --force
+tokenpak index ~/notes --force
 ```
 
 ### Index is using too much disk space
@@ -288,7 +288,7 @@ tokenpak prune --older-than 30d
 ```bash
 # Rebuild from scratch
 rm -f ~/.tokenpak/registry.db
-tokenpak index ~/vault
+tokenpak index ~/notes
 ```
 
 ---

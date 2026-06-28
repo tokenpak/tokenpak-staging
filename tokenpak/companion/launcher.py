@@ -364,7 +364,11 @@ def _write_settings(config: CompanionConfig) -> str:
     if hook_sh.is_file():
         hook_cmd = f"bash {hook_sh}"
     elif hook_py.is_file():
-        hook_cmd = f"python3 {hook_py}"
+        # ``sys.executable`` is the companion's own interpreter; a bare
+        # ``python3`` literal is absent from native Windows PATH and may
+        # resolve to an unrelated interpreter. Mirrors the MCP config and
+        # the Codex hook commands (CP-01).
+        hook_cmd = f"{sys.executable} {hook_py}"
     else:
         hook_cmd = None
 

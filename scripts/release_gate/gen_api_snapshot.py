@@ -220,15 +220,21 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
             continue
         if "tests" in parts:
             continue
-        # Dispatch is excluded from the released wheel (preview / main-only),
-        # mirroring pyproject ``packages.find`` exclude of
-        # ``tokenpak.orchestration.dispatch*``. The public-API snapshot records
-        # the RELEASED package surface, so it likewise excludes the dispatch
-        # subsystem (``orchestration.dispatch*``) and its CLI module
-        # (``cli.commands.dispatch_cmd``) — it must not record preview/source-only
-        # dispatch code as public released API.
-        if name == "tokenpak.cli.commands.dispatch_cmd" or name.startswith(
-            "tokenpak.orchestration.dispatch"
+        # Preview / internal orchestration subsystems are excluded from the
+        # public-API snapshot. The snapshot records the RELEASED public surface,
+        # so it must not record preview/source-only code as public released API:
+        #   * ``orchestration.dispatch*`` + ``cli.commands.dispatch_cmd`` —
+        #     the Dispatch subsystem (preview / main-only).
+        #   * ``orchestration.deliberation*`` — the Deliberation Engine, the
+        #     internal layer of Deliberation Dispatch (Std 69 Adaptive
+        #     Deliberation Policy: advisory-first, draft, "future product code",
+        #     publishes nothing / no new public claim). It is a sibling of the
+        #     dispatch subsystem and must be treated identically: its symbols are
+        #     NOT released public API.
+        if (
+            name == "tokenpak.cli.commands.dispatch_cmd"
+            or name.startswith("tokenpak.orchestration.dispatch")
+            or name.startswith("tokenpak.orchestration.deliberation")
         ):
             continue
         try:

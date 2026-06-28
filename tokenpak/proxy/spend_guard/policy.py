@@ -243,11 +243,10 @@ class SpendGuardConfig:
     # ── Concurrent budget reservations (Standard 29 §15) ──
     # Atomic admission control for in-flight requests against the SAME
     # rolling-cap budget (settled + reserved + this request ≤ cap).
-    # Default OFF until the proxy response path settles holds
-    # (reservation.settle_reservation); until then every forward would
-    # hold its projection for the full TTL and over-block sustained
-    # traffic. The settle-wiring follow-up flips this default.
-    reservations_enabled: bool = False
+    # Settle wiring is now on the proxy response path, so reservations are
+    # active by default. Operators can still disable them explicitly via
+    # config or TOKENPAK_SPEND_GUARD_RESERVATIONS_ENABLED=0.
+    reservations_enabled: bool = True
     reservation_ttl_seconds: int = 600
 
 

@@ -15,8 +15,12 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from tokenpak.platform import process
 
 # Configuration
 PROXY_PORT = int(os.environ.get("TOKENPAK_PORT", "8766"))
@@ -41,6 +45,21 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def _http_get_json(path: str, timeout: float = 3.0) -> Optional[Dict]:
+    """GET ``http://localhost:<port><path>`` and return parsed JSON, or None.
+
+    Pure-Python (urllib) replacement for ``curl`` shellouts so health/stats
+    checks work identically on Linux, macOS, and native Windows without an
+    external binary.
+    """
+    url = f"http://localhost:{PROXY_PORT}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 — fixed localhost
+            return json.loads(resp.read().decode())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -153,33 +172,15 @@ class ProxyWatchdog:
         self.cooldown_mgr = CooldownManager()
 
     def is_proxy_running(self) -> bool:
-        """Check if proxy process is running and responding."""
-        try:
-            result = subprocess.run(
-                ["curl", "-s", "--max-time", "2", f"http://localhost:{PROXY_PORT}/health"],
-                capture_output=True,
-                timeout=3,
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                return data.get("status") in ("ok", "degraded")
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
-            pass
+        """Check if proxy process is running and responding (Python HTTP, no curl)."""
+        data = _http_get_json("/health", timeout=3.0)
+        if isinstance(data, dict):
+            return data.get("status") in ("ok", "degraded")
         return False
 
     def is_port_listening(self) -> bool:
-        """Check if the proxy port is actually listening."""
-        try:
-            result = subprocess.run(
-                ["ss", "-tlnp"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            return f":{PROXY_PORT}" in result.stdout
-        except Exception:
-            pass
-        return False
+        """Check if the proxy port is actually listening (pure socket, no `ss`)."""
+        return process.port_in_use(PROXY_PORT)
 
     def restart_proxy(self) -> bool:
         """Restart the proxy with exponential backoff."""
@@ -193,18 +194,20 @@ class ProxyWatchdog:
         logger.info(f"Restarting proxy... (attempt {self.restart_count + 1}, backoff {backoff}s)")
 
         try:
-            # Kill any existing proxy process
-            subprocess.run(["pkill", "-f", "tokenpak.proxy"], timeout=2)
-            subprocess.run(["pkill", "-f", "tokenpak/proxy"], timeout=2)
+            # Kill any existing proxy process. On POSIX this uses `pkill -f`;
+            # on Windows (no pkill) we fall back to terminating the tracked PID.
+            killed, how = process.kill_by_pattern(["tokenpak.proxy", "tokenpak/proxy"])
+            if not killed:
+                logger.info(f"Pattern kill unavailable ({how}); using PID-file termination")
+                tracked_pid = process.read_pid_file(PROXY_PID_FILE)
+                if tracked_pid is not None:
+                    process.terminate(tracked_pid)
             time.sleep(1)
 
-            # Start new proxy
-            subprocess.Popen(
-                [sys.executable, "-m", "tokenpak.proxy"],
-                cwd=Path.home() / "tokenpak",
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            # Start new proxy via installed-module execution. No cwd assumption:
+            # `-m tokenpak.proxy` resolves the installed package regardless of the
+            # working directory, so we drop the old `~/tokenpak` cwd fallback.
+            process.start_background([sys.executable, "-m", "tokenpak.proxy"])
             self.restart_count += 1
             time.sleep(backoff)
 
@@ -224,7 +227,13 @@ class ProxyWatchdog:
             return False
 
     def check_memory_usage(self):
-        """Warn if proxy memory exceeds 500MB."""
+        """Warn if proxy memory exceeds 500MB.
+
+        Uses POSIX ``pgrep``/``ps``; skipped on native Windows where those
+        binaries do not exist (memory monitoring there is a future enhancement).
+        """
+        if process.is_windows():
+            return
         try:
             result = subprocess.run(
                 ["pgrep", "-f", "tokenpak.proxy"],
@@ -249,21 +258,12 @@ class ProxyWatchdog:
             pass
 
     def check_error_rate(self):
-        """Warn if proxy error rate in session is high."""
-        try:
-            result = subprocess.run(
-                ["curl", "-s", "--max-time", "2", f"http://localhost:{PROXY_PORT}/stats/session"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                errors = data.get("errors", 0)
-                if errors > 10:
-                    logger.warning(f"High error rate in session: {errors} errors")
-        except Exception:
-            pass
+        """Warn if proxy error rate in session is high (Python HTTP, no curl)."""
+        data = _http_get_json("/stats/session", timeout=3.0)
+        if isinstance(data, dict):
+            errors = data.get("errors", 0)
+            if errors > 10:
+                logger.warning(f"High error rate in session: {errors} errors")
 
     def clear_cooldowns(self):
         """Clear any expired cooldowns from state files."""
@@ -276,29 +276,14 @@ class ProxyWatchdog:
         """Log summary stats every hour."""
         now = time.time()
         if now - self.last_stats_log > STATS_INTERVAL:
-            try:
-                result = subprocess.run(
-                    [
-                        "curl",
-                        "-s",
-                        "--max-time",
-                        "2",
-                        f"http://localhost:{PROXY_PORT}/stats/session",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=3,
+            stats = _http_get_json("/stats/session", timeout=3.0)
+            if isinstance(stats, dict):
+                logger.info(
+                    f"Hourly stats — requests: {stats.get('requests', 0)}, "
+                    f"errors: {stats.get('errors', 0)}, "
+                    f"saved_tokens: {stats.get('saved_tokens', 0)}"
                 )
-                if result.returncode == 0:
-                    stats = json.loads(result.stdout)
-                    logger.info(
-                        f"Hourly stats — requests: {stats.get('requests', 0)}, "
-                        f"errors: {stats.get('errors', 0)}, "
-                        f"saved_tokens: {stats.get('saved_tokens', 0)}"
-                    )
-                    self.last_stats_log = now
-            except Exception:
-                pass
+                self.last_stats_log = now
 
     def run(self):
         """Main watchdog loop."""
