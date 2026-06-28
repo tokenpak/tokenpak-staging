@@ -74,6 +74,10 @@ _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
         # Cards authoring layer: ~/.tpk/cards/installed/,
         # ~/.tpk/cards/compiled/). Path-layout reconciliation pending.
         "cards",
+        # debug/ — encrypted/hash-only debug capture blobs and key material.
+        # The capture surface predates the resolver migration; keep it visible
+        # as adopted state until the canonical layout is amended.
+        "debug",
     }
 )
 

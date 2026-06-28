@@ -35,13 +35,13 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
 import httpx
 
 from tokenpak import __version__ as _tokenpak_version
+from tokenpak import _paths
 from tokenpak.cache.telemetry import CacheMetrics
 from tokenpak.cache.telemetry import get_collector as _get_cache_collector
 from tokenpak.core.config import get_stats_footer_enabled
@@ -3736,7 +3736,7 @@ def main() -> None:
     }
 
     # Write PID file on startup; remove on clean shutdown.
-    _pid_path = Path.home() / ".tokenpak" / "proxy.pid"
+    _pid_path = _paths.under("proxy.pid")
     _pid_path.parent.mkdir(parents=True, exist_ok=True)
     _pid_path.write_text(str(os.getpid()))
 
