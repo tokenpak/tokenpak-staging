@@ -926,7 +926,7 @@ def cmd_setup(args):
 
             print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
         except Exception:
-            print("    export ANTHROPIC_API_KEY='sk-...'")
+            print("    Set ANTHROPIC_API_KEY in your shell before starting TokenPak.")
         return
 
     # Auto-detect primary provider
@@ -2249,23 +2249,32 @@ def cmd_dashboard(args):
 
     # --public: show public URL with token
     if getattr(args, "public", False):
+        from tokenpak.cli.commands.dashboard_share import (
+            build_share_plan,
+            render_share_plan,
+            run_quick_tunnel,
+        )
         from tokenpak.core.config_loader import get as _cfg  # noqa: F401
 
         port = int(_cfg("port", 8766, "TOKENPAK_PORT", int))
         token = load_or_create_token()
-        hostname = socket.gethostname()
-        try:
-            ip = socket.gethostbyname(hostname)
-        except Exception:
-            ip = "localhost"
-        url = f"http://{ip}:{port}/dashboard?token={token}"
-        print("\n✅ TokenPak Dashboard (Public)")
-        print("─────────────────────────────────")
-        print(f"URL:   {url}")
-        print(f"Token: {token}")
-        print("\n⚠️  Share this URL only with trusted users.")
-        print("Regenerate token: tokenpak dashboard --new-token\n")
-        webbrowser.open(url)
+        plan = build_share_plan(port=port, token=token)
+        if getattr(args, "tunnel", False):
+            if not plan.proxy_running:
+                print()
+                print(render_share_plan(plan))
+                print()
+                raise SystemExit(1)
+            rc = run_quick_tunnel(port=port, token=token)
+            if rc:
+                raise SystemExit(rc)
+            return
+
+        print()
+        print(render_share_plan(plan))
+        print()
+        if plan.proxy_running and sys.stdout.isatty():
+            webbrowser.open(plan.local_url)
         return
 
     # Default: TUI dashboard
@@ -3435,7 +3444,12 @@ def build_parser():
     p_dashboard.add_argument(
         "--public",
         action="store_true",
-        help="Show public URL with token (accessible from any machine)",
+        help="Show guided sharing options with a dashboard token",
+    )
+    p_dashboard.add_argument(
+        "--tunnel",
+        action="store_true",
+        help="With --public, start a temporary Cloudflare quick tunnel",
     )
     p_dashboard.add_argument(
         "--show-token",
