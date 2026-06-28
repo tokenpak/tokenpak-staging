@@ -2402,6 +2402,14 @@ def cmd_codex(args):
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     forwarded = list(args.args)
+    if forwarded and forwarded[0] == "usage":
+        from .companion.codex.usage import main_usage
+
+        sys.exit(main_usage(forwarded[1:]))
+    if forwarded and forwarded[0] == "exec" and "--capture" in forwarded[1:]:
+        from .companion.codex.usage import main_exec_capture
+
+        sys.exit(main_exec_capture(forwarded[1:]))
     if forwarded and forwarded[0] == "doctor":
         from .companion.codex.doctor import main as doctor_main
 
@@ -2683,6 +2691,8 @@ def _build_codex_parser(sub):
             "  tokenpak codex uninstall         # reverse installation\n"
             "  tokenpak codex statusline        # enable native status modules (additive)\n"
             "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
+            "  tokenpak codex usage --latest --json\n"
+            "  tokenpak codex exec --capture -- codex exec --json \"summarize this repo\"\n"
             "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
             "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
             "  tokenpak codex --budget 5.00\n"

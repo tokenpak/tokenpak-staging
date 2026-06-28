@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-22T23:54:22Z",
+  "generated_at": "2026-06-25T01:13:42Z",
   "package_version": "1.7.1",
   "symbols": [
     {
@@ -2634,6 +2634,54 @@
     {
       "module": "tokenpak.companion.codex.uninstall",
       "name": "uninstall_skills"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "USAGE_SCHEMA_VERSION"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "UsageSafetyError"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "candidate_session_files"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "capture_codex_exec"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "load_or_create_salt"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "main_exec_capture"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "main_usage"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "parse_latest_session"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "parse_session_jsonl"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "select_latest_session"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "validate_session_path"
+    },
+    {
+      "module": "tokenpak.companion.codex.usage",
+      "name": "write_exec_sidecar"
     },
     {
       "module": "tokenpak.companion.config",
