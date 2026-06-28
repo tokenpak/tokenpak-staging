@@ -926,7 +926,7 @@ def cmd_setup(args):
 
             print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
         except Exception:
-            print("    export ANTHROPIC_API_KEY='sk-...'")
+            print("    Set ANTHROPIC_API_KEY in your shell before starting TokenPak.")
         return
 
     # Auto-detect primary provider
@@ -1932,11 +1932,10 @@ class Colors:
 
 def cmd_requests(args):
     """Live request explorer: tail or show a request by id."""
-    import json as _json
     import time as _time
 
     from tokenpak.cli.request_explorer import (
-        REQUESTS_PATH,
+        _has_request_store,
         age_label,
         cache_pct,
         get_request_by_id,
@@ -1960,7 +1959,7 @@ def cmd_requests(args):
         limit = getattr(args, "limit", 10)
         follow = not getattr(args, "once", False)
 
-        if not REQUESTS_PATH.exists():
+        if not _has_request_store():
             print("No request ledger found yet. Run requests through the proxy first.")
             return
 
@@ -1989,25 +1988,23 @@ def cmd_requests(args):
         if not follow:
             return
 
-        # Follow new entries
-        with REQUESTS_PATH.open("r") as f:
-            f.seek(0, 2)
-            try:
-                while True:
-                    line = f.readline()
-                    if not line:
-                        _time.sleep(0.5)
+        seen = {str(row.get("id", "")) for row in rows if row.get("id")}
+        try:
+            while True:
+                _time.sleep(0.5)
+                next_rows = load_requests(limit=limit)
+                fresh = []
+                for row in next_rows:
+                    request_key = str(row.get("id", ""))
+                    if request_key and request_key in seen:
                         continue
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = _json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    _print_rows([row], with_header=False)
-            except KeyboardInterrupt:
-                return
+                    if request_key:
+                        seen.add(request_key)
+                    fresh.append(row)
+                if fresh:
+                    _print_rows(fresh, with_header=False)
+        except KeyboardInterrupt:
+            return
 
     # default: show single request
     if not request_id:
@@ -2252,23 +2249,32 @@ def cmd_dashboard(args):
 
     # --public: show public URL with token
     if getattr(args, "public", False):
+        from tokenpak.cli.commands.dashboard_share import (
+            build_share_plan,
+            render_share_plan,
+            run_quick_tunnel,
+        )
         from tokenpak.core.config_loader import get as _cfg  # noqa: F401
 
         port = int(_cfg("port", 8766, "TOKENPAK_PORT", int))
         token = load_or_create_token()
-        hostname = socket.gethostname()
-        try:
-            ip = socket.gethostbyname(hostname)
-        except Exception:
-            ip = "localhost"
-        url = f"http://{ip}:{port}/dashboard?token={token}"
-        print("\n✅ TokenPak Dashboard (Public)")
-        print("─────────────────────────────────")
-        print(f"URL:   {url}")
-        print(f"Token: {token}")
-        print("\n⚠️  Share this URL only with trusted users.")
-        print("Regenerate token: tokenpak dashboard --new-token\n")
-        webbrowser.open(url)
+        plan = build_share_plan(port=port, token=token)
+        if getattr(args, "tunnel", False):
+            if not plan.proxy_running:
+                print()
+                print(render_share_plan(plan))
+                print()
+                raise SystemExit(1)
+            rc = run_quick_tunnel(port=port, token=token)
+            if rc:
+                raise SystemExit(rc)
+            return
+
+        print()
+        print(render_share_plan(plan))
+        print()
+        if plan.proxy_running and sys.stdout.isatty():
+            webbrowser.open(plan.local_url)
         return
 
     # Default: TUI dashboard
@@ -3438,7 +3444,12 @@ def build_parser():
     p_dashboard.add_argument(
         "--public",
         action="store_true",
-        help="Show public URL with token (accessible from any machine)",
+        help="Show guided sharing options with a dashboard token",
+    )
+    p_dashboard.add_argument(
+        "--tunnel",
+        action="store_true",
+        help="With --public, start a temporary Cloudflare quick tunnel",
     )
     p_dashboard.add_argument(
         "--show-token",
@@ -3913,27 +3924,53 @@ def cmd_savings(args):
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Savings are read only from the receipt-backed telemetry engine, which
-    # counts proxy-attributable savings from real cost records. There is no
-    # estimated/derived path: when no receipt-backed data exists, a neutral
-    # "no data yet" state is shown rather than an invented figure.
-    from .telemetry.query import get_savings_report
+    # Canonical conservative savings: the live `savings`
+    # command reports the SAME proxy-attributed figure as `status`/`doctor`,
+    # derived from the one `compute_savings` engine — no separate receipt-backed
+    # path that could disagree on the same install. The window is labelled
+    # explicitly; when there is no data a neutral "no data yet" state is shown
+    # rather than an invented figure.
+    from .telemetry.savings import compute_savings
 
-    report = get_savings_report(days=days)
+    _sv = compute_savings(window=f"{int(days)}d_custom")
+    _has = (not _sv.error) and _sv.requests > 0
+    actual = _sv.actual_cost if _has else 0.0
+    estimated_without = _sv.baseline_cost if _has else 0.0
+    savings_amount = _sv.saved_cost if _has else 0.0
+    savings_pct = _sv.savings_pct if _has else 0.0
+    if _has:
+        _cr = sum(m["cache_read_tokens"] for m in _sv.models)
+        _in = sum(m["input_tokens"] for m in _sv.models)
+        cache_hit_rate = (_cr / (_cr + _in)) if (_cr + _in) > 0 else 0.0
+    else:
+        cache_hit_rate = 0.0
 
     if mode == OutputMode.RAW:
-        print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
+        print(
+            fmt.raw(
+                {
+                    "section": "savings",
+                    "days": days,
+                    "window": _sv.window_label,
+                    "actual_cost": actual,
+                    "savings_amount": savings_amount,
+                    "savings_pct": savings_pct,
+                    "cache_hit_rate": cache_hit_rate,
+                    "estimated_without_compression": estimated_without,
+                }
+            )
+        )
         return
 
     # Check for empty database
-    if report.total_cost == 0.0 and report.savings_amount == 0.0:
+    if not _has:
         print("No savings data yet. Run your first request through the proxy to start tracking.")
         return
 
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{report.savings_pct:.1f}%", f"${report.savings_amount:.2f}", f"{days}d"]
+                [f"{savings_pct:.1f}%", f"${savings_amount:.2f}", _sv.window_label]
             )
         )
         return
@@ -3943,11 +3980,12 @@ def cmd_savings(args):
     print(
         fmt.kv(
             [
-                ("Savings", f"${report.savings_amount:.2f}"),
-                ("Savings %", f"{report.savings_pct:.1f}%"),
-                ("Actual Cost", f"${report.total_cost:.2f}"),
-                ("Baseline", f"${report.estimated_without_compression:.2f}"),
-                ("Cache Hit", f"{report.cache_hit_rate * 100:.1f}%"),
+                ("Window", _sv.window_label),
+                ("Savings", f"${savings_amount:.2f}"),
+                ("Savings %", f"{savings_pct:.1f}%"),
+                ("Actual Cost", f"${actual:.2f}"),
+                ("Baseline", f"${estimated_without:.2f}"),
+                ("Cache Hit", f"{cache_hit_rate * 100:.1f}%"),
             ]
         )
     )
@@ -5540,11 +5578,23 @@ def main():
                 uptime_str = "unknown"
             report = get_savings_report(days=1)
 
+            # Canonical conservative savings: the bare
+            # `tokenpak` summary reports the SAME figure as `tokenpak status`
+            # for the same window, derived from the one `compute_savings`
+            # engine — not a separate receipt-backed number that could disagree.
+            from .telemetry.savings import compute_savings
+
+            _sv = compute_savings(window="today")
+
             # Compact savings summary
             print(f"TokenPak — {uptime_str} uptime")
-            print(
-                f"💰 ${report.savings_amount:.2f} saved today ({report.savings_pct:.0f}% reduction)"
-            )
+            if _sv.error or _sv.requests == 0:
+                print("💰 savings unavailable (no telemetry yet)")
+            else:
+                print(
+                    f"💰 ${_sv.saved_cost:.2f} saved {_sv.window_label} "
+                    f"({_sv.savings_pct:.0f}% reduction)"
+                )
 
             # Get request count from recent events
             from .telemetry.query import get_recent_events
@@ -6227,6 +6277,16 @@ def cmd_cost(args):
 
     print(f"TokenPak Cost Summary — {label}")
     print(f"  Spent:  ${total:.4f}")
+
+    # Canonical conservative savings — agrees with
+    # status/doctor/savings; explicit window label, never a passthrough
+    # over-claim. Derived from the one `compute_savings` engine.
+    from .telemetry.savings import compute_savings
+
+    _cost_win = {"daily": "today", "weekly": "week", "monthly": "month"}[period]
+    _sv = compute_savings(window=_cost_win)
+    if not _sv.error:
+        print(f"  Saved:  ${_sv.saved_cost:.4f} ({_sv.savings_pct:.1f}%)  [{_sv.window_label}]")
 
     # Show live proxy session cost if available
     stats = _proxy_get("/stats")

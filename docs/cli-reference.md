@@ -447,7 +447,8 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show public URL with token (accessible from any machine)
+- `--public` — Show guided sharing options with a dashboard token
+- `--tunnel` — With --public, start a temporary Cloudflare quick tunnel
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
 

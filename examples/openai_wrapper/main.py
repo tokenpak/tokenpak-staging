@@ -20,7 +20,7 @@ from typing import Optional, Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine, CacheManager
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ class TokenPakOpenAI:
             print("⚠️  openai package not installed — running in dry-run mode")
 
         self.engine = HeuristicEngine()
-        self.cache = CacheManager(default_ttl=300)
+        self.cache = CacheManager()
         self.target_tokens = target_tokens
         self.compress_system = compress_system
         self.keep_recent_turns = keep_recent_turns
@@ -131,8 +131,8 @@ class TokenPakOpenAI:
             return msg
 
         cache_key = hashlib.sha256(content.encode()).hexdigest()[:20]
-        hit, cached = self.cache.get(cache_key)
-        if hit:
+        cached = self.cache.get(cache_key)
+        if cached is not None:
             self._stats["cache_hits"] += 1
             return {**msg, "content": cached}
 
