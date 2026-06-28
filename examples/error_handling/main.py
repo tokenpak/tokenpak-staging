@@ -18,7 +18,6 @@ import logging
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger("tokenpak.error_handling")
