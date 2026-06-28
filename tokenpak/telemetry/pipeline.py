@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # --- Shadow hook + intent classifier (fail-silent) ---
 try:
     from tokenpak.proxy.shadow_hook import ShadowHook as _ShadowHookClass
-    from tokenpak.proxy.shadow_hook import shadow_enabled_from_env as _shadow_enabled_from_env
+    from tokenpak.proxy.shadow_hook import _shadow_enabled_from_env
 
 except Exception:
     _ShadowHookClass = None  # type: ignore
