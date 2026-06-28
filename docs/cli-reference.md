@@ -1258,6 +1258,62 @@ Show per-model efficiency ranking from receipt-backed telemetry.
 
 ### `tokenpak menu`
 
+Interactive command browser with arrow-key navigation. Runs in the alternate-screen buffer — menu frames never appear in terminal scrollback.
+
+**Two ways to open:**
+
+- `tokenpak` — bare invocation on a TTY launches the menu automatically
+- `tokenpak menu` — explicit subcommand, same result
+
+The menu does **not** launch when stdin or stdout is not a TTY, when the `CI` environment variable is set, when `TOKENPAK_NONINTERACTIVE=1` is set, or when `TERM=dumb`.
+
+**Home screen:**
+
+The home screen shows nine task-focused sections. Each entry shows the equivalent CLI command on the right:
+
+| Section | CLI equivalent |
+|---|---|
+| Start proxy | `tokenpak start` |
+| Run demo | `tokenpak demo` |
+| Proxy status | `tokenpak status` |
+| Spend & savings | `tokenpak cost` |
+| Configure | `tokenpak config` |
+| Permission tier | `tokenpak permissions` |
+| Companion | — |
+| Troubleshoot | `tokenpak doctor` |
+| Browse all commands | — |
+
+A status strip at the top shows Proxy state, Today's cost, and Today's saved. Values come from a cached non-blocking snapshot — unknown figures render as `—` and are never fabricated as `$0.00`.
+
+**Keys:**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate items |
+| `Enter` | Select / run highlighted item |
+| `q` or `Ctrl-C` | Quit the menu |
+| `Esc` | Go back (in submenus); quit (at home screen) |
+| Any printable character | Filter items (type-to-filter) |
+| `Backspace` | Delete last filter character; go back if filter is empty |
+
+Type-to-filter is active on the home screen and the "Browse all commands" section. Matching runs against both the displayed label and a set of search aliases — for example, typing `health` highlights Proxy status.
+
+**Non-interactive fallback:**
+
+When the terminal is not a TTY, `tokenpak menu` prints a numbered plain-text list of home-screen options and exits rather than launching the cursor-driven interface.
+
+**`--no-tui` escape hatch:**
+
+Pass `--no-tui` anywhere on the command line to suppress the interactive menu for bare `tokenpak` invocations:
+
+```
+tokenpak --no-tui
+```
+
+This prints quick-help and proxy uptime instead of opening the TUI. `--no-tui` is a global flag — it is stripped from `sys.argv` before subcommand parsers run and does not appear in any subcommand's `--help` output. It is honored on bare `tokenpak` and `tokenpak integrate <target>` (without `--apply`); the explicit `tokenpak menu` subcommand always launches the TUI directly.
+
+Use `TOKENPAK_NONINTERACTIVE=1` as the environment-variable equivalent for scripts where the command line cannot be controlled.
+
 ### `tokenpak monitor`
 
 Start the live monitor dashboard.
