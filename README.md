@@ -45,17 +45,17 @@ for the evidence boundary and deterministic regression fixture.
 
 TokenPak speaks the OpenAI and Anthropic HTTP APIs, so any client that targets those endpoints can route through it. The table below reflects what is verified in the repo's [adapter compatibility matrix](docs/adapter-compatibility-matrix.md) versus what is not yet verified.
 
-| Client / SDK | Status |
-|--------------|--------|
-| Claude Code | ✅ Supported — `tokenpak integrate claude-code` |
-| OpenAI SDK | ✅ Supported — tested |
-| Anthropic SDK | ✅ Supported — tested |
-| LiteLLM | ✅ Supported — tested |
-| Cursor | ⚠️ Experimental — verify before relying on it |
-| Cline | ⚠️ Experimental — verify before relying on it |
-| Continue.dev | ⚠️ Experimental — verify before relying on it |
-| Aider | ⚠️ Experimental — verify before relying on it |
-| Codex | ⚠️ Experimental — verify before relying on it |
+| Client / SDK | Runtime setup mode | Compatibility label |
+|--------------|--------------------|---------------------|
+| Claude Code | `--apply` supported | Supported; tested |
+| OpenAI SDK | Print-only snippet | Supported; tested |
+| Anthropic SDK | Print-only snippet | Supported; tested |
+| LiteLLM | Print-only snippet | Supported; tested |
+| Cursor | `--apply` available | Experimental; untested |
+| Cline | Print-only snippet | Experimental; untested |
+| Continue.dev | `--apply` available | Experimental; untested |
+| Aider | `--apply` available | Experimental; untested |
+| Codex | Print-only base setup | Experimental; untested |
 
 Run `tokenpak integrate` to see the current client list with setup guides for each.
 
