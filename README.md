@@ -1,4 +1,4 @@
-# TokenPak — Cut your LLM token spend — zero config
+# TokenPak — Cut your LLM token spend — local first
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
@@ -7,31 +7,37 @@
 
 > **The open logistics layer for AI context.**
 
-TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no TokenPak cloud dependency, and provider credentials stay in your local client/provider environment.
 
 **Status:** Beta — APIs and CLI may change between releases.
 
 ---
 
-## 30-second demo
+## First measured receipt
 
 ```bash
 pip install tokenpak
-tokenpak serve                          # start proxy at localhost:8766
-tokenpak integrate claude-code --apply  # wire Claude Code to the proxy
+tokenpak start
+curl -sS http://localhost:8766/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":64,"messages":[{"role":"user","content":"Summarize this recurring project context and keep the answer short."}]}'
 ```
 
-```
-✅ Applied: Updated ~/.claude/settings.json (2 changes).
-```
-
-Then see it work on your own machine:
+That third command sends one eligible provider request through the local proxy.
+The durable local receipt is written to `~/.tpk/monitor.db` in the `requests`
+table, with model, token, cost, cache-origin, and attribution fields. Inspect the
+rollup with:
 
 ```bash
-tokenpak demo
+tokenpak status --json
 ```
 
-Run the local demo to inspect the Prompt Packing stages and a sample savings estimate on your machine.
+Receipt values are measured from local proxy telemetry and provider usage data.
+If a request has no attributable compression or cache savings, TokenPak reports
+zero instead of inventing a number. See [docs/first-receipt.md](docs/first-receipt.md)
+for the evidence boundary and deterministic regression fixture.
 
 ---
 

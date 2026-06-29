@@ -4529,6 +4529,22 @@ def _build_debug_parser(sub):
     p_export.add_argument("trace_id", help="Trace ID to export")
     p_export.add_argument("--json", action="store_true", dest="json_out", help="Output as JSON")
     p_export.set_defaults(func=cmd_debug_export)
+
+    p_receipt = dsub.add_parser(
+        "receipt", help="Render the Receipt v1 proof object for a recorded request"
+    )
+    p_receipt.add_argument(
+        "request_id",
+        nargs="?",
+        help="Request ID to render a receipt for (omit to print the support-bundle pointer)",
+    )
+    p_receipt.add_argument(
+        "--raw",
+        action="store_true",
+        help="Show the receipt without redaction (default: redaction-safe)",
+    )
+    p_receipt.set_defaults(func=cmd_debug_receipt)
+
     p_debug.set_defaults(func=lambda a: p_debug.print_help())
 
 
@@ -4625,6 +4641,22 @@ def cmd_debug_export(args):
             print(_json.dumps(v, indent=2))
         else:
             print(f"{k}: {v}")
+
+
+def cmd_debug_receipt(args):
+    """Render the Receipt v1 proof object for a recorded request.
+
+    Thin shim over the already-tested render path
+    (`tokenpak.cli.commands.debug._render_request_receipt`). Prints the
+    redaction-safe receipt JSON for a recorded request, or a support-bundle
+    pointer when the id is missing / no record exists. ``--raw`` shows the
+    receipt without redaction.
+    """
+    from tokenpak.cli.commands.debug import _render_request_receipt
+
+    request_id = getattr(args, "request_id", None)
+    redact = not getattr(args, "raw", False)
+    print(_render_request_receipt(request_id, redact=redact))
 
 
 def _build_learn_parser(sub):
