@@ -199,6 +199,7 @@ class ReviewerStatus(str, Enum):
     PASS = "pass"
     WARNING = "warning"
     FAIL = "fail"
+    NOT_EVALUABLE = "not_evaluable"
 
 
 class CriterionStatus(str, Enum):
@@ -207,6 +208,7 @@ class CriterionStatus(str, Enum):
     PASS = "pass"
     FAIL = "fail"
     UNCLEAR = "unclear"
+    NOT_EVALUABLE = "not_evaluable"
 
 
 class FixSeverity(str, Enum):

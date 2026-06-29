@@ -50,6 +50,7 @@ STATUS_TO_DELIVERY: dict[ReviewerStatus, DeliveryRecommendationStatus] = {
     ReviewerStatus.PASS: DeliveryRecommendationStatus.READY,
     ReviewerStatus.WARNING: DeliveryRecommendationStatus.READY_WITH_WARNING,
     ReviewerStatus.FAIL: DeliveryRecommendationStatus.BLOCKED,
+    ReviewerStatus.NOT_EVALUABLE: DeliveryRecommendationStatus.BLOCKED,
 }
 
 
@@ -64,13 +65,45 @@ def derive_delivery_status(status: ReviewerStatus) -> DeliveryRecommendationStat
 # ---------------------------------------------------------------------------
 
 
+class EvidenceTestResult(DispatchBaseModel):
+    """Observed test command result supplied to the Reviewer Station."""
+
+    command: str
+    status: str
+    exit_code: int | None = None
+    stdout_excerpt: str = ""
+    stderr_excerpt: str = ""
+
+
+class CommandEvidence(DispatchBaseModel):
+    """Observed command execution evidence supplied to the Reviewer Station."""
+
+    command: str
+    status: str
+    exit_code: int | None = None
+    log_excerpt: str = ""
+    effect_id: str | None = None
+
+
+class NegativeEvidence(DispatchBaseModel):
+    """Explicit absence marker when evidence needed for evaluation is missing."""
+
+    field: str
+    status: str
+    reason: str
+    consequence: str
+    blocks_required_acceptance_criteria: bool = True
+
+
 class ReviewerStationInput(DispatchBaseModel):
     """Input to the Reviewer Station.
 
     ``artifacts`` carries :class:`DispatchArtifact` records (the schema
     names the field type ``Artifact``; the foundation's artifact record is
     ``DispatchArtifact``). ``effect_records`` carries the build station's
-    :class:`DispatchEffect` records.
+    :class:`DispatchEffect` records. Evidence fields are additive and are kept
+    structured so missing review material is explicit instead of hidden in a
+    prose context blob.
     """
 
     manifest_id: str
@@ -83,6 +116,11 @@ class ReviewerStationInput(DispatchBaseModel):
     artifacts: list[DispatchArtifact] = Field(default_factory=list)
     context_summary: str = ""
     known_risk_flags: list[str] = Field(default_factory=list)
+    test_results: list[EvidenceTestResult] = Field(default_factory=list)
+    command_evidence: list[CommandEvidence] = Field(default_factory=list)
+    file_hashes: dict[str, str] = Field(default_factory=dict)
+    diff_summary: str = ""
+    negative_evidence: list[NegativeEvidence] = Field(default_factory=list)
 
 
 class CriterionResult(DispatchBaseModel):
@@ -246,9 +284,11 @@ class ReviewerStation:
                 "Decide whether it satisfies each acceptance criterion and "
                 "respects each constraint. Return ONLY a JSON object matching the "
                 "provided result schema; do not include prose outside the JSON. "
-                "Set status to 'pass', 'warning', or 'fail'. The "
+                "Set status to 'pass', 'warning', 'fail', or 'not_evaluable'. The "
                 "delivery_recommendation.status MUST be derived from status: "
-                "pass->ready, warning->ready_with_warning, fail->blocked."
+                "pass->ready, warning->ready_with_warning, fail->blocked, "
+                "not_evaluable->blocked. Do not pass an acceptance criterion "
+                "when negative_evidence says required evidence is missing."
             ),
             "manifest_id": payload.manifest_id,
             "route_id": payload.route_id,
@@ -260,6 +300,13 @@ class ReviewerStation:
             "effect_records": [e.model_dump(mode="json") for e in payload.effect_records],
             "context_summary": payload.context_summary,
             "known_risk_flags": payload.known_risk_flags,
+            "test_results": [t.model_dump(mode="json") for t in payload.test_results],
+            "command_evidence": [c.model_dump(mode="json") for c in payload.command_evidence],
+            "file_hashes": dict(payload.file_hashes),
+            "diff_summary": payload.diff_summary,
+            "negative_evidence": [
+                n.model_dump(mode="json") for n in payload.negative_evidence
+            ],
             "result_schema": result_schema,
         }
         return json.dumps(request, sort_keys=True)
@@ -286,7 +333,54 @@ class ReviewerStation:
                 "reviewer output violated the derived delivery_recommendation "
                 "invariant after validation."
             )
-        return result
+        return self._apply_negative_evidence(payload, result)
+
+    @staticmethod
+    def _apply_negative_evidence(
+        payload: ReviewerStationInput,
+        result: ReviewerStationResult,
+    ) -> ReviewerStationResult:
+        """Block delivery when required evidence is explicitly missing.
+
+        The LLM review is still made exactly once; this deterministic post-check
+        prevents a semantic ``pass`` from overriding required negative evidence.
+        """
+
+        blocking = [
+            evidence
+            for evidence in payload.negative_evidence
+            if evidence.blocks_required_acceptance_criteria
+        ]
+        if not blocking:
+            return result
+
+        details = "; ".join(f"{item.field}: {item.reason}" for item in blocking)
+        criteria = [
+            CriterionResult(
+                criterion_id=criterion.id,
+                status=CriterionStatus.NOT_EVALUABLE,
+                notes=f"Missing required evidence prevents evaluation: {details}",
+            )
+            for criterion in payload.acceptance_criteria
+        ]
+        required_fixes = list(result.required_fixes)
+        required_fixes.append(
+            RequiredFix(
+                severity=FixSeverity.HIGH,
+                description=(
+                    "Provide required reviewer evidence before delivery can be "
+                    f"evaluated: {details}"
+                ),
+                suggested_station=SuggestedStation.USER_DECISION,
+            )
+        )
+        return ReviewerStationResult.for_status(
+            ReviewerStatus.NOT_EVALUABLE,
+            criteria_results=criteria,
+            required_fixes=required_fixes,
+            risk_flags=list(result.risk_flags),
+            reason="Required evidence is missing; delivery is not evaluable.",
+        )
 
     @staticmethod
     def _coerce_to_mapping(raw: Union[str, dict[str, Any]]) -> dict[str, Any]:
@@ -323,6 +417,9 @@ class ReviewerStation:
 __all__ = [
     "STATUS_TO_DELIVERY",
     "derive_delivery_status",
+    "EvidenceTestResult",
+    "CommandEvidence",
+    "NegativeEvidence",
     "ReviewerStationInput",
     "CriterionResult",
     "RequiredFix",

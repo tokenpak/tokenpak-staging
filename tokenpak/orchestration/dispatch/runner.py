@@ -44,12 +44,14 @@ from uuid import uuid4
 from .gatehouse import DeliveryPackage, DeliveryStatus, Gatehouse
 from .ledger.db import RunLedger
 from .loop_policy import ROUTE_WALL_SECOND_DEFAULTS
+from .models.artifact import DispatchArtifact
 from .models.decision import (
     DecisionDefaultAction,
     DecisionOption,
     DecisionRecommendation,
     DispatchDecision,
 )
+from .models.effect import DispatchEffect
 from .models.enums import (
     AutoApplyAfter,
     AutonomyMode,
@@ -84,6 +86,9 @@ from .station_runner import (
     unlimited_spend_guard,
 )
 from .stations.reviewer import (
+    CommandEvidence,
+    EvidenceTestResult,
+    NegativeEvidence,
     ReviewerLLM,
     ReviewerStation,
     ReviewerStationInput,
@@ -306,7 +311,10 @@ class FulfillmentLine:
         late_results: list[LateResult] = []
         effect_ids: list[str] = []
         reviewer_result: Optional[ReviewerStationResult] = None
-        last_build_station_run: Optional[DispatchStationRun] = None
+        last_build_station_run: Optional[DispatchStationRun] = next(
+            (sr for sr in reversed(station_runs) if sr.station_id != "review"),
+            None,
+        )
 
         stations = route.stations
         for index in range(start_index, len(stations)):
@@ -328,12 +336,13 @@ class FulfillmentLine:
 
             # Reviewer station vs worker station.
             if _is_reviewer_station(station):
-                reviewer_result, review_run = self._run_reviewer_station(
+                reviewer_result, review_run, reviewer_input = self._run_reviewer_station(
                     run=run,
                     route=route,
                     manifest=manifest,
                     station=station,
                     build_station_run=last_build_station_run,
+                    effect_ids=effect_ids,
                 )
                 if review_run is not None:
                     station_runs.append(review_run)
@@ -344,7 +353,12 @@ class FulfillmentLine:
                     route=route,
                     reviewer_result=reviewer_result,
                     station_runs=station_runs,
-                    delivery_package_fields=_delivery_fields(route, station_runs),
+                    delivery_package_fields=_delivery_fields(
+                        route,
+                        station_runs,
+                        reviewer_result=reviewer_result,
+                        reviewer_input=reviewer_input,
+                    ),
                     route_uses_reviewer=True,
                 )
                 return self._finalize_with_delivery(
@@ -420,7 +434,11 @@ class FulfillmentLine:
             route=route,
             reviewer_result=ReviewerStationResult.for_status("pass"),
             station_runs=station_runs,
-            delivery_package_fields=_delivery_fields(route, station_runs),
+            delivery_package_fields=_delivery_fields(
+                route,
+                station_runs,
+                reviewer_result=ReviewerStationResult.for_status("pass"),
+            ),
             route_uses_reviewer=False,
         )
         return self._finalize_with_delivery(
@@ -518,7 +536,8 @@ class FulfillmentLine:
         manifest: DispatchManifest,
         station: RouteStation,
         build_station_run: Optional[DispatchStationRun],
-    ) -> tuple[ReviewerStationResult, Optional[DispatchStationRun]]:
+        effect_ids: list[str],
+    ) -> tuple[ReviewerStationResult, Optional[DispatchStationRun], ReviewerStationInput]:
         """Run the Reviewer Station and commit its station-run record.
 
         Requires a reviewer client to have been injected; raises if absent (a
@@ -535,15 +554,24 @@ class FulfillmentLine:
             )
 
         reviewer = ReviewerStation(self._reviewer_llm)
-        review_input = ReviewerStationInput(
-            manifest_id=manifest.id,
-            route_id=route.id,
-            build_station_result_id=(
-                build_station_run.id if build_station_run is not None else "stationrun_none"
-            ),
-            acceptance_criteria=list(manifest.acceptance_criteria),
-            constraints=list(manifest.constraints),
-            context_summary=manifest.goal,
+        effects = [
+            effect
+            for effect_id in effect_ids
+            if (effect := self._ledger.read_effect(effect_id)) is not None
+        ]
+        artifacts = (
+            self._ledger.read_artifacts_for_station_run(build_station_run.id)
+            if build_station_run is not None
+            else []
+        )
+        review_input = build_reviewer_input(
+            manifest,
+            route,
+            build_station_run,
+            self._ledger,
+            effects=effects,
+            artifacts=artifacts,
+            delivery_fields=_delivery_fields(route, [r for r in [build_station_run] if r]),
         )
         result = reviewer.review(review_input)
 
@@ -567,7 +595,7 @@ class FulfillmentLine:
         # Commit only after the schema-valid reviewer output exists (criterion 4).
         self._ledger.write_station_run(review_run)
         self._append_station_run(run, review_run.id)
-        return result, review_run
+        return result, review_run, review_input
 
     # -- delivery + finalization --------------------------------------------
 
@@ -830,49 +858,472 @@ def _station_index(route: DispatchRoute, station_id: str) -> int:
     return -1
 
 
-def _delivery_fields(
-    route: DispatchRoute, station_runs: list[DispatchStationRun]
-) -> dict[str, Any]:
-    """Assemble the delivery-package fields the Gatehouse completeness check reads.
+def build_reviewer_input(
+    manifest: DispatchManifest,
+    route: DispatchRoute,
+    build_station_run: Optional[DispatchStationRun],
+    ledger: RunLedger,
+    effects: list[DispatchEffect] | None = None,
+    artifacts: list[DispatchArtifact] | None = None,
+    delivery_fields: dict[str, Any] | None = None,
+) -> ReviewerStationInput:
+    """Assemble evidence-backed input for a Reviewer Station.
 
-    Builds exactly the pieces the route's :class:`RouteDelivery` flags require
-    (summary / files_changed / tests / risks / next_steps), populated minimally
-    from the station runs so the structural completeness check passes for a clean
-    run. The Gatehouse iterates the flags dynamically; this provides a value for
-    each enabled piece.
+    The boundary is explicit so reviewer evidence does not get spread through
+    the station runner. Evidence comes from the build station payload, Run
+    Ledger effect/artifact records, and the delivery-field projection.
     """
+
+    payload = dict(build_station_run.result_payload or {}) if build_station_run else {}
+    effect_records = list(effects or []) + _payload_effect_records(payload)
+    artifact_records = _dedupe_artifacts(list(artifacts or []) + _payload_artifacts(payload))
+    test_results = _payload_test_results(payload)
+    command_evidence = _dedupe_command_evidence(
+        _payload_command_evidence(payload)
+        + _command_evidence(effect_records, test_results)
+    )
+    file_hashes = _file_hashes(effect_records, payload)
+    patch = _payload_text(
+        payload,
+        "proposed_or_applied_patch",
+        "patch",
+        "diff",
+        "applied_patch",
+    )
+    diff_summary = str(payload.get("diff_summary") or _diff_summary(effect_records, patch))
+    known_risk_flags = _payload_strings(payload, "risk_flags", "known_risk_flags")
+    if not known_risk_flags:
+        known_risk_flags = [f"default_risk:{route.default_risk.value}"]
+    negative_evidence = _payload_negative_evidence(payload)
+    if _requires_code_evidence(route):
+        negative_evidence.extend(
+            _missing_code_evidence(
+                patch=patch,
+                effect_records=effect_records,
+                artifacts=artifact_records,
+                test_results=test_results,
+                command_evidence=command_evidence,
+                file_hashes=file_hashes,
+                diff_summary=diff_summary,
+            )
+        )
+
+    context_summary = str(payload.get("context_summary") or manifest.goal)
+    if delivery_fields and delivery_fields.get("summary"):
+        context_summary = f"{context_summary}\nDelivery summary: {delivery_fields['summary']}"
+
+    return ReviewerStationInput(
+        manifest_id=manifest.id,
+        route_id=route.id,
+        build_station_result_id=(
+            build_station_run.id if build_station_run is not None else "stationrun_none"
+        ),
+        acceptance_criteria=list(manifest.acceptance_criteria),
+        constraints=list(manifest.constraints),
+        proposed_or_applied_patch=patch,
+        effect_records=effect_records,
+        artifacts=artifact_records,
+        context_summary=context_summary,
+        known_risk_flags=known_risk_flags,
+        test_results=test_results,
+        command_evidence=command_evidence,
+        file_hashes=file_hashes,
+        diff_summary=diff_summary,
+        negative_evidence=negative_evidence,
+    )
+
+
+def _delivery_fields(
+    route: DispatchRoute,
+    station_runs: list[DispatchStationRun],
+    *,
+    reviewer_result: Optional[ReviewerStationResult] = None,
+    reviewer_input: Optional[ReviewerStationInput] = None,
+) -> dict[str, Any]:
+    """Assemble evidence-backed delivery fields for Gatehouse checks."""
 
     fields: dict[str, Any] = {}
     delivery = route.delivery
     if delivery.include_summary:
-        fields["summary"] = (
-            f"Ran {len(station_runs)} station(s) on route {route.id}."
-        )
+        fields["summary"] = _delivery_summary(route, station_runs, reviewer_result)
     if delivery.include_files_changed:
-        fields["files_changed"] = _files_changed(station_runs)
+        fields["files_changed"] = _files_changed(station_runs, reviewer_input)
     if delivery.include_tests:
-        fields["tests"] = ["station tests not run in v0.1-alpha (deterministic)"]
+        fields["tests"] = _test_delivery_entries(reviewer_input)
     if delivery.include_risks:
-        fields["risks"] = ["no external side effects (v0.1-alpha tool registry)"]
+        fields["risks"] = _risk_entries(reviewer_result, reviewer_input)
     if delivery.include_next_steps:
-        fields["next_steps"] = ["review the delivery package"]
+        fields["next_steps"] = _next_steps(reviewer_result)
+    if reviewer_input is not None and reviewer_input.negative_evidence:
+        fields["negative_evidence"] = [
+            item.model_dump(mode="json") for item in reviewer_input.negative_evidence
+        ]
     return fields
 
 
-def _files_changed(station_runs: list[DispatchStationRun]) -> list[str]:
-    """A non-empty files-changed list so the completeness check passes a clean run.
+def _delivery_summary(
+    route: DispatchRoute,
+    station_runs: list[DispatchStationRun],
+    reviewer_result: Optional[ReviewerStationResult],
+) -> str:
+    completed = sum(1 for run in station_runs if run.status is StationRunStatus.COMPLETED)
+    reviewer = (
+        f"; reviewer_status={reviewer_result.status.value}"
+        if reviewer_result is not None
+        else ""
+    )
+    return f"Route {route.id} ran {len(station_runs)} station(s), {completed} completed{reviewer}."
 
-    v0.1-alpha does not yet thread concrete file paths from effects into the
-    delivery package; a placeholder marker keeps the structural completeness
-    check honest (the route asked for the piece; the piece is present) without
-    fabricating file names.
-    """
 
-    return ["(files-changed detail recorded in the Run Ledger effects)"]
+def _files_changed(
+    station_runs: list[DispatchStationRun],
+    reviewer_input: Optional[ReviewerStationInput],
+) -> list[str]:
+    changed: list[str] = []
+    if reviewer_input is not None:
+        changed.extend(
+            effect.target
+            for effect in reviewer_input.effect_records
+            if effect.target_type.value == "file"
+        )
+        changed.extend(
+            _payload_strings(dict(run.result_payload or {}), "files_changed")
+            for run in station_runs
+        )
+    else:
+        changed.extend(
+            _payload_strings(dict(run.result_payload or {}), "files_changed")
+            for run in station_runs
+        )
+    flat = _flatten_strings(changed)
+    if flat:
+        return sorted(set(flat))
+    if reviewer_input is not None and reviewer_input.negative_evidence:
+        return [
+            f"negative_evidence:{item.field}"
+            for item in reviewer_input.negative_evidence
+            if item.field in {"effect_records", "file_hashes", "diff_summary", "artifacts"}
+        ] or ["negative_evidence:files_changed"]
+    return []
+
+
+def _test_delivery_entries(
+    reviewer_input: Optional[ReviewerStationInput],
+) -> list[dict[str, Any]]:
+    if reviewer_input is None:
+        return []
+    if reviewer_input.test_results:
+        return [test.model_dump(mode="json") for test in reviewer_input.test_results]
+    return [
+        item.model_dump(mode="json")
+        for item in reviewer_input.negative_evidence
+        if item.field in {"test_results", "test_exit_codes", "test_logs"}
+    ]
+
+
+def _risk_entries(
+    reviewer_result: Optional[ReviewerStationResult],
+    reviewer_input: Optional[ReviewerStationInput],
+) -> list[str]:
+    risks: list[str] = []
+    if reviewer_input is not None:
+        risks.extend(reviewer_input.known_risk_flags)
+        risks.extend(
+            f"negative_evidence:{item.field}"
+            for item in reviewer_input.negative_evidence
+            if item.blocks_required_acceptance_criteria
+        )
+    if reviewer_result is not None:
+        risks.extend(
+            f"{flag.id}:{flag.severity.value}" for flag in reviewer_result.risk_flags
+        )
+    return risks or ["none identified from reviewer and deterministic checks"]
+
+
+def _next_steps(reviewer_result: Optional[ReviewerStationResult]) -> list[str]:
+    if reviewer_result is None:
+        return ["delivery gate evaluated structural evidence"]
+    status = reviewer_result.status.value
+    if status == "pass":
+        return ["deliver the package"]
+    if status == "warning":
+        return ["resolve the reviewer warning decision"]
+    if status == "not_evaluable":
+        return ["provide missing required evidence before delivery"]
+    return ["address required fixes before delivery"]
+
+
+def _requires_code_evidence(route: DispatchRoute) -> bool:
+    return route.id == "route.code_task.v1"
+
+
+def _missing_code_evidence(
+    *,
+    patch: str | None,
+    effect_records: list[DispatchEffect],
+    artifacts: list[DispatchArtifact],
+    test_results: list[EvidenceTestResult],
+    command_evidence: list[CommandEvidence],
+    file_hashes: dict[str, str],
+    diff_summary: str,
+) -> list[NegativeEvidence]:
+    missing: list[NegativeEvidence] = []
+    if not patch:
+        missing.append(_negative("proposed_or_applied_patch", "no patch evidence supplied"))
+    if not effect_records:
+        missing.append(_negative("effect_records", "no DispatchEffect records supplied"))
+    if not artifacts:
+        missing.append(_negative("artifacts", "no DispatchArtifact references supplied"))
+    if not test_results:
+        missing.append(_negative("test_results", "no test command results supplied"))
+    if not command_evidence:
+        missing.append(_negative("command_evidence", "no command evidence supplied"))
+    if not file_hashes:
+        missing.append(_negative("file_hashes", "no before/after file hashes supplied"))
+    if not diff_summary:
+        missing.append(_negative("diff_summary", "no diff summary supplied"))
+    if test_results and any(test.exit_code is None for test in test_results):
+        missing.append(_negative("test_exit_codes", "one or more test results lack exit codes"))
+    if test_results and not any(test.stdout_excerpt or test.stderr_excerpt for test in test_results):
+        missing.append(_negative("test_logs", "test results lack bounded log excerpts"))
+    return missing
+
+
+def _negative(field: str, reason: str) -> NegativeEvidence:
+    return NegativeEvidence(
+        field=field,
+        status="missing",
+        reason=reason,
+        consequence="cannot verify required code_task acceptance criteria",
+    )
+
+
+def _payload_text(payload: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _payload_strings(payload: dict[str, Any], *keys: str) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, str):
+            values.append(raw)
+        elif isinstance(raw, list):
+            values.extend(str(item) for item in raw if str(item))
+    return values
+
+
+def _flatten_strings(values: list[Any]) -> list[str]:
+    flat: list[str] = []
+    for value in values:
+        if isinstance(value, list):
+            flat.extend(str(item) for item in value if str(item))
+        elif value:
+            flat.append(str(value))
+    return flat
+
+
+def _payload_test_results(payload: dict[str, Any]) -> list[EvidenceTestResult]:
+    raw = payload.get("test_results", payload.get("tests", []))
+    if isinstance(raw, dict):
+        items = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    results: list[EvidenceTestResult] = []
+    for item in items:
+        if isinstance(item, EvidenceTestResult):
+            results.append(item)
+        elif isinstance(item, dict):
+            exit_code = item.get("exit_code")
+            status = str(item.get("status") or _status_from_exit_code(exit_code))
+            results.append(
+                EvidenceTestResult(
+                    command=str(item.get("command") or item.get("name") or "unknown"),
+                    status=status,
+                    exit_code=exit_code if isinstance(exit_code, int) else None,
+                    stdout_excerpt=str(
+                        item.get("stdout_excerpt") or item.get("log_excerpt") or ""
+                    ),
+                    stderr_excerpt=str(item.get("stderr_excerpt") or ""),
+                )
+            )
+        elif isinstance(item, str):
+            results.append(EvidenceTestResult(command=item, status="declared"))
+    return results
+
+
+def _payload_command_evidence(payload: dict[str, Any]) -> list[CommandEvidence]:
+    raw = payload.get("command_evidence", payload.get("declared_test_commands", []))
+    if isinstance(raw, dict):
+        items = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    records: list[CommandEvidence] = []
+    for item in items:
+        if isinstance(item, CommandEvidence):
+            records.append(item)
+        elif isinstance(item, dict):
+            exit_code = item.get("exit_code")
+            records.append(
+                CommandEvidence(
+                    command=str(item.get("command") or item.get("name") or "unknown"),
+                    status=str(item.get("status") or "declared"),
+                    exit_code=exit_code if isinstance(exit_code, int) else None,
+                    log_excerpt=str(item.get("log_excerpt") or ""),
+                    effect_id=(
+                        str(item["effect_id"])
+                        if item.get("effect_id") is not None
+                        else None
+                    ),
+                )
+            )
+        elif isinstance(item, str):
+            records.append(CommandEvidence(command=item, status="declared"))
+    return records
+
+
+def _payload_effect_records(payload: dict[str, Any]) -> list[DispatchEffect]:
+    raw = payload.get("effect_records", [])
+    if not isinstance(raw, list):
+        return []
+    records: list[DispatchEffect] = []
+    for item in raw:
+        if isinstance(item, DispatchEffect):
+            records.append(item)
+        elif isinstance(item, dict):
+            records.append(DispatchEffect.model_validate(item))
+    return records
+
+
+def _payload_artifacts(payload: dict[str, Any]) -> list[DispatchArtifact]:
+    raw = payload.get("artifacts", [])
+    if not isinstance(raw, list):
+        return []
+    records: list[DispatchArtifact] = []
+    for item in raw:
+        if isinstance(item, DispatchArtifact):
+            records.append(item)
+        elif isinstance(item, dict):
+            records.append(DispatchArtifact.model_validate(item))
+    return records
+
+
+def _payload_negative_evidence(payload: dict[str, Any]) -> list[NegativeEvidence]:
+    raw = payload.get("negative_evidence", [])
+    if not isinstance(raw, list):
+        return []
+    records: list[NegativeEvidence] = []
+    for item in raw:
+        if isinstance(item, NegativeEvidence):
+            records.append(item)
+        elif isinstance(item, dict):
+            records.append(NegativeEvidence.model_validate(item))
+    return records
+
+
+def _dedupe_artifacts(artifacts: list[DispatchArtifact]) -> list[DispatchArtifact]:
+    seen: set[str] = set()
+    deduped: list[DispatchArtifact] = []
+    for artifact in artifacts:
+        if artifact.id in seen:
+            continue
+        seen.add(artifact.id)
+        deduped.append(artifact)
+    return deduped
+
+
+def _dedupe_command_evidence(evidence: list[CommandEvidence]) -> list[CommandEvidence]:
+    seen: set[tuple[str, str | None]] = set()
+    deduped: list[CommandEvidence] = []
+    for item in evidence:
+        key = (item.command, item.effect_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _command_evidence(
+    effects: list[DispatchEffect],
+    tests: list[EvidenceTestResult],
+) -> list[CommandEvidence]:
+    evidence = [
+        CommandEvidence(
+            command=test.command,
+            status=test.status,
+            exit_code=test.exit_code,
+            log_excerpt=test.stdout_excerpt or test.stderr_excerpt,
+        )
+        for test in tests
+    ]
+    evidence.extend(
+        CommandEvidence(
+            command=effect.target,
+            status=effect.status.value,
+            effect_id=effect.id,
+        )
+        for effect in effects
+        if effect.target_type.value == "command_output"
+    )
+    return evidence
+
+
+def _file_hashes(
+    effects: list[DispatchEffect],
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    raw = payload.get("file_hashes")
+    hashes: dict[str, str] = (
+        {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+    )
+    for effect in effects:
+        if effect.target_type.value != "file":
+            continue
+        digest = effect.after_hash or effect.before_hash
+        if digest:
+            hashes[effect.target] = digest
+    return hashes
+
+
+def _status_from_exit_code(exit_code: Any) -> str:
+    if exit_code == 0:
+        return "passed"
+    if exit_code is not None:
+        return "failed"
+    return "unknown"
+
+
+def _diff_summary(effects: list[DispatchEffect], patch: str | None) -> str:
+    file_targets = [
+        effect.target for effect in effects if effect.target_type.value == "file"
+    ]
+    command_targets = [
+        effect.target for effect in effects if effect.target_type.value == "command_output"
+    ]
+    pieces: list[str] = []
+    if file_targets:
+        pieces.append(f"file effects: {', '.join(sorted(file_targets))}")
+    if command_targets:
+        pieces.append(f"command effects: {', '.join(sorted(command_targets))}")
+    if patch and not file_targets:
+        pieces.append("patch text supplied without file effect records")
+    return "; ".join(pieces)
 
 
 __all__ = [
     "LineStatus",
     "FulfillmentResult",
     "FulfillmentLine",
+    "build_reviewer_input",
 ]

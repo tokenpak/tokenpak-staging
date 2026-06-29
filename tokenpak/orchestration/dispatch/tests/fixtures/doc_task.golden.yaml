@@ -49,6 +49,10 @@ mock_tip:
   worker_turns:
     - result_payload:
         document: "## Dispatch runtime\nThe dispatch runtime executes routes sequentially."
+        files_changed:
+          - docs/dispatch-runtime.md
+        risk_flags:
+          - docs_only
       output_schema_valid: true
       tokens_used: 64
       wall_seconds: 3

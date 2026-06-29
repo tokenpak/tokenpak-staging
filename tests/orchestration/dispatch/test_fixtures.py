@@ -188,6 +188,7 @@ class FakeReviewerLLM:
             "pass": "ready",
             "warning": "ready_with_warning",
             "fail": "blocked",
+            "not_evaluable": "blocked",
         }[status]
         self._payload = {
             "status": status,
