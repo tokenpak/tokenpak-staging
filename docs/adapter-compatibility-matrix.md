@@ -24,9 +24,9 @@ These labels match the runtime output from `tokenpak integrate`.
 | Target | Runtime setup mode | Compatibility label | Current proof |
 |--------|--------------------|---------------------|---------------|
 | Claude Code | Apply | Supported; tested | CLI integration tests and apply/verify hooks |
-| OpenAI SDK | Print-only | Supported; tested | SDK adapter round-trip tests |
-| Anthropic SDK | Print-only | Supported; tested | SDK adapter round-trip tests |
-| LiteLLM | Print-only | Supported; tested | LiteLLM adapter/unit/import-guard tests |
+| OpenAI SDK | Print-only | Supported; tested | Print-only instructions and runtime status regression; OpenAI proxy adapter round-trip tests |
+| Anthropic SDK | Print-only | Supported; tested | Print-only instructions and runtime status regression; Anthropic proxy adapter round-trip tests |
+| LiteLLM | Print-only | Supported; tested | Print-only instructions and runtime status regression; LiteLLM import-guard tests |
 | Cursor | Apply | Experimental; untested | Apply path exists; no current certified host proof |
 | Cline | Print-only | Experimental; untested | Manual setup only; no current certified host proof |
 | Continue.dev | Apply | Experimental; untested | Apply path exists; no current certified host proof |
