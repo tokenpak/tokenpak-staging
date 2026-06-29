@@ -16,8 +16,10 @@ Attribution rules (per TIP telemetry_contract.SavingsSource):
 
 from __future__ import annotations
 
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from tokenpak.tip.telemetry_contract import SavingsSource
@@ -270,6 +272,310 @@ def attribution_to_row(
     }
 
 
+# ---------------------------------------------------------------------------
+# Canonical conservative savings metric — single source of truth
+#
+# One computation shared by ``doctor``, ``savings``, ``status``, and ``cost``
+# so a single install can never report three different savings numbers.
+# Attribution is conservative (the ``status`` gold standard): a request row
+# contributes savings ONLY when TokenPak actually caused the reduction —
+#   * compression is credited only when cache_origin == 'proxy' (proxy-caused);
+#   * cache reads are credited only for proxy-managed cache (cache_origin='proxy').
+# Rows with compressed_tokens == 0 OR cache_origin != 'proxy' therefore
+# contribute **0 saved** — never the historical 100%-overclaim that
+# SUM(input_tokens - compressed_tokens) produced when compressed_tokens was 0.
+#
+# The per-model math here is the same proven computation that
+# ``status._calculate_fleet_savings`` has used; that function now delegates to
+# this engine so status/doctor and the live ``savings``/``cost`` surfaces all
+# agree. The window resolution mirrors ``status._window_clause`` for the period
+# tokens status passes (None / today / 1h / 24h / 7d / 30d / <N>h_custom /
+# <N>{m,h,d,mo}) so delegation is behaviour-preserving, and adds the extra
+# tokens the other surfaces need (all / last100 / session / <N>d_custom /
+# week / month / yesterday).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SavingsResult:
+    """Canonical savings figures for one window, shared by every CLI surface."""
+
+    window: str
+    window_label: str
+    requests: int = 0
+    saved_tokens: int = 0          # proxy-attributed compressed tokens removed
+    saved_cost: float = 0.0        # conservative $ saved (compression + proxy cache)
+    baseline_cost: float = 0.0     # estimated cost WITHOUT TokenPak
+    actual_cost: float = 0.0       # estimated cost WITH TokenPak
+    savings_pct: float = 0.0       # saved_cost / baseline_cost * 100
+    cache_savings: float = 0.0
+    compression_savings: float = 0.0
+    routing_savings: float = 0.0
+    claude_code_cache_savings: float = 0.0
+    models: List[Dict[str, Any]] = field(default_factory=list)
+    db_rows: int = 0
+    error: Optional[str] = None
+
+
+# Period→SQL maps mirror status._window_clause / _PERIOD_MAP / _WINDOW_RE /
+# _UNIT_SQL so that ``status`` delegation produces byte-identical SQL.
+_SAVINGS_PERIOD_MAP = {"1h": "-1 hours", "24h": "-1 days", "7d": "-7 days", "30d": "-30 days"}
+_SAVINGS_WINDOW_RE = re.compile(r"^(\d+)(m|h|d|mo)$")
+_SAVINGS_UNIT_SQL = {"m": "minutes", "h": "hours", "d": "days", "mo": "months"}
+
+
+def _savings_window_spec(window: Any) -> tuple:
+    """Map a window token to ``(where_sql, params, row_limit, label)``.
+
+    For the tokens ``status`` passes (``None`` / ``today`` / ``1h`` / ``24h`` /
+    ``7d`` / ``30d`` / ``<N>h_custom`` / ``<N>{m,h,d,mo}``) the returned
+    ``(where_sql, params)`` is identical to ``status._window_clause`` so the
+    delegating ``_calculate_fleet_savings`` cannot change status's results.
+    Additional tokens (``all`` / ``last100`` / ``session`` / ``<N>d_custom`` /
+    ``week`` / ``month`` / ``yesterday``) serve the ``savings`` / ``cost`` /
+    ``doctor`` surfaces.
+    """
+    if window is None:
+        return "", [], None, "all-time"
+    w = str(window).strip().lower()
+    if w in ("", "all", "all-time", "none"):
+        return "", [], None, "all-time"
+    if w in ("last100", "last-100"):
+        return "", [], 100, "last 100 reqs"
+    if w == "session":
+        return "", [], 100, "this session"
+    # status._window_clause parity branches (order matters) ------------------
+    if w == "today":
+        return "WHERE datetime(timestamp, 'localtime') >= date('now', 'localtime')", [], None, "today"
+    if w in _SAVINGS_PERIOD_MAP:
+        return "WHERE timestamp >= datetime('now', ?)", [_SAVINGS_PERIOD_MAP[w]], None, f"last {w}"
+    if w.endswith("h_custom"):
+        try:
+            hours = int(w[: -len("h_custom")])
+        except ValueError:
+            return "", [], None, "all-time"
+        return "WHERE timestamp >= datetime('now', ?)", [f"-{hours} hours"], None, f"last {hours}h"
+    # extra (non-status) tokens ---------------------------------------------
+    if w == "yesterday":
+        return (
+            "WHERE date(timestamp, 'localtime') = date('now', '-1 day', 'localtime')",
+            [],
+            None,
+            "yesterday",
+        )
+    if w == "week":
+        return "WHERE timestamp >= datetime('now', ?)", ["-7 days"], None, "last 7 days"
+    if w == "month":
+        return "WHERE timestamp >= datetime('now', ?)", ["-30 days"], None, "this month"
+    if w.endswith("d_custom"):
+        try:
+            days = int(w[: -len("d_custom")])
+        except ValueError:
+            return "", [], None, "all-time"
+        return "WHERE timestamp >= datetime('now', ?)", [f"-{days} days"], None, f"last {days}d"
+    m = _SAVINGS_WINDOW_RE.match(w)
+    if m:
+        return (
+            "WHERE timestamp >= datetime('now', ?)",
+            [f"-{m.group(1)} {_SAVINGS_UNIT_SQL[m.group(2)]}"],
+            None,
+            f"last {w}",
+        )
+    return "", [], None, "all-time"
+
+
+def compute_savings(window: Any = "all", db_path: Optional[str] = None) -> SavingsResult:
+    """Return the canonical token/cost savings for ``window``.
+
+    This is the single source of truth all savings-reporting CLI surfaces
+    (``doctor``, ``savings``, ``status``, ``cost``) derive from, so they
+    cannot disagree on the same install. Attribution is conservative: only
+    proxy-caused compression and proxy-managed cache reads count as savings;
+    rows with ``compressed_tokens == 0`` or ``cache_origin != 'proxy'``
+    contribute **0 saved**.
+
+    Parameters
+    ----------
+    window:
+        ``all`` / ``session`` / ``last100`` / ``today`` / ``yesterday`` /
+        ``1h`` / ``24h`` / ``7d`` / ``30d`` / ``<N>h_custom`` /
+        ``<N>d_custom`` / ``week`` / ``month`` / ``<N>{m,h,d,mo}`` (or ``None``
+        == all-time).
+    db_path:
+        Optional monitor.db path. When ``None``, resolves the canonical DB via
+        ``tokenpak._paths.monitor_db(mode='read')`` — the SAME candidate chain
+        ``status``, ``doctor``, ``cost``, and the proxy writer all use.
+    """
+    import sqlite3
+
+    where_sql, params, row_limit, label = _savings_window_spec(window)
+    window_key = "all" if window is None else str(window)
+
+    if db_path is None:
+        try:
+            from tokenpak import _paths
+
+            resolved = _paths.monitor_db(mode="read")
+            db_path = str(resolved) if resolved else None
+        except Exception:
+            db_path = None
+    if not db_path or not Path(db_path).exists():
+        return SavingsResult(window=window_key, window_label=label, error="db_not_found")
+
+    try:
+        from tokenpak.models import get_rates
+    except Exception:  # pragma: no cover - pricing registry unavailable
+        def get_rates(model: Optional[str] = None) -> Dict[str, float]:
+            return {"input": 3.0, "cached": 0.30, "output": 15.0}
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        col_names = {r[1] for r in conn.execute("PRAGMA table_info(requests)").fetchall()}
+        if "model" not in col_names:
+            return SavingsResult(window=window_key, window_label=label, error="no_requests_table")
+        has_origin = "cache_origin" in col_names
+
+        # Proxy-credited compression / cache: only when proxy owned the cache.
+        compressed_expr = (
+            "COALESCE(SUM(CASE WHEN cache_origin = 'proxy' "
+            "THEN compressed_tokens ELSE 0 END), 0)"
+            if has_origin
+            else "0"
+        )
+        proxy_cr_expr = (
+            "COALESCE(SUM(CASE WHEN COALESCE(cache_origin, 'unknown') = 'proxy' "
+            "THEN cache_read_tokens ELSE 0 END), 0)"
+            if has_origin
+            else "0"
+        )
+        inner = "requests"
+        if row_limit is not None:
+            inner = f"(SELECT * FROM requests ORDER BY id DESC LIMIT {int(row_limit)})"
+        sql = f"""
+            SELECT
+                model,
+                COUNT(*) AS requests,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                {compressed_expr} AS compressed_tokens,
+                COALESCE(SUM(estimated_cost), 0.0) AS estimated_cost,
+                {proxy_cr_expr} AS proxy_managed_cache_read
+            FROM {inner}
+            {where_sql}
+            GROUP BY model
+            ORDER BY SUM(input_tokens) DESC
+        """
+        rows = conn.execute(sql, params).fetchall()
+        try:
+            db_rows = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
+        except Exception:
+            db_rows = 0
+    except sqlite3.Error as exc:
+        return SavingsResult(window=window_key, window_label=label, error=str(exc))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    result = SavingsResult(window=window_key, window_label=label, db_rows=db_rows)
+    if not rows:
+        return result
+
+    total_without = 0.0
+    total_with = 0.0
+    total_cache = 0.0
+    total_compression = 0.0
+    total_cc = 0.0
+    for row in rows:
+        model_name = row["model"]
+        rates = get_rates(model_name)
+        input_rate = rates["input"]
+        cached_rate = rates["cached"]
+        output_rate = rates["output"]
+
+        req_count = row["requests"]
+        input_tok = row["input_tokens"]          # post-compression tokens sent
+        output_tok = row["output_tokens"]
+        cache_read = row["cache_read_tokens"]
+        compressed_tok = row["compressed_tokens"]  # proxy-attributed only (see SQL)
+        proxy_managed_cr = (
+            row["proxy_managed_cache_read"]
+            if "proxy_managed_cache_read" in row.keys()
+            else 0
+        )
+        client_managed_cr = max(0, cache_read - proxy_managed_cr)
+
+        # "Without TokenPak": compression undone (sent at full input rate) and
+        # proxy-managed cache reads billed as full-price input; client-managed
+        # cache stays cached (the client would have cached regardless).
+        raw_input = input_tok + compressed_tok
+        baseline_input = raw_input + proxy_managed_cr
+        without_cost = (
+            (baseline_input / 1_000_000) * input_rate
+            + (client_managed_cr / 1_000_000) * cached_rate
+            + (output_tok / 1_000_000) * output_rate
+        )
+        with_cost = (
+            (input_tok / 1_000_000) * input_rate
+            + (cache_read / 1_000_000) * cached_rate
+            + (output_tok / 1_000_000) * output_rate
+        )
+        saved = without_cost - with_cost
+        cache_saving = (proxy_managed_cr / 1_000_000) * (input_rate - cached_rate)
+        compression_saving = (compressed_tok / 1_000_000) * input_rate
+        cc_saving = (client_managed_cr / 1_000_000) * (input_rate - cached_rate)
+        pct = (saved / without_cost * 100) if without_cost > 0 else 0.0
+        total_input_handled = cache_read + input_tok
+        cache_hit_rate = (
+            (cache_read / total_input_handled * 100) if total_input_handled > 0 else 0.0
+        )
+
+        result.models.append(
+            {
+                "model": model_name,
+                "requests": req_count,
+                "without_cost": round(without_cost, 2),
+                "with_cost": round(with_cost, 2),
+                "saved": round(saved, 2),
+                "savings_pct": round(pct, 1),
+                "cache_hit_rate": round(cache_hit_rate, 1),
+                "cache_savings": round(cache_saving, 2),
+                "compression_savings": round(compression_saving, 2),
+                "claude_code_cache_savings": round(cc_saving, 2),
+                "input_tokens": input_tok,
+                "output_tokens": output_tok,
+                "cache_read_tokens": cache_read,
+                "proxy_managed_cache_read": proxy_managed_cr,
+                "client_managed_cache_read": client_managed_cr,
+                "compressed_tokens": compressed_tok,
+            }
+        )
+        result.requests += req_count
+        result.saved_tokens += int(compressed_tok)
+        total_without += without_cost
+        total_with += with_cost
+        total_cache += cache_saving
+        total_compression += compression_saving
+        total_cc += cc_saving
+
+    total_saved = total_without - total_with
+    result.baseline_cost = total_without
+    result.actual_cost = total_with
+    result.saved_cost = total_saved
+    result.savings_pct = (total_saved / total_without * 100) if total_without > 0 else 0.0
+    result.cache_savings = total_cache
+    result.compression_savings = total_compression
+    result.routing_savings = max(0.0, total_saved - total_cache - total_compression)
+    result.claude_code_cache_savings = total_cc
+    return result
+
+
+# NOTE: ``compute_savings`` / ``SavingsResult`` are intentionally NOT exported in
+# ``__all__`` below. Consumers import them by explicit name; keeping them out of
+# ``__all__`` leaves the public-API snapshot unchanged (no regen needed).
 __all__ = [
     "parse_openai_usage",
     "parse_anthropic_usage",

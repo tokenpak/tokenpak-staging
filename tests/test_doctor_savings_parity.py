@@ -22,6 +22,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -101,7 +102,16 @@ def _run_doctor_json(db_path: str) -> dict:
     from tokenpak.cli.commands import doctor as doctor_mod
 
     captured = StringIO()
-    with patch.dict("os.environ", {"TOKENPAK_DB": db_path}), \
+    fake_home = Path(db_path).parent / "home"
+    fake_home.mkdir()
+    with patch.dict(
+            "os.environ",
+            {
+                "TOKENPAK_DB": db_path,
+                "HOME": str(fake_home),
+                "TOKENPAK_HOME": str(fake_home / ".tpk"),
+            },
+    ), \
             patch("sys.stdout", captured), \
             patch.object(doctor_mod, "_proxy_get", return_value=None):
         doctor_mod.run_doctor(output_json=True)

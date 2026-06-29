@@ -9,8 +9,13 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import requests
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
+
+try:
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+except ModuleNotFoundError:  # pragma: no cover - exercised through CLI import tests
+    FileSystemEventHandler = object  # type: ignore[assignment]
+    Observer = None  # type: ignore[assignment]
 
 # Re-export RequestStats for tests that import from this module
 from tokenpak.telemetry.proxy_collector import RequestStats as RequestStats  # noqa: F401
@@ -56,6 +61,11 @@ class TelemetryCollector:
 
     def start(self, blocking: bool = True):
         """Start the file watcher background thread."""
+        if Observer is None:
+            raise RuntimeError(
+                "watchdog is required for telemetry file watching; "
+                "install the optional watcher dependency before starting TelemetryCollector"
+            )
         self._running = True
         if self.config.backfill_on_start:
             self.backfill()

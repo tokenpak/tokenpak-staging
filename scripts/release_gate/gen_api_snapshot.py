@@ -112,11 +112,25 @@ def _format_import_error(e: BaseException, module_name: str = "") -> str:
             r"cannot import name '[^']+' from '([a-z_]+_tokenpak)'"
         )
 
-    # Walk-site sidecar normalization (transform 3 above)
+    # Walk-site sidecar normalization (transform 3 above).
+    #
+    # H6 hardening (L11b release-gate integrity): previously this rewrote ANY
+    # exception raised while importing a ``tokenpak.sdk.<sidecar>.*`` module to
+    # the canonical "optional sidecar absent" string, regardless of the real
+    # exception. That masked genuine regressions — a SyntaxError, an
+    # AttributeError, or a first-party ``tokenpak.*`` ModuleNotFoundError inside
+    # the sidecar walk — behind a benign placeholder, so the snapshot never
+    # drifted and the release gate never caught them. We now normalize ONLY the
+    # genuine case: a ``ModuleNotFoundError`` whose missing top-level module is
+    # the third-party sidecar package itself (e.g. ``crewai`` / ``crewai_tokenpak``),
+    # never a first-party ``tokenpak.*`` module. Every other exception falls
+    # through to the honest representation below and therefore drifts the snapshot.
     m_walk = re.match(r"^tokenpak\.sdk\.([a-z_]+)\.", module_name)
-    if m_walk:
-        sidecar = m_walk.group(1)
-        return f"<IMPORT_ERROR: ModuleNotFoundError: No module named '{sidecar}_tokenpak'>"
+    if m_walk and isinstance(e, ModuleNotFoundError):
+        missing_mod = getattr(e, "name", "") or ""
+        if missing_mod and not missing_mod.startswith("tokenpak"):
+            sidecar = m_walk.group(1)
+            return f"<IMPORT_ERROR: ModuleNotFoundError: No module named '{sidecar}_tokenpak'>"
 
     msg = _ABS_PATH_PAREN_RE.sub("", str(e))
     m = _SIDECAR_RE.search(msg)
@@ -206,15 +220,21 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
             continue
         if "tests" in parts:
             continue
-        # Dispatch is excluded from the released wheel (preview / main-only),
-        # mirroring pyproject ``packages.find`` exclude of
-        # ``tokenpak.orchestration.dispatch*``. The public-API snapshot records
-        # the RELEASED package surface, so it likewise excludes the dispatch
-        # subsystem (``orchestration.dispatch*``) and its CLI module
-        # (``cli.commands.dispatch_cmd``) — it must not record preview/source-only
-        # dispatch code as public released API.
-        if name == "tokenpak.cli.commands.dispatch_cmd" or name.startswith(
-            "tokenpak.orchestration.dispatch"
+        # Preview / internal orchestration subsystems are excluded from the
+        # public-API snapshot. The snapshot records the RELEASED public surface,
+        # so it must not record preview/source-only code as public released API:
+        #   * ``orchestration.dispatch*`` + ``cli.commands.dispatch_cmd`` —
+        #     the Dispatch subsystem (preview / main-only).
+        #   * ``orchestration.deliberation*`` — the Deliberation Engine, the
+        #     internal layer of Deliberation Dispatch (Std 69 Adaptive
+        #     Deliberation Policy: advisory-first, draft, "future product code",
+        #     publishes nothing / no new public claim). It is a sibling of the
+        #     dispatch subsystem and must be treated identically: its symbols are
+        #     NOT released public API.
+        if (
+            name == "tokenpak.cli.commands.dispatch_cmd"
+            or name.startswith("tokenpak.orchestration.dispatch")
+            or name.startswith("tokenpak.orchestration.deliberation")
         ):
             continue
         try:

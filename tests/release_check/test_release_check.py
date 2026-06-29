@@ -78,6 +78,28 @@ def test_leak_scan_flags_ticket_and_path():
     assert hits  # both a ticket-ID and a private path
 
 
+def test_leak_scan_masks_public_surface_terms():
+    pats = rc.load_leak_patterns()
+    text = "\n".join([
+        "Use tokenpak fleet for grouped proxy status.",
+        "Pass --fleet to show the fleet rollup.",
+        "Read openclaw.json during setup.",
+    ])
+    assert rc.scan_leaks("docs/x.md", text, pats) == []
+
+
+def test_leak_scan_keeps_internal_surface_terms_forbidden():
+    pats = rc.load_leak_patterns()
+    text = "\n".join([
+        "The agent fleet should process this.",
+        "Tracked as ABC-42 for this follow-up.",
+    ])
+    hits = rc.scan_leaks("docs/x.md", text, pats)
+    assert len(hits) == 2
+    assert any("internal-fleet-phrase" in hit for hit in hits)
+    assert any("internal-task-id-shape" in hit for hit in hits)
+
+
 # --- help-verbs (pure core) --------------------------------------------------
 def test_help_verbs_all_resolve():
     assert rc.check_help_verbs([("serve", True), ("config", True)]) == []

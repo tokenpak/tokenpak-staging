@@ -1,6 +1,6 @@
 # TokenPak Quick Start Guide
 
-Get from zero to savings in 5 minutes. Pick your path:
+Get from install to a local TokenPak receipt in 5 minutes. Pick your path:
 
 | Path | Best for |
 |------|----------|
@@ -31,28 +31,52 @@ tokenpak start
 
 ### Minute 3: Point your app at the proxy
 
-Run the one-shot configurator for your tool:
+Run the one-shot configurator for your tool. Supported/tested targets:
 
 ```bash
 tokenpak integrate # list clients + detection status
 tokenpak integrate claude-code --apply # writes ~/.claude/settings.json
+tokenpak integrate openai-sdk # print-only SDK snippet
+tokenpak integrate anthropic-sdk # print-only SDK snippet
+tokenpak integrate litellm # print-only LiteLLM snippet
+```
+
+Experimental/untested targets are available, but verify before relying on them:
+
+```bash
 tokenpak integrate cursor --apply # writes Cursor settings.json
 tokenpak integrate continue --apply # writes ~/.continue/config.json
 tokenpak integrate aider --apply # writes ~/.aider.conf.yml
+tokenpak integrate cline # print-only manual Cline steps
+tokenpak integrate codex # print-only base setup
 ```
 
 Every `--apply` backs up the existing config and prints a rollback command.
-For clients without auto-apply (Cline, SDKs), `tokenpak integrate <client>` prints the exact snippet to paste.
+For print-only targets, `tokenpak integrate <client>` prints the exact snippet
+or manual steps to paste.
 
-### Minute 4: See your savings
+### Minute 4: Create your first measured receipt
 
 ```bash
-tokenpak demo # see compression in action on a sample prompt
-tokenpak cost # view today's spend and tokens saved
-tokenpak status # live snapshot: requests, cache hit rate, models used
+curl -sS http://localhost:8766/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":64,"messages":[{"role":"user","content":"Summarize this recurring project context and keep the answer short."}]}'
 ```
 
-That's it. Every request is now routed through tokenpak.
+That request goes through the local proxy and writes a durable receipt to
+`~/.tpk/monitor.db`. Inspect the rollup with:
+
+```bash
+tokenpak status --json
+tokenpak cost
+```
+
+TokenPak reports only measured local telemetry. If a request has no attributable
+compression or cache savings, the receipt stays honest and reports zero savings.
+`tokenpak demo` is still useful for offline inspection, but it is not a substitute
+for the first-receipt proof. See [first-receipt.md](./first-receipt.md).
 
 ---
 
@@ -179,10 +203,12 @@ TokenPak is a passthrough proxy — it never stores or modifies your credentials
 
 ```bash
 tokenpak cost --week # check a longer time window
-tokenpak demo # verify compression is working
+tokenpak status --json # inspect local request receipts
 ```
 
-Short prompts compress less. Savings show up most on long conversations and large document contexts.
+Short prompts compress less, and some requests have no attributable compression
+or cache savings. Those requests still create local receipts; TokenPak reports
+zero savings rather than fabricating a value.
 
 ### "The proxy started but requests aren't going through"
 
@@ -229,4 +255,4 @@ All tools call the proxy's REST API (`/tpk/v1/*`) so your data lives in exactly 
 
 ---
 
-> **Tip:** Run `tokenpak demo` at any time to see live compression on a sample prompt — no proxy needed.
+> **Tip:** Run `tokenpak demo` at any time to inspect offline compression on a sample prompt. It does not create the first measured proxy receipt.
