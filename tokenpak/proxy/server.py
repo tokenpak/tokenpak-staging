@@ -1925,6 +1925,108 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                     print(render_footer_oneline(req_stats), file=sys.stderr)
 
+            # ── Codex /v1/responses monitor row ───────────────────────────
+            # Emit ONE monitor.db row for the additive Codex route so
+            # `tokenpak status`/queries see ChatGPT-backend traffic. Kept fully
+            # separate from the is_messages logging path above. Persists integer
+            # token counts + metadata only — never any prompt/response content.
+            if is_codex_responses and ps.monitor is not None:
+                try:
+                    _cx_status = resp.status_code if "resp" in dir() else 0  # type: ignore
+                    # Model from the request body JSON (best-effort), fallback gpt-5.5.
+                    _cx_model = "gpt-5.5"
+                    try:
+                        if body:
+                            _cx_bd = json.loads(body)
+                            if isinstance(_cx_bd, dict) and _cx_bd.get("model"):
+                                _cx_model = str(_cx_bd["model"])
+                    except Exception:
+                        pass
+                    # Best-effort integer token counts from the final
+                    # `response.completed` SSE event's `response.usage`. Never
+                    # persists raw content; on any failure logs zeros.
+                    _cx_in = 0
+                    _cx_out = 0
+                    _cx_cache_read = 0
+                    try:
+                        _tail = _codex_sse_tail if "_codex_sse_tail" in dir() else b""
+                        if _tail:
+                            for _line in _tail.split(b"\n"):
+                                _line = _line.strip()
+                                if not _line.startswith(b"data:"):
+                                    continue
+                                _payload = _line[5:].strip()
+                                if not _payload or _payload == b"[DONE]":
+                                    continue
+                                try:
+                                    _ev = json.loads(_payload)
+                                except Exception:
+                                    continue
+                                _usage = None
+                                if isinstance(_ev, dict):
+                                    _resp_obj = _ev.get("response")
+                                    if isinstance(_resp_obj, dict):
+                                        _usage = _resp_obj.get("usage")
+                                    if _usage is None:
+                                        _usage = _ev.get("usage")
+                                if isinstance(_usage, dict):
+                                    _cx_in = int(_usage.get("input_tokens") or 0)
+                                    _cx_out = int(_usage.get("output_tokens") or 0)
+                                    _cx_details = _usage.get("input_tokens_details")
+                                    if isinstance(_cx_details, dict):
+                                        _cx_cache_read = int(
+                                            _cx_details.get("cached_tokens") or 0
+                                        )
+                    except Exception:
+                        _cx_in = 0
+                        _cx_out = 0
+                        _cx_cache_read = 0
+                    try:
+                        from tokenpak.proxy.request_pipeline import (
+                            _resolve_agent_id as _rai_cx,
+                        )
+                        from tokenpak.proxy.request_pipeline import (
+                            _resolve_cycle_id as _rci_cx,
+                        )
+                        from tokenpak.proxy.request_pipeline import (
+                            _resolve_session_id as _rsi_cx,
+                        )
+                        _cx_session_id = _rsi_cx(self.headers, "")
+                        _cx_agent_id = _rai_cx(self.headers)
+                        _cx_cycle_id = _rci_cx(self.headers)
+                    except Exception:
+                        _cx_session_id = ""
+                        _cx_agent_id = ""
+                        _cx_cycle_id = ""
+                    # Dispatch correlation headers (P-TELEMETRY-01). '' when
+                    # absent or when self.headers is None; never fabricated.
+                    _cx_hdrs = self.headers
+                    _cx_dispatch_job_id = (
+                        (_cx_hdrs.get("x-tokenpak-dispatch-job-id", "") or "") if _cx_hdrs else ""
+                    )
+                    _cx_dispatch_station_id = (
+                        (_cx_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _cx_hdrs else ""
+                    )
+                    ps.monitor.log(
+                        model=_cx_model,
+                        input_tokens=_cx_in,
+                        output_tokens=_cx_out,
+                        cost=0.0,
+                        latency_ms=latency_ms,
+                        status_code=_cx_status,
+                        endpoint=target_url or "/v1/responses",
+                        cache_read_tokens=_cx_cache_read,
+                        cache_origin="upstream",
+                        user_id=getattr(self, "_tokenpak_user_id", "") or "",
+                        session_id=_cx_session_id,
+                        agent_id=_cx_agent_id,
+                        cycle_id=_cx_cycle_id,
+                        dispatch_job_id=_cx_dispatch_job_id,
+                        dispatch_station_id=_cx_dispatch_station_id,
+                    )
+                except Exception:
+                    pass  # DB errors must never break the request
+
             # ── Circuit breaker: record outcome ───────────────────────────
             if _cb_registry is not None and _cb_provider is not None:
                 if _cb_success:
