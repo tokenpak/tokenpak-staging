@@ -70,10 +70,16 @@ receipt = build_request_receipt(None, decision=preflight_decision)
 
 ## Viewing a receipt
 
-`tokenpak.cli.commands.debug._render_request_receipt(request_id)` renders a
-redaction-safe receipt for a recorded request, or a support-bundle pointer when
-none is found. Surfacing this on the live `tokenpak debug receipt <id>` parser is
-a one-line follow-up in `_cli_core.py` (`_build_debug_parser`).
+```bash
+tokenpak debug receipt <request_id>        # redaction-safe receipt JSON
+tokenpak debug receipt <request_id> --raw  # without redaction
+```
+
+The live `tokenpak debug receipt <id>` command renders a redaction-safe receipt
+for a recorded request, or a support-bundle pointer when none is found. It is
+backed by `tokenpak.cli.commands.debug._render_request_receipt(request_id)`. The
+`request_id` is optional — invoking `tokenpak debug receipt` with no id prints
+the support-bundle pointer.
 
 ## What this moves toward score 5
 
@@ -93,5 +99,3 @@ a one-line follow-up in `_cli_core.py` (`_build_debug_parser`).
   slot exists and is populated when callers supply it.
 - `optimization.methods` is `optimization_methods_not_recorded` until per-method
   attribution is wired.
-- The receipt is currently a library/CLI surface; live `tokenpak debug receipt`
-  exposure is the next wiring step.
