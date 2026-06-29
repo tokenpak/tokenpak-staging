@@ -54,7 +54,19 @@ tokenpak demo
 
 **Claude Code** · **Cursor** · **Cline** · **Continue.dev** · **Aider** · **OpenAI SDK** · **Anthropic SDK** · **LiteLLM** · **Codex**
 
-Run `tokenpak integrate` to see the full client list with setup guides for each.
+| Client / SDK | Runtime setup mode | Compatibility label |
+|--------------|--------------------|---------------------|
+| Claude Code | `--apply` supported | Supported; tested |
+| OpenAI SDK | Print-only snippet | Supported; tested |
+| Anthropic SDK | Print-only snippet | Supported; tested |
+| LiteLLM | Print-only snippet | Supported; tested |
+| Cursor | `--apply` available | Experimental; untested |
+| Cline | Print-only snippet | Experimental; untested |
+| Continue.dev | `--apply` available | Experimental; untested |
+| Aider | `--apply` available | Experimental; untested |
+| Codex | Print-only base setup | Experimental; untested |
+
+Run `tokenpak integrate` to see the current client list with setup guides for each.
 
 ---
 

@@ -1,6 +1,6 @@
 # TokenPak Adapter Capability Matrix
 
-**Last updated:** 2026-06-26 — `feat/provider-adapter-certification-matrix-2026-06-25`
+**Last updated:** 2026-06-29 — `feat/provider-adapter-certification-matrix-2026-06-25`
 
 This document states **what TokenPak can prove per provider** based on code-level analysis and
 offline smoke tests. It supersedes the SDK-version compatibility table that was here previously
@@ -8,14 +8,39 @@ offline smoke tests. It supersedes the SDK-version compatibility table that was 
 
 ---
 
-## Status Legend
+## User-Facing Target Labels
+
+These labels match the runtime output from `tokenpak integrate`.
+
+| Label | Meaning |
+|-------|---------|
+| **Supported** | TokenPak presents this as a regular Beta setup path. |
+| **Tested** | Current repo tests or offline smoke proof cover the target behavior. |
+| **Experimental** | TokenPak exposes setup help, but testers should verify before relying on it. |
+| **Untested** | No current runnable proof is recorded for the target. Do not describe it as tested. |
+| **Apply** | `tokenpak integrate <target> --apply` writes a supported config surface. |
+| **Print-only** | `tokenpak integrate <target>` prints setup instructions; no config file is written. |
+
+| Target | Runtime setup mode | Compatibility label | Current proof |
+|--------|--------------------|---------------------|---------------|
+| Claude Code | Apply | Supported; tested | CLI integration tests and apply/verify hooks |
+| OpenAI SDK | Print-only | Supported; tested | SDK adapter round-trip tests |
+| Anthropic SDK | Print-only | Supported; tested | SDK adapter round-trip tests |
+| LiteLLM | Print-only | Supported; tested | LiteLLM adapter/unit/import-guard tests |
+| Cursor | Apply | Experimental; untested | Apply path exists; no current certified host proof |
+| Cline | Print-only | Experimental; untested | Manual setup only; no current certified host proof |
+| Continue.dev | Apply | Experimental; untested | Apply path exists; no current certified host proof |
+| Aider | Apply | Experimental; untested | Apply path exists; no current certified host proof |
+| Codex | Print-only | Experimental; untested | Base setup is print-only; tier flags are separate |
+
+## Capability Status Legend
 
 | Symbol | Meaning |
 |--------|---------|
-| ✅ **supported** | Implemented, tested offline, behaves as documented |
+| ✅ **tested** | Implemented, tested offline, behaves as documented |
 | ⚠️ **partial** | Implemented but with known caveats or untested edge cases |
 | ❌ **missing** | Not implemented or deliberately disabled |
-| ❓ **unknown** | Provider API does not document / expose this feature; cannot prove either way without live credentials |
+| ❓ **untested** | Provider API does not document / expose this feature; cannot prove either way without live credentials |
 
 > **Live-only gaps** — any cell marked ❓ requires a live provider call to verify.
 > These are reported explicitly so they are not silently presented as green.
@@ -228,16 +253,19 @@ These commands validate the main adapters without live credentials.
 Run from the repository root.
 
 ```bash
-# Full offline adapter smoke suite
-python -m pytest tests/test_proxy_adapters.py tests/test_adapter_roundtrip.py tests/proxy/adapters -q 2>&1 | tail -20
+# Current offline proxy adapter + runtime-label proof
+python -m pytest tests/test_proxy_adapters.py tests/cli/test_integrate_print_only_targets.py
+
+# Legacy SDK adapter smoke, when the legacy tokenpak.adapters import surface is available
+python -m pytest tests/test_adapter_roundtrip.py
 
 # Lint
-python -m ruff check tokenpak tests 2>&1 | head -30
+python -m ruff check tokenpak/cli/commands/integrate.py tests/cli/test_integrate_print_only_targets.py
 ```
 
-Expected: all tests pass, no ruff errors.
-
-If `tests/proxy/adapters/` does not exist yet, run the `test_proxy_adapters.py` alone as the canonical offline check.
+Expected: current proxy adapter and runtime-label tests pass, no ruff errors.
+`tests/test_adapter_roundtrip.py` may skip in slim checkouts that do not expose
+the legacy `tokenpak.adapters` import surface; do not count a skip as live proof.
 
 ---
 
@@ -266,8 +294,10 @@ is now **capability proof per provider**, not SDK version ranges.
 ## Sources
 
 - `tokenpak/proxy/adapters/__init__.py` — `build_default_registry()` priority table
+- `tokenpak/cli/commands/integrate.py` — runtime target labels and apply/print-only modes
 - `tokenpak/proxy/adapters/{anthropic,openai_chat,openai_responses,openai_codex_responses,google,grok,passthrough}_adapter.py`
 - `tokenpak/telemetry/adapters/{anthropic,openai,gemini}.py` + `registry.py`
 - `tokenpak/telemetry/canonical.py` — `CanonicalUsage`, `UsageSource`, `Confidence`
-- `tests/test_proxy_adapters.py`, `tests/test_adapter_roundtrip.py`
+- `tests/test_proxy_adapters.py`, `tests/cli/test_integrate_print_only_targets.py`
+- `tests/test_adapter_roundtrip.py` — legacy SDK smoke when its import gate is available
 - Offline analysis only; `live_api_allowed: false`
