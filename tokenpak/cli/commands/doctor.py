@@ -866,13 +866,15 @@ def run_doctor(
             _record(
                 "vault_index",
                 "warn",
-                "Vault index         not available — run: tokenpak index <path>",
+                "Vault index         not available — optional; "
+                "run: tokenpak index <path> to enable semantic search",
             )
         else:
             _record(
                 "vault_index",
                 "warn",
-                "Vault index         0 blocks — run: tokenpak index <path>",
+                "Vault index         0 blocks — optional; "
+                "run: tokenpak index <path> to enable semantic search",
             )
     else:
         # Fallback: check file on disk
@@ -894,7 +896,8 @@ def run_doctor(
                     _record(
                         "vault_index",
                         "warn",
-                        f"Vault index         {index_path} — 0 blocks (run: tokenpak index)",
+                        f"Vault index         {index_path} — 0 blocks "
+                        "(optional; run: tokenpak index <path> to enable semantic search)",
                     )
             except json.JSONDecodeError:
                 _record(
@@ -906,7 +909,8 @@ def run_doctor(
             _record(
                 "vault_index",
                 "warn",
-                "Vault index         not found (run: tokenpak index <path>)",
+                "Vault index         not found — optional; "
+                "run: tokenpak index <path> to enable semantic search",
             )
 
     # === Check 7b: Registered vault paths staleness ============================
