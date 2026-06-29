@@ -307,7 +307,7 @@ jobs:
               # at a citation end (non-section char / sentence period / EOL) but
               # not a ".<digit>" sub-section.
               sed -E \
-                -e 's/\b(Apache-2\.0|Apache-1\.1|MIT|BSD-2-Clause|BSD-3-Clause|GPL-2\.0|GPL-3\.0|LGPL-2\.1|LGPL-3\.0|MPL-2\.0|AGPL-3\.0|ISC|Unlicense) §([0-9])/\1 __PUBLIC_LICENSE_SEC_\2__/g' \
+                -e 's/Apache-2\.0 §[0-9]+(\.[0-9]+)*/Apache-2.0 __PUBLIC_LICENSE_SEC__/g' \
                 -e 's/\bStd 21\b/Std __PUBLIC_RELGATE_REF_21__/g' \
                 -e 's/\bStd 30\b/Std __PUBLIC_RELGATE_REF_30__/g' \
                 -e 's/§13\.3(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SNAP_SEC_13_3__\1/g' \
@@ -426,7 +426,7 @@ jobs:
               # The section boundary masks "§N" at a citation end (non-section
               # char / sentence period / EOL) but not a ".<digit>" sub-section.
               sed -E \
-                -e 's/\b(Apache-2\.0|Apache-1\.1|MIT|BSD-2-Clause|BSD-3-Clause|GPL-2\.0|GPL-3\.0|LGPL-2\.1|LGPL-3\.0|MPL-2\.0|AGPL-3\.0|ISC|Unlicense) §([0-9])/\1 __PUBLIC_LICENSE_SEC_\2__/g' \
+                -e 's/Apache-2\.0 §[0-9]+(\.[0-9]+)*/Apache-2.0 __PUBLIC_LICENSE_SEC__/g' \
                 -e 's/\bStd 02\b/Std __PUBLIC_RELGATE_STD_02__/g' \
                 -e 's/\bStd 10\b/Std __PUBLIC_RELGATE_STD_10__/g' \
                 -e 's/\bStd 12\b/Std __PUBLIC_RELGATE_STD_12__/g' \
@@ -540,17 +540,19 @@ jobs:
                 -e 's#~/\.claude/projects#~/__FUNC_CLAUDE_TRANSCRIPT_DIR__#g' \
                 "$file"
             elif [ "$pat" = '§[0-9]' ]; then
-              # License-section legal citations (e.g. "Apache-2.0 §6 grants no
-              # trademark rights") are preserved legal/trademark text in the
-              # README / package metadata, NOT internal section refs. The
-              # no-space "§N" matches them, so mask "<license-id> §N" for the
-              # section pattern. A bare internal "§N" (no license-id prefix) is
-              # still caught. (Reached only for non-snapshot/non-impl paths;
-              # those are handled above with their own §-citation cite-lists,
-              # which also carry this license mask.) Mirror of
-              # _mask_license_citations in check_release_leaks.py.
+              # The exact "Apache-2.0 §6" license-section citation (e.g.
+              # "Apache-2.0 §6 grants no trademark rights") is preserved
+              # legal/trademark text in the README / package metadata, NOT an
+              # internal section ref. The no-space "§N" matches it, so mask the
+              # exact "Apache-2.0 §N" literal for the section pattern. A bare
+              # internal "§N" (or any other license-id prefix) is still caught.
+              # Apache-2.0 ONLY per the 2026-06-28 ruling — the generic
+              # "<license-id> §N" SPDX carve-out is a separate Suki/Kevin policy
+              # decision. (Reached only for non-snapshot/non-impl paths; those
+              # are handled above with their own §-citation cite-lists.) Mirror
+              # of _mask_license_citations in check_release_leaks.py.
               sed -E \
-                -e 's/\b(Apache-2\.0|Apache-1\.1|MIT|BSD-2-Clause|BSD-3-Clause|GPL-2\.0|GPL-3\.0|LGPL-2\.1|LGPL-3\.0|MPL-2\.0|AGPL-3\.0|ISC|Unlicense) §([0-9])/\1 __PUBLIC_LICENSE_SEC_\2__/g' \
+                -e 's/Apache-2\.0 §[0-9]+(\.[0-9]+)*/Apache-2.0 __PUBLIC_LICENSE_SEC__/g' \
                 "$file"
             else
               cat "$file"

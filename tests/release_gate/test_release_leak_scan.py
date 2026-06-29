@@ -318,8 +318,9 @@ def test_non_relgate_path_cited_section_still_fails(tmp_path):
 def test_fp_license_section_citation_passes(tmp_path):
     # Preserved legal/trademark text: the README trademark clause cites the
     # license section with a NO-SPACE "§6" ("Apache-2.0 §6 grants no trademark
-    # rights") — the §[0-9] pattern matches it, so the <license-id> §N carve-out
-    # must let it pass. (The space-form "§ 512" FP test does not cover this.)
+    # rights") — the §[0-9] pattern matches it, so the exact Apache-2.0 §N
+    # allowlist must let it pass. (The space-form "§ 512" FP test does not cover
+    # this.)
     _write(
         tmp_path,
         "tokenpak/_meta/readme_snippet.md",
@@ -327,12 +328,66 @@ def test_fp_license_section_citation_passes(tmp_path):
         "no trademark rights).\n",
     )
     res = _run_tree(tmp_path)
-    assert res.returncode == 0, f"license-section citation must pass:\n{res.stdout}"
+    assert res.returncode == 0, f"Apache-2.0 license-section citation must pass:\n{res.stdout}"
 
 
-def test_license_carveout_requires_license_prefix(tmp_path):
-    # The carve-out is narrow: a bare internal "§6" with no SPDX-license-id
-    # prefix is still a leak and must still trip.
+def test_apache_license_multidigit_section_passes(tmp_path):
+    # The allowlist matches the full section number, so a multi-digit / dotted
+    # section masks cleanly (no partial-mask leak).
+    _write(tmp_path, "tokenpak/_meta/readme_snippet.md", "see Apache-2.0 §10.2 hypothetical\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"multi-digit Apache section must pass:\n{res.stdout}"
+
+
+def test_license_carveout_requires_apache_prefix(tmp_path):
+    # The allowlist is narrow: a bare internal "§6" with no Apache-2.0 prefix is
+    # still a leak and must still trip.
     _write(tmp_path, "tokenpak/_meta/note.md", "internal rule per §6 of the spec\n")
     res = _run_tree(tmp_path)
-    assert res.returncode == 1, "bare §6 (no license-id) must still fail"
+    assert res.returncode == 1, "bare §6 (no Apache-2.0 prefix) must still fail"
+
+
+def test_non_apache_license_section_fails(tmp_path):
+    # Scope ruling (2026-06-28): Apache-2.0 ONLY. The generic "<license-id> §N"
+    # SPDX carve-out is NOT used, so a non-Apache license-section citation (e.g.
+    # "MIT §6") is NOT allowlisted and still trips the §[0-9] rule. (Widening to
+    # other SPDX identifiers is a separate Suki/Kevin policy decision.)
+    _write(tmp_path, "tokenpak/_meta/note.md", "see MIT §6 for the clause\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "non-Apache license-section citation must fail (Apache-only allowlist)"
+
+
+def test_pattern_register_parity_with_delta_gate():
+    # Mechanical SYNC OBLIGATION check: the full-tree register (PATTERNS in
+    # check_release_leaks.py) and the per-PR delta gate
+    # (identity-language-check.yml `patterns=( ... )`) MUST carry the identical
+    # forbidden-pattern set. Guards against the two scanners drifting. The YAML
+    # extraction reads ONLY array-ENTRY lines (a lone quoted string), skipping
+    # comment lines inside the block.
+    import importlib.util
+    import re as _re
+
+    spec = importlib.util.spec_from_file_location("_crl_parity", SCANNER)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_crl_parity"] = mod
+    spec.loader.exec_module(mod)
+    py_set = set(mod.PATTERNS)
+
+    yml = (REPO_ROOT / ".github" / "workflows" / "identity-language-check.yml").read_text(
+        encoding="utf-8"
+    )
+    block = _re.search(r"patterns=\((.*?)\n\s*\)", yml, _re.S).group(1)
+    y_set = set()
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped:
+            continue
+        m = _re.fullmatch(r"'([^']*)'", stripped)  # entry line = a lone quoted string
+        if m:
+            y_set.add(m.group(1))
+
+    assert py_set == y_set, (
+        "scanner register and delta gate drifted:\n"
+        f"  only in scanner: {py_set - y_set}\n"
+        f"  only in delta gate: {y_set - py_set}"
+    )

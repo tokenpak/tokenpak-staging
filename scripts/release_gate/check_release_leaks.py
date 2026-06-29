@@ -273,38 +273,29 @@ def _mask_relgate_impl(text: str) -> str:
     )
 
 
-# SPDX license identifiers that may legitimately precede a no-space section
-# citation. A "<license-id> §N" is preserved legal/trademark text in the README
-# / package metadata (e.g. "Apache-2.0 §6 grants no trademark rights"), NOT an
-# internal section reference — and the no-space §[0-9] pattern would otherwise
-# false-positive on it. The earlier FP validation only covered the SPACE-form
-# legal citation ("§ 512"); this no-space license form was surfaced by the
-# package-wide scrub (2026-06-28). Mirror: identity-language-check.yml.
-_LICENSE_IDS = (
-    "Apache-2.0",
-    "Apache-1.1",
-    "MIT",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "GPL-2.0",
-    "GPL-3.0",
-    "LGPL-2.1",
-    "LGPL-3.0",
-    "MPL-2.0",
-    "AGPL-3.0",
-    "ISC",
-    "Unlicense",
-)
+# Exact Apache-2.0 license-section citation. The README/package-metadata
+# trademark notice cites the license section with a no-space "§6"
+# ("Apache-2.0 §6 grants no trademark rights"), which is preserved legal text,
+# NOT an internal section reference — and the no-space §[0-9] pattern would
+# otherwise false-positive on it (the earlier FP validation only covered the
+# SPACE-form legal citation "§ 512"). Surfaced by the package-wide scrub
+# (2026-06-28).
+#
+# Scope ruling (2026-06-28): Apache-2.0 ONLY. The broader generic
+# "<license-id> §N" SPDX carve-out is deliberately NOT used here; widening to
+# other SPDX identifiers is a separate masking-policy decision that requires
+# explicit Suki/Kevin approval with evidence. Matches the full section number so
+# "§10" / "§6.1" mask cleanly. Mirror: identity-language-check.yml.
+APACHE_LEGAL_SECTION = r"Apache-2\.0 §[0-9]+(?:\.[0-9]+)*"
 
 
 def _mask_license_citations(text: str) -> str:
-    """Mask license-section legal citations (e.g. ``Apache-2.0 §6``) on ANY path.
+    """Mask the exact ``Apache-2.0 §N`` legal/trademark citation on ANY path.
 
-    Only ``<license-id> §N`` is neutralized; a bare internal ``§N`` with no
-    SPDX-license-id prefix is left intact and still trips the §[0-9] rule.
+    Only ``Apache-2.0 §N`` is neutralized; a bare internal ``§N`` (or any other
+    license-id prefix) is left intact and still trips the §[0-9] rule.
     """
-    alt = "|".join(re.escape(x) for x in _LICENSE_IDS)
-    return re.sub(rf"\b({alt}) §([0-9])", r"\1 __LICENSE_SEC_\2__", text)
+    return re.sub(APACHE_LEGAL_SECTION, "Apache-2.0 __LICENSE_SEC__", text)
 
 
 def _mask_openclaw_functional(text: str) -> str:
