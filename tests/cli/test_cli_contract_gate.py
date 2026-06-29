@@ -99,6 +99,56 @@ def test_start_uses_cli_port_for_background_proxy(monkeypatch, tmp_path):
     assert calls[0]["cmd"][-4:] == ["--port", "9999", "--log-level", "debug"]
 
 
+def test_proxy_next_steps_include_dashboard(capsys):
+    _cli_core._print_proxy_next_steps(8766)
+
+    out = capsys.readouterr().out
+
+    assert "tokenpak status" in out
+    assert "tokenpak dashboard" in out
+    assert "watch live requests and savings" in out
+    assert "tokenpak savings" in out
+
+
+def test_start_success_mentions_dashboard_next_step(monkeypatch, tmp_path, capsys):
+    calls: list[dict[str, object]] = []
+
+    class GoodValidator:
+        def validate(self, config):
+            return []
+
+    class FakeProc:
+        pid = 4242
+
+    def fake_popen(cmd, **kwargs):
+        calls.append({"cmd": cmd, **kwargs})
+        return FakeProc()
+
+    health_calls = iter(
+        [
+            None,
+            {"compilation_mode": "hybrid", "stats": {"requests": 0}},
+        ]
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TOKENPAK_PORT", raising=False)
+    monkeypatch.setattr("tokenpak.core.config_loader.load_config", lambda: {})
+    monkeypatch.setattr("tokenpak.core.config_validator.ConfigValidator", GoodValidator)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(_cli_core, "_proxy_get", lambda *args, **kwargs: next(health_calls))
+
+    rc = _cli_core.cmd_start(Namespace(port=9999, log_level="debug"))
+
+    out = capsys.readouterr().out
+    assert rc is None
+    assert calls
+    assert "tokenpak dashboard" in out
+    assert "watch live requests and savings" in out
+    assert "tokenpak savings" in out
+
+
 def test_start_invalid_config_returns_config_error(monkeypatch, capsys):
     class BadValidator:
         def validate(self, config):

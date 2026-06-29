@@ -781,6 +781,18 @@ def cmd_help(args):
         _print_full_help()
 
 
+def _print_proxy_next_steps(port: int, *, first_time_hint: bool = False) -> None:
+    """Print the common proxy-start next steps."""
+    print("Next steps:")
+    print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
+    print("  2. Run: tokenpak status     (check health)")
+    print("  3. Run: tokenpak dashboard  (watch live requests and savings)")
+    print("  4. Run: tokenpak savings    (see your ROI)")
+    if first_time_hint:
+        print()
+        print("💡 First time? Run: tokenpak setup")
+
+
 # ── Alias commands ────────────────────────────────────────────────────────────
 
 
@@ -892,8 +904,9 @@ def cmd_init(args):
     if vault_path:
         click.echo(f"   Vault:      {vault_path}")
     click.echo()
-    click.echo("Next step:")
-    click.echo("   tokenpak start\n")
+    click.echo("Next steps:")
+    click.echo("  1. tokenpak start")
+    click.echo("  2. tokenpak dashboard  (watch live requests and savings)\n")
 
 
 def cmd_setup(args):
@@ -1106,15 +1119,14 @@ def cmd_setup(args):
         print(f"✅ Proxy launched (PID {proc.pid}, port {port})")
 
     # Success message with next steps
-    print("\nNext steps:")
-    print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
-    print("  2. Run: tokenpak status    (check health)")
-    print("  3. Run: tokenpak savings   (see your ROI)")
+    print()
+    _print_proxy_next_steps(port)
     print()
     print("💡 Quick commands:")
     print("  tokenpak serve      — start the proxy")
     print("  tokenpak stop       — stop the proxy")
     print("  tokenpak status     — check proxy health")
+    print("  tokenpak dashboard  — watch live requests and savings")
     print("  tokenpak savings    — view compression savings")
     print()
 
@@ -1220,12 +1232,7 @@ def cmd_start(args):
     if health:
         mode = health.get("compilation_mode", "hybrid")
         print(f"\n✅ Proxy running on http://localhost:{port} (mode: {mode})\n")
-        print("Next steps:")
-        print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
-        print("  2. Run: tokenpak status    (check health)")
-        print("  3. Run: tokenpak savings   (see your ROI)")
-        print()
-        print("💡 First time? Run: tokenpak setup")
+        _print_proxy_next_steps(port, first_time_hint=True)
     else:
         print(f"Proxy launched (PID {proc.pid}, port {port}) — waiting for startup...")
         print("  Run `tokenpak status` to verify.")
