@@ -3819,26 +3819,14 @@ def _cmd_status_legacy(args):
         print()
 
         # Savings summary — prominent 💰 line
-        # cache_read_tokens is in /stats session, not /health stats
-        _stats_session = (stats or {}).get("session", {})
-        cache_read = _stats_session.get("cache_read_tokens", s.get("cache_read_tokens", 0))
-        saved_tok = s.get("saved_tokens", 0)
-        _hits = s.get("cache_hits", 0)
-        _misses = s.get("cache_misses", 0)
-        _total_cache = _hits + _misses
-        _hit_rate = (_hits / _total_cache * 100) if _total_cache > 0 else 0
-        # Cache reads save (full_price - cache_read_price) per token.
-        # Using Anthropic claude-sonnet-4 rates: $3.00/MTok input, $0.30/MTok cache read.
-        _cache_savings = cache_read * 2.70 / 1_000_000
-        # Compression savings: tokens eliminated entirely, valued at input rate.
-        _compression_savings = saved_tok * 3.00 / 1_000_000
-        _total_saved = _cache_savings + _compression_savings
         # Compact savings status bar — prefer today's stats over session stats
+        # Generic provider/client cache reads are observability in this legacy
+        # fallback; without origin data they must not inflate TokenPak savings.
         _today = (stats or {}).get("today", {})
         _today_input = _today.get("input_tokens", 0)
         _today_compressed = _today.get("compressed_tokens", 0)
         _today_cache_read = _today.get("cache_read_tokens", 0)
-        _today_total_saved_tok = _today_compressed + _today_cache_read
+        _today_total_saved_tok = _today_compressed
 
         # Compression % from today's data
         _avg_compression = (_today_compressed / _today_input * 100) if _today_input > 0 else 0.0
@@ -3871,8 +3859,14 @@ def _cmd_status_legacy(args):
 
         if _savings_parts:
             print(f"  💰 Savings: {' | '.join(_savings_parts)}")
+            if _today_cache_read > 0:
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
         else:
-            print("  💰 Savings: no data yet (run some requests first)")
+            if _today_cache_read > 0:
+                print("  💰 Savings: no TokenPak-attributed savings yet")
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
+            else:
+                print("  💰 Savings: no data yet (run some requests first)")
         print()
 
         # Today's savings (from telemetry DB)
@@ -4053,7 +4047,15 @@ def _savings_json_payload(report, days):
     mistake "nothing recorded yet" for "zero savings achieved".
     """
     has_data = not (report.total_cost == 0.0 and report.savings_amount == 0.0)
-    payload = {"section": "savings", "days": days, "available": has_data}
+    payload = {
+        "section": "savings",
+        "days": days,
+        "available": has_data,
+        "attribution": {
+            "model": "conservative_tokenpak_caused_savings",
+            "provider_or_client_cache": "observed_not_credited",
+        },
+    }
     if has_data:
         payload.update(
             {
@@ -4158,7 +4160,8 @@ def cmd_savings(args):
                 ("Savings %", f"{savings_pct:.1f}%"),
                 ("Actual Cost", f"${actual:.2f}"),
                 ("Baseline", f"${estimated_without:.2f}"),
-                ("Cache Hit", f"{cache_hit_rate * 100:.1f}%"),
+                ("Cache Observed", f"{cache_hit_rate * 100:.1f}%"),
+                ("Attribution", "TokenPak-caused only"),
             ]
         )
     )

@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -48,7 +50,13 @@ def _write_fastapi_blocker(directory: Path) -> Path:
     return directory
 
 
-def _run_cli(args, *, home: Path, blocker_dir: Path | None = None):
+def _run_cli(
+    args,
+    *,
+    home: Path,
+    blocker_dir: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+):
     """Run ``python -m tokenpak <args>`` with an isolated HOME.
 
     The worktree under test is prepended to ``PYTHONPATH`` so it shadows any
@@ -63,14 +71,61 @@ def _run_cli(args, *, home: Path, blocker_dir: Path | None = None):
     if env.get("PYTHONPATH"):
         path_parts.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(path_parts)
+    if extra_env:
+        env.update(extra_env)
     # Avoid inheriting a port that points at someone else's running proxy.
-    env.pop("TOKENPAK_PORT", None)
+    if not extra_env or "TOKENPAK_PORT" not in extra_env:
+        env.pop("TOKENPAK_PORT", None)
     return subprocess.run(
         [sys.executable, "-m", "tokenpak", *args],
         env=env,
         capture_output=True,
         text=True,
     )
+
+
+def _create_monitor_db(path: Path, *, cache_origin: str) -> None:
+    """Create a minimal monitor.db with one cache-heavy request row."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                estimated_cost REAL,
+                compressed_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_creation_tokens INTEGER DEFAULT 0,
+                cache_origin TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO requests (
+                timestamp, model, input_tokens, output_tokens, estimated_cost,
+                compressed_tokens, cache_read_tokens, cache_origin
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "claude-haiku-4-5",
+                100_000,
+                0,
+                0.0,
+                40_000,
+                60_000,
+                cache_origin,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # --- P0-B: JSON contract ----------------------------------------------------
@@ -115,7 +170,27 @@ def test_savings_json_with_data_reports_metrics():
     assert payload["savings_amount"] == 5.0
     assert payload["actual_cost"] == 10.0
     assert payload["baseline_cost"] == 15.0
+    assert payload["attribution"]["model"] == "conservative_tokenpak_caused_savings"
     assert "state" not in payload
+
+
+def test_savings_json_observes_client_cache_without_crediting_it(tmp_path):
+    db = tmp_path / "monitor.db"
+    _create_monitor_db(db, cache_origin="client")
+
+    res = _run_cli(
+        ["savings", "--json"],
+        home=tmp_path / "home",
+        extra_env={"TOKENPAK_DB": str(db), "TOKENPAK_PORT": "59231"},
+    )
+    assert res.returncode == 0, res.stderr
+    data = json.loads(res.stdout)
+
+    assert data["available"] is True
+    assert data["cache_hit_rate"] > 0
+    assert data["savings_amount"] == 0.0
+    assert data["actual_cost"] == data["baseline_cost"]
+    assert data["attribution"]["provider_or_client_cache"] == "observed_not_credited"
 
 
 def test_cost_json_payload_includes_by_model(monkeypatch):
