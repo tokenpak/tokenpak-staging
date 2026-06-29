@@ -1013,11 +1013,11 @@ Replay captured sessions
 
 ### `tokenpak audit`
 
-Audit log management
+Audit log surface (Pro/Enterprise)
 
 ### `tokenpak compliance`
 
-Compliance reports
+Compliance report surface (Pro/Enterprise)
 
 ### `tokenpak validate`
 

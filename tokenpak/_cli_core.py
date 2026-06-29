@@ -267,8 +267,8 @@ _COMMAND_GROUPS = {
         ("lock", "File lock management"),
         ("run", "Schedule macro runs"),
         ("replay", "Replay captured sessions"),
-        ("audit", "Audit log management"),
-        ("compliance", "Compliance reports"),
+        ("audit", "Audit log surface (Pro/Enterprise)"),
+        ("compliance", "Compliance report surface (Pro/Enterprise)"),
         ("validate", "Validate JSON files"),
         ("config-check", "Validate config"),
         ("diff", "Show context changes"),
@@ -2962,8 +2962,14 @@ def _build_stub_parsers(sub):
     instead of a traceback.
     """
     _STUBS = {
-        "audit": "Enterprise audit log management (available in TokenPak Pro)",
-        "compliance": "Generate compliance reports (available in TokenPak Pro)",
+        "audit": (
+            "Enterprise audit log surface (Pro/Enterprise); see "
+            "docs/guides/enterprise/security-architecture.md"
+        ),
+        "compliance": (
+            "Compliance report surface (Pro/Enterprise); see "
+            "docs/guides/enterprise/compliance-mapping.md"
+        ),
         "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
     }
 
