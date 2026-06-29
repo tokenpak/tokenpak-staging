@@ -86,9 +86,9 @@ def _detect_claude_cli() -> Optional[str]:
 def _detect_codex_cli() -> Optional[str]:
     loc = _detect_binary("codex")
     if loc:
-        return loc
+        return "codex CLI on PATH"
     if (Path.home() / ".codex").exists():
-        return str(Path.home() / ".codex")
+        return "Codex config directory present"
     return None
 
 
@@ -227,12 +227,11 @@ def _instr_litellm(proxy_url: str) -> str:
 
 def _instr_codex(proxy_url: str) -> str:
     return (
-        f"Codex CLI reads OpenAI creds from ~/.codex/auth.json.\n"
-        f"Point it at tokenpak with:\n\n"
+        f"Codex CLI can use its existing OpenAI authentication.\n"
+        f"Route Codex requests through TokenPak for this shell with:\n\n"
         f"    {_env('OPENAI_BASE_URL', proxy_url + '/v1')}\n"
         f"    codex exec \"your prompt\"\n\n"
-        f"tokenpak's Codex adapter handles the OAuth credential injection;\n"
-        f"see project_tokenpak_codex_three_paths memory for path choice."
+        f"TokenPak does not edit your Codex config or print credentials."
     )
 
 
