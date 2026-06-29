@@ -214,13 +214,9 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
             continue
         if "tests" in parts:
             continue
-        # Dispatch is excluded from the released wheel (preview / main-only),
-        # mirroring pyproject ``packages.find`` exclude of
-        # ``tokenpak.orchestration.dispatch*``. The public-API snapshot records
-        # the RELEASED package surface, so it likewise excludes the dispatch
-        # subsystem (``orchestration.dispatch*``) and its CLI module
-        # (``cli.commands.dispatch_cmd``) — it must not record preview/source-only
-        # dispatch code as public released API.
+        # Dispatch is package-aware and has runtime-heavy optional dependency
+        # paths. Keep it out of the public-API snapshot until its API stability
+        # contract is explicitly promoted beyond the v0.1-alpha CLI surface.
         if name == "tokenpak.cli.commands.dispatch_cmd" or name.startswith(
             "tokenpak.orchestration.dispatch"
         ):

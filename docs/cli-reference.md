@@ -575,7 +575,7 @@ Live request explorer
 
 ### `tokenpak dispatch`
 
-TokenPak Dispatch — scoped, station-based, resumable, gated work packages with a Decision Inbox and delivery receipts (OSS, v0.1-alpha preview — not yet in a released pip package; available on the project main branch; CLI-first).
+TokenPak Dispatch — scoped, station-based, resumable, gated work packages with a Decision Inbox and delivery receipts (OSS, v0.1-alpha — released in pip install tokenpak as of v1.10.0; delivery and receipts remain post-alpha; CLI-first).
 
 **Subcommands:**
 

@@ -117,8 +117,9 @@ dispatch = [
     # The Dispatch orchestration subsystem (tokenpak/orchestration/dispatch/**)
     # is pydantic-native: every record model subclasses pydantic.BaseModel, and
     # JSON Schema build/parse round-trips use jsonschema. Both are opt-in so the
-    # slim core stays free of pydantic. The dispatch runtime is unbuilt as of
-    # v0.1-alpha, so nothing in the slim install imports these yet.
+    # slim core stays free of pydantic. Dispatch ships in the released package as
+    # of v1.10.0; this extra keeps runtime-heavy validation/test dependencies
+    # opt-in for callers who need those paths.
     "pydantic>=2.0.0",
     "jsonschema>=4.0.0",
 ]
