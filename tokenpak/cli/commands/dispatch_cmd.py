@@ -80,8 +80,8 @@ def build_dispatch_parser(sub: Any) -> None:
         description=(
             "TokenPak Dispatch — scoped, station-based, resumable, gated work "
             "packages with a Decision Inbox and delivery receipts (OSS, "
-            "v0.1-alpha preview — not yet in a released pip package; available "
-            "on the project main branch; CLI-first)."
+            "v0.1-alpha — released in pip install tokenpak as of v1.10.0; "
+            "delivery and receipts remain post-alpha; CLI-first)."
         ),
     )
     dsub = p.add_subparsers(dest="dispatch_action", required=False)
@@ -237,26 +237,22 @@ def _err(msg: str, as_json: bool, *, code: str = "error") -> int:
 
 
 # ---------------------------------------------------------------------------
-# Runtime availability gate (Dispatch v0.1-alpha: runtime is source/main-only)
+# Runtime availability gate
 # ---------------------------------------------------------------------------
 #
-# The Dispatch *runtime engine* (DispatchRuntime / FrontDock / Run Ledger) is
-# excluded from the released wheel for v0.1-alpha — only the CLI command file and
-# the registry/schema DATA ship under ``tokenpak/orchestration/dispatch/``. Those
-# data files make that directory a PEP 420 *namespace package*, so probing the
-# package directory (``find_spec("tokenpak.orchestration.dispatch")``) is NOT a
-# reliable presence check — it resolves non-``None`` even when no runtime module
-# is installed. We therefore sentinel on a real runtime module. The runtime
-# package is build-excluded as a unit, so a single sentinel is sufficient.
+# The Dispatch *runtime engine* (DispatchRuntime / FrontDock / Run Ledger)
+# ships in the released package as of v1.10.0. Some stripped or partial builds
+# may still carry only registry/schema data under ``tokenpak/orchestration/dispatch/``.
+# Those data files can make that directory a PEP 420 *namespace package*, so
+# probing the package directory (``find_spec("tokenpak.orchestration.dispatch")``)
+# is NOT a reliable presence check. We sentinel on a real runtime module.
 
 _DISPATCH_RUNTIME_SENTINEL = "tokenpak.orchestration.dispatch.dispatch"
 
 _DISPATCH_RUNTIME_UNAVAILABLE_MSG = (
-    "Dispatch runtime is source/main-only in TokenPak v0.1-alpha. This build "
-    "ships the Dispatch CLI and registry/schema data but not the runtime engine. "
-    "The optional `[dispatch]` extra installs preview dependencies for running "
-    "Dispatch from a source checkout — it does not bundle a packaged runtime. "
-    "Run Dispatch from a source/main install to use this verb."
+    "Dispatch runtime is unavailable in this TokenPak build. Dispatch ships in "
+    "`pip install tokenpak` as of v1.10.0; upgrade the package or reinstall from "
+    "a complete build that includes tokenpak.orchestration.dispatch."
 )
 
 
@@ -277,10 +273,9 @@ def _dispatch_runtime_available() -> bool:
 def _needs_runtime(fn):
     """Degrade a runtime-touching dispatch verb to an actionable message.
 
-    When the Dispatch runtime engine is absent (e.g. the slim released wheel),
-    invoking a runtime verb returns a concise, nonzero "source/main-only" notice
-    instead of raising a raw ``ModuleNotFoundError`` traceback (B1). The message
-    also explains the truthful ``[dispatch]`` extra contract (B2).
+    When the Dispatch runtime engine is absent, invoking a runtime verb returns
+    a concise, nonzero notice instead of raising a raw ``ModuleNotFoundError``
+    traceback.
     """
 
     @functools.wraps(fn)

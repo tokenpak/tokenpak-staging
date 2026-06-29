@@ -1,6 +1,6 @@
 {
   "version": "1.1",
-  "generated_at": "2026-06-28T17:50:51Z",
+  "generated_at": "2026-06-29T01:54:44Z",
   "guarded_globs": [
     "release*.yml",
     "release-rehearsal.yml"
@@ -380,6 +380,18 @@
     },
     {
       "workflow": "release.yml",
+      "job": "notify-site-release",
+      "id": "",
+      "name": "Dispatch site release sync"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "notify-site-release",
+      "id": "",
+      "name": "Require cross-repo dispatch token"
+    },
+    {
+      "workflow": "release.yml",
       "job": "publish",
       "id": "",
       "name": "Download dist artifact only"
@@ -521,6 +533,11 @@
     {
       "workflow": "release.yml",
       "job": "build",
+      "if": "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "notify-site-release",
       "if": "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
     },
     {

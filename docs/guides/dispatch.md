@@ -1,11 +1,9 @@
-# TokenPak Dispatch (v0.1-alpha preview)
+# TokenPak Dispatch (v0.1-alpha)
 
-> **Preview status.** Dispatch is an early **v0.1-alpha preview**. It is **not yet part of a
-> released `pip install tokenpak` package** — in published PyPI wheels the Dispatch engine is
-> intentionally excluded, so the `dispatch` command is cleanly absent. To try the preview today you
-> need a **source / `main`-branch install** (see [Trying the preview](#trying-the-preview)). The
-> command surface is real and tested, but one part of the flow — actually executing the work and
-> producing a delivery receipt — is intentionally **post-alpha** and is not wired yet.
+> **Release status.** Dispatch is an early **v0.1-alpha** feature that ships in
+> `pip install tokenpak` as of v1.10.0. The command surface is real and tested,
+> but one part of the flow — actually executing the work and producing a
+> delivery receipt — is intentionally **post-alpha** and is not wired yet.
 
 ## What Dispatch is
 
@@ -102,25 +100,20 @@ Because of that:
 
 If you see "no receipt" in the preview, that is expected and correct — not a bug.
 
-## Trying the preview
+## Trying Dispatch
 
-Because the engine is excluded from released wheels, `pip install tokenpak` will **not** give you a
-`dispatch` command. To explore the preview, install TokenPak from source on the project `main`
-branch, then run:
+Install the current package, then run:
 
 ```console
 $ tokenpak dispatch --help
 ```
 
-If `dispatch` is not listed, you are on a released package without the preview engine — switch to a
-source / `main`-branch install. When Dispatch graduates beyond the preview, it will become available
-through the standard install.
+If `dispatch` is not listed, upgrade to TokenPak v1.10.0 or newer.
 
 ## Summary
 
-- Dispatch is a CLI-first, preview workflow-control surface: route a request, track it in a Run
+- Dispatch is a CLI-first, v0.1-alpha workflow-control surface: route a request, track it in a Run
   Ledger, and approve/reject via a Decision Inbox.
 - The control plane (run, status, inspect, decisions, lifecycle, error paths) **works today** from a
-  source/`main` install.
+  current `pip install tokenpak`.
 - Live station execution and delivery **receipts are post-alpha** and not wired yet.
-- It is **not** available via `pip install tokenpak` in this preview.

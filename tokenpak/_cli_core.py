@@ -248,7 +248,7 @@ _COMMAND_GROUPS = {
         ("fleet", "Fleet status"),
         ("aggregate", "Aggregate ledger"),
         ("requests", "Live request explorer"),
-        ("dispatch", "Workflow control (v0.1-alpha preview): run, decide, deliver"),
+        ("dispatch", "Workflow control (v0.1-alpha): run, decide, deliver"),
     ],
     "Companion": [
         ("claude", "Launch with Claude Code"),
@@ -7186,6 +7186,12 @@ def _build_dispatch_parser(sub):
     Implementation lives in :mod:`tokenpak.cli.commands.dispatch_cmd`; lazy
     import keeps ``tokenpak --help`` fast.
     """
+    # Register the command group only when the orchestration package is present
+    # in this build; stripped or partial builds stay cleanly usable.
+    import importlib.util
+
+    if importlib.util.find_spec("tokenpak.orchestration.dispatch") is None:
+        return
     from tokenpak.cli.commands.dispatch_cmd import build_dispatch_parser
 
     build_dispatch_parser(sub)

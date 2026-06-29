@@ -1,19 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for the Dispatch slim-wheel runtime guard (B1 / B2).
+"""Regression tests for the Dispatch runtime availability guard.
 
-Reproduces the v0.1-alpha *slim wheel* failure mode. The published package ships
-the Dispatch CLI command file plus registry/schema **data** under
+Reproduces the stripped/partial-build failure mode. A build may ship the Dispatch
+CLI command file plus registry/schema **data** under
 ``tokenpak/orchestration/dispatch/`` (which makes that directory a PEP 420
-*namespace package*), but it does NOT ship the runtime engine modules. Before the
-fix, invoking a runtime verb (``tokenpak dispatch run …``) raised a raw
-``ModuleNotFoundError`` traceback, because the absence check probed the namespace
-package directory — which resolves non-``None`` even when the runtime is absent.
+*namespace package*) without the runtime engine modules. Before the fix, invoking
+a runtime verb (``tokenpak dispatch run ...``) raised a raw ``ModuleNotFoundError``
+traceback, because the absence check probed the namespace package directory —
+which resolves non-``None`` even when the runtime is absent.
 
 The fix sentinels on a *real runtime module*
 (:data:`~tokenpak.cli.commands.dispatch_cmd._DISPATCH_RUNTIME_SENTINEL`) and
-degrades runtime verbs to a concise, actionable "source/main-only" message via the
-existing ``_err`` envelope with a nonzero exit code, instead of crashing. The
-message also states the truthful ``[dispatch]`` extra contract (B2).
+degrades runtime verbs to a concise, actionable message via the existing ``_err``
+envelope with a nonzero exit code, instead of crashing.
 
 These tests drive the CLI in-process via the argparse builder + handler functions
 (faster, and any leaked ``ModuleNotFoundError`` surfaces as a caught exception).
@@ -97,9 +96,9 @@ def home(tmp_path, monkeypatch):
 def test_runtime_available_false_when_only_namespace_pkg(monkeypatch):
     """The namespace-package directory must NOT be mistaken for a runtime.
 
-    Simulates the slim wheel: ``tokenpak.orchestration.dispatch`` resolves (data
-    namespace package) but the runtime sentinel module does not. The old guard
-    keyed on the former and was defeated; the fix keys on the latter.
+    Simulates a stripped build: ``tokenpak.orchestration.dispatch`` resolves
+    (data namespace package) but the runtime sentinel module does not. The old
+    guard keyed on the former and was defeated; the fix keys on the latter.
     """
     real_find_spec = importlib.util.find_spec
     # Any real spec object stands in for the "present" namespace package.
@@ -151,9 +150,10 @@ def test_runtime_verb_degrades_human_with_actionable_message(monkeypatch):
 
     assert exc is None
     assert rc != 0
-    # Actionable, truthful message (B1 wording + B2 extra contract).
-    assert "source/main-only" in err
-    assert "[dispatch]" in err
+    # Actionable, truthful message.
+    assert "Dispatch runtime is unavailable" in err
+    assert "v1.10.0" in err
+    assert "complete build" in err
     # No raw traceback markers leaked to the user.
     assert "Traceback" not in err and "ModuleNotFoundError" not in err
 
