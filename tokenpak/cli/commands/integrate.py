@@ -45,17 +45,9 @@ def _detect_binary(name: str) -> Optional[str]:
 
 def _detect_module(name: str) -> Optional[str]:
     try:
-        spec = importlib.util.find_spec(name)
+        return "Python module installed" if importlib.util.find_spec(name) else None
     except Exception:
         return None
-    if spec is None:
-        return None
-    if spec.origin and spec.origin != "namespace":
-        return spec.origin
-    locations = list(spec.submodule_search_locations or [])
-    if locations:
-        return locations[0]
-    return "<installed>"
 
 
 def _detect_vscode_extension(prefix: str) -> Optional[str]:
