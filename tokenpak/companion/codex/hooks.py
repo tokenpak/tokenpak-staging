@@ -259,13 +259,51 @@ def ensure_hooks_feature_enabled() -> bool:
     return True
 
 
+def _hooks_feature_configured() -> bool:
+    """True if Codex config already has ``[features].hooks = true``.
+
+    This is the launcher hot-path guard: when setup is current, normal
+    ``tokenpak codex`` launches can avoid shelling out to ``codex
+    features enable hooks``, which opens Codex's own local SQLite state.
+    ``--install-only`` still runs the Codex-native command to repair drift.
+    """
+    from .mcp_config import codex_config_path
+
+    path = codex_config_path()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    try:
+        import tomllib as _toml  # 3.11+
+    except ModuleNotFoundError:  # 3.10
+        try:
+            import tomli as _toml  # type: ignore
+        except ModuleNotFoundError:  # pragma: no cover - graceful degrade
+            return False
+
+    try:
+        data = _toml.loads(text)
+    except Exception:
+        return False
+
+    features = data.get("features")
+    if not isinstance(features, dict) or features.get("hooks") is not True:
+        return False
+    _suppress_unstable_warning()
+    return True
+
+
 def _suppress_unstable_warning() -> None:
-    """Add ``suppress_unstable_features_warning = true`` to ~/.codex/config.toml.
+    """Add ``suppress_unstable_features_warning = true`` to Codex config.
 
     Best-effort: if the file can't be read/written we stay silent rather
     than fail the install. The warning is cosmetic.
     """
-    config_path = Path.home() / ".codex" / "config.toml"
+    from .mcp_config import codex_config_path
+
+    config_path = codex_config_path()
     try:
         content = config_path.read_text() if config_path.exists() else ""
     except OSError:

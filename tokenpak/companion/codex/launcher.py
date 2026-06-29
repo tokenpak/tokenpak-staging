@@ -134,8 +134,7 @@ def main(args: list[str] | None = None) -> int:
     except Exception as exc:  # never let isolation block the launcher
         progress.clear()
         print(
-            f"tokenpak: codex home provisioning failed ({exc}); "
-            "using default ~/.codex",
+            f"tokenpak: codex home provisioning failed ({exc}); using default ~/.codex",
             file=sys.stderr,
         )
         provisioned = None
@@ -155,20 +154,34 @@ def main(args: list[str] | None = None) -> int:
     refresh_rates()
 
     # ── Step 1: Register MCP server ──────────────────────────
-    from .mcp_config import get_env_vars, register
+    from .mcp_config import get_env_vars, register, verify_policy
 
-    progress.step("registering Codex MCP server")
     env_vars = get_env_vars(config)
-    if not register(env_vars=env_vars):
+    mcp_policy_ok, _mcp_policy_problems = verify_policy()
+    if install_only or not mcp_policy_ok:
+        progress.step("registering Codex MCP server")
+        mcp_registered = register(env_vars=env_vars)
+    else:
+        progress.step("Codex MCP server already configured")
+        mcp_registered = True
+    if not mcp_registered:
         progress.clear()
         print("tokenpak: MCP registration failed (continuing)", file=sys.stderr)
 
     # ── Step 2: Install hooks ────────────────────────────────
     if config.hooks_enabled:
-        from .hooks import ensure_hooks_feature_enabled, install_hooks
+        from .hooks import (
+            _hooks_feature_configured,
+            ensure_hooks_feature_enabled,
+            install_hooks,
+        )
 
         progress.step("installing Codex hooks")
-        if ensure_hooks_feature_enabled():
+        if install_only or not _hooks_feature_configured():
+            hooks_ready = ensure_hooks_feature_enabled()
+        else:
+            hooks_ready = True
+        if hooks_ready:
             install_hooks(target="global")
         else:
             progress.clear()
@@ -281,11 +294,7 @@ def _print_ready_banner(
     from tokenpak.cli.commands.status import MEME_LINES, _get_version
 
     mode = config.profile.capitalize()
-    budget = (
-        f"${config.budget_daily_usd:.2f}/day"
-        if config.budget_daily_usd > 0
-        else "Unlimited"
-    )
+    budget = f"${config.budget_daily_usd:.2f}/day" if config.budget_daily_usd > 0 else "Unlimited"
     meme = random.choice(MEME_LINES)
     version = _get_version()
 

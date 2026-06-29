@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the Codex state-database lock preflight.
+"""Tests for the Codex local-database lock preflight.
 
 Re-authored as part of the isolated-CODEX_HOME work (absorbs the prior
 state-lock diagnostics + lock-message rework): a fresh/free home preflights
@@ -38,7 +38,17 @@ def _make_state_db(home: Path) -> Path:
     return db
 
 
+def _make_log_db(home: Path) -> Path:
+    db = home / sl._LOG_DB_NAME
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE IF NOT EXISTS logs (id INTEGER)")
+    conn.commit()
+    conn.close()
+    return db
+
+
 # ── absent / free database ────────────────────────────────────────────
+
 
 def test_probe_absent_db_is_unlocked(codex_home):
     status = sl.probe(codex_home)
@@ -64,6 +74,7 @@ def test_probe_defaults_to_codex_home_env(codex_home, monkeypatch):
 
 # ── contended database ────────────────────────────────────────────────
 
+
 def test_probe_detects_locked_db(codex_home):
     db = _make_state_db(codex_home)
     holder = sqlite3.connect(str(db), isolation_level=None)
@@ -73,6 +84,23 @@ def test_probe_detects_locked_db(codex_home):
         assert status.locked is True
         assert status.exists is True
         assert "locked" in status.detail.lower()
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_probe_detects_locked_log_db(codex_home):
+    """Regression: Codex can fail state init because logs_2.sqlite is locked."""
+    _make_state_db(codex_home)
+    log_db = _make_log_db(codex_home)
+    holder = sqlite3.connect(str(log_db), isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")  # hold an exclusive lock on logs_2.sqlite
+    try:
+        status = sl.probe(codex_home)
+        assert status.locked is True
+        assert status.db_path == log_db
+        assert sl._LOG_DB_NAME in status.detail
+        assert str(log_db) in sl.remediation_hint(status)
     finally:
         holder.execute("ROLLBACK")
         holder.close()
@@ -94,6 +122,7 @@ def test_locked_status_with_no_holder_pid_still_locked(codex_home):
 
 
 # ── holder PID context + remediation message ──────────────────────────
+
 
 def test_remediation_hint_for_locked_shared_home(codex_home):
     db = _make_state_db(codex_home)
@@ -168,6 +197,7 @@ def test_dead_holder_pid_dropped_from_candidates(codex_home):
 
 
 # ── non-database / malformed file is not a lock ───────────────────────
+
 
 def test_malformed_state_file_is_not_a_lock(codex_home):
     (codex_home / sl.STATE_DB_NAME).write_text("not a sqlite db at all")

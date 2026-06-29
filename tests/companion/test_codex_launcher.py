@@ -57,6 +57,24 @@ def _patch_setup(monkeypatch, tmp_path):
     )
 
 
+def _write_current_codex_config(tmp_path):
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    config_path = codex_dir / "config.toml"
+    policy = "\n".join(mcp_config.render_policy_lines())
+    config_path.write_text(
+        "[features]\n"
+        "hooks = true\n"
+        "\n"
+        f"[mcp_servers.{mcp_config.SERVER_NAME}]\n"
+        'command = "python3"\n'
+        'args = ["-P", "-m", "tokenpak.companion.mcp.server"]\n'
+        f"{policy}\n",
+        encoding="utf-8",
+    )
+    return config_path
+
+
 def test_install_only_prints_loading_status_then_codex_banner(
     monkeypatch,
     tmp_path,
@@ -80,6 +98,65 @@ def test_install_only_prints_loading_status_then_codex_banner(
     assert "MCP server registered" not in err
     assert "hooks installed" not in err
     assert "companion ready for codex" not in err
+
+
+def test_main_skips_codex_setup_subprocesses_when_config_current(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    """Regression: normal launch avoids Codex CLI probes when setup is current."""
+    _patch_setup(monkeypatch, tmp_path)
+    _write_current_codex_config(tmp_path)
+
+    def register_must_not_run(env_vars=None):
+        raise AssertionError("register should not run on current hot path")
+
+    def enable_must_not_run():
+        raise AssertionError("features enable should not run on current hot path")
+
+    captured = {}
+
+    def fake_exec(cmd, args, env):
+        captured["cmd"] = cmd
+        captured["args"] = args
+        raise _ExecCalled
+
+    monkeypatch.setattr(mcp_config, "register", register_must_not_run)
+    monkeypatch.setattr(hooks, "ensure_hooks_feature_enabled", enable_must_not_run)
+    monkeypatch.setattr(launcher.os, "execvpe", fake_exec)
+
+    with pytest.raises(_ExecCalled):
+        launcher.main(["--model", "gpt-5-codex"])
+
+    assert captured["cmd"] == "codex"
+    assert captured["args"] == ["codex", "--model", "gpt-5-codex"]
+    err = capsys.readouterr().err
+    assert "tokenpak: Codex MCP server already configured..." in err
+    assert "tokenpak: registering Codex MCP server..." not in err
+
+
+def test_install_only_repairs_setup_even_when_config_current(
+    monkeypatch,
+    tmp_path,
+):
+    _patch_setup(monkeypatch, tmp_path)
+    _write_current_codex_config(tmp_path)
+    calls = {"register": 0, "hooks": 0}
+
+    def count_register(env_vars=None):
+        calls["register"] += 1
+        return True
+
+    def count_hooks():
+        calls["hooks"] += 1
+        return True
+
+    monkeypatch.setattr(mcp_config, "register", count_register)
+    monkeypatch.setattr(hooks, "ensure_hooks_feature_enabled", count_hooks)
+
+    assert launcher.main(["--install-only"]) == 0
+    assert calls == {"register": 1, "hooks": 1}
 
 
 def test_main_proxy_flag_routes_codex_through_named_profile(
