@@ -313,3 +313,26 @@ def test_non_relgate_path_cited_section_still_fails(tmp_path):
     _write(tmp_path, "tokenpak/proxy/leak.py", "# transcribed §7 note\nP = 1\n")
     res = _run_tree(tmp_path)
     assert res.returncode == 1, "§7 outside release-gate paths must still fail"
+
+
+def test_fp_license_section_citation_passes(tmp_path):
+    # Preserved legal/trademark text: the README trademark clause cites the
+    # license section with a NO-SPACE "§6" ("Apache-2.0 §6 grants no trademark
+    # rights") — the §[0-9] pattern matches it, so the <license-id> §N carve-out
+    # must let it pass. (The space-form "§ 512" FP test does not cover this.)
+    _write(
+        tmp_path,
+        "tokenpak/_meta/readme_snippet.md",
+        "Brand assets are not licensed under Apache-2.0 (Apache-2.0 §6 grants "
+        "no trademark rights).\n",
+    )
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"license-section citation must pass:\n{res.stdout}"
+
+
+def test_license_carveout_requires_license_prefix(tmp_path):
+    # The carve-out is narrow: a bare internal "§6" with no SPDX-license-id
+    # prefix is still a leak and must still trip.
+    _write(tmp_path, "tokenpak/_meta/note.md", "internal rule per §6 of the spec\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "bare §6 (no license-id) must still fail"

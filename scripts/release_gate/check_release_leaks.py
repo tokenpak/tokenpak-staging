@@ -71,6 +71,7 @@ from dataclasses import dataclass
 FLEET = r"\bfleet\b"
 OPENCLAW = r"\bopenclaw\b"
 CLAUDE_PROJECTS = r"\.claude/projects"
+SECTION = r"§[0-9]"
 
 PATTERNS: list[str] = [
     r"\bSue\b",
@@ -109,7 +110,7 @@ PATTERNS: list[str] = [
     # per the explicit per-surface cite-lists below; every other Std NN / §N /
     # Standards Delta still trips. Mirror: identity-language-check.yml.
     r"\bStd [0-9]{2}\b",
-    r"§[0-9]",
+    SECTION,
     r"Standards[ ]Delta",
     r"Suki: auto-commit",
 ]
@@ -272,6 +273,40 @@ def _mask_relgate_impl(text: str) -> str:
     )
 
 
+# SPDX license identifiers that may legitimately precede a no-space section
+# citation. A "<license-id> §N" is preserved legal/trademark text in the README
+# / package metadata (e.g. "Apache-2.0 §6 grants no trademark rights"), NOT an
+# internal section reference — and the no-space §[0-9] pattern would otherwise
+# false-positive on it. The earlier FP validation only covered the SPACE-form
+# legal citation ("§ 512"); this no-space license form was surfaced by the
+# package-wide scrub (2026-06-28). Mirror: identity-language-check.yml.
+_LICENSE_IDS = (
+    "Apache-2.0",
+    "Apache-1.1",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "GPL-2.0",
+    "GPL-3.0",
+    "LGPL-2.1",
+    "LGPL-3.0",
+    "MPL-2.0",
+    "AGPL-3.0",
+    "ISC",
+    "Unlicense",
+)
+
+
+def _mask_license_citations(text: str) -> str:
+    """Mask license-section legal citations (e.g. ``Apache-2.0 §6``) on ANY path.
+
+    Only ``<license-id> §N`` is neutralized; a bare internal ``§N`` with no
+    SPDX-license-id prefix is left intact and still trips the §[0-9] rule.
+    """
+    alt = "|".join(re.escape(x) for x in _LICENSE_IDS)
+    return re.sub(rf"\b({alt}) §([0-9])", r"\1 __LICENSE_SEC_\2__", text)
+
+
 def _mask_openclaw_functional(text: str) -> str:
     text = re.sub(r"tokenpak\.sdk\.openclaw", "tokenpak.sdk.__FUNC_OC_MODULE__", text)
     text = re.sub(
@@ -327,6 +362,11 @@ def _mask_fleet_functional(text: str) -> str:
 def mask_content(pattern: str, path: str, text: str) -> str:
     """Return ``text`` with the legitimate public-surface forms masked for this
     (pattern, path) pair. Dispatch order mirrors the delta gate exactly."""
+    if pattern == SECTION:
+        # License-section legal citations ("Apache-2.0 §6") are preserved legal
+        # text on ANY path and must never trip the §N rule. Pre-mask them, then
+        # apply the normal path-scoped masking on the result.
+        text = _mask_license_citations(text)
     if is_release_gate_snapshot_path(path):
         return _mask_snapshot(text)
     if pattern == FLEET and is_fleet_public_path(path):
