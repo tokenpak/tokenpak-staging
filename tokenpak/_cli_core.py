@@ -3819,26 +3819,14 @@ def _cmd_status_legacy(args):
         print()
 
         # Savings summary — prominent 💰 line
-        # cache_read_tokens is in /stats session, not /health stats
-        _stats_session = (stats or {}).get("session", {})
-        cache_read = _stats_session.get("cache_read_tokens", s.get("cache_read_tokens", 0))
-        saved_tok = s.get("saved_tokens", 0)
-        _hits = s.get("cache_hits", 0)
-        _misses = s.get("cache_misses", 0)
-        _total_cache = _hits + _misses
-        _hit_rate = (_hits / _total_cache * 100) if _total_cache > 0 else 0
-        # Cache reads save (full_price - cache_read_price) per token.
-        # Using Anthropic claude-sonnet-4 rates: $3.00/MTok input, $0.30/MTok cache read.
-        _cache_savings = cache_read * 2.70 / 1_000_000
-        # Compression savings: tokens eliminated entirely, valued at input rate.
-        _compression_savings = saved_tok * 3.00 / 1_000_000
-        _total_saved = _cache_savings + _compression_savings
         # Compact savings status bar — prefer today's stats over session stats
+        # Generic provider/client cache reads are observability in this legacy
+        # fallback; without origin data they must not inflate TokenPak savings.
         _today = (stats or {}).get("today", {})
         _today_input = _today.get("input_tokens", 0)
         _today_compressed = _today.get("compressed_tokens", 0)
         _today_cache_read = _today.get("cache_read_tokens", 0)
-        _today_total_saved_tok = _today_compressed + _today_cache_read
+        _today_total_saved_tok = _today_compressed
 
         # Compression % from today's data
         _avg_compression = (_today_compressed / _today_input * 100) if _today_input > 0 else 0.0
@@ -3871,8 +3859,14 @@ def _cmd_status_legacy(args):
 
         if _savings_parts:
             print(f"  💰 Savings: {' | '.join(_savings_parts)}")
+            if _today_cache_read > 0:
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
         else:
-            print("  💰 Savings: no data yet (run some requests first)")
+            if _today_cache_read > 0:
+                print("  💰 Savings: no TokenPak-attributed savings yet")
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
+            else:
+                print("  💰 Savings: no data yet (run some requests first)")
         print()
 
         # Today's savings (from telemetry DB)
@@ -4044,6 +4038,12 @@ def cmd_usage(args):
             )
 
 
+SAVINGS_ESTIMATE_NOTE = (
+    "Savings are estimates from recorded telemetry and local pricing rates; "
+    "provider pricing and run-to-run model behavior can change the final bill."
+)
+
+
 def _savings_json_payload(report, days):
     """Build the machine-readable savings summary.
 
@@ -4053,7 +4053,15 @@ def _savings_json_payload(report, days):
     mistake "nothing recorded yet" for "zero savings achieved".
     """
     has_data = not (report.total_cost == 0.0 and report.savings_amount == 0.0)
-    payload = {"section": "savings", "days": days, "available": has_data}
+    payload = {
+        "section": "savings",
+        "days": days,
+        "available": has_data,
+        "attribution": {
+            "model": "conservative_tokenpak_caused_savings",
+            "provider_or_client_cache": "observed_not_credited",
+        },
+    }
     if has_data:
         payload.update(
             {
@@ -4062,6 +4070,7 @@ def _savings_json_payload(report, days):
                 "actual_cost": round(report.total_cost, 6),
                 "baseline_cost": round(report.estimated_without_compression, 6),
                 "cache_hit_rate": round(report.cache_hit_rate, 6),
+                "estimate_note": SAVINGS_ESTIMATE_NOTE,
             }
         )
     else:
@@ -4130,6 +4139,7 @@ def cmd_savings(args):
                     "savings_pct": savings_pct,
                     "cache_hit_rate": cache_hit_rate,
                     "estimated_without_compression": estimated_without,
+                    "estimate_note": SAVINGS_ESTIMATE_NOTE if _has else "",
                 }
             )
         )
@@ -4143,7 +4153,12 @@ def cmd_savings(args):
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{savings_pct:.1f}%", f"${savings_amount:.2f}", _sv.window_label]
+                [
+                    f"{savings_pct:.1f}%",
+                    f"${savings_amount:.2f}",
+                    _sv.window_label,
+                    "estimate",
+                ]
             )
         )
         return
@@ -4158,10 +4173,13 @@ def cmd_savings(args):
                 ("Savings %", f"{savings_pct:.1f}%"),
                 ("Actual Cost", f"${actual:.2f}"),
                 ("Baseline", f"${estimated_without:.2f}"),
-                ("Cache Hit", f"{cache_hit_rate * 100:.1f}%"),
+                ("Cache Observed", f"{cache_hit_rate * 100:.1f}%"),
+                ("Attribution", "TokenPak-caused only"),
             ]
         )
     )
+    print()
+    print(f"Note: {SAVINGS_ESTIMATE_NOTE}")
 
     # Attribution v2 breakdown (additive; only shown when TOKENPAK_ATTRIBUTION_V2 is set)
     try:
@@ -4511,6 +4529,22 @@ def _build_debug_parser(sub):
     p_export.add_argument("trace_id", help="Trace ID to export")
     p_export.add_argument("--json", action="store_true", dest="json_out", help="Output as JSON")
     p_export.set_defaults(func=cmd_debug_export)
+
+    p_receipt = dsub.add_parser(
+        "receipt", help="Render the Receipt v1 proof object for a recorded request"
+    )
+    p_receipt.add_argument(
+        "request_id",
+        nargs="?",
+        help="Request ID to render a receipt for (omit to print the support-bundle pointer)",
+    )
+    p_receipt.add_argument(
+        "--raw",
+        action="store_true",
+        help="Show the receipt without redaction (default: redaction-safe)",
+    )
+    p_receipt.set_defaults(func=cmd_debug_receipt)
+
     p_debug.set_defaults(func=lambda a: p_debug.print_help())
 
 
@@ -4607,6 +4641,22 @@ def cmd_debug_export(args):
             print(_json.dumps(v, indent=2))
         else:
             print(f"{k}: {v}")
+
+
+def cmd_debug_receipt(args):
+    """Render the Receipt v1 proof object for a recorded request.
+
+    Thin shim over the already-tested render path
+    (`tokenpak.cli.commands.debug._render_request_receipt`). Prints the
+    redaction-safe receipt JSON for a recorded request, or a support-bundle
+    pointer when the id is missing / no record exists. ``--raw`` shows the
+    receipt without redaction.
+    """
+    from tokenpak.cli.commands.debug import _render_request_receipt
+
+    request_id = getattr(args, "request_id", None)
+    redact = not getattr(args, "raw", False)
+    print(_render_request_receipt(request_id, redact=redact))
 
 
 def _build_learn_parser(sub):
