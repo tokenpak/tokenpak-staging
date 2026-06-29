@@ -327,6 +327,48 @@ def attribution_coverage(db_path) -> "tuple[int, int, float | None]":
             pass
 
 
+def _shell_completion_candidates() -> list[Path]:
+    """Paths ``scripts/install-completions.sh`` writes the tokenpak completion
+    file to, across bash / zsh / fish (system + per-user locations).
+
+    Kept in lockstep with the destination lists in that installer so doctor's
+    discoverability probe matches what the installer actually does. Read-only:
+    callers only ``stat`` these, never write to them.
+    """
+    home = Path.home()
+    return [
+        # bash → file named "tokenpak"
+        Path("/usr/local/etc/bash_completion.d/tokenpak"),
+        Path("/etc/bash_completion.d/tokenpak"),
+        home / ".local/share/bash-completion/completions/tokenpak",
+        home / ".bash_completion.d/tokenpak",
+        # zsh → file named "_tokenpak"
+        Path("/usr/local/share/zsh/site-functions/_tokenpak"),
+        Path("/usr/share/zsh/site-functions/_tokenpak"),
+        home / ".zsh/completions/_tokenpak",
+        home / ".local/share/zsh/completions/_tokenpak",
+        # fish → file named "tokenpak.fish"
+        Path("/usr/share/fish/vendor_completions.d/tokenpak.fish"),
+        home / ".config/fish/completions/tokenpak.fish",
+    ]
+
+
+def _shell_completions_present() -> Path | None:
+    """Return the first installed tokenpak shell-completion file, or ``None``.
+
+    Side-effect-free: only stats candidate paths — never writes, sources, or
+    otherwise mutates shell startup state — so it is safe to call from
+    ``tokenpak doctor`` without touching the user's shell configuration.
+    """
+    for candidate in _shell_completion_candidates():
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def run_doctor(
     fix: bool = False,
     output_json: bool = False,
@@ -1280,6 +1322,33 @@ def run_doctor(
                     print(f"  ✓ Created {d}")
     else:
         _record("required_dirs", "pass", "Required dirs       all present")
+
+    # === Shell completions discovery (F12 install-friction hint) =================
+    # Optional tooling. Surface a safe, non-mutating pointer to the completions
+    # installer so users can discover it from `tokenpak doctor` without us ever
+    # touching their shell startup files. Recorded as "pass" whether or not
+    # completions are installed (like other optional/not-configured rows), so it
+    # never perturbs the warning/error counts or the doctor exit code.
+    completion_file = _shell_completions_present()
+    if completion_file is not None:
+        _record(
+            "shell_completions",
+            "pass",
+            f"Shell completions   installed: {completion_file}",
+        )
+    else:
+        _record(
+            "shell_completions",
+            "pass",
+            "Shell completions   not installed (optional) — preview with: "
+            "bash scripts/install-completions.sh --dry-run",
+            detail=(
+                "Shell tab-completion for the `tokenpak` command is not yet "
+                "discoverable. Preview exactly what would be written (no changes "
+                "made) with `bash scripts/install-completions.sh --dry-run`, then "
+                "re-run without --dry-run to install for bash, zsh, and fish."
+            ),
+        )
 
     # === Permission tiers (persistent tier vs launcher fleet mode) ==============
     # Three-row display. The persistent-tier rows can only ever read

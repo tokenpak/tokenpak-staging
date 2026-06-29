@@ -89,6 +89,25 @@ print("✓ Installation successful!")
 EOF
 ```
 
+## Shell Completions (Optional)
+
+TokenPak ships tab-completion for the `tokenpak` command for bash, zsh, and fish.
+Preview exactly what would be installed first — this makes **no changes** to your
+shell startup files:
+
+```bash
+bash scripts/install-completions.sh --dry-run
+```
+
+When the output looks right, install it for real (omit `--dry-run`):
+
+```bash
+bash scripts/install-completions.sh
+```
+
+Not sure whether completions are set up? `tokenpak doctor` reports their status
+and prints the same dry-run preview command when they are not yet discoverable.
+
 ## Troubleshooting
 
 ### Issue: "ModuleNotFoundError: No module named 'tokenpak'"
