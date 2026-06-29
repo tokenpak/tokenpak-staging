@@ -2,7 +2,8 @@
 
 Verifies, with a FAKE injected client (no real LLM):
 
-  * each reviewer status path (pass / warning / fail) parses + validates;
+  * each reviewer status path (pass / warning / fail / not_evaluable) parses +
+    validates;
   * the I/O contracts match §5.7 (status + criteria + required_fixes + risk_flags
     + derived delivery_recommendation);
   * malformed output fails loud (non-JSON, non-object, schema-invalid, and a
@@ -103,6 +104,7 @@ def _result_payload(status: str) -> dict:
         ("pass", DeliveryRecommendationStatus.READY),
         ("warning", DeliveryRecommendationStatus.READY_WITH_WARNING),
         ("fail", DeliveryRecommendationStatus.BLOCKED),
+        ("not_evaluable", DeliveryRecommendationStatus.BLOCKED),
     ],
 )
 def test_reviewer_status_paths(status, expected_delivery):
@@ -118,6 +120,30 @@ def test_reviewer_status_paths(status, expected_delivery):
     assert result.delivery_recommendation.status is derive_delivery_status(result.status)
     # Exactly one LLM call per review (§5.7).
     assert client.calls == 1
+
+
+def test_negative_evidence_overrides_pass_after_one_review_call():
+    payload = _result_payload("pass")
+    client = _FakeReviewerLLM(payload)
+    base = _input().model_dump(mode="json")
+    base["negative_evidence"] = [
+        {
+            "field": "test_results",
+            "status": "missing",
+            "reason": "no declared test command",
+            "consequence": "cannot verify AC-1",
+            "blocks_required_acceptance_criteria": True,
+        }
+    ]
+    review_input = ReviewerStationInput.model_validate(base)
+
+    result = ReviewerStation(client).review(review_input)
+
+    assert client.calls == 1
+    assert result.status is ReviewerStatus.NOT_EVALUABLE
+    assert result.delivery_recommendation.status is DeliveryRecommendationStatus.BLOCKED
+    assert result.criteria_results[0].status.value == "not_evaluable"
+    assert result.required_fixes
 
 
 def test_reviewer_fail_carries_required_fixes():
@@ -247,7 +273,7 @@ def test_result_model_rejects_handauthored_mismatch():
         )
 
 
-@pytest.mark.parametrize("status", ["pass", "warning", "fail"])
+@pytest.mark.parametrize("status", ["pass", "warning", "fail", "not_evaluable"])
 def test_for_status_derives_recommendation(status):
     result = ReviewerStationResult.for_status(
         status,

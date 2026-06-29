@@ -37,6 +37,7 @@ from tokenpak.orchestration.dispatch.loop_policy import (  # noqa: E402
     resolve_loop_policy,
     system_default_loop_policy,
 )
+from tokenpak.orchestration.dispatch.models.artifact import DispatchArtifact  # noqa: E402
 from tokenpak.orchestration.dispatch.models.common import (  # noqa: E402
     StationLoopPolicy,
     WorkerLoopDefault,
@@ -57,7 +58,11 @@ from tokenpak.orchestration.dispatch.resume import (  # noqa: E402
     hash_workspace_file,
     reconcile_run,
 )
-from tokenpak.orchestration.dispatch.runner import FulfillmentLine, LineStatus  # noqa: E402
+from tokenpak.orchestration.dispatch.runner import (  # noqa: E402
+    FulfillmentLine,
+    LineStatus,
+    build_reviewer_input,
+)
 from tokenpak.orchestration.dispatch.station_runner import (  # noqa: E402
     SPEND_GUARD_EXCEEDED_REASON,
     FlagCancelToken,
@@ -98,6 +103,7 @@ class FakeReviewerLLM:
             "pass": "ready",
             "warning": "ready_with_warning",
             "fail": "blocked",
+            "not_evaluable": "blocked",
         }[status]
         self._payload = {
             "status": status,
@@ -151,6 +157,116 @@ def _select_code_task(intake):
     return outcome.route
 
 
+def _evidence_effect() -> DispatchEffect:
+    return DispatchEffect(
+        id="effect_build_patch",
+        job_id="job_01",
+        station_run_id="stationrun_build",
+        tool_name="apply_patch",
+        target_type=EffectTargetType.FILE,
+        target="src/parser.py",
+        before_exists=True,
+        before_hash="sha256:before",
+        after_hash="sha256:after",
+        rollback_behavior=RollbackBehavior.RESTORE_BEFORE_CONTENT_IF_CURRENT_HASH_MATCHES_AFTER_HASH,
+        status=EffectStatus.APPLIED,
+        rollback_available=True,
+        created_at=_NOW,
+        finalized_at=_NOW,
+    )
+
+
+def _evidence_artifact() -> DispatchArtifact:
+    return DispatchArtifact(
+        id="artifact_patch_01",
+        job_id="job_01",
+        station_run_id="stationrun_build",
+        kind="patch",
+        target="artifacts/patch_01.diff",
+        content_hash="sha256:patch",
+        size_bytes=120,
+        created_at=_NOW,
+    )
+
+
+def _code_task_evidence_payload() -> dict:
+    return {
+        "summary": "patch drafted",
+        "proposed_or_applied_patch": "--- a/src/parser.py\n+++ b/src/parser.py\n",
+        "diff_summary": "updates parser flag handling",
+        "effect_records": [_evidence_effect().model_dump(mode="json")],
+        "artifacts": [_evidence_artifact().model_dump(mode="json")],
+        "test_results": [
+            {
+                "command": "pytest tests/test_parser.py -q",
+                "status": "passed",
+                "exit_code": 0,
+                "stdout_excerpt": "1 passed",
+            }
+        ],
+        "file_hashes": {"src/parser.py": "sha256:after"},
+        "risk_flags": ["touches_parser"],
+    }
+
+
+def _code_evidence_payload(summary: str) -> dict:
+    """Evidence-backed code_task payload for reviewer/delivery tests."""
+
+    return {
+        "summary": summary,
+        "proposed_or_applied_patch": (
+            "diff --git a/src/parser.py b/src/parser.py\n"
+            "--- a/src/parser.py\n"
+            "+++ b/src/parser.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        ),
+        "effect_records": [
+            {
+                "id": "effect_parser_patch",
+                "job_id": "job_evidence",
+                "station_run_id": "stationrun_payload",
+                "tool_name": "apply_patch",
+                "target_type": "file",
+                "target": "src/parser.py",
+                "before_exists": True,
+                "before_hash": "sha256:before",
+                "after_hash": "sha256:after",
+                "rollback_behavior": "restore_before_content_if_current_hash_matches_after_hash",
+                "status": "applied",
+                "rollback_available": True,
+                "created_at": _NOW.isoformat(),
+                "finalized_at": _NOW.isoformat(),
+            }
+        ],
+        "artifacts": [
+            {
+                "id": "artifact_parser_patch",
+                "job_id": "job_evidence",
+                "station_run_id": "stationrun_payload",
+                "kind": "patch",
+                "target": "artifacts/parser.patch",
+                "content_hash": "sha256:patch",
+                "size_bytes": 128,
+                "created_at": _NOW.isoformat(),
+            }
+        ],
+        "test_results": [
+            {
+                "command": "pytest tests/parser/test_parser.py",
+                "status": "passed",
+                "exit_code": 0,
+                "stdout_excerpt": "1 passed",
+            }
+        ],
+        "file_hashes": {"src/parser.py": "sha256:after"},
+        "diff_summary": "src/parser.py updated by parser patch",
+        "risk_flags": ["touches_parser"],
+        "files_changed": ["src/parser.py"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # 1) Full code_task golden path
 # ---------------------------------------------------------------------------
@@ -161,7 +277,13 @@ def test_code_task_golden_path(ledger):
     route = _select_code_task(intake)
 
     worker = FakeWorkerLLM(
-        [WorkerTurn(result_payload={"summary": "patch drafted"}, output_schema_valid=True, tokens_used=20)]
+        [
+            WorkerTurn(
+                result_payload=_code_evidence_payload("patch drafted"),
+                output_schema_valid=True,
+                tokens_used=20,
+            )
+        ]
     )
     reviewer = FakeReviewerLLM("pass")
 
@@ -189,6 +311,9 @@ def test_code_task_golden_path(ledger):
     assert reviewer.calls == 1
     assert result.delivery_package is not None
     assert result.delivery_package.status.value == "delivery_ready"
+    assert "src/parser.py" in result.delivery_package.files_changed
+    assert result.delivery_package.tests[0]["exit_code"] == 0
+    assert result.delivery_package.negative_evidence == []
 
     # Run Ledger persisted both station runs + the run (criterion 4: a completed
     # station run carries its schema-valid payload).
@@ -196,8 +321,55 @@ def test_code_task_golden_path(ledger):
     assert {sr.station_id for sr in persisted} == {"build", "review"}
     build = next(sr for sr in persisted if sr.station_id == "build")
     assert build.status is StationRunStatus.COMPLETED
-    assert build.result_payload == {"summary": "patch drafted"}
+    assert build.result_payload["summary"] == "patch drafted"
+    assert build.result_payload["test_results"][0]["exit_code"] == 0
     assert ledger.read_run(result.run.id).status == "delivered"
+
+
+def test_build_reviewer_input_threads_required_evidence(ledger):
+    intake = _code_task_intake()
+    route = _select_code_task(intake)
+    build = DispatchStationRun(
+        id="stationrun_build",
+        run_id="run_01",
+        station_id="build",
+        worker_id="worker.builder.default.v1",
+        context_bundle_id="ctx_01",
+        status=StationRunStatus.COMPLETED,
+        result_payload={
+            "proposed_or_applied_patch": "--- a/src/parser.py\n+++ b/src/parser.py\n",
+            "diff_summary": "updates parser flag handling",
+            "test_results": [
+                {
+                    "command": "pytest tests/test_parser.py -q",
+                    "exit_code": 0,
+                    "stdout_excerpt": "1 passed",
+                }
+            ],
+            "risk_flags": ["touches_parser"],
+        },
+        result_schema_version="station_result.v1",
+    )
+
+    review_input = build_reviewer_input(
+        intake.manifest,
+        route,
+        build,
+        ledger,
+        effects=[_evidence_effect()],
+        artifacts=[_evidence_artifact()],
+        delivery_fields={"summary": "evidence-backed delivery"},
+    )
+
+    assert review_input.proposed_or_applied_patch
+    assert review_input.effect_records == [_evidence_effect()]
+    assert review_input.artifacts == [_evidence_artifact()]
+    assert review_input.test_results[0].exit_code == 0
+    assert review_input.command_evidence[0].command == "pytest tests/test_parser.py -q"
+    assert review_input.file_hashes["src/parser.py"] == "sha256:after"
+    assert review_input.diff_summary == "updates parser flag handling"
+    assert review_input.known_risk_flags == ["touches_parser"]
+    assert review_input.negative_evidence == []
 
 
 def test_completed_station_run_committed_only_with_valid_output(ledger):
@@ -430,7 +602,9 @@ def test_resume_via_fulfillment_line_continues_to_review(ledger, tmp_path):
     )
 
     line = FulfillmentLine(
-        worker_llm=FakeWorkerLLM([WorkerTurn(result_payload={"x": 1}, output_schema_valid=True)]),
+        worker_llm=FakeWorkerLLM(
+            [WorkerTurn(result_payload=_code_evidence_payload("x"), output_schema_valid=True)]
+        ),
         context_provider=LocalContextProvider(),
         ledger=ledger,
         worker_registry=default_worker_registry(),
@@ -444,9 +618,11 @@ def test_resume_via_fulfillment_line_continues_to_review(ledger, tmp_path):
         autonomy_mode=AutonomyMode.AUTO_DISPATCH_LIMITED,
         workspace_root=str(workspace),
     )
-    # The build was consistent → reconciliation continues to the review station,
-    # which passes → delivered.
-    assert result.status is LineStatus.DELIVERED
+    # The build was consistent → reconciliation continues to the review station.
+    # The legacy interrupted record lacks the new required evidence, so delivery
+    # blocks as not_evaluable rather than claiming a pass.
+    assert result.status is LineStatus.BLOCKED
+    assert result.reviewer_result.status.value == "not_evaluable"
     assert any(sr.station_id == "review" for sr in result.station_runs)
 
 
@@ -543,7 +719,7 @@ def test_reviewer_warning_creates_decision(ledger):
     route = _select_code_task(intake)
 
     worker = FakeWorkerLLM(
-        [WorkerTurn(result_payload={"summary": "drafted"}, output_schema_valid=True)]
+        [WorkerTurn(result_payload=_code_evidence_payload("drafted"), output_schema_valid=True)]
     )
     reviewer = FakeReviewerLLM("warning", reason="naming nit")
     line = FulfillmentLine(
@@ -577,7 +753,7 @@ def test_reviewer_fail_blocks_delivery(ledger):
 
     line = FulfillmentLine(
         worker_llm=FakeWorkerLLM(
-            [WorkerTurn(result_payload={"summary": "drafted"}, output_schema_valid=True)]
+            [WorkerTurn(result_payload=_code_evidence_payload("drafted"), output_schema_valid=True)]
         ),
         context_provider=LocalContextProvider(),
         ledger=ledger,
@@ -594,6 +770,35 @@ def test_reviewer_fail_blocks_delivery(ledger):
     assert result.delivery_package.status.value == "blocked"
     # No automatic repair loop: required_fixes carried, nothing re-dispatched.
     assert result.delivery_package.required_fixes
+
+
+def test_missing_code_evidence_blocks_as_not_evaluable(ledger):
+    intake = _code_task_intake()
+    route = _select_code_task(intake)
+
+    reviewer = FakeReviewerLLM("pass")
+    line = FulfillmentLine(
+        worker_llm=FakeWorkerLLM(
+            [WorkerTurn(result_payload={"summary": "drafted"}, output_schema_valid=True)]
+        ),
+        context_provider=LocalContextProvider(),
+        ledger=ledger,
+        worker_registry=default_worker_registry(),
+        reviewer_llm=reviewer,
+        clock=lambda: _NOW,
+    )
+    result = line.run(
+        route=route,
+        manifest=intake.manifest,
+        autonomy_mode=AutonomyMode.AUTO_DISPATCH_LIMITED,
+    )
+
+    assert reviewer.calls == 1
+    assert result.status is LineStatus.BLOCKED
+    assert result.reviewer_result.status.value == "not_evaluable"
+    assert result.delivery_package.status.value == "blocked"
+    assert result.delivery_package.negative_evidence
+    assert result.delivery_package.tests[0]["field"] == "test_results"
 
 
 # ---------------------------------------------------------------------------

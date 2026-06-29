@@ -333,6 +333,16 @@ class RunLedger:
             "dispatch_artifacts", artifact_id, DispatchArtifact
         )
 
+    def read_artifacts_for_station_run(self, station_run_id: str) -> list[DispatchArtifact]:
+        """Return every artifact recorded for *station_run_id* (ordered by created_at)."""
+
+        rows = self._conn.execute(
+            "SELECT payload FROM dispatch_artifacts WHERE station_run_id = ? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (station_run_id,),
+        ).fetchall()
+        return [DispatchArtifact.model_validate_json(row["payload"]) for row in rows]
+
     # -- DispatchReceipt ----------------------------------------------------
 
     def write_receipt(self, receipt: DispatchReceipt) -> None:

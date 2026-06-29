@@ -336,6 +336,10 @@ def test_handoff_reviewer_pass_delivery_ready():
     assert pkg.gatehouse_report.passed
     assert pkg.decision is None
     assert pkg.required_fixes == []
+    assert pkg.files_changed == ["src/app.py"]
+    assert pkg.tests == ["tests/test_app.py"]
+    assert pkg.risks == ["touches cli"]
+    assert pkg.next_steps == ["ship it"]
     # Cost note attached because the route used a Reviewer Station.
     assert pkg.cost_note == REVIEWER_COST_NOTE
 
@@ -354,6 +358,15 @@ def test_handoff_reviewer_fail_blocked_with_required_fixes_no_repair_loop():
     assert pkg.required_fixes[0].severity.value == "high"
     assert "no automatic repair loop" in pkg.summary
     assert pkg.cost_note == REVIEWER_COST_NOTE
+
+
+def test_handoff_reviewer_not_evaluable_blocks_no_repair_loop():
+    pkg = _evaluate(_reviewer_result("not_evaluable"))
+    assert pkg.status is DeliveryStatus.BLOCKED
+    assert pkg.reviewer_status is not None
+    assert pkg.reviewer_status.value == "not_evaluable"
+    assert "required evidence is missing" in pkg.summary
+    assert "No automatic repair loop" in pkg.summary
 
 
 def test_handoff_reviewer_warning_unresolved_creates_decision():

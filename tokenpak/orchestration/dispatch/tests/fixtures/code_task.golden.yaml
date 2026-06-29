@@ -50,6 +50,49 @@ mock_tip:
   worker_turns:
     - result_payload:
         summary: "patch drafted for the parser module"
+        proposed_or_applied_patch: |
+          diff --git a/src/parser.py b/src/parser.py
+          --- a/src/parser.py
+          +++ b/src/parser.py
+          @@ -1 +1 @@
+          -old
+          +new
+        effect_records:
+          - id: effect_parser_patch
+            job_id: job_fixture
+            station_run_id: stationrun_payload
+            tool_name: apply_patch
+            target_type: file
+            target: src/parser.py
+            before_exists: true
+            before_hash: sha256:before
+            after_hash: sha256:after
+            rollback_behavior: restore_before_content_if_current_hash_matches_after_hash
+            status: applied
+            rollback_available: true
+            created_at: "2026-06-08T12:00:00Z"
+            finalized_at: "2026-06-08T12:00:00Z"
+        artifacts:
+          - id: artifact_parser_patch
+            job_id: job_fixture
+            station_run_id: stationrun_payload
+            kind: patch
+            target: artifacts/parser.patch
+            content_hash: sha256:patch
+            size_bytes: 128
+            created_at: "2026-06-08T12:00:00Z"
+        test_results:
+          - command: pytest tests/parser/test_parser.py
+            status: passed
+            exit_code: 0
+            stdout_excerpt: "1 passed"
+        file_hashes:
+          src/parser.py: sha256:after
+        diff_summary: "src/parser.py updated by parser patch"
+        risk_flags:
+          - touches_parser
+        files_changed:
+          - src/parser.py
       output_schema_valid: true
       tokens_used: 42
       wall_seconds: 2

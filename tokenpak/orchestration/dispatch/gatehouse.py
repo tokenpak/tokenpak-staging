@@ -137,6 +137,11 @@ class DeliveryPackage(DispatchBaseModel):
     cost_note: str | None = None
     reviewer_status: ReviewerStatus | None = None
     summary: str = ""
+    files_changed: list[str] = Field(default_factory=list)
+    tests: list[Any] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    negative_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +447,7 @@ class Gatehouse:
             )
 
         cost_note = REVIEWER_COST_NOTE if route_uses_reviewer else None
+        evidence_fields = _delivery_evidence_fields(delivery_package_fields)
 
         # A failed deterministic check blocks regardless of the reviewer verdict:
         # the Gatehouse is the structural gate.
@@ -457,6 +463,7 @@ class Gatehouse:
                     "Delivery Gate blocked on failed structural check(s): "
                     + ", ".join(c.name for c in report.failures)
                 ),
+                **evidence_fields,
             )
 
         status = reviewer_result.status
@@ -469,6 +476,7 @@ class Gatehouse:
                 cost_note=cost_note,
                 reviewer_status=status,
                 summary="Reviewer pass; Delivery Gate proceeds.",
+                **evidence_fields,
             )
 
         if status is ReviewerStatus.FAIL:
@@ -484,6 +492,22 @@ class Gatehouse:
                     "Reviewer fail; Delivery Gate blocked. "
                     "required_fixes attached; no automatic repair loop (v0.1-alpha)."
                 ),
+                **evidence_fields,
+            )
+
+        if status is ReviewerStatus.NOT_EVALUABLE:
+            return DeliveryPackage(
+                job_id=job_id,
+                status=DeliveryStatus.BLOCKED,
+                gatehouse_report=report,
+                required_fixes=list(reviewer_result.required_fixes),
+                cost_note=cost_note,
+                reviewer_status=status,
+                summary=(
+                    "Reviewer not_evaluable; Delivery Gate blocked because "
+                    "required evidence is missing. No automatic repair loop."
+                ),
+                **evidence_fields,
             )
 
         # status is WARNING → decision-gated.
@@ -499,6 +523,7 @@ class Gatehouse:
                 cost_note=cost_note,
                 reviewer_status=status,
                 summary="Reviewer warning; user decision required (accept/reject).",
+                **evidence_fields,
             )
 
         if warning_decision_resolution:
@@ -509,6 +534,7 @@ class Gatehouse:
                 cost_note=cost_note,
                 reviewer_status=status,
                 summary="Reviewer warning accepted by user; delivery ready with warning.",
+                **evidence_fields,
             )
 
         return DeliveryPackage(
@@ -519,6 +545,7 @@ class Gatehouse:
             cost_note=cost_note,
             reviewer_status=status,
             summary="Reviewer warning rejected by user; delivery blocked.",
+            **evidence_fields,
         )
 
     @staticmethod
@@ -570,6 +597,21 @@ class Gatehouse:
             ),
             status=DecisionStatus.PENDING,
         )
+
+
+def _delivery_evidence_fields(
+    delivery_package_fields: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Extract evidence-backed delivery fields for the returned package."""
+
+    fields = delivery_package_fields or {}
+    return {
+        "files_changed": list(fields.get("files_changed") or []),
+        "tests": list(fields.get("tests") or []),
+        "risks": list(fields.get("risks") or []),
+        "next_steps": list(fields.get("next_steps") or []),
+        "negative_evidence": list(fields.get("negative_evidence") or []),
+    }
 
 
 __all__ = [
