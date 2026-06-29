@@ -192,3 +192,124 @@ def test_dist_mode_allowlist_applies_after_prefix_strip(tmp_path):
     )
     res = _run_dist(dist)
     assert res.returncode == 0, f"allowlist must apply to sdist paths:\n{res.stdout}"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Std / § / Standards-Delta register extension (leak-gate Std/§ scanner
+# extension, 2026-06-28). Closes the gap that let internal ``Std NN`` (outside
+# 20-39), no-space ``§N`` section refs, and the ``Standards Delta`` artifact
+# name ship in the v1.10.0 wheel. Each case also implicitly checks the
+# explicit per-surface cite-list masks (un-cited Std/§ must still trip) and the
+# false-positive safety against the legal corpus.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_std_out_of_range_leak_fails(tmp_path):
+    # Std 41 is outside the old 20-39 window AND carries a §16 section ref —
+    # exactly the form that shipped in v1.10.0.
+    _write(tmp_path, "tokenpak/core/x.py", "# per Std 41 §16 dispatch contract\nX = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "Std-out-of-range + section leak must fail"
+
+
+def test_std_low_number_leak_fails(tmp_path):
+    _write(tmp_path, "tokenpak/core/y.py", "# product constitution per Std 02\nY = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "low Std number leak must fail"
+
+
+def test_section_ref_leak_fails(tmp_path):
+    _write(tmp_path, "tokenpak/core/z.py", "# see §4.1 for the rule\nZ = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "bare section-ref leak must fail"
+
+
+def test_standards_delta_leak_fails(tmp_path):
+    _write(tmp_path, "tokenpak/core/d.py", "# transcribed from Standards Delta v0\nD = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "Standards Delta artifact-name leak must fail"
+
+
+def test_fp_crypto_curve_passes(tmp_path):
+    # NIST curve names contain "P-256" / "P-384" — must NOT match §/Std.
+    _write(tmp_path, "tokenpak/crypto/keys.py", "# uses NIST P-256 and P-384 curves\nK = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"crypto curve names must pass:\n{res.stdout}"
+
+
+def test_fp_iso_std_passes(tmp_path):
+    # "Std 14001" is a 5-digit ISO number, not a 2-digit \bStd NN\b citation.
+    _write(tmp_path, "tokenpak/quality/iso.py", "# conforms to ISO Std 14001\nI = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"ISO Std 14001 must pass:\n{res.stdout}"
+
+
+def test_fp_legal_section_word_passes(tmp_path):
+    _write(tmp_path, "tokenpak/legal/dmca.py", "# safe harbor under section 230\nL = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"legal 'section 230' prose must pass:\n{res.stdout}"
+
+
+def test_fp_legal_section_sign_citation_passes(tmp_path):
+    # The internal form is uniformly no-space ("§N"); a legal citation uses a
+    # SPACE ("§ 512"), so the no-space §[0-9] pattern structurally cannot hit it.
+    _write(tmp_path, "tokenpak/legal/cite.py", "# see 17 U.S.C. § 512(c)\nC = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"legal '§ 512' (space form) must pass:\n{res.stdout}"
+
+
+def test_fp_bare_section_sign_passes(tmp_path):
+    _write(tmp_path, "tokenpak/docs/sym.py", "# the § sign denotes a section\nS = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"bare § (no digit) must pass:\n{res.stdout}"
+
+
+def test_relgate_impl_cited_std_section_passes(tmp_path):
+    # scripts/release_gate/** legitimately implements Std 30 and cites §7.
+    _write(tmp_path, "scripts/release_gate/foo.py", "# implements Std 30 §7 R7\nF = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"cited Std/§ on impl path must pass:\n{res.stdout}"
+
+
+def test_relgate_impl_sentence_period_citation_passes(tmp_path):
+    # A cited section followed by a sentence period ("§13.3.") must NOT
+    # self-fail the gate.
+    _write(tmp_path, "scripts/release_gate/bar.py", "# governed by Std 30 §13.3.\nB = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"sentence-period citation must pass:\n{res.stdout}"
+
+
+def test_relgate_impl_uncited_std_still_fails(tmp_path):
+    # Std 99 is NOT on the impl cite-list — the mask is explicit, not blanket.
+    _write(tmp_path, "scripts/release_gate/baz.py", "# bogus Std 99 reference\nZ = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "un-cited Std on impl path must still fail"
+
+
+def test_relgate_impl_uncited_subsection_still_fails(tmp_path):
+    # §13 and §13.1-.4 are cited; §13.5 is NOT — the boundary keeps it tripping.
+    _write(tmp_path, "scripts/release_gate/qux.py", "# stray §13.5 ref\nQ = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "un-cited sub-section on impl path must still fail"
+
+
+def test_snapshot_cited_section_passes(tmp_path):
+    # Generated snapshot metadata legitimately cites §7 (R7).
+    _write(tmp_path, "tokenpak/_snapshots/x.json", '{"note": "api-snapshot-check §7 R7"}\n')
+    res = _run_tree(tmp_path)
+    assert res.returncode == 0, f"cited §7 in snapshot must pass:\n{res.stdout}"
+
+
+def test_snapshot_uncited_section_still_fails(tmp_path):
+    # §4 is NOT on the snapshot cite-list ({7, 13.3}) — must still trip.
+    _write(tmp_path, "tokenpak/_snapshots/y.json", '{"note": "stray §4 ref"}\n')
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "un-cited §4 in snapshot must still fail"
+
+
+def test_non_relgate_path_cited_section_still_fails(tmp_path):
+    # The same §7 that is masked on a release-gate path is a leak elsewhere:
+    # proves the cite-list is path-scoped, not global.
+    _write(tmp_path, "tokenpak/proxy/leak.py", "# transcribed §7 note\nP = 1\n")
+    res = _run_tree(tmp_path)
+    assert res.returncode == 1, "§7 outside release-gate paths must still fail"
