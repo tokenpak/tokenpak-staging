@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,66 +29,87 @@ from tokenpak.companion.mcp.tools import (
     _handle_session_info,
 )
 
-
-# ---------------------------------------------------------------------------
-# TSR-05d / WS-E (2026-05-08) — conditional skip when no proxy running.
-# ---------------------------------------------------------------------------
-# Investigation context:
-#
-# The file's docstring claims "unit tests (not integration tests) — they
-# call handler functions directly". That was true historically: the
-# handlers had in-process implementations (see the still-present
-# `_handle_estimate_tokens_legacy_unused` at tokenpak/companion/mcp/
-# tools.py:97 — its docstring confirms "Legacy in-process estimator
-# kept for reference; no longer registered").
-#
-# Post-monolith migration, handlers were rewritten to delegate to the
-# tokenpak proxy via /tpk/v1/* HTTP calls (see _handle_estimate_tokens
-# at tools.py:77, _handle_check_budget at tools.py:132, etc.). Without
-# a running proxy at 127.0.0.1:8766, every handler returns
-# {"error": "proxy_unreachable", ...} and the tests fail with KeyError
-# on the in-process-shape keys they expect.
-#
-# Resolution path: don't permanent-skip (the tests retain real value
-# when run against a live proxy — they exercise the canonical proxy/
-# handler integration end-to-end). Instead, probe the proxy at
-# import time and auto-skip the file when it's unreachable. CI gets
-# 21 failures → 0 failures. Local devs running `tokenpak serve` get
-# the tests as a real coverage surface.
-#
-# 11 tests still fail when the proxy IS running because /tpk/v1/* now
-# returns a different response shape than the legacy in-process keys.
-# That's WS-B / API-drift territory and is **deliberately not bundled**
-# into this slice; it routes to a future focused per-handler PR.
-def _proxy_reachable() -> bool:
-    """Probe whether a tokenpak proxy is reachable at the canonical port."""
-    import urllib.error
-    import urllib.request
-    try:
-        urllib.request.urlopen("http://127.0.0.1:8766/health", timeout=0.5)
-        return True
-    except (urllib.error.URLError, OSError):
-        return False
-
-
-SKIP_NEEDS_LIVE_PROXY = (
-    "MCP tool handlers were migrated post-monolith from in-process to "
-    "/tpk/v1/* proxy-delegated (see tokenpak/companion/mcp/tools.py:77+ "
-    "and the legacy comment at tools.py:97). Without a running tokenpak "
-    "proxy at 127.0.0.1:8766 every handler returns "
-    "{'error': 'proxy_unreachable', ...} and the tests' in-process-shape "
-    "assertions fail. Run `tokenpak serve` locally to exercise."
-)
-
-pytestmark = [
-    pytest.mark.needs_proxy,
-    pytest.mark.skipif(not _proxy_reachable(), reason=SKIP_NEEDS_LIVE_PROXY),
-]
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def fake_proxy(monkeypatch):
+    """Fixture-backed proxy contract so these handler tests never need a live proxy."""
+    journal_entries: dict[str, list[dict[str, str]]] = {}
+
+    def fake_get(path: str, params: dict[str, Any] | None = None):
+        params = params or {}
+        if path == "/tpk/v1/budget":
+            return 200, {
+                "session_cost_usd": 0.0,
+                "daily_cost_usd": 0.0,
+                "daily_budget_usd": 10.0,
+                "remaining_usd": 10.0,
+                "session_requests": 0,
+                "budget_set": True,
+            }
+        if path == "/tpk/v1/capsules":
+            return 200, {"capsules": []}
+        if path.startswith("/tpk/v1/capsules/"):
+            session_id = path.rsplit("/", 1)[-1]
+            if session_id == "mysess":
+                return 200, {"content": "## Session Capsule: mysess\nDecisions: ..."}
+            return 404, {"error": "capsule_not_found", "detail": session_id}
+        if path == "/tpk/v1/journal/sessions":
+            return 200, {"sessions": []}
+        if path.startswith("/tpk/v1/journal/"):
+            session_id = path.rsplit("/", 1)[-1]
+            entries = list(journal_entries.get(session_id, []))
+            entry_type = params.get("entry_type")
+            if entry_type:
+                entries = [entry for entry in entries if entry["type"] == entry_type]
+            return 200, {"session_id": session_id, "entries": entries}
+        if path == "/tpk/v1/session/info":
+            return 200, {"version": "test-proxy", "mode": "fixture"}
+        raise AssertionError(f"unexpected proxy GET: {path} {params}")
+
+    def fake_post(
+        path: str,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ):
+        body = body or {}
+        if path == "/tpk/v1/tokens/estimate":
+            if "file_path" in body:
+                file_path = Path(str(body["file_path"]))
+                if not file_path.exists():
+                    return 404, {"error": "file_not_found", "detail": str(file_path)}
+                text = file_path.read_text(encoding="utf-8")
+            else:
+                text = str(body.get("text", ""))
+            chars = len(text)
+            return 200, {
+                "tokens": max(1, chars // 4),
+                "chars": chars,
+                "chars_per_token": 4.0,
+            }
+        if path == "/tpk/v1/compress":
+            text = str(body.get("text", ""))
+            max_tokens = int(body.get("max_tokens", 2000) or 2000)
+            if len(text) <= max_tokens * 4:
+                return 200, {"pruned_text": text, "reduction_pct": 0.0}
+            pruned = f"{text[:80]}\n[... elided ...]\n{text[-80:]}"
+            reduction = 100.0 * (1.0 - (len(pruned) / len(text)))
+            return 200, {"pruned_text": pruned, "reduction_pct": reduction}
+        if path.startswith("/tpk/v1/journal/") and path.endswith("/entry"):
+            session_id = path.split("/")[-2]
+            entry = {
+                "type": str(body.get("entry_type", "user")),
+                "content": str(body.get("content", "")),
+            }
+            journal_entries.setdefault(session_id, []).append(entry)
+            return 200, {"status": "ok", "session_id": session_id}
+        raise AssertionError(f"unexpected proxy POST: {path} {body} {params}")
+
+    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_get", fake_get)
+    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_post", fake_post)
 
 
 def _make_state(tmp_path: Path, session_id: str = "") -> CompanionState:
@@ -114,6 +136,7 @@ def test_companion_state_explicit_session_wins_over_config(tmp_path):
 
 
 def test_tools_registry_has_expected_entries():
+    """Red under registry drift: tool additions/removals must update this set."""
     names = {t.name for t in TOOLS}
     assert names == {
         "estimate_tokens",
