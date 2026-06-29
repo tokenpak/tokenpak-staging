@@ -139,7 +139,7 @@ def estimate_ttfb_ms(
     with _forecast_latency_lock:
         lats = list(_forecast_latencies)
     if lats:
-        return int(sum(lats) / len(lats))
+        return max(100, int(sum(lats) / len(lats)))
 
     try:
         conn = sqlite3.connect(str(db_path), timeout=2)
