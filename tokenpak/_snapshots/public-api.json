@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-18T00:45:53Z",
-  "package_version": "1.9.2",
+  "generated_at": "2026-07-01T19:06:23Z",
+  "package_version": "1.10.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -6254,6 +6254,74 @@
     {
       "module": "tokenpak.orchestration.case_memory",
       "name": "search"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "BoundedScanControls"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "CANONICAL_STATUSES"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "ClaimContext"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "ClaimDecision"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "DECISION_PRIORITY"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "EvaluatorResult"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "PacketSnapshot"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "REASON_REGISTRY"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "ReasonCode"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "SOURCE_LAYERS"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "ShadowReportRow"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "TERMINAL_STATUSES"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "WorkerSnapshot"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "build_shadow_report"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "can_claim"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "registry_as_dict"
+    },
+    {
+      "module": "tokenpak.orchestration.claimability",
+      "name": "validate_reason_registry"
     },
     {
       "module": "tokenpak.orchestration.episode_distiller",
