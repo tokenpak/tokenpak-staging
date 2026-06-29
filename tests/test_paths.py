@@ -150,3 +150,63 @@ def test_under_allows_dispatch_multi_segment(fake_home):
     assert _paths.under("dispatch", "runs.db") == (
         _paths.resolved_home() / "dispatch" / "runs.db"
     )
+
+
+# ---------------------------------------------------------------------------
+# Companion title-state placement + secure writes
+# (PakLine architecture contract §3.4/§3.5: 0700 dirs, 0600 files, atomic)
+# ---------------------------------------------------------------------------
+
+
+def test_companion_home_path_is_pure_by_default(fake_home):
+    assert _paths.companion_home() == _paths.resolved_home() / "companion"
+    assert not _paths.companion_home().exists()  # pure-path by default
+
+
+def test_companion_titles_dir_path_is_pure_by_default(fake_home):
+    assert _paths.companion_titles_dir() == (
+        _paths.resolved_home() / "companion" / "titles"
+    )
+    assert not _paths.companion_titles_dir().exists()
+
+
+def test_companion_titles_dir_ensure_creates_0700(fake_home):
+    d = _paths.companion_titles_dir(ensure=True)
+    assert d.exists()
+    assert (os.stat(d).st_mode & 0o777) == 0o700
+    # parent companion/ dir is private too
+    assert (os.stat(d.parent).st_mode & 0o777) == 0o700
+
+
+def test_ensure_dir_tightens_existing_dir(fake_home):
+    target = _paths.resolved_home() / "companion" / "titles"
+    target.mkdir(parents=True)
+    target.chmod(0o755)  # too open
+    _paths.ensure_dir(target)
+    assert (os.stat(target).st_mode & 0o777) == 0o700
+
+
+def test_ensure_dir_is_idempotent(fake_home):
+    target = _paths.resolved_home() / "companion"
+    first = _paths.ensure_dir(target)
+    second = _paths.ensure_dir(target)
+    assert first == second == target
+    assert (os.stat(target).st_mode & 0o777) == 0o700
+
+
+def test_secure_write_text_file_0600_dir_0700(fake_home):
+    target = _paths.companion_titles_dir() / "sess-1"
+    out = _paths.secure_write_text(target, "Proposal analysis\n")
+    assert out == target
+    assert target.read_text() == "Proposal analysis\n"
+    assert (os.stat(target).st_mode & 0o777) == 0o600
+    assert (os.stat(target.parent).st_mode & 0o777) == 0o700
+
+
+def test_secure_write_text_atomic_overwrite_leaves_no_temp(fake_home):
+    target = _paths.companion_titles_dir() / "sess-1"
+    _paths.secure_write_text(target, "first")
+    _paths.secure_write_text(target, "second")
+    assert target.read_text() == "second"
+    # the temp file was renamed away — only the final file remains
+    assert [p.name for p in target.parent.iterdir()] == ["sess-1"]

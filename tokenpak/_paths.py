@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -226,6 +227,109 @@ def is_legacy() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Companion state placement + secure writes
+#
+# The companion title-state / status-cache files carry session_id, cwd, model
+# and cost, so they are placed under the canonical TokenPak home with private
+# permissions — 0700 directories and 0600 files, written atomically. These
+# helpers are the canonical mechanism; the title-state writer adopts them.
+# PakLine itself is a pure reader and resolves the same location inline (no
+# python on its hot path).
+# ---------------------------------------------------------------------------
+
+
+def ensure_dir(path: Path, *, mode: int = 0o700) -> Path:
+    """Create *path* (and parents) at *mode*, tightening the chain to it.
+
+    ``Path.mkdir(mode=..., parents=True)`` applies *mode* only to the leaf —
+    intermediate directories are created with the process umask default. So
+    this also chmods every directory from the resolved TokenPak home down to
+    *path* (and re-chmods already-present dirs), ensuring an intermediate like
+    ``companion/`` is not left group/world-readable. Directories above the
+    TokenPak home are never touched. Returns the directory path.
+    """
+    path = Path(path)
+    path.mkdir(mode=mode, parents=True, exist_ok=True)
+    h = home()
+    try:
+        rel = path.relative_to(h)
+        chain = [h]
+        cur = h
+        for part in rel.parts:
+            cur = cur / part
+            chain.append(cur)
+    except ValueError:
+        # *path* is not under the TokenPak home — only tighten the leaf.
+        chain = [path]
+    for d in chain:
+        try:
+            d.chmod(mode)
+        except OSError:
+            pass
+    return path
+
+
+def companion_home(*, ensure: bool = False, mode: int = 0o700) -> Path:
+    """Resolved companion state directory (``<home>/companion``).
+
+    Pure-path by default. When *ensure* is true the directory tree is created
+    (and tightened) to *mode* (0700).
+    """
+    d = under("companion")
+    if ensure:
+        ensure_dir(d, mode=mode)
+    return d
+
+
+def companion_titles_dir(*, ensure: bool = False, mode: int = 0o700) -> Path:
+    """Resolved PakLine title-state directory (``<home>/companion/titles``).
+
+    The statusline title hook writes one short title file per session here and
+    PakLine reads it on the status-line hot path. Pure-path by default; when
+    *ensure* is true the tree is created (and tightened) to *mode* (0700).
+    """
+    d = under("companion", "titles")
+    if ensure:
+        ensure_dir(d, mode=mode)
+    return d
+
+
+def secure_write_text(
+    path: Path,
+    text: str,
+    *,
+    file_mode: int = 0o600,
+    dir_mode: int = 0o700,
+    encoding: str = "utf-8",
+) -> Path:
+    """Atomically write *text* to *path* with private permissions.
+
+    Ensures the parent directory exists at *dir_mode* (0700), writes to a temp
+    file in the same directory, chmods it to *file_mode* (0600), then
+    ``os.replace`` onto *path* (atomic on POSIX). On any failure the temp file
+    is removed. Used for status cache/title files, which carry cwd, model,
+    session_id and cost and must not be group/world readable.
+    """
+    path = Path(path)
+    ensure_dir(path.parent, mode=dir_mode)
+    fd, tmp = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(text)
+        os.chmod(tmp, file_mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Monitor DB resolver
 # ---------------------------------------------------------------------------
 
@@ -345,8 +449,12 @@ __all__ = [
     "has_canonical",
     "needs_migration",
     "ensure_home",
+    "ensure_dir",
     "under",
     "update_check_cache",
+    "companion_home",
+    "companion_titles_dir",
+    "secure_write_text",
     "is_legacy_active",
     "monitor_db",
     "monitor_db_candidates",

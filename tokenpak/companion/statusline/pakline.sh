@@ -15,7 +15,7 @@
 #   • context  — statusLine stdin  exceeds_200k_tokens        (state, Claude Code)
 #   • duration — statusLine stdin  cost.total_duration_ms     (exact, Claude Code)
 #
-# Deliberately NOT done here (see pakline provenance-spec.md):
+# Deliberately NOT done here (these are v1+/v2 provenance-gated fields):
 #   • no transcript scan, no SQLite query, no live cache computation
 #   • observed cache / TP saved / PAKs / todos are v1+/v2 and must come from a
 #     precomputed, session-scoped, provenance-gated source — never live here.
@@ -35,8 +35,21 @@ command -v jq >/dev/null 2>&1 || exit 0
 eval "$(printf '%s' "$INPUT" | jq -r '@sh "SESSION_ID=\(.session_id // "") COST=\((.cost.total_cost_usd // 0)|tostring) DUR_MS=\((.cost.total_duration_ms // 0)|tostring) MODEL=\(.model.display_name // "") OVER200=\((.exceeds_200k_tokens // false)|tostring)"' 2>/dev/null)"
 
 # ── task ── title-state file (set by the title hook) → else model → "session"
+# Canonical TokenPak home resolution — kept inline (pure bash, no python
+# spawn) so the status-line hot path stays O(1). Mirrors tokenpak/_paths.home():
+# order is TOKENPAK_HOME → ~/.tpk (canonical) → ~/.tokenpak (legacy, only if it
+# exists) → ~/.tpk. No hardcoded ~/.tokenpak default.
+_pakline_home() {
+    if [ -n "${TOKENPAK_HOME:-}" ]; then printf '%s' "$TOKENPAK_HOME"; return; fi
+    if [ -d "$HOME/.tpk" ]; then printf '%s' "$HOME/.tpk"; return; fi
+    if [ -d "$HOME/.tokenpak" ]; then printf '%s' "$HOME/.tokenpak"; return; fi
+    printf '%s' "$HOME/.tpk"
+}
 TASK=""
-TITLE_FILE="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}/titles/${SESSION_ID}"
+# The companion's own TOKENPAK_COMPANION_JOURNAL_DIR override wins; otherwise
+# resolve the companion state dir under the canonical TokenPak home.
+COMPANION_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$(_pakline_home)/companion}"
+TITLE_FILE="${COMPANION_DIR}/titles/${SESSION_ID}"
 if [ -n "$SESSION_ID" ] && [ -s "$TITLE_FILE" ]; then
     # First line only, capped — the file holds the prompt-derived short title.
     TASK=$(head -n1 "$TITLE_FILE" 2>/dev/null | cut -c1-48)
