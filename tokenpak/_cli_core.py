@@ -4044,6 +4044,12 @@ def cmd_usage(args):
             )
 
 
+SAVINGS_ESTIMATE_NOTE = (
+    "Savings are estimates from recorded telemetry and local pricing rates; "
+    "provider pricing and run-to-run model behavior can change the final bill."
+)
+
+
 def _savings_json_payload(report, days):
     """Build the machine-readable savings summary.
 
@@ -4062,6 +4068,7 @@ def _savings_json_payload(report, days):
                 "actual_cost": round(report.total_cost, 6),
                 "baseline_cost": round(report.estimated_without_compression, 6),
                 "cache_hit_rate": round(report.cache_hit_rate, 6),
+                "estimate_note": SAVINGS_ESTIMATE_NOTE,
             }
         )
     else:
@@ -4130,6 +4137,7 @@ def cmd_savings(args):
                     "savings_pct": savings_pct,
                     "cache_hit_rate": cache_hit_rate,
                     "estimated_without_compression": estimated_without,
+                    "estimate_note": SAVINGS_ESTIMATE_NOTE if _has else "",
                 }
             )
         )
@@ -4143,7 +4151,12 @@ def cmd_savings(args):
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{savings_pct:.1f}%", f"${savings_amount:.2f}", _sv.window_label]
+                [
+                    f"{savings_pct:.1f}%",
+                    f"${savings_amount:.2f}",
+                    _sv.window_label,
+                    "estimate",
+                ]
             )
         )
         return
@@ -4162,6 +4175,8 @@ def cmd_savings(args):
             ]
         )
     )
+    print()
+    print(f"Note: {SAVINGS_ESTIMATE_NOTE}")
 
     # Attribution v2 breakdown (additive; only shown when TOKENPAK_ATTRIBUTION_V2 is set)
     try:

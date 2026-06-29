@@ -1,9 +1,9 @@
 """Regression guard: fabricated savings values must never re-enter the trust surface.
 
 The savings/cost CLI surface must only display receipt-backed numbers produced by
-the honest savings engine (``get_savings_report``), or a neutral
-"data unavailable" state. It must never invent figures via magic multipliers,
-model-name string-matching, or corrupt/unreliable columns.
+the honest savings engine (``compute_savings``), or a neutral "data unavailable"
+state. It must never invent figures via magic multipliers, model-name
+string-matching, or corrupt/unreliable columns.
 
 This test scans the shipped trust-surface source files for the specific
 fabrication patterns that were removed and fails if any of them reappear.
@@ -87,4 +87,7 @@ def test_savings_command_routes_through_honest_engine() -> None:
     )
     assert "compressed_tokens" not in body, (
         "cmd_savings must not read the corrupt compressed_tokens column"
+    )
+    assert "SAVINGS_ESTIMATE_NOTE" in body, (
+        "cmd_savings must label displayed savings as estimated"
     )
