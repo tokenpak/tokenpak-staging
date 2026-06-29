@@ -4148,14 +4148,36 @@ def _compute_config_hash(cfg: dict) -> str:
 
 
 def _get_proxy_version() -> dict:
-    """Query the proxy ``/health`` endpoint (which carries ``version``). Returns dict or raises."""
+    """Query proxy /health endpoint and normalize version fields."""
     import urllib.request as _ur
 
     try:
         with _ur.urlopen(f"{_PROXY_URL}/health", timeout=3) as resp:
-            return json.loads(resp.read())
+            health = json.loads(resp.read())
     except Exception as e:
         return {"error": str(e)}
+
+    runtime = health.get("runtime", {}) if isinstance(health.get("runtime"), dict) else {}
+    health["version"] = (
+        health.get("version")
+        or health.get("proxy_version")
+        or health.get("runtime_version")
+        or "?"
+    )
+    health["uptime"] = (
+        health.get("uptime")
+        or health.get("uptime_seconds")
+        or health.get("uptime_s")
+        or 0
+    )
+    health["pythonVersion"] = (
+        health.get("pythonVersion")
+        or health.get("python_version")
+        or runtime.get("python_version")
+        or "?"
+    )
+    health["configHash"] = health.get("configHash") or health.get("config_hash") or "?"
+    return health
 
 
 def _load_lock() -> dict:
