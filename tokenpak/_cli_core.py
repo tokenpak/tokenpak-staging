@@ -157,6 +157,7 @@ def _monitor_db_savings(days: int = 30) -> dict:
         cur = conn.cursor()
         cur.execute(
             """SELECT
+                COUNT(*)                                  AS request_count,
                 COALESCE(SUM(estimated_cost), 0)      AS actual_cost,
                 COALESCE(SUM(input_tokens), 0)         AS total_input,
                 COALESCE(SUM(output_tokens), 0)        AS total_output,
@@ -177,6 +178,7 @@ def _monitor_db_savings(days: int = 30) -> dict:
         # Rough baseline: what it would cost without cache/compression
         raw_input = row["total_input"] + row["compressed"]
         return {
+            "request_count": row["request_count"],
             "actual_cost": actual,
             "cache_read": cache_read,
             "cache_hit_rate": cache_read / total_in if total_in else 0,
@@ -3340,26 +3342,14 @@ def _cmd_status_legacy(args):
         print()
 
         # Savings summary — prominent 💰 line
-        # cache_read_tokens is in /stats session, not /health stats
-        _stats_session = (stats or {}).get("session", {})
-        cache_read = _stats_session.get("cache_read_tokens", s.get("cache_read_tokens", 0))
-        saved_tok = s.get("saved_tokens", 0)
-        _hits = s.get("cache_hits", 0)
-        _misses = s.get("cache_misses", 0)
-        _total_cache = _hits + _misses
-        _hit_rate = (_hits / _total_cache * 100) if _total_cache > 0 else 0
-        # Cache reads save (full_price - cache_read_price) per token.
-        # Using Anthropic claude-sonnet-4 rates: $3.00/MTok input, $0.30/MTok cache read.
-        _cache_savings = cache_read * 2.70 / 1_000_000
-        # Compression savings: tokens eliminated entirely, valued at input rate.
-        _compression_savings = saved_tok * 3.00 / 1_000_000
-        _total_saved = _cache_savings + _compression_savings
         # Compact savings status bar — prefer today's stats over session stats
+        # Generic provider/client cache reads are observability in this legacy
+        # fallback; without origin data they must not inflate TokenPak savings.
         _today = (stats or {}).get("today", {})
         _today_input = _today.get("input_tokens", 0)
         _today_compressed = _today.get("compressed_tokens", 0)
         _today_cache_read = _today.get("cache_read_tokens", 0)
-        _today_total_saved_tok = _today_compressed + _today_cache_read
+        _today_total_saved_tok = _today_compressed
 
         # Compression % from today's data
         _avg_compression = (_today_compressed / _today_input * 100) if _today_input > 0 else 0.0
@@ -3391,8 +3381,14 @@ def _cmd_status_legacy(args):
 
         if _savings_parts:
             print(f"  💰 Savings: {' | '.join(_savings_parts)}")
+            if _today_cache_read > 0:
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
         else:
-            print("  💰 Savings: no data yet (run some requests first)")
+            if _today_cache_read > 0:
+                print("  💰 Savings: no TokenPak-attributed savings yet")
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
+            else:
+                print("  💰 Savings: no data yet (run some requests first)")
         print()
 
         # Today's savings (from telemetry DB)
@@ -3550,6 +3546,43 @@ def cmd_usage(args):
             )
 
 
+def _savings_json_payload(report, days):
+    """Build the machine-readable savings summary.
+
+    Mirrors the receipt definition used by the human ``tokenpak savings``
+    output. When no receipt-backed data exists the result is reported as an
+    explicit no-data state rather than a confident zero, so consumers never
+    mistake "nothing recorded yet" for "zero savings achieved".
+    """
+    has_data = not (report.total_cost == 0.0 and report.savings_amount == 0.0)
+    payload = {
+        "section": "savings",
+        "days": days,
+        "available": has_data,
+        "attribution": {
+            "model": "conservative_tokenpak_caused_savings",
+            "provider_or_client_cache": "observed_not_credited",
+        },
+    }
+    if has_data:
+        payload.update(
+            {
+                "savings_amount": round(report.savings_amount, 6),
+                "savings_pct": round(report.savings_pct, 4),
+                "actual_cost": round(report.total_cost, 6),
+                "baseline_cost": round(report.estimated_without_compression, 6),
+                "cache_hit_rate": round(report.cache_hit_rate, 6),
+            }
+        )
+    else:
+        payload["state"] = "no_data"
+        payload["message"] = (
+            "No receipt-backed savings data yet. "
+            "Run requests through the proxy to start tracking."
+        )
+    return payload
+
+
 def cmd_savings(args):
     """Show compression savings summary."""
     mode = resolve_mode(args)
@@ -3559,24 +3592,33 @@ def cmd_savings(args):
     # Try monitor.db first (proxy's live data source)
     monitor_data = _monitor_db_savings(days=days)
 
-    if monitor_data and monitor_data.get("actual_cost", 0) > 0:
+    if monitor_data and monitor_data.get("request_count", 0) > 0:
         actual = monitor_data["actual_cost"]
         cache_hit_rate = monitor_data["cache_hit_rate"]
         compressed = monitor_data["compressed_tokens"]
-        cache_read = monitor_data["cache_read"]
 
         total_input = monitor_data["total_input"] + monitor_data.get("total_output", 0)
         avg_rate = actual / total_input if total_input > 0 else 0
-        savings_amount = (cache_read + compressed) * avg_rate
+        # Provider/client cache reads are observability, not TokenPak-caused savings.
+        savings_amount = compressed * avg_rate
         estimated_without = actual + savings_amount
         savings_pct = (savings_amount / estimated_without * 100) if estimated_without > 0 else 0
 
         if mode == OutputMode.RAW:
             print(json.dumps({
-                "section": "savings", "days": days,
-                "actual_cost": actual, "savings_amount": savings_amount,
-                "savings_pct": savings_pct, "cache_hit_rate": cache_hit_rate,
+                "section": "savings",
+                "days": days,
+                "available": True,
+                "actual_cost": actual,
+                "savings_amount": savings_amount,
+                "savings_pct": savings_pct,
+                "cache_hit_rate": cache_hit_rate,
+                "baseline_cost": estimated_without,
                 "estimated_without_compression": estimated_without,
+                "attribution": {
+                    "model": "conservative_tokenpak_caused_savings",
+                    "provider_or_client_cache": "observed_not_credited",
+                },
             }))
             return
 
@@ -3590,7 +3632,8 @@ def cmd_savings(args):
             ("Actual Cost", f"${actual:.2f}"),
             ("Est. Baseline", f"${estimated_without:.2f}"),
             ("Est. Savings", f"${savings_amount:.2f} ({savings_pct:.1f}%)"),
-            ("Cache Hit Rate", f"{cache_hit_rate * 100:.1f}%"),
+            ("Cache Observed", f"{cache_hit_rate * 100:.1f}%"),
+            ("Attribution", "TokenPak-caused only"),
             ("Compressed Tokens", f"{compressed:,}"),
         ]))
         return
@@ -3600,7 +3643,7 @@ def cmd_savings(args):
     report = get_savings_report(days=days)
 
     if mode == OutputMode.RAW:
-        print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
+        print(fmt.raw(_savings_json_payload(report, days)))
         return
 
     # Check for empty database
@@ -3625,7 +3668,8 @@ def cmd_savings(args):
                 ("Savings %", f"{report.savings_pct:.1f}%"),
                 ("Actual Cost", f"${report.total_cost:.2f}"),
                 ("Baseline", f"${report.estimated_without_compression:.2f}"),
-                ("Cache Hit", f"{report.cache_hit_rate*100:.1f}%"),
+                ("Cache Observed", f"{report.cache_hit_rate*100:.1f}%"),
+                ("Attribution", "TokenPak-caused only"),
             ]
         )
     )
