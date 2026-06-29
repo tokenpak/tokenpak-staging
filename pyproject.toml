@@ -50,9 +50,10 @@ classifiers = [
     "Topic :: Utilities",
     "Typing :: Typed",
 ]
-# Slim core dependencies — Standard 02 §9 / Constitution 00 compliance.
-# Anything that drags in torch / nvidia-* / scipy / pandas / a multi-hundred-MB
-# transitive belongs in [project.optional-dependencies] below, not here.
+# Slim network/server core dependencies.
+# Heavy ML/data stacks such as torch / nvidia-* / scipy / pandas, or any
+# multi-hundred-MB transitive tree, belong in [project.optional-dependencies]
+# below, not here.
 # See proposals/2026-05-01-tokenpak-install-footprint-extras-split.md.
 dependencies = [
     "aiohttp>=3.9.0",
@@ -90,10 +91,10 @@ intelligence = [
     # scipy is the only intelligence-tier dep currently imported (guarded in
     # tokenpak/intelligence/ab_optimizer.py). scikit-learn / sympy were
     # candidates in the proposal but no source file imports them today, so
-    # adding them would violate Standard 02 §9 ("New runtime deps require a
-    # PR note explaining what they do, why stdlib won't work, and what
-    # happens when they're missing"). Add them here when a real consumer
-    # lands.
+    # adding them would violate the runtime dependency policy: new deps require
+    # a PR note explaining what they do, why stdlib or the existing core stack
+    # will not work, and what happens when they're missing. Add them here when
+    # a real consumer lands.
     "scipy>=1.10.0",
 ]
 data = [
