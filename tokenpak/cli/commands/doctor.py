@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -50,6 +51,79 @@ def _proxy_get(path: str, port: int | None = None, timeout: int = 3) -> dict | N
 # Mirrors install.PROXY_URL so the route check compares against the same value
 # `tokenpak setup` writes. Overridable via TOKENPAK_PROXY_URL for non-default ports.
 CANONICAL_PROXY_URL = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+_DISK_USAGE_MAX_ENTRIES = 5_000
+_DISK_USAGE_TIMEOUT_SECONDS = 0.25
+
+
+@dataclass(frozen=True)
+class _DiskUsageResult:
+    total_bytes: int
+    files: int
+    entries: int
+    truncated: bool = False
+    reason: str = ""
+
+
+def _measure_disk_usage(
+    root: Path,
+    *,
+    max_entries: int = _DISK_USAGE_MAX_ENTRIES,
+    timeout_s: float = _DISK_USAGE_TIMEOUT_SECONDS,
+) -> _DiskUsageResult:
+    """Return a bounded size estimate for TokenPak state.
+
+    First-run diagnostics must not recursively walk a large local state tree
+    forever. This probe follows no symlinks, stops on either a wall-clock or
+    entry-count cap, and reports a partial warning instead of pretending the
+    measurement was complete.
+    """
+    start = time.monotonic()
+    deadline = start + max(0.0, timeout_s)
+    pending = [root]
+    total_bytes = 0
+    files = 0
+    entries = 0
+
+    def _truncated(reason: str) -> _DiskUsageResult:
+        return _DiskUsageResult(
+            total_bytes=total_bytes,
+            files=files,
+            entries=entries,
+            truncated=True,
+            reason=reason,
+        )
+
+    while pending:
+        if entries >= max_entries:
+            return _truncated(f"entry limit {max_entries}")
+        if time.monotonic() >= deadline:
+            return _truncated(f"timeout {timeout_s:.2f}s")
+
+        current = pending.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    entries += 1
+                    if entries >= max_entries:
+                        return _truncated(f"entry limit {max_entries}")
+                    if time.monotonic() >= deadline:
+                        return _truncated(f"timeout {timeout_s:.2f}s")
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            total_bytes += entry.stat(follow_symlinks=False).st_size
+                            files += 1
+                        elif entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+    return _DiskUsageResult(
+        total_bytes=total_bytes,
+        files=files,
+        entries=entries,
+    )
 
 
 def _claude_settings_path() -> Path:
@@ -1237,11 +1311,20 @@ def run_doctor(
     # Disk usage
     try:
         if tokenpak_dir.exists():
-            total_bytes = sum(
-                f.stat().st_size for f in tokenpak_dir.rglob("*") if f.is_file()
-            )
-            size_mb = total_bytes / (1024 * 1024)
-            if size_mb < 500:
+            usage = _measure_disk_usage(tokenpak_dir)
+            size_mb = usage.total_bytes / (1024 * 1024)
+            if usage.truncated:
+                _record(
+                    "disk_usage",
+                    "warn",
+                    f"Disk usage          at least {size_mb:.1f} MB — bounded after "
+                    f"{usage.entries} entries ({usage.reason}); run: tokenpak maintenance",
+                    detail=(
+                        f"bytes_partial={usage.total_bytes} files_partial={usage.files} "
+                        f"entries={usage.entries} reason={usage.reason}"
+                    ),
+                )
+            elif size_mb < 500:
                 _record("disk_usage", "pass", f"Disk usage          {size_mb:.1f} MB — OK")
             else:
                 _record(
