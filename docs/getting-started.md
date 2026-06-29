@@ -178,6 +178,25 @@ tokenpak budget alert --at 80% # warn at 80%
 
 ---
 
+## TokenPak home directory
+
+TokenPak keeps its configuration, databases, and caches under a single home
+directory. It is resolved in this order:
+
+1. `TOKENPAK_HOME` — explicit override (e.g. for sandboxes or CI).
+2. `~/.tpk/` — the canonical default used by fresh installs.
+3. `~/.tokenpak/` — a legacy fallback, used automatically only when it already
+   exists and `~/.tpk/` does not, so installs from earlier versions keep
+   working without changes.
+
+Newer docs and examples use the canonical `~/.tpk/` path. Where you still see
+`~/.tokenpak/`, treat it as the legacy-compatible location for the same data.
+To move a legacy install onto the canonical path, run `tokenpak home migrate`,
+which copies `~/.tokenpak/` to `~/.tpk/` and leaves the old tree in place as a
+backup.
+
+---
+
 ## Next Steps
 
 - [Onboarding Guide](onboarding.md) — Day 3 through Day 30: savings reports, custom recipes, budgets, production deployment

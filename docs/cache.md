@@ -49,7 +49,7 @@ The heuristic is conservative — it slightly over-estimates, so the compression
 
 ### What it is
 
-A SQLite database (`~/.tokenpak/registry.db`) that acts as a persistent index of your codebase or notes directory. When you run `tokenpak index ~/notes`, each file is parsed, its content is extracted, and a content-addressed record is written to the registry.
+A SQLite database (`~/.tpk/registry.db`) that acts as a persistent index of your codebase or notes directory. When you run `tokenpak index ~/notes`, each file is parsed, its content is extracted, and a content-addressed record is written to the registry.
 
 ### What's stored
 
@@ -88,7 +88,7 @@ tokenpak calibrate ~/notes
 tokenpak index ~/notes --workers 8
 ```
 
-Calibration runs a bounded benchmark (min 1 worker, max `--max-workers`, default 8) and saves the optimal value to `~/.tokenpak/calibration.json`. Subsequent index runs use it automatically.
+Calibration runs a bounded benchmark (min 1 worker, max `--max-workers`, default 8) and saves the optimal value to `~/.tpk/calibration.json`. Subsequent index runs use it automatically.
 
 **Benchmark (572-file vault):**
 
@@ -138,9 +138,13 @@ Combined, these can reduce effective cost by 80%+ on workloads with large, repea
 
 ## Cache Locations
 
+Paths below use the canonical TokenPak home `~/.tpk/` (override with
+`TOKENPAK_HOME`). Legacy installs that still live under `~/.tokenpak/` keep
+working; `tokenpak home migrate` moves them to the canonical path.
+
 | Cache | Location | Type | Cleared by |
 |---|---|---|---|
 | Token count | In-process LRU | Memory | Proxy restart |
-| Vault registry | `~/.tokenpak/registry.db` | SQLite | `rm ~/.tokenpak/registry.db` + reindex |
-| Calibration | `~/.tokenpak/calibration.json` | JSON | Delete file + recalibrate |
-| Telemetry | `~/.tokenpak/telemetry.db` | SQLite | `tokenpak maintenance prune` |
+| Vault registry | `~/.tpk/registry.db` | SQLite | `rm ~/.tpk/registry.db` + reindex |
+| Calibration | `~/.tpk/calibration.json` | JSON | Delete file + recalibrate |
+| Telemetry | `~/.tpk/telemetry.db` | SQLite | `tokenpak maintenance prune` |

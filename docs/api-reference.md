@@ -203,41 +203,52 @@ Proxy health and stats.
 
 ### `GET /health`
 
-Structured health check. Returns component status, uptime, version, and actionable suggestions when degraded.
+Structured health check. Returns the proxy status, uptime, version, session
+counters, connection-pool metrics, and circuit-breaker state.
 
 **No authentication required.**
 
-**HTTP status codes:**
-- `200` — healthy or degraded
-- `503` — critical (all providers down)
+Pass `?deep=true` to additionally include a per-provider status list, process
+memory (`rss_mb`), and disk-available (`available_gb`) figures.
 
 **Response:**
 ```json
 {
- "status": "healthy",
- "uptime": 3600,
+ "status": "ok",
+ "uptime_seconds": 3600,
  "version": "1.0.0",
+ "requests_total": 23,
+ "requests_errors": 0,
+ "compression_ratio_avg": 0.41,
+ "is_degraded": false,
+ "is_shutting_down": false,
+ "in_flight_requests": 0,
  "timestamp": "2026-03-16T19:10:00Z",
- "components": {
- "cache": { "status": "ok", "entries": 42 },
- "provider_connections": {
- "anthropic": { "status": "ok", "circuit_open": false, "failures": 0 },
- "openai": { "status": "ok", "circuit_open": false, "failures": 0 },
- "google": { "status": "ok", "circuit_open": false, "failures": 0 }
+ "connection_pool": {
+ "http2_enabled": true,
+ "active_providers": ["anthropic"]
  },
- "config": { "status": "ok" }
- },
- "suggestions": []
+ "circuit_breakers": {
+ "enabled": true,
+ "any_open": false,
+ "providers": {}
+ }
 }
 ```
 
-**`status` values:**
+**Top-level `status` values:**
 
-| Value | Meaning | HTTP |
-|-------|---------|------|
-| `healthy` | All components nominal | 200 |
-| `degraded` | One or more providers circuit-open, or error rate >10% | 200 |
-| `critical` | All providers unreachable | 503 |
+| Value | Meaning |
+|-------|---------|
+| `ok` | Proxy nominal |
+| `degraded` | Degradation tracker active (e.g. a provider circuit is open or errors are elevated) |
+| `shutting_down` | Proxy is draining in-flight requests for graceful shutdown |
+
+The endpoint always responds `200`; the operational state is carried in the
+`status` field (plus the `is_degraded` / `is_shutting_down` booleans), not the
+HTTP code. The top-level `status` is therefore `ok` (never `healthy`); the
+string `"ok"` is also reused for nested per-component health, such as each
+circuit-breaker provider entry.
 
 ---
 

@@ -242,18 +242,23 @@ tokenpak config set pricing.my-model.output_per_1k 0.015
 ```bash
 tokenpak prune --older-than 0d # delete all history
 # or
-rm ~/.tokenpak/stats.db # nuclear option
+rm ~/.tpk/stats.db # nuclear option
 ```
 
 ### Where is my data stored?
 
+Under the TokenPak home directory — `~/.tpk/` by default (override with
+`TOKENPAK_HOME`). Installs created before the `~/.tpk/` default keep using the
+legacy `~/.tokenpak/` home automatically; run `tokenpak home migrate` to move to
+the canonical path.
+
 | Data | Location |
 |------|----------|
-| Configuration | `~/.tokenpak/config.json` |
-| Session database | `~/.tokenpak/monitor.db` (or `TOKENPAK_DB` env var) |
-| Vault index | `.tokenpak/registry.db` |
-| Calibration profile | `~/.tokenpak/calibration.json` |
-| Recipes | `~/.tokenpak/recipes/` |
+| Configuration | `~/.tpk/config.json` |
+| Session database | `~/.tpk/monitor.db` (or `TOKENPAK_DB` env var) |
+| Vault index | `~/.tpk/registry.db` |
+| Calibration profile | `~/.tpk/calibration.json` |
+| Recipes | `~/.tpk/recipes/` |
 
 ---
 
@@ -287,7 +292,7 @@ tokenpak prune --older-than 30d
 
 ```bash
 # Rebuild from scratch
-rm -f ~/.tokenpak/registry.db
+rm -f ~/.tpk/registry.db
 tokenpak index ~/notes
 ```
 
@@ -320,7 +325,7 @@ tokenpak budget alert --at 80
 ```
 [INFO] TokenPak proxy starting on :8766
 [INFO] Compression: enabled (hybrid mode, threshold=4500 tokens)
-[INFO] Telemetry: active → ~/.tokenpak/telemetry.db
+[INFO] Telemetry: active → ~/.tpk/telemetry.db
 [INFO] Ready.
 ```
 
