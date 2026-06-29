@@ -518,6 +518,9 @@ Toggle debug logging
 - `export`
   - `TRACE_ID` — Trace ID to export
   - `--json` — Output as JSON
+- `receipt`
+  - `REQUEST_ID` — Request ID to render a receipt for (omit to print the support-bundle pointer)
+  - `--raw` — Show the receipt without redaction (default: redaction-safe)
 
 ### `tokenpak learn`
 
