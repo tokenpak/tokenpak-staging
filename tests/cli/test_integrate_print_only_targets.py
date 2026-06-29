@@ -22,12 +22,26 @@ from tokenpak.cli.commands.integrate import (
     INTEGRATIONS,
     Integration,
     _run_guided_form,
+    _setup_mode,
+    _status_label,
     run_integrate,
 )
 
 PROXY = "http://localhost:8766"
 
 PRINT_ONLY_KEYS = list(_PRINT_ONLY_KEYS)
+
+EXPECTED_TARGET_STATUS = {
+    "claude-code": ("supported", "tested", "apply"),
+    "cursor": ("experimental", "untested", "apply"),
+    "cline": ("experimental", "untested", "print-only"),
+    "continue": ("experimental", "untested", "apply"),
+    "aider": ("experimental", "untested", "apply"),
+    "codex": ("experimental", "untested", "print-only"),
+    "openai-sdk": ("supported", "tested", "print-only"),
+    "anthropic-sdk": ("supported", "tested", "print-only"),
+    "litellm": ("supported", "tested", "print-only"),
+}
 
 
 def _make_args(**kwargs) -> argparse.Namespace:
@@ -40,6 +54,19 @@ def _make_args(**kwargs) -> argparse.Namespace:
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
+
+
+def test_integration_registry_status_labels_match_apply_modes():
+    """README, quickstart, matrix, and runtime labels rely on this mapping."""
+    by_key = {integration.key: integration for integration in INTEGRATIONS}
+
+    assert set(EXPECTED_TARGET_STATUS) <= set(by_key)
+    for key, (maturity, proof, setup_mode) in EXPECTED_TARGET_STATUS.items():
+        integration = by_key[key]
+        assert integration.maturity == maturity
+        assert integration.proof_label == proof
+        assert _setup_mode(integration) == setup_mode
+        assert _status_label(integration) == f"{maturity}; {proof}; {setup_mode}"
 
 
 # ── Print-only targets in guided form ─────────────────────────────────────
@@ -139,6 +166,24 @@ def test_apply_on_print_only_target_graceful(capsys):
     out = capsys.readouterr().out
     # Should show instructions and a note, not crash
     assert len(out) > 10
+
+
+def test_codex_print_only_instructions_are_public_safe(capsys):
+    """Codex setup text must not expose internal memory or vault routing notes."""
+    integ = next(i for i in INTEGRATIONS if i.key == "codex")
+
+    with patch("tokenpak.cli.commands.integrate._find", return_value=integ):
+        rc = run_integrate(_make_args(client="codex"))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "OPENAI_BASE_URL" in out
+    assert "codex exec" in out
+    assert "TokenPak does not edit your Codex config or print credentials" in out
+    assert "project_tokenpak" not in out
+    assert "memory" not in out.lower()
+    assert "vault" not in out.lower()
+    assert "/home/" not in out
 
 
 def test_apply_on_sdk_target_graceful(capsys):
