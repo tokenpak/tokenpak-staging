@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from tokenpak.telemetry.rollups import RollupEngine
@@ -769,14 +769,20 @@ def create_dashboard_router(
         }
         return templates.TemplateResponse(request, "settings.html", ctx)
 
-    @router.post("/settings/save", response_class=HTMLResponse)
+    @router.post("/settings/save")
     async def settings_save(request: Request):
-        """Server-side settings save (stub; most prefs use localStorage)."""
+        """Reject unsupported runtime-settings persistence from the dashboard."""
         try:
             await request.json()
         except Exception:
             pass
-        return HTMLResponse(content='{"status":"ok"}', media_type="application/json")
+        return JSONResponse(
+            {
+                "status": "unsupported",
+                "message": "Dashboard settings are display preferences only; use the CLI or config files for runtime settings.",
+            },
+            status_code=501,
+        )
 
     # --- Notification endpoints ---
     @router.get("/notifications")
