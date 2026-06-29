@@ -92,26 +92,39 @@ pip install tokenpak
 
 ### Compress and send
 
-Point your existing LLM client at the TokenPak proxy — no API changes needed:
+`ContextPack` builds a budget-aware prompt locally — no proxy, no network call.
+Add your content as priority-ranked `PackBlock`s; `compile()` trims to the token
+budget and returns a stack-neutral result you can hand to any LLM client:
 
 ```python
-from openai import OpenAI
+>>> from tokenpak.compression.pack import ContextPack, PackBlock
+>>> pack = ContextPack(budget=4000)
+>>> _ = pack.add(PackBlock(
+...     id="system", type="instructions",
+...     content="You are a helpful assistant.", priority="critical"))
+>>> _ = pack.add(PackBlock(
+...     id="docs", type="knowledge",
+...     content="TokenPak packs context to fit a token budget.", priority="high"))
+>>> compiled = pack.compile()
+>>> "You are a helpful assistant." in compiled.to_prompt()
+True
 
-# Just change base_url — everything else stays the same
-client = OpenAI(
-    api_key="your-api-key",
-    base_url="http://localhost:8766"  # Route through TokenPak
-)
-
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Summarize the docs"}
-    ]
-)
-# TokenPak routes the request locally and records measured telemetry in monitor.db
 ```
+
+The compiled result is stack-neutral — send it through whichever client you
+already use, no API changes required:
+
+```python
+>>> compiled.to_messages()[0]["role"]            # OpenAI / LiteLLM / Ollama
+'user'
+>>> system, _messages = compiled.to_anthropic()  # Anthropic SDK
+>>> system == compiled.to_prompt()
+True
+
+```
+
+> **One-liner?** `from tokenpak import pack_prompt` does the same in a single
+> call: `pack_prompt(system="You are helpful.", docs=my_docs, budget=4000)`.
 
 ---
 
