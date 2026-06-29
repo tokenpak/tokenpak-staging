@@ -3546,6 +3546,12 @@ def cmd_usage(args):
             )
 
 
+SAVINGS_ESTIMATE_NOTE = (
+    "Savings are estimates from recorded telemetry and local pricing rates; "
+    "provider pricing and run-to-run model behavior can change the final bill."
+)
+
+
 def _savings_json_payload(report, days):
     """Build the machine-readable savings summary.
 
@@ -3572,6 +3578,7 @@ def _savings_json_payload(report, days):
                 "actual_cost": round(report.total_cost, 6),
                 "baseline_cost": round(report.estimated_without_compression, 6),
                 "cache_hit_rate": round(report.cache_hit_rate, 6),
+                "estimate_note": SAVINGS_ESTIMATE_NOTE,
             }
         )
     else:
@@ -3609,33 +3616,42 @@ def cmd_savings(args):
                 "section": "savings",
                 "days": days,
                 "available": True,
-                "actual_cost": actual,
-                "savings_amount": savings_amount,
-                "savings_pct": savings_pct,
-                "cache_hit_rate": cache_hit_rate,
-                "baseline_cost": estimated_without,
-                "estimated_without_compression": estimated_without,
+                "actual_cost": round(actual, 6),
+                "savings_amount": round(savings_amount, 6),
+                "savings_pct": round(savings_pct, 4),
+                "cache_hit_rate": round(cache_hit_rate, 6),
+                "baseline_cost": round(estimated_without, 6),
+                "estimated_without_compression": round(estimated_without, 6),
                 "attribution": {
                     "model": "conservative_tokenpak_caused_savings",
                     "provider_or_client_cache": "observed_not_credited",
                 },
+                "estimate_note": SAVINGS_ESTIMATE_NOTE,
             }))
             return
 
         if fmt.minimal:
-            print(fmt.minimal_line([f"{savings_pct:.1f}%", f"${savings_amount:.2f}", f"{days}d"]))
+            print(
+                fmt.minimal_line(
+                    [f"{savings_pct:.1f}%", f"${savings_amount:.2f}", f"{days}d", "estimate"]
+                )
+            )
             return
 
         print(fmt.header())
         print()
         print(fmt.kv([
+            ("Window", f"{days}d"),
+            ("Savings", f"${savings_amount:.2f}"),
+            ("Savings %", f"{savings_pct:.1f}%"),
             ("Actual Cost", f"${actual:.2f}"),
-            ("Est. Baseline", f"${estimated_without:.2f}"),
-            ("Est. Savings", f"${savings_amount:.2f} ({savings_pct:.1f}%)"),
+            ("Baseline", f"${estimated_without:.2f}"),
             ("Cache Observed", f"{cache_hit_rate * 100:.1f}%"),
             ("Attribution", "TokenPak-caused only"),
             ("Compressed Tokens", f"{compressed:,}"),
         ]))
+        print()
+        print(f"Note: {SAVINGS_ESTIMATE_NOTE}")
         return
 
     # Fallback to telemetry.db
@@ -3654,7 +3670,12 @@ def cmd_savings(args):
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{report.savings_pct:.1f}%", f"${report.savings_amount:.2f}", f"{days}d"]
+                [
+                    f"{report.savings_pct:.1f}%",
+                    f"${report.savings_amount:.2f}",
+                    f"{days}d",
+                    "estimate",
+                ]
             )
         )
         return
@@ -3664,6 +3685,7 @@ def cmd_savings(args):
     print(
         fmt.kv(
             [
+                ("Window", f"{days}d"),
                 ("Savings", f"${report.savings_amount:.2f}"),
                 ("Savings %", f"{report.savings_pct:.1f}%"),
                 ("Actual Cost", f"${report.total_cost:.2f}"),
@@ -3673,6 +3695,8 @@ def cmd_savings(args):
             ]
         )
     )
+    print()
+    print(f"Note: {SAVINGS_ESTIMATE_NOTE}")
 
     # Attribution v2 breakdown (additive; only shown when TOKENPAK_ATTRIBUTION_V2 is set)
     try:
