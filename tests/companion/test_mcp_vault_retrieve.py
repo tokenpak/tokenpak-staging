@@ -17,6 +17,8 @@ def test_vault_retrieve_path_calls_block_endpoint_directly(monkeypatch) -> None:
         return 200, {
             "block_id": "block-a",
             "path": "docs/a.md",
+            "source_path": "docs/a.md",
+            "tokens": 17,
             "content": "alpha",
             "resolution": "exact_path",
         }
@@ -27,6 +29,8 @@ def test_vault_retrieve_path_calls_block_endpoint_directly(monkeypatch) -> None:
 
     assert calls == [("/tpk/v1/vault/block/", {"path": "docs/a.md"})]
     assert body["block_id"] == "block-a"
+    assert body["path"] == "docs/a.md"
+    assert body["tokens"] == 17
     assert body["resolution"] == "exact_path"
 
 
@@ -38,6 +42,8 @@ def test_vault_retrieve_block_id_keeps_existing_route(monkeypatch) -> None:
         return 200, {
             "block_id": "folder/block",
             "path": "docs/a.md",
+            "source_path": "docs/a.md",
+            "tokens": 17,
             "content": "alpha",
             "resolution": "exact_block_id",
         }
@@ -47,4 +53,6 @@ def test_vault_retrieve_block_id_keeps_existing_route(monkeypatch) -> None:
     body = json.loads(tools._handle_vault_retrieve(None, {"block_id": "folder/block"}))
 
     assert calls == [("/tpk/v1/vault/block/folder%2Fblock", None)]
+    assert body["path"] == "docs/a.md"
+    assert body["tokens"] == 17
     assert body["resolution"] == "exact_block_id"
