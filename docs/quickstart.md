@@ -31,18 +31,29 @@ tokenpak start
 
 ### Minute 3: Point your app at the proxy
 
-Run the one-shot configurator for your tool:
+Run the one-shot configurator for your tool. Supported/tested targets:
 
 ```bash
 tokenpak integrate # list clients + detection status
 tokenpak integrate claude-code --apply # writes ~/.claude/settings.json
+tokenpak integrate openai-sdk # print-only SDK snippet
+tokenpak integrate anthropic-sdk # print-only SDK snippet
+tokenpak integrate litellm # print-only LiteLLM snippet
+```
+
+Experimental/untested targets are available, but verify before relying on them:
+
+```bash
 tokenpak integrate cursor --apply # writes Cursor settings.json
 tokenpak integrate continue --apply # writes ~/.continue/config.json
 tokenpak integrate aider --apply # writes ~/.aider.conf.yml
+tokenpak integrate cline # print-only manual Cline steps
+tokenpak integrate codex # print-only base setup
 ```
 
 Every `--apply` backs up the existing config and prints a rollback command.
-For clients without auto-apply (Cline, SDKs), `tokenpak integrate <client>` prints the exact snippet to paste.
+For print-only targets, `tokenpak integrate <client>` prints the exact snippet
+or manual steps to paste.
 
 ### Minute 4: Create your first measured receipt
 
