@@ -134,10 +134,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Install (dev shape)
+      - name: Install (all extras for canonical snapshot reproduction)
+        # Mirror of release.yml: public-api.json captures the COMPLETE public
+        # surface, so snapshot validation MUST install every optional extra.
+        # Without them, telemetry/server, vault/ingest/api, proxy.intelligence,
+        # dashboard, etc. raise IMPORT_ERROR during snapshot generation and the
+        # api-snapshot-check fires phantom-removal noise (Std 30 §3 R3 parity).
         run: |
           python -m pip install --upgrade pip
-          pip install ".[dev]"
+          pip install ".[dev,full,serve,telemetry,tokens,otel]"
+          pip install python-multipart
       - name: api-snapshot-check (Std 30 §7 R7)
         run: make api-snapshot-check
       - name: workflow-steps-check (Std 30 §13.3 R11)

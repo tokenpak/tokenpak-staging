@@ -16,12 +16,12 @@ Setup: pip install tokenpak langchain langchain-core
 import sys
 import os
 import hashlib
-from typing import Optional, Sequence
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine, CacheManager
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ class TokenPakChatMessageHistory:
         self.session_id = session_id or "default"
 
         self.engine = HeuristicEngine()
-        self.cache = CacheManager(default_ttl=600)
+        self.cache = CacheManager()
         self._messages = []  # Store as simple dicts for portability
 
     def add_user_message(self, content: str) -> None:
@@ -74,8 +74,8 @@ class TokenPakChatMessageHistory:
         content = msg["content"]
         cache_key = hashlib.sha256(content.encode()).hexdigest()[:20]
 
-        hit, cached = self.cache.get(cache_key)
-        if hit:
+        cached = self.cache.get(cache_key)
+        if cached is not None:
             return {**msg, "content": cached, "_compressed": True}
 
         hints = CompactionHints(target_tokens=max(50, len(content) // 8))

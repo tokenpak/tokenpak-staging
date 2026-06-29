@@ -14,7 +14,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   mode — see `tokenpak permissions --help`.
 - TokenPak Dispatch (v0.1-alpha, **preview**) — scoped, station-based,
   resumable work packages with a Decision Inbox and delivery receipts.
-  Available on the main branch only; **not yet included in a released
+  The released `pip install tokenpak` package ships the `tokenpak dispatch`
+  command plus its registry and schema data files; the Dispatch runtime is
+  source-only in v0.1-alpha (available on the `main` branch), so the
+  dispatch runtime commands are **not yet usable from a released
   `pip install tokenpak` package**. See `tokenpak dispatch --help`.
 
 ### Changed

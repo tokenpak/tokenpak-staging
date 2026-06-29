@@ -51,12 +51,12 @@ class PruneJob:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Calculate cutoff date
+            # Calculate cutoff (canonical store keys event time as epoch ``ts``)
             cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-            cutoff_str = cutoff.isoformat()
+            cutoff_ts = cutoff.timestamp()
 
             # Delete events older than cutoff
-            cursor.execute("DELETE FROM events WHERE created_at < ?", (cutoff_str,))
+            cursor.execute("DELETE FROM tp_events WHERE ts < ?", (cutoff_ts,))
 
             deleted_count = cursor.rowcount
             conn.commit()
@@ -78,14 +78,21 @@ class PruneJob:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Calculate cutoff date
+            # Calculate cutoff date. Canonical rollups are the per-dimension
+            # daily tables keyed on a ``date`` TEXT column (ISO ``YYYY-MM-DD``).
             cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-            cutoff_str = cutoff.isoformat()
+            cutoff_date = cutoff.date().isoformat()
 
-            # Delete rollups older than cutoff
-            cursor.execute("DELETE FROM rollups WHERE created_at < ?", (cutoff_str,))
+            # Delete rollups older than cutoff across all daily rollup tables
+            deleted_count = 0
+            for _tbl in (
+                "tp_rollup_daily_model",
+                "tp_rollup_daily_provider",
+                "tp_rollup_daily_agent",
+            ):
+                cursor.execute(f"DELETE FROM {_tbl} WHERE date < ?", (cutoff_date,))
+                deleted_count += cursor.rowcount
 
-            deleted_count = cursor.rowcount
             conn.commit()
             conn.close()
 

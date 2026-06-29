@@ -165,6 +165,8 @@ serve = [
     "starlette>=0.36.0",
     "pydantic>=2.0.0",
     "fastapi>=0.100.0",
+    "python-multipart>=0.0.9",
+    "jinja2>=3.1.0",
     # Optional WebSocket proxy endpoint (tokenpak/proxy/websocket.py). The
     # import is guarded (try/except ImportError) and the WS server is simply
     # disabled when absent, so this is serve-only, not a core dependency.
@@ -212,6 +214,9 @@ tokenpak = [
     "models/data/*.json",
     "telemetry/data/*.json",
     "tip/schemas/*.json",
+    "dashboard/*.html",
+    "dashboard/*.js",
+    "dashboard/*.css",
     "dashboard/templates/**/*",
     "telemetry/dashboard/static/**/*",
     "telemetry/dashboard/templates/**/*",
