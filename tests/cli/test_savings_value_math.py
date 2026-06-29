@@ -105,7 +105,7 @@ def test_cmd_savings_renders_live_value_math_and_estimate_caveat(tmp_path, monke
     assert "Savings %" in out and "30.5%" in out
     assert "Actual Cost" in out and "$3.96" in out
     assert "Baseline" in out and "$5.70" in out
-    assert "Cache Hit" in out and "20.0%" in out
+    assert "Cache Observed" in out and "20.0%" in out
     assert _cli_core.SAVINGS_ESTIMATE_NOTE in out
     assert "$17.40" not in out
 
