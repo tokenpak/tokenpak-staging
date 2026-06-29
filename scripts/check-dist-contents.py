@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import shutil
@@ -22,6 +23,23 @@ REQUIRED_PACKAGE_DATA = {
     "tokenpak/budget_config.yaml",
     "tokenpak/term_cards.json",
 }
+# Dispatch v0.1-alpha registry/schema package data declared in pyproject.toml
+# [tool.setuptools.package-data]. The registry/routes/overlays directories are
+# not Python packages (no __init__.py), so their data ships only as package-data
+# globs of the parent ``tokenpak`` package. Each glob below MUST match at least
+# one shipped file in both wheel and sdist — proving the declared globs are live
+# and the Dispatch registry/schema files actually graduate into built artifacts.
+REQUIRED_DISPATCH_DATA_GLOBS = (
+    "tokenpak/orchestration/dispatch/registry/*.yaml",
+    "tokenpak/orchestration/dispatch/registry/routes/*.yaml",
+    "tokenpak/orchestration/dispatch/registry/overlays/*.yaml",
+    "tokenpak/orchestration/dispatch/schemas/*.json",
+)
+REQUIRED_DASHBOARD_DATA_GLOBS = (
+    "tokenpak/dashboard/*.html",
+    "tokenpak/dashboard/*.js",
+    "tokenpak/dashboard/*.css",
+)
 PACKAGE_TEST_PATH_RE = re.compile(r"^tokenpak/(?:tests/|.+/tests/)")
 BYTECODE_PATH_RE = re.compile(r"(^|/)__pycache__/|\.py[cod]$")
 
@@ -83,6 +101,45 @@ def _assert_required_data(names: set[str], artifact_label: str) -> None:
         )
 
 
+def _matches_glob(name: str, glob: str) -> bool:
+    """Match a posix archive path against a single-segment ``*`` glob.
+
+    Unlike :func:`fnmatch.fnmatch`, the ``*`` here does not cross ``/``: the
+    directory portion must match exactly and only the basename is wildcarded.
+    This keeps ``registry/*.yaml`` from being satisfied by a file that actually
+    lives in ``registry/routes/``.
+    """
+    glob_dir, _, glob_base = glob.rpartition("/")
+    name_dir, _, name_base = name.rpartition("/")
+    return name_dir == glob_dir and fnmatch.fnmatch(name_base, glob_base)
+
+
+def _assert_required_dispatch_data(names: set[str], artifact_label: str) -> None:
+    missing = [
+        glob
+        for glob in REQUIRED_DISPATCH_DATA_GLOBS
+        if not any(_matches_glob(name, glob) for name in names)
+    ]
+    if missing:
+        raise AssertionError(
+            f"{artifact_label} is missing required Dispatch package data "
+            f"(no shipped file matches): {', '.join(missing)}"
+        )
+
+
+def _assert_required_dashboard_data(names: set[str], artifact_label: str) -> None:
+    missing = [
+        glob
+        for glob in REQUIRED_DASHBOARD_DATA_GLOBS
+        if not any(_matches_glob(name, glob) for name in names)
+    ]
+    if missing:
+        raise AssertionError(
+            f"{artifact_label} is missing required dashboard package data "
+            f"(no shipped file matches): {', '.join(missing)}"
+        )
+
+
 def _assert_no_development_artifacts(names: set[str], artifact_label: str) -> None:
     offenders = sorted(
         name
@@ -113,6 +170,10 @@ def main() -> int:
 
     _assert_required_data(wheel_names, "wheel")
     _assert_required_data(sdist_names, "sdist")
+    _assert_required_dispatch_data(wheel_names, "wheel")
+    _assert_required_dispatch_data(sdist_names, "sdist")
+    _assert_required_dashboard_data(wheel_names, "wheel")
+    _assert_required_dashboard_data(sdist_names, "sdist")
     _assert_no_development_artifacts(wheel_names, "wheel")
     _assert_no_development_artifacts(sdist_names, "sdist")
     print("distribution contents are clean")

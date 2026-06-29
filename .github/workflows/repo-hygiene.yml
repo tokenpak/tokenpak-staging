@@ -94,3 +94,6 @@ jobs:
             exit 1
           fi
           echo "✅ No apex-host \$id URL drift found"
+
+      - name: Companion visible-surface orphan check
+        run: python3 scripts/release_gate/check_companion_visible_surfaces.py

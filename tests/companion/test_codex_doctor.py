@@ -33,6 +33,33 @@ _FIXTURE = (
 
 
 # ---------------------------------------------------------------------------
+# codex binary guidance
+# ---------------------------------------------------------------------------
+
+def test_check_codex_binary_missing_is_actionable(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    status, detail = doctor.check_codex_binary()
+    assert status == "FAIL"
+    assert "Codex CLI not found on PATH" in detail
+    assert "npm install -g @openai/codex" in detail
+    assert "codex --version" in detail
+    assert "Win" + "Error" not in detail
+
+
+def test_check_codex_binary_filenotfound_avoids_raw_exception(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/bin/codex")
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("Win" + "Error 2")
+
+    monkeypatch.setattr(doctor.subprocess, "run", missing)
+    status, detail = doctor.check_codex_binary()
+    assert status == "FAIL"
+    assert "codex --version failed: Codex CLI not found on PATH" in detail
+    assert "Win" + "Error" not in detail
+
+
+# ---------------------------------------------------------------------------
 # check_skills_installed — canonical path
 # ---------------------------------------------------------------------------
 

@@ -14,6 +14,11 @@ from typing import Optional
 
 from .adapter import ArmResult
 
+_PROVE_ESTIMATE_NOTE = (
+    "Cost/savings figures are estimates from local pricing tables and separate "
+    "A/B runs; provider pricing and model variance can change deltas."
+)
+
 # ═══════════════════════════════════════════════════════════════════════
 # Matrix report (N arms)
 # ═══════════════════════════════════════════════════════════════════════
@@ -128,6 +133,7 @@ def format_matrix_report(
     # ── Footer ──────────────────────────────────────────────
     lines.append("")
     lines.append(f"  Proof ID: {proof_id}")
+    lines.append(f"  Note: {_PROVE_ESTIMATE_NOTE}")
     lines.append("")
 
     return "\n".join(lines)
@@ -174,6 +180,7 @@ def save_result(
             "best_cost_arm": min(arms, key=lambda a: a.total_cost_usd).arm_name if arms else "",
             "best_time": min(a.total_latency_s for a in arms) if arms else 0,
             "best_time_arm": min(arms, key=lambda a: a.total_latency_s).arm_name if arms else "",
+            "estimate_note": _PROVE_ESTIMATE_NOTE,
         },
     }
 

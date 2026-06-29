@@ -56,6 +56,10 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
         # tmp/, overlays/). Added per the canonical layout amendment of
         # 2026-05-20.
         "dispatch",
+        # deliberation/ — Deliberation Dispatch system state (file-based JSON
+        # Deliberation Receipts under deliberation/receipts/).
+        # Added per the canonical layout amendment of 2026-06-12.
+        "deliberation",
     }
 )
 
@@ -70,6 +74,10 @@ _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
         # Cards authoring layer: ~/.tpk/cards/installed/,
         # ~/.tpk/cards/compiled/). Path-layout reconciliation pending.
         "cards",
+        # debug/ — encrypted/hash-only debug capture blobs and key material.
+        # The capture surface predates the resolver migration; keep it visible
+        # as adopted state until the canonical layout is amended.
+        "debug",
     }
 )
 

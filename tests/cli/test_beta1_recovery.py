@@ -260,6 +260,10 @@ def test_activate_accepts_plausible_key(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(_lic, "_license_path", lambda: tmp_path / "license.json")
+    monkeypatch.setattr(
+        "tokenpak.licensing.daemon_probe.detect_daemon_state",
+        lambda: "unavailable",
+    )
     # Plausible base64url-ish token
     result = _lic.activate("ABCD-1234-EFGH-5678-IJKL")
     assert result.ok is True
