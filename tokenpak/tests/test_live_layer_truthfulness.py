@@ -1,6 +1,6 @@
 """Regression tests for live-layer reporting truthfulness fixes.
 
-Tests cover four P1/P2 bugs confirmed by Sue's Loop 3 validation
+Tests cover four P1/P2 bugs confirmed during live-layer validation
 (2026-06-26) against a 179K-row live monitor.db:
 
   P1 savings    — _monitor_db_savings() over-claimed by including
@@ -22,7 +22,6 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-
 
 # ---------------------------------------------------------------------------
 # Shared fixture helpers
@@ -91,7 +90,6 @@ class TestSavingsCacheOriginFilter(unittest.TestCase):
     """_monitor_db_savings() must only credit proxy-origin cache reads."""
 
     def _call(self, db: Path, days: int = 30) -> dict:
-        import sys, importlib, os
         # Patch _get_monitor_db_path to return our fixture DB
         import tokenpak._cli_core as core
         orig = core._get_monitor_db_path
@@ -247,7 +245,7 @@ class TestRequestsFromDb(unittest.TestCase):
     def test_follow_default_is_false(self):
         """cmd_requests must default to non-follow to avoid infinite loop."""
         import types
-        import tokenpak._cli_core as core
+
         args = types.SimpleNamespace(
             requests_cmd="tail", action=None, request_id=None,
             limit=5, once=False,  # once=False is the old trigger for infinite loop
@@ -266,11 +264,11 @@ class TestAttributionFromDb(unittest.TestCase):
 
     def setUp(self):
         self.db = _make_db([
-            {"request_id": "r1", "attribution_source": "cali",
+            {"request_id": "r1", "attribution_source": "cli",
              "cache_read_tokens": 100, "timestamp": "2026-06-26T10:00:00"},
-            {"request_id": "r2", "attribution_source": "cali",
+            {"request_id": "r2", "attribution_source": "cli",
              "cache_read_tokens": 0, "timestamp": "2026-06-26T10:01:00"},
-            {"request_id": "r3", "attribution_source": "sue",
+            {"request_id": "r3", "attribution_source": "editor",
              "cache_read_tokens": 50, "timestamp": "2026-06-26T10:02:00"},
             {"request_id": "r4", "attribution_source": None,
              "cache_read_tokens": 0, "timestamp": "2026-06-26T10:03:00"},
@@ -289,15 +287,15 @@ class TestAttributionFromDb(unittest.TestCase):
         self.assertIsInstance(result, str)
         self.assertTrue(len(result) > 0)
 
-    def test_contains_cali_source(self):
+    def test_contains_cli_source(self):
         from tokenpak.telemetry.attribution import get_attribution_summary_from_db
         result = get_attribution_summary_from_db(self.db, days=30)
-        self.assertIn("cali", result)
+        self.assertIn("cli", result)
 
-    def test_contains_sue_source(self):
+    def test_contains_editor_source(self):
         from tokenpak.telemetry.attribution import get_attribution_summary_from_db
         result = get_attribution_summary_from_db(self.db, days=30)
-        self.assertIn("sue", result)
+        self.assertIn("editor", result)
 
     def test_does_not_return_no_attribution_data(self):
         """Must never return the old 'No attribution data found' when DB has rows."""

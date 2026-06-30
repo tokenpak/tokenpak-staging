@@ -231,11 +231,11 @@ class AttributionTracker:
             pass
 
 
-# Agent emoji map
+# Attribution source emoji map
 AGENT_EMOJI = {
-    "sue": "💻",
-    "trix": "🐰",
-    "cali": "✨",
+    "cli": "💻",
+    "editor": "✨",
+    "automation": "⚙️",
     "unknown": "??",
     "localhost": "🏠",
 }
