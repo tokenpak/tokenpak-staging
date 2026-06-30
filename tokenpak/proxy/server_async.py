@@ -218,6 +218,8 @@ def _build_forward_headers(request: Request, target_url: str) -> Dict[str, str]:
         "trailer",
         "upgrade",
         "accept-encoding",
+        "x-tokenpak-agent",
+        "x-tokenpak-cycle",
     }
     headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
     headers["host"] = parsed.netloc
@@ -429,6 +431,9 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                         cache_read_tokens,
                         cache_creation_tokens,
                         latency_ms,
+                        status_code=upstream.status_code,
+                        endpoint=target_url,
+                        headers=request.headers,
                     )
 
                 response = StreamingResponse(
@@ -480,6 +485,9 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                 cache_read_tokens,
                 cache_creation_tokens,
                 latency_ms,
+                status_code=resp.status_code,
+                endpoint=target_url,
+                headers=request.headers,
             )
 
             resp_headers = {
@@ -523,6 +531,9 @@ def _record_telemetry(
     cache_read_tokens: int,
     cache_creation_tokens: int,
     latency_ms: int,
+    status_code: int = 0,
+    endpoint: str = "",
+    headers: Optional[Any] = None,
 ) -> None:
     """Record telemetry for a completed request. Thread-safe."""
     if input_tokens == 0:
@@ -590,6 +601,50 @@ def _record_telemetry(
                 "cost_saved": round(cost_saved, 6),
                 "percent_saved": round(saved / input_tokens * 100, 1) if input_tokens else 0.0,
             }
+
+        monitor = getattr(ps, "monitor", None)
+        if monitor is not None:
+            try:
+                from tokenpak.proxy.request_pipeline import (
+                    _resolve_agent_id,
+                    _resolve_cycle_id,
+                    _resolve_session_id,
+                )
+
+                session_id = _resolve_session_id(headers, "") if headers is not None else ""
+                agent_id = _resolve_agent_id(headers) if headers is not None else ""
+                cycle_id = _resolve_cycle_id(headers) if headers is not None else ""
+                dispatch_job_id = ""
+                dispatch_station_id = ""
+                if headers is not None and hasattr(headers, "items"):
+                    for hk, hv in headers.items():
+                        hk_lower = str(hk).lower()
+                        if hk_lower == "x-tokenpak-dispatch-job-id":
+                            dispatch_job_id = str(hv).strip()
+                        elif hk_lower == "x-tokenpak-dispatch-station-id":
+                            dispatch_station_id = str(hv).strip()
+                monitor.log(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                    latency_ms=latency_ms,
+                    status_code=status_code,
+                    endpoint=endpoint,
+                    compilation_mode=getattr(ps, "compilation_mode", "") or "",
+                    protected_tokens=protected_tokens,
+                    compressed_tokens=max(0, input_tokens - sent_input_tokens),
+                    cache_read_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                    would_have_saved=int(saved),
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    cycle_id=cycle_id,
+                    dispatch_job_id=dispatch_job_id,
+                    dispatch_station_id=dispatch_station_id,
+                )
+            except Exception:
+                pass
     except Exception:
         pass  # telemetry must never break the proxy
 

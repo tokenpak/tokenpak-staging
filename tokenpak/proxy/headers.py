@@ -60,6 +60,8 @@ _HOP_BY_HOP_HEADERS: frozenset = frozenset((
     "content-length",
     "transfer-encoding",
     "accept-encoding",
+    "x-tokenpak-agent",
+    "x-tokenpak-cycle",
 ))
 
 # Broader blocklist for the ``sanitize`` strategy (non-Anthropic providers).
@@ -75,6 +77,8 @@ BLOCKED_FORWARD_HEADERS: frozenset = frozenset((
     "te",
     "trailers",
     "upgrade",
+    "x-tokenpak-agent",
+    "x-tokenpak-cycle",
 ))
 
 

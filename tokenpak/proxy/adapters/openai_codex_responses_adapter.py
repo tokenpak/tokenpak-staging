@@ -90,6 +90,66 @@ def codex_responses_payload_fixup(body: bytes) -> bytes:
         return body
 
 
+def _codex_response_completed_usage(sse_bytes: bytes) -> dict[str, int | str]:
+    """Extract monitor-safe usage from Codex ``response.completed`` SSE bytes.
+
+    The parser keeps only model and integer usage counters. It never persists
+    prompt or response content and returns zero counters on malformed input.
+    """
+    result: dict[str, int | str] = {
+        "model": "",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+    }
+    try:
+        lines = sse_bytes.decode("utf-8", errors="replace").split("\n")
+    except Exception:
+        return result
+
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            event = json.loads(payload)
+        except Exception:
+            continue
+        if not isinstance(event, dict):
+            continue
+
+        response = event.get("response")
+        response_obj = response if isinstance(response, dict) else {}
+        model = response_obj.get("model") or event.get("model")
+        if isinstance(model, str) and model:
+            result["model"] = model
+
+        usage = response_obj.get("usage")
+        if usage is None:
+            usage = event.get("usage")
+        if not isinstance(usage, dict):
+            continue
+
+        result["input_tokens"] = int(
+            usage.get("input_tokens")
+            or usage.get("prompt_tokens")
+            or 0
+        )
+        result["output_tokens"] = int(
+            usage.get("output_tokens")
+            or usage.get("completion_tokens")
+            or 0
+        )
+        details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
+        if isinstance(details, dict):
+            result["cache_read_tokens"] = int(details.get("cached_tokens") or 0)
+
+    return result
+
+
 class OpenAICodexResponsesAdapter(OpenAIResponsesAdapter):
     """Codex Responses adapter — same format, different upstream + detection.
 

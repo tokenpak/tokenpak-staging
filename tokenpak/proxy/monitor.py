@@ -76,7 +76,11 @@ def _db_writer_worker():
     while not _DB_BACKGROUND_STOP.is_set():
         try:
             # Block for up to 1 second waiting for items
-            work_item = _DB_WRITE_QUEUE.get(timeout=1.0)
+            queue = _DB_WRITE_QUEUE
+            if queue is None:
+                _DB_BACKGROUND_STOP.wait(timeout=0.1)
+                continue
+            work_item = queue.get(timeout=1.0)
             if work_item is None:  # Poison pill to stop
                 break
 
@@ -91,20 +95,20 @@ def _db_writer_worker():
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
                             would_have_saved,cache_origin,user_id,
                             cache_creation_ephemeral_1h_tokens,cache_creation_ephemeral_5m_tokens,ttl_attribution,
-                            session_id,agent_id,cycle_id,
+                            session_id,agent_id,cycle_id,attribution_source,
                             ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
                             ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
                             ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
                             ssrm_progress_signal,ssrm_signals_json,skip_reason,
                             dispatch_job_id,dispatch_station_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
             except Exception as e:
                 print(f"[TokenPak] DB write error: {e}", file=sys.stderr)
             finally:
-                _DB_WRITE_QUEUE.task_done()
+                queue.task_done()
         except Empty:
             continue
         except Exception as e:
@@ -171,6 +175,7 @@ class Monitor:
                     session_id TEXT DEFAULT '',
                     agent_id TEXT DEFAULT '',
                     cycle_id TEXT DEFAULT '',
+                    attribution_source TEXT DEFAULT 'unknown',
                     dispatch_job_id TEXT DEFAULT '',
                     dispatch_station_id TEXT DEFAULT ''
                 )
@@ -267,6 +272,7 @@ class Monitor:
             for _alter in (
                 "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
                 "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
+                "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT 'unknown'",
             ):
                 try:
                     conn.execute(_alter)
@@ -381,6 +387,7 @@ class Monitor:
         session_id="",
         agent_id="",
         cycle_id="",
+        attribution_source=None,
         ssrm_decision="",
         ssrm_effective_context_tokens=None,
         ssrm_effective_context_pct=None,
@@ -407,6 +414,11 @@ class Monitor:
         # SSRM Phase 1: 9 trailing ssrm_* params are advisory-only telemetry.
         # Populated only when ssrm.enabled=true; otherwise the column values
         # are empty/NULL and reading them is a no-op.
+        _attribution_source = (
+            attribution_source
+            if attribution_source is not None
+            else ("header" if (agent_id or cycle_id) else "unknown")
+        )
         insert_params = (
             datetime.now().isoformat(),
             model,
@@ -433,6 +445,7 @@ class Monitor:
             session_id or "",
             agent_id or "",
             cycle_id or "",
+            _attribution_source or "unknown",
             ssrm_decision or "",
             ssrm_effective_context_tokens,
             ssrm_effective_context_pct,
@@ -458,13 +471,13 @@ class Monitor:
                     "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
                     "would_have_saved, cache_origin, user_id, "
                     "cache_creation_ephemeral_1h_tokens, cache_creation_ephemeral_5m_tokens, ttl_attribution, "
-                    "session_id, agent_id, cycle_id, "
+                    "session_id, agent_id, cycle_id, attribution_source, "
                     "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
                     "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
                     "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
                     "ssrm_progress_signal, ssrm_signals_json, skip_reason, "
                     "dispatch_job_id, dispatch_station_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                     "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     insert_params,
                 )

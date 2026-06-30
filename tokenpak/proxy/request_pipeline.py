@@ -7,7 +7,10 @@ Extended in TPK-CONSOLIDATION-A2c with: _resolve_session_id,
 _apply_budget, _shadow_validate.
 """
 
+import hashlib
 import json
+import logging
+import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -23,6 +26,8 @@ from .config import (
 # ---------------------------------------------------------------------------
 _ROUTER_INSTANCE = None
 _ROUTER_LOCK = threading.Lock()
+_ATTRIBUTION_HEADER_RE = re.compile(r"^[a-z0-9-]+$")
+_ATTRIBUTION_LOG = logging.getLogger(__name__)
 
 
 def _get_router():
@@ -660,10 +665,24 @@ def _resolve_agent_id(headers: Any) -> str:
     Returns ``""`` (the empty-string sentinel, classified ``unknown``
     downstream) when no caller set the header. Never fabricated.
     """
+    return _resolve_attribution_header(headers, "x-tokenpak-agent", lower=True)
+
+
+def _resolve_attribution_header(headers: Any, header_name: str, *, lower: bool) -> str:
     try:
         for hk, hv in (headers.items() if hasattr(headers, "items") else []):
-            if str(hk).lower() == "x-tokenpak-agent":
-                return str(hv).strip().lower()
+            if str(hk).lower() == header_name:
+                value = str(hv).strip()
+                resolved = value.lower() if lower else value
+                if _ATTRIBUTION_HEADER_RE.fullmatch(resolved):
+                    return resolved
+                digest = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:16]
+                _ATTRIBUTION_LOG.warning(
+                    "invalid %s header ignored; sha256=%s",
+                    header_name,
+                    digest,
+                )
+                return ""
     except Exception:
         pass
     return ""
@@ -677,13 +696,7 @@ def _resolve_cycle_id(headers: Any) -> str:
     the ``""`` sentinel is written and classified ``unknown`` —
     never fabricated.
     """
-    try:
-        for hk, hv in (headers.items() if hasattr(headers, "items") else []):
-            if str(hk).lower() == "x-tokenpak-cycle":
-                return str(hv).strip()
-    except Exception:
-        pass
-    return ""
+    return _resolve_attribution_header(headers, "x-tokenpak-cycle", lower=False)
 
 
 # ---------------------------------------------------------------------------

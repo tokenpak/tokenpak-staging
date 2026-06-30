@@ -92,8 +92,7 @@ def test_resolve_agent_id_sentinel_when_absent():
 
 
 def test_resolve_cycle_id_captured_or_sentinel():
-    # captured verbatim (not lower-cased — cycle ids may be case-significant)
-    assert _resolve_cycle_id({"X-Tokenpak-Cycle": "C-9"}) == "C-9"
+    assert _resolve_cycle_id({"X-Tokenpak-Cycle": "cycle-9"}) == "cycle-9"
     # no caller sets it today -> sentinel, never fabricated
     assert _resolve_cycle_id({}) == ""
 
