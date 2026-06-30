@@ -29,8 +29,10 @@ def test_monitor_schema_uses_empty_attribution_sentinel() -> None:
 
     assert "agent_id TEXT DEFAULT ''" in monitor_source
     assert "cycle_id TEXT DEFAULT ''" in monitor_source
+    assert "attribution_source TEXT DEFAULT 'unknown'" in monitor_source
     assert "agent_id or \"\"" in monitor_source
     assert "cycle_id or \"\"" in monitor_source
+    assert 'attribution_source or "unknown"' in monitor_source
 
 
 def test_header_resolvers_use_empty_attribution_sentinel() -> None:
@@ -74,6 +76,7 @@ def test_proxy_completion_log_call_sites_thread_attribution_fields() -> None:
     assert "session_id=_cx_session_id" in codex_block
     assert "agent_id=_cx_agent_id" in codex_block
     assert "cycle_id=_cx_cycle_id" in codex_block
+    assert "attribution_source=_cx_attribution_source" in codex_block
 
     async_block = async_source[
         async_source.index("def _record_telemetry")

@@ -2470,10 +2470,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         _cx_session_id = _rsi_cx(self.headers, "")
                         _cx_agent_id = _rai_cx(self.headers)
                         _cx_cycle_id = _rci_cx(self.headers)
+                        _cx_attribution_source = (
+                            "header" if (_cx_agent_id or _cx_cycle_id) else "unknown"
+                        )
                     except Exception:
                         _cx_session_id = ""
                         _cx_agent_id = ""
                         _cx_cycle_id = ""
+                        _cx_attribution_source = "unknown"
                     # Dispatch correlation headers (P-TELEMETRY-01). '' when
                     # absent or when self.headers is None; never fabricated.
                     _cx_hdrs = self.headers
@@ -2497,6 +2501,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         session_id=_cx_session_id,
                         agent_id=_cx_agent_id,
                         cycle_id=_cx_cycle_id,
+                        attribution_source=_cx_attribution_source,
                         dispatch_job_id=_cx_dispatch_job_id,
                         dispatch_station_id=_cx_dispatch_station_id,
                     )
