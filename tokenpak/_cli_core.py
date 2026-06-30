@@ -8053,7 +8053,7 @@ def _build_demo_parser(sub):
 
 
 def _run_compression_demo():
-    """Show live compression on a realistic DevOps agent conversation fixture."""
+    """Show offline compression on a realistic DevOps agent conversation fixture."""
     from tokenpak.compression.pipeline import CompressionPipeline
 
     # Fixture: DevOps agent diagnosing a startup failure.
@@ -8181,15 +8181,17 @@ def _run_compression_demo():
 
     print()
     print("┌" + "─" * (W - 2) + "┐")
-    _row("TokenPak — Live Compression Demo", "")
+    _row("TokenPak — Offline Fixture Demo", "")
     print("├" + "─" * (W - 2) + "┤")
     _row("Scenario", "DevOps agent (config + logs)")
+    _row("Data source", "built-in sample fixture")
     _row("Savings drivers", "dedup + alias")
     print("├" + "─" * (W - 2) + "┤")
     _row("Original", f"{raw:,} tokens")
     _row("Compressed", f"{after:,} tokens")
-    _row("Saved", f"{saved:,} tokens  ({pct:.1f}%)")
-    _row("Cost saved (est.)", f"${cost_saved:.5f} per call")
+    _row("Fixture delta", f"{saved:,} tokens  ({pct:.1f}%)")
+    _row("Fixture cost delta", f"${cost_saved:.5f} per fixture")
+    _row("Receipt status", "not a savings receipt")
     print("├" + "─" * (W - 2) + "┤")
     stages_str = ", ".join(result.stages_run)
     print("│  Stages: " + stages_str + " " * (W - 12 - len(stages_str)) + "│")
@@ -8197,7 +8199,7 @@ def _run_compression_demo():
     print()
     print("  Try it with your own traffic:")
     print("    tokenpak serve        → start the proxy (zero-config)")
-    print("    tokenpak cost         → track your real savings")
+    print("    tokenpak cost         → track receipt-backed savings")
     print("    tokenpak demo --list  → browse 50 built-in compression recipes")
     print()
 
@@ -8259,7 +8261,7 @@ def cmd_demo(args):
             print("   Dashboard is now empty (ready for real traffic)")
         return
 
-    # ── Default: live compression demo on sample prompt
+    # ── Default: offline compression demo on sample prompt
     if (
         not getattr(args, "list", False)
         and not getattr(args, "category", None)

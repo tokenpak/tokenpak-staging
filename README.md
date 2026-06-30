@@ -78,7 +78,7 @@ tokenpak update
 
 ### Optional features (extras)
 
-The slim install keeps core functionality under 200 MB. Heavy optional features are opt-in:
+The slim install keeps heavy optional features out of core. Feature bundles are opt-in:
 
 | Extra | What it adds | Install |
 |---|---|---|
