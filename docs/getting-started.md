@@ -150,7 +150,7 @@ tokenpak cost
 If you work with a large codebase or notes vault, index it for instant semantic search:
 
 ```bash
-tokenpak index ~/vault
+tokenpak index ~/notes
 tokenpak vault repair # Check index health and rebuild stale entries
 ```
 
