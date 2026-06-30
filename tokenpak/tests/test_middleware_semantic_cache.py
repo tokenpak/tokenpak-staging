@@ -157,6 +157,18 @@ class TestGetOrCreateCache(unittest.TestCase):
         c2 = mw._get_or_create_cache("sess-B")
         self.assertIs(c1, c2)
 
+    def test_scope_cache_count_is_bounded_lru(self):
+        mw = SemanticCacheMiddleware(
+            SemanticCacheConfig(scope="session"),
+            max_scope_caches=2,
+        )
+        mw._get_or_create_cache("sess-A")
+        mw._get_or_create_cache("sess-B")
+        mw._get_or_create_cache("sess-A")
+        mw._get_or_create_cache("sess-C")
+
+        self.assertEqual(list(mw._caches.keys()), ["sess-A", "sess-C"])
+
 
 # ---------------------------------------------------------------------------
 # check / record

@@ -20,7 +20,7 @@ Design goals:
 from __future__ import annotations
 
 import argparse
-import importlib
+import importlib.util
 import os
 import shutil
 import sys
@@ -45,10 +45,7 @@ def _detect_binary(name: str) -> Optional[str]:
 
 def _detect_module(name: str) -> Optional[str]:
     try:
-        m = importlib.import_module(name)
-        ver = getattr(m, "__version__", "")
-        loc = getattr(m, "__file__", None) or "<installed>"
-        return f"{loc} (v{ver})" if ver else loc
+        return "Python module installed" if importlib.util.find_spec(name) else None
     except Exception:
         return None
 
@@ -89,9 +86,9 @@ def _detect_claude_cli() -> Optional[str]:
 def _detect_codex_cli() -> Optional[str]:
     loc = _detect_binary("codex")
     if loc:
-        return loc
+        return "codex CLI on PATH"
     if (Path.home() / ".codex").exists():
-        return str(Path.home() / ".codex")
+        return "Codex config directory present"
     return None
 
 
@@ -115,6 +112,8 @@ class Integration:
     backup_locator: Optional[Callable[[], Optional[Path]]] = None  # for --revert
     preview_fn: Optional[Callable[[str], str]] = None  # human diff preview
     verify_fn: Optional[Callable[[str], "tuple[bool, str]"]] = None  # post-apply check
+    maturity: str = "experimental"  # supported | experimental
+    proof_label: str = "untested"  # tested | untested
     notes: list[str] = field(default_factory=list)
 
 
@@ -228,12 +227,11 @@ def _instr_litellm(proxy_url: str) -> str:
 
 def _instr_codex(proxy_url: str) -> str:
     return (
-        f"Codex CLI reads OpenAI creds from ~/.codex/auth.json.\n"
-        f"Point it at tokenpak with:\n\n"
+        f"Codex CLI can use its existing OpenAI authentication.\n"
+        f"Route Codex requests through TokenPak for this shell with:\n\n"
         f"    {_env('OPENAI_BASE_URL', proxy_url + '/v1')}\n"
         f"    codex exec \"your prompt\"\n\n"
-        f"tokenpak's Codex adapter handles the OAuth credential injection;\n"
-        f"see project_tokenpak_codex_three_paths memory for path choice."
+        f"TokenPak does not edit your Codex config or print credentials."
     )
 
 
@@ -875,6 +873,18 @@ _PRINT_ONLY_KEYS: frozenset[str] = frozenset(
 )
 
 
+def _setup_mode(integration: Integration) -> str:
+    """Return the user-facing setup mode for an integration target."""
+    if integration.key in _PRINT_ONLY_KEYS or integration.applier is None:
+        return "print-only"
+    return "apply"
+
+
+def _status_label(integration: Integration) -> str:
+    """Compact compatibility label shown by runtime setup surfaces."""
+    return f"{integration.maturity}; {integration.proof_label}; {_setup_mode(integration)}"
+
+
 def _tty_confirm(prompt: str, default: bool = True) -> bool:
     """Readline-style [Y/n] prompt. Returns default on empty input."""
     hint = "[Y/n]" if default else "[y/N]"
@@ -903,8 +913,9 @@ def _run_guided_form(integration: Integration, proxy_url: str) -> int:
         print(f"  Detected   {loc}")
     else:
         print("  Detected   (not installed on this host — instructions still apply)")
+    print(f"  Status     {_status_label(integration)}")
 
-    is_print_only = integration.key in _PRINT_ONLY_KEYS or integration.applier is None
+    is_print_only = _setup_mode(integration) == "print-only"
 
     if is_print_only:
         print()
@@ -1094,6 +1105,8 @@ INTEGRATIONS: list[Integration] = [
         backup_locator=_bak_claude_code,
         preview_fn=_preview_claude_code,
         verify_fn=_verify_claude_code,
+        maturity="supported",
+        proof_label="tested",
     ),
     Integration(
         key="cursor",
@@ -1105,6 +1118,8 @@ INTEGRATIONS: list[Integration] = [
         backup_locator=_bak_cursor,
         preview_fn=_preview_cursor,
         verify_fn=_verify_cursor,
+        maturity="experimental",
+        proof_label="untested",
     ),
     Integration(
         key="cline",
@@ -1113,6 +1128,8 @@ INTEGRATIONS: list[Integration] = [
         detector=lambda: _detect_vscode_extension("saoudrizwan.claude-dev"),
         instructions=_instr_cline,
         applier=_apply_cline,
+        maturity="experimental",
+        proof_label="untested",
     ),
     Integration(
         key="continue",
@@ -1124,6 +1141,8 @@ INTEGRATIONS: list[Integration] = [
         backup_locator=_bak_continue,
         preview_fn=_preview_continue,
         verify_fn=_verify_continue,
+        maturity="experimental",
+        proof_label="untested",
     ),
     Integration(
         key="aider",
@@ -1135,6 +1154,8 @@ INTEGRATIONS: list[Integration] = [
         backup_locator=_bak_aider,
         preview_fn=_preview_aider,
         verify_fn=_verify_aider,
+        maturity="experimental",
+        proof_label="untested",
     ),
     Integration(
         key="codex",
@@ -1142,6 +1163,8 @@ INTEGRATIONS: list[Integration] = [
         kind="client",
         detector=_detect_codex_cli,
         instructions=_instr_codex,
+        maturity="experimental",
+        proof_label="untested",
     ),
     Integration(
         key="openai-sdk",
@@ -1149,6 +1172,8 @@ INTEGRATIONS: list[Integration] = [
         kind="sdk",
         detector=lambda: _detect_module("openai"),
         instructions=_instr_openai_sdk,
+        maturity="supported",
+        proof_label="tested",
     ),
     Integration(
         key="anthropic-sdk",
@@ -1156,6 +1181,8 @@ INTEGRATIONS: list[Integration] = [
         kind="sdk",
         detector=lambda: _detect_module("anthropic"),
         instructions=_instr_anthropic_sdk,
+        maturity="supported",
+        proof_label="tested",
     ),
     Integration(
         key="litellm",
@@ -1163,6 +1190,8 @@ INTEGRATIONS: list[Integration] = [
         kind="sdk",
         detector=lambda: _detect_module("litellm"),
         instructions=_instr_litellm,
+        maturity="supported",
+        proof_label="tested",
     ),
 ]
 
@@ -1192,7 +1221,8 @@ def _render_listing(proxy_url: str) -> str:
             loc = None
         badge = "✓" if loc else "✗"
         suffix = f"  ({loc})" if loc else "  (not detected)"
-        return f"    {badge} {integration.key:14s} {integration.label}{suffix}"
+        status = _status_label(integration)
+        return f"    {badge} {integration.key:14s} {integration.label} [{status}]{suffix}"
 
     lines.append("  Clients:")
     for i in clients:
@@ -1221,6 +1251,7 @@ def _render_one(integration: Integration, proxy_url: str) -> str:
         lines.append(f"  Detected   {loc}")
     else:
         lines.append("  Detected   (not installed on this host — instructions below still apply)")
+    lines.append(f"  Status     {_status_label(integration)}")
     lines.append("")
     for ln in integration.instructions(proxy_url).splitlines():
         lines.append("  " + ln)

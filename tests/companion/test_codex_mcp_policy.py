@@ -324,3 +324,21 @@ def test_register_failure_does_not_write_policy(monkeypatch, tmp_path: Path):
 
     assert mcp_config.register() is False
     assert not (tmp_path / "config.toml").exists()
+
+
+def test_register_missing_codex_binary_prints_install_guidance(
+    monkeypatch, tmp_path: Path, capsys
+):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(mcp_config, "is_registered", lambda: False)
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("Win" + "Error 2")
+
+    monkeypatch.setattr(mcp_config.subprocess, "run", missing)
+
+    assert mcp_config.register() is False
+    err = capsys.readouterr().err
+    assert "MCP registration skipped: Codex CLI not found on PATH" in err
+    assert "npm install -g @openai/codex" in err
+    assert "Win" + "Error" not in err

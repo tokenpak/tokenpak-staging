@@ -17,14 +17,12 @@ Setup: pip install tokenpak
 
 import sys
 import os
-import io
-import time
-from typing import Iterator, Optional
+from typing import Iterator
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------

@@ -35,13 +35,13 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
 import httpx
 
 from tokenpak import __version__ as _tokenpak_version
+from tokenpak import _paths
 from tokenpak.cache.telemetry import CacheMetrics
 from tokenpak.cache.telemetry import get_collector as _get_cache_collector
 from tokenpak.core.config import get_stats_footer_enabled
@@ -2102,16 +2102,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
 
+            if should_log and is_messages and _resp_status == 429 and _cb_provider:
+                get_rate_limit_registry().record_429(_cb_provider)
+
             if should_log and is_messages and input_tokens > 0:
                 if _resp_status != 200:
                     # Non-200 responses generate no tokens; log cost=0 to avoid
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
                     cost = 0.0
                     cost_without = 0.0
-                    # Record 429 in the rate-limit circuit breaker so repeated
-                    # rate-limit bursts trip the circuit and stop upstream hammering.
-                    if _resp_status == 429 and _cb_provider:
-                        get_rate_limit_registry().record_429(_cb_provider)
                 else:
                     cost = estimate_cost(model, sent_input_tokens, output_tokens,
                                          cache_read_tokens, cache_creation_tokens)
@@ -3524,18 +3523,24 @@ class ProxyServer:
         if deep:
             import shutil
 
-            import psutil  # optional; fall back gracefully
+            try:
+                import psutil  # type: ignore[import-not-found]
+            except ImportError:
+                psutil = None
             # providers: list active providers with their circuit-breaker status
             providers = [
                 {"name": name, "status": info.get("state", "unknown")}
                 for name, info in cb_statuses.items()
             ]
             # memory usage in MB
-            try:
-                proc = psutil.Process()
-                mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
-            except Exception:
+            if psutil is None:
                 mem_mb = None
+            else:
+                try:
+                    proc = psutil.Process()
+                    mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+                except Exception:
+                    mem_mb = None
             # disk available in GB
             try:
                 disk = shutil.disk_usage("/")
@@ -3731,7 +3736,7 @@ def main() -> None:
     }
 
     # Write PID file on startup; remove on clean shutdown.
-    _pid_path = Path.home() / ".tokenpak" / "proxy.pid"
+    _pid_path = _paths.under("proxy.pid")
     _pid_path.parent.mkdir(parents=True, exist_ok=True)
     _pid_path.write_text(str(os.getpid()))
 
