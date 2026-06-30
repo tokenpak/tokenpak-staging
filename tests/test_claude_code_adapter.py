@@ -1,13 +1,12 @@
 """Unit tests for the Claude Code registry adapter (CCA-01)."""
 
-import pytest
-
-pytest.importorskip("tokenpak.registry.claude_code.launcher", reason="module not available in current build")
 import os
 import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytest.importorskip("tokenpak.registry.claude_code.launcher", reason="module not available in current build")
 from tokenpak.registry.claude_code.adapter import ClaudeCodeAdapter
 from tokenpak.registry.claude_code.config import ClaudeCodeConfig
 from tokenpak.registry.claude_code.health import check_proxy_health

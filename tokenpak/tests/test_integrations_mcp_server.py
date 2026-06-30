@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 from unittest.mock import MagicMock, patch
 
@@ -126,6 +127,19 @@ class TestSharedIndexLock:
         """Should not raise even if dir doesn't exist."""
         with _shared_index_lock("/nonexistent/path/abc"):
             pass  # must not raise
+
+    def test_yields_when_fcntl_import_unavailable(self, tmp_path):
+        """Windows-like environments without fcntl should fall back cleanly."""
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "fcntl":
+                raise ImportError("no fcntl")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with _shared_index_lock(str(tmp_path)):
+                pass
 
 
 # ---------------------------------------------------------------------------

@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import os
 import random
+import subprocess
 import sys
-from typing import TextIO
+from typing import Callable, TextIO
 
 from ..config import CompanionConfig
 
@@ -27,6 +28,25 @@ _TOKENPAK_CHATGPT_BASE_URL = "http://127.0.0.1:8766/v1"
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
 _TRUTHY = {"1", "true", "yes"}
+
+
+def _exec_or_run(
+    program: str,
+    argv: list[str],
+    env: dict[str, str],
+    *,
+    record_child_pid: Callable[[int], None] | None = None,
+) -> int:
+    """Replace this process on POSIX; run as a subprocess where execvpe is absent."""
+    if os.name == "nt" or not hasattr(os, "execvpe"):
+        proc = subprocess.Popen(argv, env=env)
+        if record_child_pid is not None:
+            record_child_pid(proc.pid)
+        return proc.wait()
+    if record_child_pid is not None:
+        record_child_pid(os.getpid())
+    os.execvpe(program, argv, env)
+    return 1
 
 
 def _bypass_env_enabled(env: dict[str, str] | None = None) -> bool:
@@ -226,9 +246,12 @@ def main(args: list[str] | None = None) -> int:
     # Point the child Codex process at the provisioned home and record the
     # PID sentinel (same PID survives execvpe, so it stays accurate). Do this
     # before the bypass-flag injection so the bypass logic sees the final env.
+    record_child_pid = None
     if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
         env = session_home.apply_to_env(provisioned.home, env)
-        session_home.record_pid(provisioned.home)
+
+        def record_child_pid(pid: int) -> None:
+            session_home.record_pid(provisioned.home, pid)
 
     fleet = _fleet_state_enabled()
     forwarded = _maybe_inject_bypass_flag(args, env, fleet=fleet)
@@ -238,7 +261,12 @@ def main(args: list[str] | None = None) -> int:
     codex_args = ["codex", *forwarded]
     if proxy_url:
         codex_args = ["codex", "-p", "tokenpak-chatgpt", *forwarded]
-    os.execvpe("codex", codex_args, env)
+    return _exec_or_run(
+        "codex",
+        codex_args,
+        env,
+        record_child_pid=record_child_pid,
+    )
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
     return 1

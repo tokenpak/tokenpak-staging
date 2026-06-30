@@ -1,10 +1,22 @@
 """CLI launcher logic for the Claude Code adapter."""
 import os
+import subprocess
 import sys
 from typing import List, Optional
 
 from tokenpak.core.registry.claude_code.config import ClaudeCodeConfig
 from tokenpak.core.registry.claude_code.health import check_proxy_health
+
+
+def _exec_or_run(program: str, argv: List[str], env: dict) -> int:
+    """Replace this process on POSIX; run as a subprocess where execvpe is absent."""
+    if os.name == "nt" or not hasattr(os, "execvpe"):
+        return subprocess.run(argv, env=env, check=False).returncode
+    try:
+        os.execvpe(program, argv, env)
+    except OSError:
+        return subprocess.run(argv, env=env, check=False).returncode
+    return 1
 
 
 def build_launch_env(config: ClaudeCodeConfig) -> dict:
@@ -56,9 +68,4 @@ def launch(
     env = build_launch_env(config)
     cmd_args = ["claude"] + (args or [])
 
-    try:
-        os.execvpe("claude", cmd_args, env)
-    except OSError:
-        import subprocess  # noqa: PLC0415
-
-        subprocess.run(cmd_args, env=env, check=False)
+    raise SystemExit(_exec_or_run("claude", cmd_args, env))

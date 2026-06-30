@@ -191,6 +191,17 @@ def test_cmd_stop_invalid_pid_returns_1(home):
     assert cli_core.cmd_stop(types.SimpleNamespace()) == 1
 
 
+def test_cmd_logs_reads_tempdir_proxy_log(home, monkeypatch, tmp_path, capsys):
+    """The legacy fallback log path follows the platform temp directory."""
+    monkeypatch.setattr(cli_core.tempfile, "gettempdir", lambda: str(tmp_path))
+    log_path = tmp_path / "tokenpak-proxy.log"
+    log_path.write_text("first\nsecond\n", encoding="utf-8")
+
+    cli_core.cmd_logs(types.SimpleNamespace(lines=1))
+
+    assert capsys.readouterr().out.strip() == "second"
+
+
 # --------------------------------------------------------------------------- #
 # cmd_start — alive PID short-circuits before launching
 # --------------------------------------------------------------------------- #
