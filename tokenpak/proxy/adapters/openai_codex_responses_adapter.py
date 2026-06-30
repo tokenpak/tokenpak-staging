@@ -48,6 +48,86 @@ def _is_chatgpt_oauth_token(auth_header: str) -> bool:
     return token.startswith("eyJ") and "." in token
 
 
+def codex_responses_payload_fixup(body: bytes) -> bytes:
+    """Apply the ChatGPT Codex Responses constraints to a request body.
+
+    This mirrors :meth:`OpenAICodexResponsesAdapter.denormalize` but operates
+    directly on raw request bytes so the proxy can apply it on the additive
+    ``/v1/responses`` → ChatGPT-backend route WITHOUT running the full adapter
+    normalize/denormalize round-trip.
+
+    EXACT transformations applied (and nothing else):
+      1. ``stream``            → set to ``True``  (ChatGPT backend requires SSE)
+      2. ``store``             → set to ``False`` (ChatGPT backend rejects store)
+      3. ``max_output_tokens`` → removed (unsupported by the ChatGPT backend)
+      4. ``input`` (if a non-empty ``str``) → converted to the Responses list
+         form ``[{"role":"user","content":[{"type":"input_text","text":<text>}]}]``
+
+    No other field is read, added, or modified. No prompt/response content is
+    persisted. Returns the ORIGINAL bytes unchanged on any exception or when the
+    decoded body is not a JSON object (fail-open: never break a request).
+    """
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return body
+    if not isinstance(payload, dict):
+        return body
+    try:
+        payload["stream"] = True
+        payload["store"] = False
+        payload.pop("max_output_tokens", None)
+        if isinstance(payload.get("input"), str):
+            text = payload["input"]
+            if text:
+                payload["input"] = [
+                    {"role": "user", "content": [{"type": "input_text", "text": text}]}
+                ]
+            else:
+                payload["input"] = []
+        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        return body
+
+
+def extract_codex_responses_usage_from_sse_tail(sse_tail: bytes) -> dict[str, int]:
+    """Extract final Responses usage counters from a bounded SSE tail.
+
+    Returns zeroes on malformed input. Only aggregate token counters are
+    returned; event content and response text are ignored.
+    """
+    result = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+    try:
+        for raw_line in sse_tail.splitlines():
+            line = raw_line.strip()
+            if not line.startswith(b"data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == b"[DONE]":
+                continue
+            try:
+                event = json.loads(payload)
+            except Exception:
+                continue
+            usage = None
+            if isinstance(event, dict):
+                response = event.get("response")
+                if isinstance(response, dict):
+                    usage = response.get("usage")
+                if usage is None:
+                    usage = event.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            result["input_tokens"] = int(usage.get("input_tokens") or 0)
+            result["output_tokens"] = int(usage.get("output_tokens") or 0)
+            details = usage.get("input_tokens_details")
+            if isinstance(details, dict):
+                result["cache_read_tokens"] = int(details.get("cached_tokens") or 0)
+    except Exception:
+        return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+    return result
+
+
 class OpenAICodexResponsesAdapter(OpenAIResponsesAdapter):
     """Codex Responses adapter — same format, different upstream + detection.
 
