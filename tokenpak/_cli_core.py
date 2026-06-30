@@ -4743,7 +4743,18 @@ def _build_user_template_parser(sub):
 
 # ── Version Control Commands ──────────────────────────────────────────────────
 
-PROXY_VERSION = "1.1.0"
+# The proxy ships from the same wheel as the CLI, so the "expected" proxy
+# version always equals the installed package version. Deriving it from
+# ``tokenpak.__version__`` (instead of a separate hardcoded literal) keeps
+# ``tokenpak version`` honest across releases. A stale ``"1.1.0"`` constant
+# here advertised a version the package never shipped.
+# The CLI docs generator installs a lightweight mocked top-level ``tokenpak``
+# module before importing this file, so keep import-time docs generation alive.
+try:
+    from tokenpak import __version__ as PROXY_VERSION
+except Exception:  # pragma: no cover - exercised by generated-docs mock import
+    PROXY_VERSION = "unknown"
+
 _LOCK_FILE = _paths.under("tokenpak.lock.json")
 _TOKENPAK_CFG = _paths.under("config.json")
 _PROXY_URL = "http://localhost:8766"
