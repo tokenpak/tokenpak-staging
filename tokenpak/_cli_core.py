@@ -195,8 +195,23 @@ def _proxy_get(path: str, port: Optional[int] = None) -> "dict | None":
 
 _FIRST_RUN_FLAG = Path.home() / ".tokenpak" / ".seen_intro"
 
-# Commands shown in quick --help (beginner view)
-_QUICK_COMMANDS = ["setup", "start", "status", "doctor", "demo", "cost", "savings"]
+# Commands shown in quick --help (beginner view). Std03 requires all canonical
+# verbs to remain present in this tier.
+_QUICK_COMMANDS = [
+    "setup",
+    "start",
+    "serve",
+    "status",
+    "doctor",
+    "demo",
+    "cost",
+    "savings",
+    "integrate",
+    "creds",
+    "cache",
+    "index",
+    "replay",
+]
 
 # All commands grouped for `tokenpak help`
 _COMMAND_GROUPS = {
@@ -689,7 +704,15 @@ def _print_quick_help():
         "  cost         View your API spend\n"
         "  savings      View Savings Ledger\n"
         "\n"
-        "Run `tokenpak help` for common commands including integrate, creds, cache, index, and replay.\n"
+        "Core Commands:\n"
+        "  serve        Run the proxy in the foreground\n"
+        "  integrate    Set up TokenPak for LLM clients\n"
+        "  creds        Discover credentials and run diagnostics\n"
+        "  cache        Show or clear local cache status\n"
+        "  index        Index files for context retrieval\n"
+        "  replay       Inspect and re-run captured sessions\n"
+        "\n"
+        "Run `tokenpak help` for common commands.\n"
         "Run `tokenpak help --all` for the complete command reference.\n"
         "Run `tokenpak <command> --help` for command details."
     )

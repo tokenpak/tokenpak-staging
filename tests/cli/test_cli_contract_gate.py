@@ -157,11 +157,23 @@ def test_low_confidence_unknown_command_suppresses_suggestion(monkeypatch, capsy
 def test_tier1_cli_contract_commands_are_exposed(capsys):
     parser = _cli_core.build_parser()
     invokable = _cli_core.registered_command_names(parser)
+    canonical = {
+        "serve",
+        "integrate",
+        "cost",
+        "savings",
+        "demo",
+        "doctor",
+        "status",
+        "creds",
+        "cache",
+        "index",
+        "replay",
+    }
 
-    for command in ("integrate", "creds", "replay", "cache"):
-        assert command in invokable
+    assert canonical <= invokable
 
     _cli_core._print_quick_help()
     out = capsys.readouterr().out
-    for command in ("integrate", "creds", "replay", "cache"):
+    for command in canonical:
         assert f"  {command:<12}" in out
