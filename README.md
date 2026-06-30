@@ -76,6 +76,23 @@ pip install -U tokenpak
 tokenpak update
 ```
 
+### Optional features (extras)
+
+The slim install keeps core functionality under 200 MB. Heavy optional features are opt-in:
+
+| Extra | What it adds | Install |
+|---|---|---|
+| `retrieval` | Semantic/vector search (sentence-transformers, ~5 GB with torch) | `pip install tokenpak[retrieval]` |
+| `code-compression` | AST-based code compression (tree-sitter-languages) | `pip install tokenpak[code-compression]` |
+| `intelligence` | A/B optimizer analytics (scipy) | `pip install tokenpak[intelligence]` |
+| `data` | Data analysis features (pandas) | `pip install tokenpak[data]` |
+| `compression` | LLM-based compression engine (llmlingua) | `pip install tokenpak[compression]` |
+| `integrations-litellm` | LiteLLM router middleware (litellm) | `pip install tokenpak[integrations-litellm]` |
+| `dispatch` | Dispatch orchestration subsystem (pydantic, jsonschema) | `pip install tokenpak[dispatch]` |
+| `full` | All of the above — restores legacy bundled behavior | `pip install tokenpak[full]` |
+
+**Upgrading from v1.8.x or earlier?** Six heavy packages (`sentence-transformers`, `tree-sitter-languages`, `scipy`, `pandas`, `llmlingua`, `litellm`) moved from core to optional extras in v1.9.0. Install the extras you need above, or use `pip install tokenpak[full]` to restore the previous bundled behavior.
+
 See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
 
 Requirements: Python 3.10+. No external dependencies for core functionality.
