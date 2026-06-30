@@ -16,6 +16,18 @@ Your goal today: install TokenPak, start the proxy, send one request, and confir
 pip install tokenpak
 ```
 
+For local installs, activate a virtual environment first:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install tokenpak
+```
+
+If `pip` reports an externally managed Python environment (PEP 668), use a
+virtual environment or `pipx install tokenpak` instead of forcing writes into
+the system Python.
+
 Plain `pip install tokenpak` includes the local HTTP proxy used by `tokenpak serve`. Install `tokenpak[serve]` only when you also need the FastAPI dashboard, telemetry, or ingest ASGI surfaces.
 
 Confirm it installed:
@@ -39,6 +51,16 @@ What it does per client:
 - **Google AI SDK** — prints the one-line export command
 
 The wizard never reads or writes API keys — only proxy URLs.
+
+Credential modes:
+
+- **Claude Code OAuth passthrough:** no provider API key is required; Claude
+  Code's OAuth bearer token is forwarded unchanged.
+- **Direct provider key:** OpenAI, Anthropic, Gemini, LiteLLM, and raw HTTP
+  clients still need the provider key in the client config, environment, or
+  request header.
+- **Manual/env mode:** scripts and CI can export provider keys themselves;
+  TokenPak reads them for routing and never writes them for this mode.
 
 > **Non-interactive / CI:** Run `tokenpak setup` and answer the prompts, or configure the proxy URL manually by editing your LLM client config directly.
 
@@ -114,7 +136,7 @@ This shows your cumulative savings since install: total tokens saved, estimated 
 
 A healthy setup measurably reduces tokens on typical mixed workloads — check your own with `tokenpak savings`. If you're seeing little or no reduction, check these:
 
-- Is compression set to `balanced` or `aggressive` mode? (Check `~/.tokenpak/config.json`, key `compression.level`)
+- Is compression set to `balanced` or `aggressive` mode? (Check `~/.tpk/config.json`, key `compression.level`)
 - Are your requests using long system prompts or repetitive context? Those compress best.
 - Run `tokenpak demo --verbose` to see the pipeline applied to a sample payload.
 
@@ -199,7 +221,7 @@ The `--verbose` flag shows which directives fired and how many tokens each remov
 
 ### Create a Custom Recipe
 
-You can create new recipes in `tokenpak/recipes_oss/` or in `~/.tokenpak/recipes/` (user-local, not overwritten on upgrade).
+You can create new recipes in `tokenpak/recipes_oss/` or in `~/.tpk/recipes/` (user-local, not overwritten on upgrade).
 
 See [Recipe Development](guides/recipes.md) for the full YAML reference and [Recipe SDK](recipe-sdk.md) for building recipes programmatically.
 
@@ -229,11 +251,11 @@ This sets a $50/month hard limit. Requests that would exceed the budget are bloc
 tokenpak budget alert --at 80%
 ```
 
-This triggers a warning at 80% of your monthly budget ($40 in this example). By default the alert logs to `~/.tokenpak/logs/budget.log`.
+This triggers a warning at 80% of your monthly budget ($40 in this example). By default the alert logs to `~/.tpk/logs/budget.log`.
 
 ### Configure a Slack Alert
 
-To send alerts to Slack, add your webhook URL to `~/.tokenpak/config.json`:
+To send alerts to Slack, add your webhook URL to `~/.tpk/config.json`:
 
 ```json
 {
@@ -272,7 +294,7 @@ tokenpak budget set --monthly 50
 
 - [ ] `tokenpak budget set --monthly 50` ran without error
 - [ ] `tokenpak budget alert --at 80%` is configured
-- [ ] `~/.tokenpak/config.json` shows the correct `monthly_usd` value
+- [ ] `~/.tpk/config.json` shows the correct `monthly_usd` value
 - [ ] Alert triggered successfully with the low test budget
 - [ ] Budget restored to working value
 
@@ -320,7 +342,7 @@ docker run -d \
  --name tokenpak \
  --restart unless-stopped \
  -p 8766:8766 \
- -v ~/.tokenpak:/root/.tokenpak \
+ -v ~/.tpk:/root/.tpk \
  tokenpak/tokenpak:latest
 ```
 

@@ -10,11 +10,27 @@ Get TokenPak running in under 5 minutes.
 
 - Python 3.10+
 - An existing LLM client (Claude Code, OpenAI client, etc.)
-- Your provider API key (Anthropic, OpenAI, etc.)
+- For direct provider-key clients: your provider API key (Anthropic, OpenAI,
+  Gemini, etc.)
+- For Claude Code OAuth/subscription sessions: no provider API key is required;
+  TokenPak forwards the client's OAuth bearer token unchanged.
 
 ---
 
 ## Install
+
+For local installs, use a virtual environment before running the canonical
+install command:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install tokenpak
+```
+
+If `pip` reports an externally managed Python environment (PEP 668), use a
+virtual environment or `pipx install tokenpak` instead of forcing writes into
+the system Python.
 
 === "pip"
  ```bash
@@ -31,10 +47,10 @@ Get TokenPak running in under 5 minutes.
 === "With optional extras"
  ```bash
  # Accurate token counting (recommended)
- pip install tokenpak[tiktoken]
+ pip install tokenpak[tokens]
 
- # ML-powered compression (advanced)
- pip install tokenpak[ml]
+ # LLM-based compression engine (advanced)
+ pip install tokenpak[compression]
  ```
 
 ---
@@ -58,6 +74,16 @@ config file automatically — no manual editing required.
  Run `tokenpak setup` and answer the prompts, or set the proxy URL manually using the instructions in the [manual alternative](#connect-your-llm-client-manual-alternative) section below.
 
 The wizard never reads or writes API keys — only proxy URLs.
+
+Credential modes:
+
+- **Claude Code OAuth passthrough:** no provider API key is required; Claude
+  Code's OAuth bearer token is forwarded unchanged.
+- **Direct provider key:** OpenAI, Anthropic, Gemini, LiteLLM, and raw HTTP
+  clients still need their provider key in the client, environment, or request
+  header.
+- **Manual/env mode:** scripts and CI can export provider keys themselves;
+  TokenPak reads them for routing and never writes them for this mode.
 
 ---
 
@@ -163,7 +189,7 @@ Let TokenPak calibrate optimal parallelism for your hardware:
 tokenpak calibrate ~/vault --max-workers 8 --rounds 2
 ```
 
-This runs once and saves a profile to `~/.tokenpak/calibration.json`. Future indexing runs use it automatically.
+This runs once and saves a profile to `~/.tpk/calibration.json`. Future indexing runs use it automatically.
 
 ---
 

@@ -19,10 +19,22 @@ Get from install to a local TokenPak receipt in 5 minutes. Pick your path:
 pip install tokenpak
 ```
 
+For local installs, activate a virtual environment first:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install tokenpak
+```
+
+If `pip` reports an externally managed Python environment (PEP 668), use a
+virtual environment or `pipx install tokenpak` instead of forcing writes into
+the system Python.
+
 Already installed? Upgrade with `pip install -U tokenpak` or `tokenpak update`
 (a plain `pip install tokenpak` will not upgrade an existing version).
 
-The slim install covers all core functionality. Optional heavy features are available as extras — see [Optional features (extras)](../README.md#optional-features-extras) in the README for the full list (`retrieval`, `code-compression`, `intelligence`, `data`, `compression`, `integrations-litellm`, `dispatch`, `full`).
+The slim install covers all core functionality. Optional heavy features are available as extras — see [Optional dependencies](install-guide.md#optional-dependencies) for the common choices (`tokens`, `compression`, `retrieval`, `full`) and the README for the full list.
 
 **Upgrading from v1.8.x or earlier?** Six heavy packages moved from core to optional extras in v1.9.0 (`sentence-transformers`, `tree-sitter-languages`, `scipy`, `pandas`, `llmlingua`, `litellm`). Use `pip install tokenpak[full]` to restore the previous bundled behavior, or install only the extras you need.
 
@@ -58,6 +70,16 @@ tokenpak integrate codex # print-only base setup
 Every `--apply` backs up the existing config and prints a rollback command.
 For print-only targets, `tokenpak integrate <client>` prints the exact snippet
 or manual steps to paste.
+
+Credential modes:
+
+- **Claude Code OAuth passthrough:** no provider API key is required; the
+  client's OAuth bearer token is forwarded unchanged.
+- **Direct provider key:** OpenAI, Anthropic, Gemini, LiteLLM, and raw HTTP
+  clients still need the provider key in the client config, environment, or
+  request header.
+- **Manual/env mode:** scripts and CI can export `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, or the provider-specific key themselves.
 
 ### Minute 4: Create your first measured receipt
 
@@ -136,7 +158,9 @@ True
 
 ### "I use Claude Code"
 
-Claude Code uses an OpenAI-compatible API. Point it at the proxy:
+Claude Code can route through the local proxy. If you use Claude Code's
+OAuth/subscription auth, you do not need to set a provider API key for that
+mode; TokenPak forwards the OAuth bearer token unchanged.
 
 ```bash
 # Start the proxy
@@ -199,9 +223,14 @@ Check that your client is pointing at `http://localhost:8766` (not `https://`).
 
 ### "My API key isn't being forwarded"
 
-TokenPak is a passthrough proxy — it never stores or modifies your credentials. Make sure:
+TokenPak is a passthrough proxy — it never stores or modifies your credentials.
+For direct provider-key clients, make sure:
+
 - Your API key is set in your environment: `export ANTHROPIC_API_KEY='sk-...'`
-- Or pass it directly in your client config
+- Or pass it directly in your client config or request header
+
+For Claude Code OAuth/subscription sessions, a provider API key is not expected.
+Check that the client is pointed at the proxy URL instead.
 
 ### "I'm not seeing any savings"
 

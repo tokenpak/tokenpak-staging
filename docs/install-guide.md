@@ -14,6 +14,18 @@ The simplest way to install TokenPak:
 pip install tokenpak
 ```
 
+For local installs, use a virtual environment before running the same command:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install tokenpak
+```
+
+If `pip` reports an externally managed Python environment (PEP 668), use a
+virtual environment or `pipx install tokenpak` instead of forcing writes into
+the system Python.
+
 This installs the core library with heuristic-based compression.
 
 ## Optional Dependencies
@@ -21,14 +33,17 @@ This installs the core library with heuristic-based compression.
 TokenPak has optional extras for advanced features:
 
 ```bash
-# Install with ML-based compression support
-pip install tokenpak[ml]
+# Accurate token counting
+pip install tokenpak[tokens]
 
-# Install with all features (recommended)
-pip install tokenpak[ml,tiktoken]
+# LLM-based compression engine
+pip install tokenpak[compression]
 
-# Or install each extra separately
-pip install tokenpak tiktoken
+# Semantic/vector retrieval
+pip install tokenpak[retrieval]
+
+# Restore the legacy bundled install behavior
+pip install tokenpak[full]
 ```
 
 ## Using a Virtual Environment (Recommended)
@@ -45,7 +60,7 @@ source ~/my_tokenpak_env/bin/activate # Linux/macOS
 ~/my_tokenpak_env\Scripts\activate # Windows
 
 # Install TokenPak
-pip install tokenpak[ml,tiktoken]
+pip install tokenpak
 
 # Deactivate when done
 deactivate
@@ -62,7 +77,7 @@ uv venv ~/my_tokenpak_env
 source ~/my_tokenpak_env/bin/activate
 
 # Install TokenPak
-pip install tokenpak[ml,tiktoken]
+pip install tokenpak
 ```
 
 ## Verify Your Installation
@@ -70,23 +85,13 @@ pip install tokenpak[ml,tiktoken]
 After installing, verify that TokenPak works:
 
 ```bash
-python3 -c "from tokenpak import HeuristicEngine; print('✓ TokenPak installed!')"
+tokenpak --version
 ```
 
 Or run a quick test:
 
 ```bash
-python3 << 'EOF'
-from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
-
-engine = HeuristicEngine()
-text = "This is a test. " * 100
-hints = CompactionHints(target_tokens=50)
-result = engine.compact(text, hints)
-print(f"Compressed {len(text)} chars to {len(result)} chars")
-print("✓ Installation successful!")
-EOF
+python3 -c "import tokenpak; print(tokenpak.__version__)"
 ```
 
 ## Troubleshooting
@@ -106,17 +111,21 @@ pip install --upgrade tokenpak
 
 ### Issue: "tiktoken not found" or encoding errors
 
-**Solution:** Install the tiktoken extra:
+**Solution:** Install the token-counting extra:
 ```bash
-pip install tokenpak[tiktoken]
+pip install tokenpak[tokens]
 ```
 
 ### Issue: "Permission denied" when installing
 
-**Solution:** Use `--user` flag or a virtual environment:
+**Solution:** Use a virtual environment. `--user` can work on unmanaged Python
+installs, but PEP 668-managed system Python installs should use a venv or
+`pipx install tokenpak`.
+
 ```bash
-pip install --user tokenpak # Install to user directory
-# OR use a venv (recommended)
+python3 -m venv ~/.venvs/tokenpak
+source ~/.venvs/tokenpak/bin/activate
+pip install tokenpak
 ```
 
 ### Issue: Python version error (3.9 or earlier)
