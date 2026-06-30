@@ -145,7 +145,7 @@ The TokenPak open-source core is licensed under the Apache License 2.0 — see [
 
 ## Support
 
-- **Docs:** [docs/quickstart.md](docs/quickstart.md) · [API reference](docs/api-tpk-v1.md)
+- **Docs:** [docs/quickstart.md](docs/quickstart.md) · [CI guide](docs/ci.md) · [API reference](docs/api-tpk-v1.md)
 - **Issues:** [github.com/tokenpak/tokenpak/issues](https://github.com/tokenpak/tokenpak/issues)
 - **Discussions:** [github.com/tokenpak/tokenpak/discussions](https://github.com/tokenpak/tokenpak/discussions)
 - **Email:** hello@tokenpak.ai
