@@ -6,6 +6,7 @@ on:
     paths:
       - 'tokenpak/**'
       - 'tests/**'
+      - 'examples/**'
       - '.github/workflows/ci.yml'
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'tokenpak/**'
       - 'tests/**'
+      - 'examples/**'
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
@@ -112,6 +114,31 @@ jobs:
 
       - name: Run slim install smoke
         run: bash scripts/slim-install-smoke.sh
+
+  examples-guard:
+    name: Examples Guard (no-network)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install package (curated examples import the tokenpak runtime)
+        # The curated offline examples import `tokenpak`; [dev] is the smallest
+        # extras set that covers the runtime import chain (same rationale as the
+        # cli-docs-check job above). The guard itself runs with no network.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run curated examples guard (no network, no provider keys)
+        # Focused on the curated examples manifest only — no broad suites.
+        run: python -m pytest tests/examples -q
 
   package-contents:
     name: Package Contents
