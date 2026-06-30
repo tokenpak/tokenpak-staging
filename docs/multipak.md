@@ -67,33 +67,33 @@ Vault Paks: `vault:<source-path>#<sha256-prefix>` — for example, `vault:<proje
 
 Other subtypes (Pro): `interaction:<session>:<entry>`, `decision:<id>`, `recall:<query-hash>`, `handoff:<target>:<id>`.
 
-## Recall Preview + Apply — `tokenpak pakplan` (OSS, baseline same-store)
+## Recall Preview + Apply — `tokenpak pakplan` (OSS, vault file index)
 
-The `pakplan` surface turns baseline Pak recall into a **preview → review → apply** workflow so you stop copy-pasting context by hand and stop dumping the whole history into a session.
+The `pakplan` surface turns vault recall into a **preview → review → apply** workflow so you stop copy-pasting context by hand and stop dumping the whole history into a session.
 
 ```bash
-# 1. Preview baseline recall candidates (single-source, deterministic, unscored)
+# 1. Preview recall candidates ranked over the vault FILE index (BM25)
 $ tokenpak pakplan recall --query auth --limit 10
-PAKPlan recall preview (OSS, unscored, single-source)
-   1. vault://gamma-runbook  Gamma auth runbook
-      source : doc/file_source  score: None
+PAKPlan recall preview (OSS — vault file index, BM25)
+   1. vault:gamma-runbook  Gamma auth runbook
+      source : file/file_source  score: 9.4
       snippet: auth incident escalation
       risk   : warn
-   2. vault://alpha-design   Alpha auth design
-      source : doc/file_source  score: None
-      reasons: current_task
+   2. vault:alpha-design   Alpha auth design
+      source : code/file_source  score: 4.1
+      snippet: how auth tokens rotate
 
 # 2. Apply a selection — keep some, drop the rest, and record why
-$ tokenpak pakplan apply --query auth --exclude vault://gamma-runbook --json
-{ "included": [ ... ], "dropped": [ {"pak_id": "vault://gamma-runbook", "drop_reason": "user_excluded", ...} ],
-  "boundary": "oss_baseline_same_store", "proof_path": ".../selections/sel-….json", ... }
+$ tokenpak pakplan apply --query auth --exclude vault:gamma-runbook --json
+{ "included": [ ... ], "dropped": [ {"pak_id": "vault:gamma-runbook", "drop_reason": "user_excluded", ...} ],
+  "boundary": "oss_vault_file_index", "proof_path": ".../selections/sel-….json", ... }
 ```
 
-- `recall` previews candidates with **source**, **rank**, **snippet/title**, and **reason/risk** fields. `--query` is a case-insensitive substring over title + summary; `--project` / `--type` are byte-literal filters.
+- `recall` previews candidates with **source**, **rank**, **snippet/title**, **BM25 score**, and the vault block's **risk** field. `--query` is a BM25 query over the vault file index; `--project` / `--type` are client-side filters over the returned candidates.
 - `apply` partitions candidates into an **include/drop proof**: `--include id …` keeps only those (the rest are dropped as `not_selected`), or `--exclude id …` drops those (the rest are included). `--dry-run` shows the proof without writing it; `--reason` records a note.
-- The proof is written next to the recall db under `selections/` as an inspectable, reversible JSON artifact — delete the file to undo. Its `included` / `dropped` lists are exactly what **Receipt v1** surfaces as the request's context proof.
+- The proof is written under the companion `selections/` home as an inspectable, reversible JSON artifact — delete the file to undo. Its `included` / `dropped` lists are exactly what **Receipt v1** surfaces as the request's context proof.
 
-> **OSS boundary (the relevant standard).** This is **baseline, single-source, same-store** retrieval over the local recall db. It is *deterministic* (newest-first, with substring + byte-literal metadata filters) and *unscored* — every candidate's `score` is `null` and `rank` is just the position in that deterministic order, carrying the honest `boundary: "oss_baseline_same_store"` marker on every proof. OSS never auto-applies a selection to a live request. **Cross-source scoring, learned ranking, capture, and anchor hydration are Pro** and run behind the daemon — `POST /pak/v1/recall` stays `501` (see below). The OSS slice is retrieval + selection + proof, not ranking.
+> **OSS boundary (the relevant standard).** OSS ranked recall is confined to the **vault file index** — BM25 over your vault files — carrying the honest `boundary: "oss_vault_file_index"` marker on every proof. OSS never auto-applies a selection to a live request. **Ranked retrieval over the recall / Pak store** (`paks` / `paks_fts` / `pak_relations`), **cross-source scoring, learned ranking, capture, and anchor hydration are Pro** and run behind the daemon — `POST /pak/v1/recall` stays `501` (see below). The OSS slice is vault-index retrieval + selection + proof; Pak-store recall ranking is not shipped in OSS.
 
 ## HTTP — `/pak/v1/*`
 

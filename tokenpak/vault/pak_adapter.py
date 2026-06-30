@@ -254,6 +254,118 @@ def search_as_paks(
     return [vault_block_to_pak(block, score=score) for block, score in results]
 
 
+# ---------------------------------------------------------------------------
+# OSS recall preview (vault FILE index only)
+# ---------------------------------------------------------------------------
+#
+# Ranked retrieval for OSS recall is confined to the vault FILE index (BM25
+# over vault files). Ranked retrieval over the recall / Pak store
+# (``paks`` / ``paks_fts`` / ``pak_relations``) is Pro-reserved by policy and
+# is deliberately NOT reachable from this surface.
+
+_RECALL_SNIPPET_MAX = 200
+
+
+def _enum_value(value: object) -> Optional[str]:
+    """Return ``value.value`` for enums, the string form otherwise."""
+    if value is None:
+        return None
+    inner = getattr(value, "value", value)
+    return str(inner)
+
+
+def _recall_snippet(text: object, *, limit: int = _RECALL_SNIPPET_MAX) -> str:
+    """Single-line, length-bounded snippet for preview candidates."""
+    s = " ".join(str(text or "").split())
+    if len(s) <= limit:
+        return s
+    return s[: limit - 1].rstrip() + "…"
+
+
+def _recall_candidate_from_block(block: dict, *, score: object, rank: int) -> dict:
+    """Project a vault-index ``(block, score)`` result into a recall candidate.
+
+    The candidate dict carries what a preview / a later Receipt needs. ``score``
+    is the real BM25 relevance from the vault file index and ``rank`` is the
+    1-based position in descending-score order. ``risk`` is the vault block's
+    ``risk_class``; ``reason_codes`` / ``risk_flags`` are recall/Pak-store
+    concepts (Pro) and are intentionally empty for the OSS vault-index surface.
+    """
+    pak = vault_block_to_pak(block, score=score)
+    return {
+        "pak_id": pak.pak_id,
+        "title": pak.title,
+        "snippet": _recall_snippet(pak.summary),
+        "source": {
+            "source_type": _enum_value(pak.source.source_type),
+            "authority": _enum_value(pak.authority),
+            "pak_type": _enum_value(pak.pak_type),
+            "project": pak.scope.project,
+        },
+        "rank": rank,
+        # OSS ranked retrieval over the vault file index — BM25 score is real
+        # here (unlike Pak-store recall, which is Pro and not shipped in OSS).
+        "score": float(score) if score is not None else None,
+        # reason_codes / risk_flags are recall/Pak-store metadata (Pro). The
+        # vault file index exposes only the block's risk_class.
+        "reason_codes": [],
+        "risk_flags": [],
+        "risk": (block.get("risk_class") or None),
+        "status": _enum_value(pak.status),
+    }
+
+
+def recall_preview_candidates(
+    query: Optional[str] = None,
+    *,
+    top_k: int = 20,
+    min_score: float = 0.0,
+    vault_index=None,
+) -> list[dict]:
+    """OSS recall preview over the vault FILE index.
+
+    Ranked retrieval is confined to the vault file index — BM25 over vault
+    files — and never touches the recall / Pak store
+    (``paks`` / ``paks_fts`` / ``pak_relations``), which is Pro-reserved by
+    policy. Returns preview candidate dicts ordered by descending BM25
+    score (deterministic on ties). An empty query, an unavailable vault index,
+    or no matching blocks all yield ``[]`` — the honest "nothing to preview"
+    result.
+
+    ``vault_index`` defaults to the module-level accessor in
+    :mod:`tokenpak.vault.search`; pass an explicit instance for tests or a
+    non-default index.
+    """
+    q = query.strip() if isinstance(query, str) and query.strip() else ""
+    if not q:
+        return []
+    raw_limit = top_k if isinstance(top_k, int) and top_k > 0 else 20
+
+    if vault_index is None:
+        # Lazy import — same contract as :func:`search_as_paks`.
+        try:
+            from tokenpak.vault.search import get_vault_index  # type: ignore[import-not-found]
+        except ImportError:
+            return []
+        try:
+            vault_index = get_vault_index()
+        except Exception:
+            return []
+
+    if vault_index is None:
+        return []
+
+    try:
+        results = vault_index.search(q, top_k=raw_limit, min_score=min_score)
+    except Exception:
+        return []
+
+    return [
+        _recall_candidate_from_block(block, score=score, rank=i + 1)
+        for i, (block, score) in enumerate(results)
+    ]
+
+
 __all__ = [
     "search_as_paks",
     "vault_block_to_pak",

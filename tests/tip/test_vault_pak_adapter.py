@@ -30,6 +30,7 @@ from tokenpak.tip.pak import (
 from tokenpak.vault.pak_adapter import (
     _file_type_to_source_type,
     _infer_project,
+    recall_preview_candidates,
     search_as_paks,
     vault_block_to_pak,
 )
@@ -326,3 +327,95 @@ def test_file_type_to_source_type_case_insensitive():
 def test_file_type_to_source_type_none_returns_FILE():
     assert _file_type_to_source_type(None) is PakSourceType.FILE
     assert _file_type_to_source_type("") is PakSourceType.FILE
+
+
+# ---------------------------------------------------------------------------
+# recall_preview_candidates — OSS ranked retrieval over the vault FILE index
+# (Std 32 D5 boundary; Pak-store recall is Pro-reserved)
+# ---------------------------------------------------------------------------
+
+
+class _ScoredVaultIndex:
+    """VaultIndex stub returning explicit (block, score) pairs in given order."""
+
+    def __init__(self, pairs):
+        self._pairs = pairs
+
+    def search(self, query, top_k=5, min_score=0.0):
+        return [p for p in self._pairs if p[1] >= min_score][:top_k]
+
+
+def _block(block_id, source_path, *, file_type="text", risk_class=None, raw_tokens=10):
+    b = {
+        "block_id": block_id,
+        "source_path": source_path,
+        "raw_tokens": raw_tokens,
+        "file_type": file_type,
+    }
+    if risk_class is not None:
+        b["risk_class"] = risk_class
+    return b
+
+
+def test_recall_preview_candidates_rank_follows_bm25_order():
+    idx = _ScoredVaultIndex([
+        (_block("hi", "proj/a.py", file_type="code"), 9.5),
+        (_block("lo", "proj/b.md"), 3.2),
+    ])
+    out = recall_preview_candidates("auth", vault_index=idx)
+
+    assert [c["pak_id"] for c in out] == ["vault:hi", "vault:lo"]
+    # rank is 1-based position in descending-score order; score is real BM25.
+    assert [c["rank"] for c in out] == [1, 2]
+    assert [c["score"] for c in out] == [9.5, 3.2]
+
+
+def test_recall_preview_candidate_shape():
+    idx = _ScoredVaultIndex([(_block("x", "proj/a.py", file_type="code", risk_class="warn"), 7.0)])
+    c = recall_preview_candidates("q", vault_index=idx)[0]
+
+    assert set(c) >= {
+        "pak_id", "title", "snippet", "source", "rank", "score",
+        "reason_codes", "risk_flags", "risk", "status",
+    }
+    assert c["source"] == {
+        "source_type": "code",
+        "authority": "file_source",
+        "pak_type": "vault",
+        "project": "proj",
+    }
+    # risk comes from the vault block's risk_class; reason_codes / risk_flags
+    # are Pak-store (Pro) concepts and are empty for the vault-index surface.
+    assert c["risk"] == "warn"
+    assert c["reason_codes"] == []
+    assert c["risk_flags"] == []
+    assert c["snippet"]
+
+
+def test_recall_preview_candidates_empty_query_returns_empty():
+    idx = _ScoredVaultIndex([(_block("x", "proj/a.py"), 5.0)])
+    assert recall_preview_candidates("", vault_index=idx) == []
+    assert recall_preview_candidates("   ", vault_index=idx) == []
+    assert recall_preview_candidates(None, vault_index=idx) == []
+
+
+def test_recall_preview_candidates_respects_top_k():
+    idx = _ScoredVaultIndex([
+        (_block(f"b{i}", f"proj/{i}.md"), 9.0 - i) for i in range(5)
+    ])
+    out = recall_preview_candidates("q", top_k=2, vault_index=idx)
+    assert len(out) == 2
+    assert [c["rank"] for c in out] == [1, 2]
+
+
+def test_recall_preview_candidates_empty_when_no_index():
+    # vault_index=None falls through to the lazy import; unavailable → [].
+    assert isinstance(recall_preview_candidates("q", vault_index=None), list)
+
+
+def test_recall_preview_candidates_handles_search_exception():
+    class _RaisingIndex:
+        def search(self, query, top_k=5, min_score=0.0):
+            raise RuntimeError("vault corrupt")
+
+    assert recall_preview_candidates("q", vault_index=_RaisingIndex()) == []

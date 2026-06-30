@@ -72,7 +72,7 @@ def build_pakplan_parser(sub: Any) -> None:
 
     p_recall = psub.add_parser(
         "recall",
-        help="Preview baseline same-store Pak recall candidates (OSS, unscored)",
+        help="Preview OSS recall candidates over the vault file index (BM25)",
     )
     _add_recall_query_args(p_recall)
     p_recall.add_argument(
@@ -98,7 +98,7 @@ def build_pakplan_parser(sub: Any) -> None:
     )
     p_apply.add_argument(
         "--out", default=None,
-        help="Write the proof JSON here (default: alongside the recall db)",
+        help="Write the proof JSON here (default: companion selections/ home)",
     )
     p_apply.add_argument(
         "--dry-run", dest="dry_run", action="store_true",
@@ -116,14 +116,15 @@ def _add_recall_query_args(parser: Any) -> None:
     """Shared recall-query arguments for the ``recall`` and ``apply`` surfaces."""
     parser.add_argument(
         "--query", "-q", default=None,
-        help="Case-insensitive substring match over title + summary",
+        help="BM25 query over the vault file index",
     )
     parser.add_argument(
-        "--project", default=None, help="Byte-literal project filter",
+        "--project", default=None,
+        help="Client-side filter: keep candidates from this project",
     )
     parser.add_argument(
         "--type", dest="pak_type", default=None,
-        help="Byte-literal pak_type filter",
+        help="Client-side filter: keep candidates of this pak_type",
     )
     parser.add_argument(
         "--limit", type=int, default=20, help="Max candidates (default: 20)",
@@ -271,21 +272,17 @@ def cmd_pakplan_report(args: Any) -> int:
 
 
 def cmd_pakplan_recall(args: Any) -> int:
-    """Preview baseline same-store recall candidates (OSS, unscored).
+    """Preview OSS recall candidates over the vault FILE index.
 
-    This is single-source, deterministic metadata retrieval over the local
-    recall db — not Pro cross-source ranking. ``score`` is always ``null``.
+    Ranked retrieval is BM25 over the vault file index — never the recall /
+    Pak store (``paks`` / ``paks_fts`` / ``pak_relations``), which is
+    Pro-reserved by policy. ``score`` is the real BM25 relevance.
     """
-    db = _recall_db()
-    if not db or not db.exists():
-        return _no_recall_db(db, getattr(args, "as_json", False), "recall")
-
-    candidates = _store_recall_preview(db, args)
+    candidates = _vault_recall_candidates(args)
     payload = {
         "scope": "recall-preview",
-        "boundary": "oss_baseline_same_store",
-        "scoring": "not-shipped-in-OSS",
-        "recall_db": str(db),
+        "boundary": "oss_vault_file_index",
+        "scoring": "bm25-vault-file-index",
         "query": getattr(args, "query", None),
         "count": len(candidates),
         "candidates": candidates,
@@ -294,10 +291,13 @@ def cmd_pakplan_recall(args: Any) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    print("PAKPlan recall preview (OSS, unscored, single-source)")
+    print("PAKPlan recall preview (OSS — vault file index, BM25)")
     print("─────────────────────────────────────────────────────")
     if not candidates:
-        print(f"ℹ️  No matching Paks in {db}")
+        if not (getattr(args, "query", None) or "").strip():
+            print("ℹ️  Provide --query to search the vault file index.")
+        else:
+            print("ℹ️  No matching vault blocks (no vault index, or no matches).")
         return 0
     for c in candidates:
         src = c.get("source", {})
@@ -306,51 +306,39 @@ def cmd_pakplan_recall(args: Any) -> int:
               f"  score: {c.get('score')}")
         if c.get("snippet"):
             print(f"      snippet: {c['snippet'][:80]}")
-        if c.get("reason_codes"):
-            print(f"      reasons: {', '.join(c['reason_codes'])}")
         if c.get("risk"):
             print(f"      risk   : {c['risk']}")
     print()
-    print("Ranking/scoring is Pro — OSS recall is deterministic + unscored.")
+    print("Ranked retrieval over the recall/Pak store is Pro;")
+    print("OSS ranks the vault file index only.")
     return 0
 
 
 def cmd_pakplan_apply(args: Any) -> int:
     """Apply/exclude recall candidates into an include/drop proof object.
 
-    The proof is inspectable and reversible (a JSON file you can read or
-    delete); Receipt v1 consumes its ``included`` / ``dropped`` lists. OSS
-    never auto-applies the selection to a live request.
+    Candidates come from the OSS vault FILE index; the proof is
+    inspectable and reversible (a JSON file you can read or delete). Receipt v1
+    consumes its ``included`` / ``dropped`` lists. OSS never auto-applies the
+    selection to a live request, and this path never reads the recall / Pak
+    store — the include/drop shaper is a pure, store-agnostic transform.
     """
-    db = _recall_db()
-    if not db or not db.exists():
-        return _no_recall_db(db, getattr(args, "as_json", False), "apply")
+    from tokenpak.companion.recall.store import RecallStore
 
-    from tokenpak.companion.recall.store import open_recall_store
-
-    store = open_recall_store(db)
-    try:
-        candidates = store.recall_preview(
-            query=getattr(args, "query", None),
-            project=getattr(args, "project", None),
-            pak_type=getattr(args, "pak_type", None),
-            limit=int(getattr(args, "limit", 20) or 20),
+    candidates = _vault_recall_candidates(args)
+    selection = RecallStore.build_context_selection(
+        candidates,
+        include=getattr(args, "include", None),
+        exclude=getattr(args, "exclude", None),
+        query=getattr(args, "query", None),
+        reason=getattr(args, "reason", None),
+    )
+    out_path: Optional[Path] = None
+    if not getattr(args, "dry_run", False):
+        raw_out = getattr(args, "out", None)
+        out_path = RecallStore.write_context_selection(
+            selection, path=Path(raw_out) if raw_out else None
         )
-        selection = store.build_context_selection(
-            candidates,
-            include=getattr(args, "include", None),
-            exclude=getattr(args, "exclude", None),
-            query=getattr(args, "query", None),
-            reason=getattr(args, "reason", None),
-        )
-        out_path: Optional[Path] = None
-        if not getattr(args, "dry_run", False):
-            raw_out = getattr(args, "out", None)
-            out_path = store.write_context_selection(
-                selection, path=Path(raw_out) if raw_out else None
-            )
-    finally:
-        store.close()
 
     payload = dict(selection)
     payload["proof_path"] = str(out_path) if out_path else None
@@ -379,42 +367,45 @@ def cmd_pakplan_apply(args: Any) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Recall db helpers
+# Recall candidate source (OSS vault FILE index)
 # ---------------------------------------------------------------------------
 
 
-def _store_recall_preview(db: Path, args: Any) -> list[dict]:
-    """Open the recall store and return preview candidates for ``args``."""
-    from tokenpak.companion.recall.store import open_recall_store
+def _vault_recall_candidates(args: Any) -> list[dict]:
+    """OSS recall candidates ranked over the vault FILE index.
 
-    store = open_recall_store(db)
-    try:
-        return store.recall_preview(
-            query=getattr(args, "query", None),
-            project=getattr(args, "project", None),
-            pak_type=getattr(args, "pak_type", None),
-            limit=int(getattr(args, "limit", 20) or 20),
-        )
-    finally:
-        store.close()
+    Retrieval is BM25 over the vault file index via
+    :func:`tokenpak.vault.pak_adapter.recall_preview_candidates` — never the
+    recall / Pak store, which is Pro-reserved. ``--query`` drives the BM25
+    search; ``--project`` / ``--type`` are applied as honest client-side
+    filters over the returned candidates (``rank`` is renumbered contiguously
+    after filtering). An empty query or unavailable vault index yields ``[]``.
+    """
+    from tokenpak.vault import pak_adapter
+
+    candidates = pak_adapter.recall_preview_candidates(
+        query=getattr(args, "query", None),
+        top_k=int(getattr(args, "limit", 20) or 20),
+    )
+
+    project = getattr(args, "project", None)
+    pak_type = getattr(args, "pak_type", None)
+    if project:
+        candidates = [
+            c for c in candidates if c.get("source", {}).get("project") == project
+        ]
+    if pak_type:
+        candidates = [
+            c for c in candidates if c.get("source", {}).get("pak_type") == pak_type
+        ]
+    for i, c in enumerate(candidates):
+        c["rank"] = i + 1
+    return candidates
 
 
-def _no_recall_db(db: Optional[Path], as_json: bool, action: str) -> int:
-    """Honest no-db response shared by the recall/apply surfaces."""
-    msg = "no recall db on disk"
-    if as_json:
-        print(json.dumps({
-            "scope": action,
-            "recall_db": str(db) if db else None,
-            "present": False,
-            "count": 0,
-            "candidates": [],
-            "note": msg,
-        }, indent=2, sort_keys=True))
-    else:
-        print(f"ℹ️  tokenpak pakplan {action} — {msg} ({db})")
-        print("   Foundation tables ship in OSS; population is Pro.")
-    return 0
+# ---------------------------------------------------------------------------
+# Recall db helpers (inspect/list surfaces: preview / explain / report)
+# ---------------------------------------------------------------------------
 
 
 def _recall_db() -> Optional[Path]:

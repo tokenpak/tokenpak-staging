@@ -27,6 +27,7 @@ from tokenpak.companion.recall.store import (
     RecallStore,
     RiskFlagEntry,
 )
+from tokenpak.vault import pak_adapter
 
 
 def _seed_recall_db(path: Path) -> None:
@@ -97,39 +98,50 @@ def test_source_has_no_stale_drift_literals() -> None:
 
 
 # ---------------------------------------------------------------------------
-# recall preview + apply CLI surface (OSS baseline same-store)
+# recall preview + apply CLI surface (OSS vault FILE index — Std 32 D5)
+#
+# Recall / apply source candidates from the vault file index, never the recall
+# / Pak store. These tests stub ``pak_adapter.recall_preview_candidates`` (the
+# vault-index BM25 surface) so they exercise the CLI wiring + ``_vault_recall_candidates``
+# filters without a real vault index.
 # ---------------------------------------------------------------------------
 
 
-def _seed_two(path: Path) -> None:
-    store = RecallStore.open(path)
-    try:
-        store.upsert_pak(
-            pak_id="vault://a", pak_type="vault", source_type="doc",
-            authority="file_source", title="Alpha auth design",
-            content_hash="aaaa1111", summary="how auth tokens rotate",
-            project="proj", now="2026-06-20T10:00:00Z",
-        )
-        store.upsert_pak(
-            pak_id="vault://c", pak_type="vault", source_type="doc",
-            authority="file_source", title="Gamma auth runbook",
-            content_hash="cccc2222", summary="auth incident escalation",
-            project="proj", now="2026-06-22T10:00:00Z",
-        )
-        store.set_pak_reason_codes("vault://a", [ReasonCodeEntry("current_task", 0.9)])
-        store.set_pak_risk_flags(
-            "vault://c", [RiskFlagEntry("mandatory_context_missing", "warn")]
-        )
-    finally:
-        store.close()
+def _vault_cand(pak_id, *, rank, score, project="proj", pak_type="vault", risk=None):
+    return {
+        "pak_id": pak_id,
+        "title": f"title-{pak_id}",
+        "snippet": f"snippet-{pak_id}",
+        "source": {
+            "source_type": "file",
+            "authority": "file_source",
+            "pak_type": pak_type,
+            "project": project,
+        },
+        "rank": rank,
+        "score": score,
+        "reason_codes": [],
+        "risk_flags": [],
+        "risk": risk,
+        "status": "proposed",
+    }
 
 
-def test_cli_recall_preview_json_is_unscored_same_store(
-    tmp_path: Path, monkeypatch, capsys
+def _stub_vault(monkeypatch, candidates):
+    """Patch the vault-index recall surface to return ``candidates`` verbatim."""
+    monkeypatch.setattr(
+        pak_adapter, "recall_preview_candidates",
+        lambda query=None, **kw: list(candidates),
+    )
+
+
+def test_cli_recall_preview_json_ranks_vault_file_index(
+    monkeypatch, capsys
 ) -> None:
-    db = tmp_path / "recall.db"
-    _seed_two(db)
-    monkeypatch.setattr(pakplan, "_recall_db", lambda: db)
+    _stub_vault(monkeypatch, [
+        _vault_cand("vault:c", rank=1, score=9.0, risk="warn"),
+        _vault_cand("vault:a", rank=2, score=3.0),
+    ])
 
     args = SimpleNamespace(
         query="auth", project=None, pak_type=None, limit=10, as_json=True
@@ -138,33 +150,55 @@ def test_cli_recall_preview_json_is_unscored_same_store(
     payload = json.loads(capsys.readouterr().out)
 
     assert rc == 0
-    assert payload["boundary"] == "oss_baseline_same_store"
+    assert payload["boundary"] == "oss_vault_file_index"
+    assert payload["scoring"] == "bm25-vault-file-index"
     assert payload["count"] == 2
-    # Newest-first, deterministic rank, and unscored (score is null).
-    assert [c["pak_id"] for c in payload["candidates"]] == ["vault://c", "vault://a"]
-    assert all(c["score"] is None for c in payload["candidates"])
+    # BM25 order, real scores (never the unscored Pak-store path).
+    assert [c["pak_id"] for c in payload["candidates"]] == ["vault:c", "vault:a"]
+    assert [c["score"] for c in payload["candidates"]] == [9.0, 3.0]
     assert payload["candidates"][0]["risk"] == "warn"
+
+
+def test_cli_recall_project_filter_reranks(monkeypatch, capsys) -> None:
+    _stub_vault(monkeypatch, [
+        _vault_cand("vault:x", rank=1, score=9.0, project="alpha"),
+        _vault_cand("vault:y", rank=2, score=5.0, project="beta"),
+        _vault_cand("vault:z", rank=3, score=2.0, project="alpha"),
+    ])
+
+    args = SimpleNamespace(
+        query="q", project="alpha", pak_type=None, limit=10, as_json=True
+    )
+    rc = pakplan.cmd_pakplan_recall(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert [c["pak_id"] for c in payload["candidates"]] == ["vault:x", "vault:z"]
+    # rank renumbered contiguously after the client-side filter.
+    assert [c["rank"] for c in payload["candidates"]] == [1, 2]
 
 
 def test_cli_apply_exclude_writes_include_drop_proof(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    db = tmp_path / "recall.db"
-    _seed_two(db)
-    monkeypatch.setattr(pakplan, "_recall_db", lambda: db)
+    _stub_vault(monkeypatch, [
+        _vault_cand("vault:a", rank=1, score=9.0),
+        _vault_cand("vault:c", rank=2, score=3.0),
+    ])
 
     out = tmp_path / "proof.json"
     args = SimpleNamespace(
         query="auth", project=None, pak_type=None, limit=10,
-        include=None, exclude=["vault://c"], reason="cli demo",
+        include=None, exclude=["vault:c"], reason="cli demo",
         out=str(out), dry_run=False, as_json=True,
     )
     rc = pakplan.cmd_pakplan_apply(args)
     payload = json.loads(capsys.readouterr().out)
 
     assert rc == 0
-    assert [c["pak_id"] for c in payload["included"]] == ["vault://a"]
-    assert [c["pak_id"] for c in payload["dropped"]] == ["vault://c"]
+    assert payload["boundary"] == "oss_vault_file_index"
+    assert [c["pak_id"] for c in payload["included"]] == ["vault:a"]
+    assert [c["pak_id"] for c in payload["dropped"]] == ["vault:c"]
     assert payload["dropped"][0]["drop_reason"] == "user_excluded"
     assert payload["proof_path"] == str(out)
     # Proof persisted and reloadable for a later Receipt path.
@@ -175,13 +209,12 @@ def test_cli_apply_exclude_writes_include_drop_proof(
 def test_cli_apply_dry_run_does_not_write(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    db = tmp_path / "recall.db"
-    _seed_two(db)
-    monkeypatch.setattr(pakplan, "_recall_db", lambda: db)
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path))
+    _stub_vault(monkeypatch, [_vault_cand("vault:a", rank=1, score=9.0)])
 
     args = SimpleNamespace(
         query="auth", project=None, pak_type=None, limit=10,
-        include=["vault://a"], exclude=None, reason=None,
+        include=["vault:a"], exclude=None, reason=None,
         out=None, dry_run=True, as_json=True,
     )
     rc = pakplan.cmd_pakplan_apply(args)
@@ -190,20 +223,19 @@ def test_cli_apply_dry_run_does_not_write(
     assert rc == 0
     assert payload["dry_run"] is True
     assert payload["proof_path"] is None
-    assert not (db.parent / "selections").exists()
+    assert not (tmp_path / "companion" / "selections").exists()
 
 
-def test_cli_recall_no_db_is_honest(tmp_path: Path, monkeypatch, capsys) -> None:
-    missing = tmp_path / "nope.db"
-    monkeypatch.setattr(pakplan, "_recall_db", lambda: missing)
+def test_cli_recall_empty_when_no_vault_matches(monkeypatch, capsys) -> None:
+    _stub_vault(monkeypatch, [])
 
     args = SimpleNamespace(
-        query=None, project=None, pak_type=None, limit=10, as_json=True
+        query="nomatch", project=None, pak_type=None, limit=10, as_json=True
     )
     rc = pakplan.cmd_pakplan_recall(args)
     payload = json.loads(capsys.readouterr().out)
 
     assert rc == 0
-    assert payload["present"] is False
+    assert payload["boundary"] == "oss_vault_file_index"
     assert payload["count"] == 0
     assert payload["candidates"] == []

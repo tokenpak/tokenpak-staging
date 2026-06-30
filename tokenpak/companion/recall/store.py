@@ -222,25 +222,19 @@ PAK_RELATION_TYPES: frozenset[str] = frozenset({"supersedes", "conflicts_with"})
 """Relation types accepted by ``set_pak_relations``."""
 
 
-# --- OSS recall preview + apply (baseline same-store) ------------------------
+# --- OSS context-selection (apply) proof -------------------------------------
 #
-# Boundary: OSS recall is *single-source, same-store* metadata retrieval
-# over the local recall db. It is deterministic — newest-first
-# order with optional byte-literal (``project`` / ``pak_type``) and
-# case-insensitive substring (``query``) metadata filters — and *unscored*:
-# every candidate's ``score`` is ``None``. ``rank`` is the position in the
-# deterministic order, not a learned relevance score. Cross-source scoring,
-# learned ranking, capture, and anchor hydration are Pro and live behind the
-# daemon. Nothing here contacts the daemon or reads a store other than
-# ``self``. These names are intentionally ``_``-prefixed module constants so
-# the public-API snapshot surface is unchanged.
+# Boundary: ranked recall RETRIEVAL is NOT performed here. Ranked retrieval
+# over the recall / Pak store
+# (``paks`` / ``paks_fts`` / ``pak_relations``) is Pro-reserved by policy; OSS
+# ranked retrieval is confined to the vault FILE index and lives in
+# :func:`tokenpak.vault.pak_adapter.recall_preview_candidates`. What remains in
+# this module is the pure include/drop *proof* shaper that the apply surface
+# composes over those vault-index candidates — it performs no retrieval, reads
+# no ``paks`` rows, and contacts no daemon. These names are intentionally
+# ``_``-prefixed module constants so the public-API snapshot surface is
+# unchanged.
 _SELECTION_SCHEMA = "tokenpak.recall.context_selection/v1"
-_SNIPPET_MAX = 280
-_RISK_SEVERITY_ORDER = {"info": 0, "warn": 1, "block": 2}
-# Bounds the same-store scan a single ``recall_preview`` performs so an
-# enormous local store cannot turn a preview into a full table walk. OSS
-# baseline behaviour, not a crawler.
-_RECALL_SCAN_CAP = 1000
 
 
 class UpsertResult(NamedTuple):
@@ -934,102 +928,21 @@ class RecallStore:
         ).fetchall()
         return [RiskFlagEntry(risk_flag=r[0], severity=r[1]) for r in rows]
 
-    # OSS recall preview + apply surface ------------------------------------
+    # OSS context-selection (apply) surface ---------------------------------
+    #
+    # Ranked recall RETRIEVAL is NOT served here. Policy reserves ranked
+    # retrieval over the recall / Pak store
+    # (``paks`` / ``paks_fts`` / ``pak_relations``) to Pro; OSS ranked
+    # retrieval is confined to the vault FILE index. The OSS recall preview
+    # therefore lives in :func:`tokenpak.vault.pak_adapter.recall_preview_candidates`
+    # (BM25 over vault files) and never touches this store. What remains here
+    # is the pure, store-agnostic include/drop *proof* shaper that the apply
+    # surface composes over those vault-index candidates — it performs no
+    # retrieval and no ``paks`` reads, so it is exposed as static helpers and
+    # the apply path never instantiates a :class:`RecallStore`.
 
-    def recall_preview(
-        self,
-        *,
-        query: Optional[str] = None,
-        project: Optional[str] = None,
-        pak_type: Optional[str] = None,
-        limit: int = 20,
-    ) -> list[dict]:
-        """Return baseline same-store recall candidates for preview.
-
-        OSS baseline recall: deterministic newest-first retrieval from *this*
-        store's ``paks`` metadata (see :meth:`list_paks`), optionally narrowed
-        by byte-literal ``project`` / ``pak_type`` filters and a
-        case-insensitive substring ``query`` over title + summary.
-
-        This is metadata *retrieval*, not ranking — each candidate's ``score``
-        is ``None`` (OSS is unscored) and ``rank`` is the 1-based position in
-        the deterministic order. Cross-source scoring / learned ranking stay in
-        Pro. The scan over the same store is bounded by
-        :data:`_RECALL_SCAN_CAP`.
-
-        Each candidate dict carries what a preview or a later Receipt needs:
-        ``pak_id``, ``title``, ``snippet``, ``source`` (``source_type`` /
-        ``authority`` / ``pak_type`` / ``project``), ``rank``, ``score``
-        (always ``None`` here), ``reason_codes``, ``risk_flags`` and the
-        derived top ``risk`` severity.
-        """
-        raw_limit = limit if isinstance(limit, int) and limit > 0 else 20
-        q = query.strip().lower() if isinstance(query, str) and query.strip() else None
-
-        # Page through list_paks so the substring filter sees the full
-        # candidate set rather than a single capped page, while the scan stays
-        # bounded.
-        matched: list[PakRow] = []
-        cursor: Optional[str] = None
-        scanned = 0
-        while len(matched) < raw_limit and scanned < _RECALL_SCAN_CAP:
-            page = self.list_paks(
-                PakListFilters(
-                    project=project,
-                    pak_type=pak_type,
-                    limit=LIST_LIMIT_MAX,
-                    cursor=cursor,
-                )
-            )
-            if not page.items:
-                break
-            for row in page.items:
-                scanned += 1
-                if q is not None and q not in f"{row.title}\n{row.summary}".lower():
-                    continue
-                matched.append(row)
-                if len(matched) >= raw_limit:
-                    break
-            if not page.truncated or page.next_cursor is None:
-                break
-            cursor = page.next_cursor
-
-        return [self._candidate_from_row(row, rank=i + 1) for i, row in enumerate(matched)]
-
-    def _candidate_from_row(self, row: PakRow, *, rank: int) -> dict:
-        """Project a :class:`PakRow` into a preview/selection candidate dict."""
-        reason_codes = [e.reason_code for e in self.get_pak_reason_codes(row.pak_id)]
-        risk_entries = self.get_pak_risk_flags(row.pak_id)
-        risk_flags = [
-            {"risk_flag": e.risk_flag, "severity": e.severity} for e in risk_entries
-        ]
-        top_risk = None
-        if risk_entries:
-            top_risk = max(
-                (e.severity for e in risk_entries),
-                key=lambda s: _RISK_SEVERITY_ORDER.get(s, -1),
-            )
-        return {
-            "pak_id": row.pak_id,
-            "title": row.title,
-            "snippet": _snippet(row.summary),
-            "source": {
-                "source_type": row.source_type,
-                "authority": row.authority,
-                "pak_type": row.pak_type,
-                "project": row.project,
-            },
-            "rank": rank,
-            # OSS baseline recall is unscored; learned ranking is Pro.
-            "score": None,
-            "reason_codes": reason_codes,
-            "risk_flags": risk_flags,
-            "risk": top_risk,
-            "status": row.status,
-        }
-
+    @staticmethod
     def build_context_selection(
-        self,
         candidates: Sequence[dict],
         *,
         include: Optional[Sequence[str]] = None,
@@ -1090,9 +1003,10 @@ class RecallStore:
             "schema": _SELECTION_SCHEMA,
             "selection_id": _selection_id(query, included, dropped),
             "generated_at": now if now is not None else _utc_now_iso8601(),
-            "store": str(self._path),
-            # Honest provenance: OSS baseline, single-source, no Pro ranking.
-            "boundary": "oss_baseline_same_store",
+            # Honest provenance: candidates come from the OSS vault FILE index
+            # (BM25), never the recall / Pak store.
+            "source": "oss_vault_file_index",
+            "boundary": "oss_vault_file_index",
             "query": query,
             "reason": reason,
             "included": included,
@@ -1106,25 +1020,32 @@ class RecallStore:
             },
         }
 
+    @staticmethod
     def write_context_selection(
-        self,
         selection: dict,
         *,
         path: Optional[Path] = None,
+        base_dir: Optional[Path] = None,
     ) -> Path:
         """Persist a context-selection proof to JSON and return its path.
 
-        The proof is written next to the recall db (a ``selections/`` sibling)
-        by default so it is discoverable, inspectable, and reversible — delete
-        the file to undo. Receipt v1 reads this artifact; OSS never
-        auto-applies a selection to a live request. The write is atomic
-        (temp-file + ``os.replace``).
+        The proof is written under a ``selections/`` directory (the canonical
+        companion home by default, or ``base_dir`` when supplied) so it is
+        discoverable, inspectable, and reversible — delete the file to undo.
+        Receipt v1 reads this artifact; OSS never auto-applies a selection to a
+        live request. The write is atomic (temp-file + ``os.replace``). This is
+        a pure filesystem write — no recall / Pak-store I/O.
         """
         if path is not None:
             out = Path(path)
         else:
             sid = selection.get("selection_id") or "selection"
-            out = self._path.parent / "selections" / f"{sid}.json"
+            if base_dir is not None:
+                out = Path(base_dir) / f"{sid}.json"
+            else:
+                from tokenpak import _paths
+
+                out = _paths.under("companion", "selections") / f"{sid}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(out.suffix + ".tmp")
         tmp.write_text(
@@ -1167,14 +1088,6 @@ def _short_hash(value: object) -> str:
     """Render a hash for log lines without leaking the whole digest."""
     s = "" if value is None else str(value)
     return s[:12] + ("…" if len(s) > 12 else "")
-
-
-def _snippet(text: object, *, limit: int = _SNIPPET_MAX) -> str:
-    """Collapse whitespace and clip ``text`` to a preview-sized snippet."""
-    s = " ".join(("" if text is None else str(text)).split())
-    if len(s) <= limit:
-        return s
-    return s[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _selection_id(
