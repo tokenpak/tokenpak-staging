@@ -173,7 +173,7 @@ tokenpak cost
 If you work with a large codebase or notes vault, index it for instant semantic search:
 
 ```bash
-tokenpak index ~/vault
+tokenpak index ~/notes
 tokenpak vault repair # Check index health and rebuild stale entries
 ```
 
@@ -186,7 +186,7 @@ This uses a local SQLite registry — no LLM calls, no cost.
 Let TokenPak calibrate optimal parallelism for your hardware:
 
 ```bash
-tokenpak calibrate ~/vault --max-workers 8 --rounds 2
+tokenpak calibrate ~/notes --max-workers 8 --rounds 2
 ```
 
 This runs once and saves a profile to `~/.tpk/calibration.json`. Future indexing runs use it automatically.
