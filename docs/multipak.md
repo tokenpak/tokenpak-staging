@@ -8,9 +8,9 @@ MultiPak Pro is the local-first cross-platform AI context-continuity layer for T
 
 > Start anywhere. Continue anywhere. MultiPak brings the right Paks into the current AI session without dumping the full history.
 
-The full feature set is **Pro** (closed-source local Rust daemon, gated by the relevant standard). Phase 1 is what TokenPak ships **today** in OSS — the contracts, the Vault Pak adapter, the read-only inspection surface, and the daemon hooks.
+The full feature set is **Pro** (closed-source local Rust daemon, license-gated). Phase 1 is what TokenPak ships **today** in OSS — the contracts, the Vault Pak adapter, the read-only inspection surface, and the daemon hooks.
 
-## Pak taxonomy (the relevant standard)
+## Pak taxonomy
 
 5 canonical subtypes:
 
@@ -54,12 +54,23 @@ MultiPak Pro Phase 1 status
 
 | Command | OSS support | Notes |
 |---|---|---|
+| `tokenpak pak create <dir> -o <pak>` | ✅ always | Package a directory into a plain JSON Pak; encrypted archives + capture pipeline are Pro |
 | `tokenpak pak inspect <pak-id-or-file>` | Vault: ✅, others: ❌ | `--json` for machine output |
 | `tokenpak pak export <pak-id> -o <dir>` | Vault: ✅, others: ❌ | Vault Paks export to `pak.json` |
 | `tokenpak pak import <pak-file>` | ✅ always | Copies a Pak file into the local store with checksum verification |
 | `tokenpak pak status` | ✅ always | Diagnostic; never errors |
 
-Exit codes follow the relevant standard: `0` success, `1` user-facing error (missing Pak, Pro required), `2` argparse usage error.
+**Create and round-trip a Pak (OSS):**
+
+```bash
+# Package a project directory into a portable JSON Pak
+$ tokenpak pak create ./my-project -o my-project.pak --title "My Project"
+
+# Install it into the local store so `pak inspect <id>` can find it
+$ tokenpak pak import my-project.pak
+```
+
+Exit codes: `0` success, `1` user-facing error (missing Pak, Pro required), `2` argparse usage error.
 
 ### Pak ID format
 
@@ -83,7 +94,7 @@ Always works. Same JSON payload as `tokenpak pak status --json`.
 
 ### `POST /pak/v1/recall`
 
-Always 501 in Phase 1 — recall ranking is Pro-only (the relevant standard row 8).
+Always 501 in Phase 1 — recall ranking is Pro-only.
 
 ### Standardized 501 envelope
 
@@ -144,6 +155,8 @@ Phase 1 OSS code never auto-promotes. The Pro daemon (Phase 2+) consumes this su
 Pak content stays local. The license refresh request carries only the license token, the per-install ed25519 public key, and the hardware-bound machine fingerprint — never Paks, anchors, prompts, completions, or telemetry.
 
 ## Phasing
+
+*"TIP" here is the **TokenPak Integration Protocol** — the open contract layer OSS and the Pro daemon negotiate capabilities over (distinct from a `[TIP:]` prompt directive or a Pak).*
 
 | Phase | Surface | Status |
 |---|---|---|
