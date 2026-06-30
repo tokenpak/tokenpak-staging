@@ -114,6 +114,7 @@ DB_DEFAULT = os.environ.get(
     "TOKENPAK_DB",
     os.path.expanduser("~/tokenpak/monitor.db"),
 )
+STATUS_JSON_SCHEMA_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -872,6 +873,7 @@ def run(
     hours: int = 0,
     fleet: bool = False,
     since: Optional[str] = None,
+    all_time: bool = False,
 ) -> None:
     """Print savings-first status to stdout.
 
@@ -884,6 +886,7 @@ def run(
       --json         Machine-readable JSON dump
       --days N       Filter to last N days
       --hours N      Filter to last N hours (combinable with --days)
+      --all          Include full persistent history in JSON output
       --fleet        Fleet rollup view (reads rollup_daily table)
       --since Nd     With --fleet: window in days (e.g. '7d')
     """
@@ -892,7 +895,13 @@ def run(
         since_days = _parse_since(since) if since else (days if days > 0 else 7)
         return run_fleet(since_days=since_days, as_json=as_json, db_path=db_path)
     if as_json:
-        return _run_json(proxy_base=proxy_base, db_path=db_path, days=days, hours=hours)
+        return _run_json(
+            proxy_base=proxy_base,
+            db_path=db_path,
+            days=days,
+            hours=hours,
+            all_time=all_time,
+        )
     if minimal:
         return _run_minimal(proxy_base=proxy_base, db_path=db_path, no_meme=no_meme)
     if by_source:
@@ -1388,7 +1397,7 @@ def _run_minimal(
 
 
 # ---------------------------------------------------------------------------
-# JSON output (machine-readable full dump)
+# JSON output (machine-readable summary)
 # ---------------------------------------------------------------------------
 
 
@@ -1397,33 +1406,95 @@ def _run_json(
     db_path: Optional[str] = None,
     days: int = 0,
     hours: int = 0,
+    all_time: bool = False,
 ) -> None:
-    """Dump all status data as JSON."""
-    health = _fetch(f"{proxy_base}/health")
-    stats = _fetch(f"{proxy_base}/stats")
-    cache = _fetch(f"{proxy_base}/cache-stats")
+    """Emit the stable machine-readable status summary.
+
+    This intentionally is not a raw dump of every human/status endpoint. The
+    JSON path is for scripts, so it stays schema-versioned, bounded, and free of
+    novelty copy. Full persistent history remains opt-in via ``--all``.
+    """
+    health = _fetch(f"{proxy_base}/health", timeout=1)
 
     savings_24h = _calculate_fleet_savings(db_path=db_path, period="24h")
     savings_1h = _calculate_fleet_savings(db_path=db_path, period="1h")
-    savings_all = _calculate_fleet_savings(db_path=db_path, period=None)
-    tip_cache = _query_tip_cache_attribution(db_path=db_path, days=days, hours=hours)
+    savings_all = _calculate_fleet_savings(db_path=db_path, period=None) if all_time else None
+    tip_days = days
+    tip_hours = hours
+    if not all_time and days <= 0 and hours <= 0:
+        tip_days = 1
+    tip_cache = _query_tip_cache_attribution(db_path=db_path, days=tip_days, hours=tip_hours)
+    resolved_db = db_path or _get_db_path()
+
+    def _with_source(value: Dict[str, Any], period: str) -> Dict[str, Any]:
+        out = dict(value)
+        out["source"] = {
+            "kind": "monitor_db",
+            "path": resolved_db,
+            "freshness": "historical",
+            "period": period,
+        }
+        return out
+
+    def _proxy_summary() -> Dict[str, Any]:
+        if not isinstance(health, dict):
+            return {
+                "reachable": False,
+                "status": "unreachable",
+                "version": None,
+                "uptime_seconds": None,
+                "compilation_mode": None,
+                "requests_total": None,
+                "source": {
+                    "kind": "proxy_http",
+                    "base_url": proxy_base,
+                    "freshness": "unreachable",
+                },
+            }
+
+        stats_block = health.get("stats") if isinstance(health.get("stats"), dict) else {}
+        requests_total = health.get("requests_total")
+        if requests_total is None:
+            requests_total = stats_block.get("requests")
+        if requests_total is None:
+            stats = _fetch(f"{proxy_base}/stats", timeout=1)
+            session_block = stats.get("session", {}) if isinstance(stats, dict) else {}
+            requests_total = session_block.get("session_requests")
+        return {
+            "reachable": True,
+            "status": health.get("status", "unknown"),
+            "version": health.get("version"),
+            "uptime_seconds": health.get("uptime_seconds"),
+            "compilation_mode": health.get("compilation_mode"),
+            "requests_total": requests_total,
+            "source": {
+                "kind": "proxy_http",
+                "base_url": proxy_base,
+                "freshness": "live",
+            },
+        }
 
     output = {
+        "schema_version": STATUS_JSON_SCHEMA_VERSION,
         "version": _get_version(),
-        "proxy": {
-            "reachable": health is not None,
-            "health": health,
-            "stats": stats,
-            "cache": cache,
+        "window": {
+            "default": not all_time and days <= 0 and hours <= 0,
+            "savings": ["1h", "24h"] + (["all_time"] if all_time else []),
+            "tip_cache": "all_time" if all_time else _tip_window_label(tip_days, tip_hours),
         },
+        "proxy": _proxy_summary(),
         "savings": {
-            "last_24h": savings_24h if not savings_24h.get("error") else None,
-            "last_1h": savings_1h if not savings_1h.get("error") else None,
-            "all_time": savings_all if not savings_all.get("error") else None,
+            "last_24h": _with_source(savings_24h, "24h") if not savings_24h.get("error") else None,
+            "last_1h": _with_source(savings_1h, "1h") if not savings_1h.get("error") else None,
         },
         "tip_cache": tip_cache,
-        "meme_lines": MEME_LINES,
     }
+    if all_time:
+        output["savings"]["all_time"] = (
+            _with_source(savings_all or {}, "all_time")
+            if savings_all and not savings_all.get("error")
+            else None
+        )
     print(json.dumps(output, indent=2, default=str))
 
 
@@ -1575,11 +1646,12 @@ if HAS_CLICK:
     @click.option("--raw", is_flag=True, help="Dump raw JSON (with --full)")
     @click.option("--minimal", is_flag=True, help="One-line savings summary")
     @click.option("--tip-cache", is_flag=True, help="Show compact TIP cache attribution only")
-    @click.option("--json", "as_json", is_flag=True, help="Full JSON data dump")
+    @click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON summary")
     @click.option("--no-meme", is_flag=True, help="Suppress tagline")
     @click.option("--db", "db_path", default=None, help="Monitor DB path override")
     @click.option("--days", default=0, type=int, help="Filter to last N days (combinable with --hours)")
     @click.option("--hours", default=0, type=int, help="Filter to last N hours (combinable with --days)")
+    @click.option("--all", "all_time", is_flag=True, help="Show full persistent history in JSON output")
     @click.option("--fleet", is_flag=True, help="Fleet rollup view — reads rollup_daily")
     @click.option("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
     def status_cmd(
@@ -1593,6 +1665,7 @@ if HAS_CLICK:
         db_path: Optional[str],
         days: int,
         hours: int,
+        all_time: bool,
         fleet: bool,
         since: Optional[str],
     ) -> None:
@@ -1610,6 +1683,7 @@ if HAS_CLICK:
           tokenpak status --days 1            # last 24 hours
           tokenpak status --hours 6           # last 6 hours
           tokenpak status --days 1 --hours 6  # last 30 hours
+          tokenpak status --json --all         # include full history in JSON
           tokenpak status --full              # legacy technical output
           tokenpak status --minimal           # one-liner for scripts
           tokenpak status --tip-cache         # compact TIP attribution
@@ -1629,6 +1703,7 @@ if HAS_CLICK:
             db_path=db_path,
             days=days,
             hours=hours,
+            all_time=all_time,
             fleet=fleet,
             since=since,
         )
