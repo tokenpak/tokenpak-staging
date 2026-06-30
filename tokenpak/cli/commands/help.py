@@ -45,6 +45,34 @@ _INTERMEDIATE_COMMANDS = {
     "version": "Show current versions",
 }
 
+_COMMON_COMMAND_GROUPS = {
+    "Quick Start": {
+        "setup": "Guided first-run configuration",
+        "start": "Start the proxy",
+        "status": "Health, stats, and savings summary",
+        "doctor": "Run diagnostics and health checks",
+        "demo": "See compression on sample data",
+        "cost": "API spend and token usage",
+        "savings": "What TokenPak saved you",
+    },
+    "Common Tools": {
+        "serve": "Start proxy/telemetry server",
+        "integrate": "Client-specific setup guides",
+        "creds": "Discover credentials and run diagnostics",
+        "cache": "Show or clear local cache status",
+        "index": "Index files for context retrieval",
+        "replay": "Inspect and re-run captured sessions",
+        "config": "View/edit configuration",
+        "logs": "View proxy logs",
+    },
+    "Next Steps": {
+        "stop": "Stop the proxy",
+        "restart": "Restart the proxy",
+        "dashboard": "Open web metrics dashboard",
+        "upgrade": "Open the TokenPak Pro upgrade page",
+    },
+}
+
 # ─────────────────────────────────────────────
 # Registry loader
 # ─────────────────────────────────────────────
@@ -77,13 +105,15 @@ def _group_commands(commands: list[dict]) -> dict[str, list[dict]]:
 
 
 def print_essential_help() -> None:
-    """Print essential commands only (default view for new users)."""
+    """Print common commands for first-run discovery."""
     n = len(_load_registry())
     print("TokenPak — LLM Proxy with Prompt Packing\n")
-    print("Essential Commands:\n")
-    for cmd, desc in _ESSENTIAL_COMMANDS.items():
-        print(f"  {cmd:<14} {desc}")
-    print()
+    print("Common Commands:\n")
+    for group, commands in _COMMON_COMMAND_GROUPS.items():
+        print(f"{group}:\n")
+        for cmd, desc in commands.items():
+            print(f"  {cmd:<14} {desc}")
+        print()
     print("Run `tokenpak help --more` for intermediate commands.")
     print(f"Run `tokenpak help --all` for all {n} commands.")
     print("Run `tokenpak help <command>` for details on any command.")
@@ -246,7 +276,7 @@ def run(args: Optional[list[str]] = None) -> None:
         args = sys.argv[2:]  # skip 'tokenpak' and 'help'
 
     if not args:
-        # Default: show essential commands only
+        # Default: show common first-run commands.
         print_essential_help()
         return
 
