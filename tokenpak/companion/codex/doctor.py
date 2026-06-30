@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from ..config import CompanionConfig
+from .guidance import _codex_cli_missing_message
 from .mcp_config import SERVER_NAME, codex_config_path, codex_home, verify_policy
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .rates_snapshot import count as rates_count
@@ -46,13 +47,15 @@ SANDBOX_HELP_ANCHOR = "docs/troubleshooting.md#20-codex-linux-sandbox-warning"
 def check_codex_binary() -> "tuple[Status, str]":
     path = shutil.which("codex")
     if not path:
-        return "FAIL", "codex not on PATH"
+        return "FAIL", _codex_cli_missing_message()
     try:
         result = subprocess.run(
             ["codex", "--version"], capture_output=True, text=True, timeout=5
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        return "FAIL", f"codex --version failed: {exc}"
+    except FileNotFoundError:
+        return "FAIL", _codex_cli_missing_message("codex --version failed")
+    except subprocess.TimeoutExpired:
+        return "FAIL", "codex --version timed out"
     if result.returncode != 0:
         return "FAIL", result.stderr.strip() or "codex --version exited nonzero"
     return "PASS", result.stdout.strip() or result.stderr.strip()
@@ -71,7 +74,7 @@ def check_linux_sandbox() -> "tuple[Status, str]":
             timeout=SANDBOX_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
-        return "WARN", "codex sandbox smoke skipped: codex not on PATH"
+        return "WARN", _codex_cli_missing_message("codex sandbox smoke skipped")
     except subprocess.TimeoutExpired:
         return (
             "WARN",
@@ -114,8 +117,10 @@ def check_hooks_feature() -> "tuple[Status, str]":
         result = subprocess.run(
             ["codex", "features", "list"], capture_output=True, text=True, timeout=10
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        return "FAIL", f"codex features list failed: {exc}"
+    except FileNotFoundError:
+        return "FAIL", _codex_cli_missing_message("codex features list failed")
+    except subprocess.TimeoutExpired:
+        return "FAIL", "codex features list timed out"
 
     maturity = _parse_hooks_maturity(result.stdout)
     if maturity is None:
@@ -166,8 +171,10 @@ def check_mcp_registered() -> "tuple[Status, str]":
             text=True,
             timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        return "FAIL", f"codex mcp get failed: {exc}"
+    except FileNotFoundError:
+        return "FAIL", _codex_cli_missing_message("codex mcp get failed")
+    except subprocess.TimeoutExpired:
+        return "FAIL", "codex mcp get timed out"
     if result.returncode != 0:
         return "FAIL", f"{SERVER_NAME} not registered"
     return "PASS", f"{SERVER_NAME} registered"

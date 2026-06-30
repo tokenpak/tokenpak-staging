@@ -1,4 +1,4 @@
-# TokenPak — Cut your LLM token spend — zero config
+# TokenPak — Cut your LLM token spend — local first
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
@@ -7,31 +7,37 @@
 
 > **The open logistics layer for AI context.**
 
-TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no TokenPak cloud dependency, and provider credentials stay in your local client/provider environment.
 
 **Status:** Beta — APIs and CLI may change between releases.
 
 ---
 
-## 30-second demo
+## First measured receipt
 
 ```bash
 pip install tokenpak
-tokenpak serve                          # start proxy at localhost:8766
-tokenpak integrate claude-code --apply  # wire Claude Code to the proxy
+tokenpak start
+curl -sS http://localhost:8766/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":64,"messages":[{"role":"user","content":"Summarize this recurring project context and keep the answer short."}]}'
 ```
 
-```
-✅ Applied: Updated ~/.claude/settings.json (2 changes).
-```
-
-Then see it work on your own machine:
+That third command sends one eligible provider request through the local proxy.
+The durable local receipt is written to `~/.tpk/monitor.db` in the `requests`
+table, with model, token, cost, cache-origin, and attribution fields. Inspect the
+rollup with:
 
 ```bash
-tokenpak demo
+tokenpak status --json
 ```
 
-Run the local demo to inspect the Prompt Packing stages and a sample savings estimate on your machine.
+Receipt values are measured from local proxy telemetry and provider usage data.
+If a request has no attributable compression or cache savings, TokenPak reports
+zero instead of inventing a number. See [docs/first-receipt.md](docs/first-receipt.md)
+for the evidence boundary and deterministic regression fixture.
 
 ---
 
@@ -39,17 +45,17 @@ Run the local demo to inspect the Prompt Packing stages and a sample savings est
 
 TokenPak speaks the OpenAI and Anthropic HTTP APIs, so any client that targets those endpoints can route through it. The table below reflects what is verified in the repo's [adapter compatibility matrix](docs/adapter-compatibility-matrix.md) versus what is not yet verified.
 
-| Client / SDK | Status |
-|--------------|--------|
-| Claude Code | ✅ Supported — `tokenpak integrate claude-code` |
-| OpenAI SDK | ✅ Supported — tested |
-| Anthropic SDK | ✅ Supported — tested |
-| LiteLLM | ✅ Supported — tested |
-| Cursor | ⚠️ Experimental — verify before relying on it |
-| Cline | ⚠️ Experimental — verify before relying on it |
-| Continue.dev | ⚠️ Experimental — verify before relying on it |
-| Aider | ⚠️ Experimental — verify before relying on it |
-| Codex | ⚠️ Experimental — verify before relying on it |
+| Client / SDK | Runtime setup mode | Compatibility label |
+|--------------|--------------------|---------------------|
+| Claude Code | `--apply` supported | Supported; tested |
+| OpenAI SDK | Print-only snippet | Supported; tested |
+| Anthropic SDK | Print-only snippet | Supported; tested |
+| LiteLLM | Print-only snippet | Supported; tested |
+| Cursor | `--apply` available | Experimental; untested |
+| Cline | Print-only snippet | Experimental; untested |
+| Continue.dev | `--apply` available | Experimental; untested |
+| Aider | `--apply` available | Experimental; untested |
+| Codex | Print-only base setup | Experimental; untested |
 
 Run `tokenpak integrate` to see the current client list with setup guides for each.
 
@@ -70,6 +76,23 @@ pip install -U tokenpak
 tokenpak update
 ```
 
+### Optional features (extras)
+
+The slim install keeps core functionality under 200 MB. Heavy optional features are opt-in:
+
+| Extra | What it adds | Install |
+|---|---|---|
+| `retrieval` | Semantic/vector search (sentence-transformers, ~5 GB with torch) | `pip install tokenpak[retrieval]` |
+| `code-compression` | AST-based code compression (tree-sitter-languages) | `pip install tokenpak[code-compression]` |
+| `intelligence` | A/B optimizer analytics (scipy) | `pip install tokenpak[intelligence]` |
+| `data` | Data analysis features (pandas) | `pip install tokenpak[data]` |
+| `compression` | LLM-based compression engine (llmlingua) | `pip install tokenpak[compression]` |
+| `integrations-litellm` | LiteLLM router middleware (litellm) | `pip install tokenpak[integrations-litellm]` |
+| `dispatch` | Dispatch orchestration subsystem (pydantic, jsonschema) | `pip install tokenpak[dispatch]` |
+| `full` | All of the above — restores legacy bundled behavior | `pip install tokenpak[full]` |
+
+**Upgrading from v1.8.x or earlier?** Six heavy packages (`sentence-transformers`, `tree-sitter-languages`, `scipy`, `pandas`, `llmlingua`, `litellm`) moved from core to optional extras in v1.9.0. Install the extras you need above, or use `pip install tokenpak[full]` to restore the previous bundled behavior.
+
 See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
 
 Requirements: Python 3.10+. No external dependencies for core functionality.
@@ -81,6 +104,8 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 ---
 
 ## What's included (OSS)
+
+> **Dispatch (v0.1-alpha preview):** turn a request into a scoped, resumable, reviewable workflow from the CLI. It is a source/`main`-branch preview and is not yet part of a released `pip install tokenpak`; see the [Dispatch guide](docs/guides/dispatch.md).
 
 - **Prompt Packing** — fewer tokens on real agent workloads. Savings are
   route-specific: direct API, CLI, and uncached repeated-agent loops are the

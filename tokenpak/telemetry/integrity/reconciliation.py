@@ -79,13 +79,14 @@ class ReconciliationManager:
                     model = record["model"]
                     billed_tokens = record["billed_tokens"]
 
-                    # Get proxy tokens for same period
+                    # Get proxy tokens for same period. Canonical store keeps
+                    # event time as the epoch column ``ts`` (REAL).
                     cursor.execute(
                         """
-                        SELECT SUM(final_input_tokens) FROM events
+                        SELECT SUM(final_input_tokens) FROM tp_events
                         WHERE provider = ? AND model = ?
-                        AND DATE(created_at) >= DATE(?)
-                        AND DATE(created_at) < DATE(?, '+1 day')
+                        AND DATE(ts, 'unixepoch') >= DATE(?)
+                        AND DATE(ts, 'unixepoch') < DATE(?, '+1 day')
                     """,
                         (provider, model, period_start, period_start),
                     )

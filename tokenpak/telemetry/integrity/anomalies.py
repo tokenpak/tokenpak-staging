@@ -70,19 +70,20 @@ class AnomalyDetector:
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
 
-            # Get baseline (7-day average)
-            (datetime.now(timezone.utc) - timedelta(days=baseline_days)).isoformat()
+            # Get baseline (7-day average). Canonical store keeps event time as
+            # the epoch column ``ts`` (REAL), not an ISO ``created_at`` string.
+            now_ts = datetime.now(timezone.utc).timestamp()
 
             cursor.execute(
                 """
-                SELECT AVG(final_input_tokens) FROM events
-                WHERE model = ? AND created_at < ?
-                AND DATE(created_at) >= DATE(?, '-' || ? || ' days')
+                SELECT AVG(final_input_tokens) FROM tp_events
+                WHERE model = ? AND ts < ?
+                AND DATE(ts, 'unixepoch') >= DATE(?, 'unixepoch', '-' || ? || ' days')
             """,
                 (
                     model,
-                    datetime.now(timezone.utc).isoformat(),
-                    datetime.now(timezone.utc).isoformat(),
+                    now_ts,
+                    now_ts,
                     baseline_days,
                 ),
             )
@@ -125,8 +126,8 @@ class AnomalyDetector:
 
             cursor.execute(
                 """
-                SELECT AVG(actual_cost) FROM events
-                WHERE DATE(created_at) = ?
+                SELECT AVG(actual_cost) FROM tp_events
+                WHERE DATE(ts, 'unixepoch') = ?
             """,
                 (yesterday,),
             )
@@ -165,24 +166,24 @@ class AnomalyDetector:
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
 
-            start_time = (
+            start_ts = (
                 datetime.now(timezone.utc) - timedelta(minutes=time_window_minutes)
-            ).isoformat()
+            ).timestamp()
 
             cursor.execute(
                 """
-                SELECT COUNT(*) FROM events WHERE created_at > ? AND retry_count > 0
+                SELECT COUNT(*) FROM tp_events WHERE ts > ? AND retry_count > 0
             """,
-                (start_time,),
+                (start_ts,),
             )
 
             retried = cursor.fetchone()[0]
 
             cursor.execute(
                 """
-                SELECT COUNT(*) FROM events WHERE created_at > ?
+                SELECT COUNT(*) FROM tp_events WHERE ts > ?
             """,
-                (start_time,),
+                (start_ts,),
             )
 
             total = cursor.fetchone()[0]
@@ -222,24 +223,24 @@ class AnomalyDetector:
         with closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
 
-            start_time = (
+            start_ts = (
                 datetime.now(timezone.utc) - timedelta(minutes=time_window_minutes)
-            ).isoformat()
+            ).timestamp()
 
             cursor.execute(
                 """
-                SELECT COUNT(*) FROM events WHERE created_at > ? AND status = 'error'
+                SELECT COUNT(*) FROM tp_events WHERE ts > ? AND status = 'error'
             """,
-                (start_time,),
+                (start_ts,),
             )
 
             errors = cursor.fetchone()[0]
 
             cursor.execute(
                 """
-                SELECT COUNT(*) FROM events WHERE created_at > ?
+                SELECT COUNT(*) FROM tp_events WHERE ts > ?
             """,
-                (start_time,),
+                (start_ts,),
             )
 
             total = cursor.fetchone()[0]

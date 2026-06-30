@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 _BASH_HOOK = str(Path(_REPO_ROOT) / "tokenpak" / "companion" / "hooks" / "pre_send.sh")
@@ -504,6 +507,34 @@ def test_bash_hook_show_cost_disabled_no_stderr(tmp_path):
     )
     assert result.returncode == 0
     assert result.stderr == ""
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="dynamic title requires jq")
+def test_bash_hook_emits_native_session_title_once(tmp_path):
+    """Allow-path hook emits Claude Code's native sessionTitle payload once."""
+    hook_input = dict(_SIX_FIELD_INPUT)
+    hook_input.update({
+        "session_id": "surface-title-1",
+        "prompt": "Refactor telemetry statusline guard tests",
+        "transcript_path": "",
+    })
+
+    result = _run_bash_hook(hook_input, tmp_path=tmp_path)
+    assert result.returncode == 0
+    payload = json.loads(result.stdout.strip())
+    output = payload["hookSpecificOutput"]
+    assert output["hookEventName"] == "UserPromptSubmit"
+    assert output["sessionTitle"].startswith("\U0001f4e6 ")
+    assert "Telemetry statusline" in output["sessionTitle"]
+
+    title_state = tmp_path / "titles" / "surface-title-1"
+    title_text = title_state.read_text().strip()
+    assert "Telemetry statusline" in title_text
+    assert output["sessionTitle"] == "\U0001f4e6 " + title_text
+
+    second = _run_bash_hook(hook_input, tmp_path=tmp_path)
+    assert second.returncode == 0
+    assert second.stdout == ""
 
 
 # ---------------------------------------------------------------------------

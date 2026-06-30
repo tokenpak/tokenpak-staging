@@ -335,8 +335,22 @@ _EXTRA_KNOWN_COMMANDS = frozenset(
         "home",
         # Dispatch v0.1-alpha (workflow-control layer)
         "dispatch",
+        # Mission-verb aliases: thin routes to existing commands.
+        "pack",
+        "reuse",
+        "guard",
+        "receipt",
+        "verify",
     }
 )
+
+_MISSION_VERB_ALIASES = {
+    "pack": ("compress",),
+    "reuse": ("recipe",),
+    "guard": ("budget",),
+    "receipt": ("dispatch", "receipt"),
+    "verify": ("prove",),
+}
 
 
 def _core_command_names() -> set:
@@ -434,6 +448,38 @@ def registered_command_names(parser=None) -> set:
         if isinstance(action, argparse._SubParsersAction):
             names.update(action.choices.keys())
     return names
+
+
+def _rewrite_mission_verb_alias(argv: list[str]) -> list[str]:
+    """Rewrite top-level mission aliases to their canonical parser path."""
+    if len(argv) < 2:
+        return argv
+    command_index = 1
+    while command_index < len(argv):
+        token = argv[command_index]
+        if token == "--db":
+            command_index += 2
+            continue
+        if token.startswith("--db="):
+            command_index += 1
+            continue
+        if token.startswith("-"):
+            return argv
+        break
+    if command_index >= len(argv):
+        return argv
+    target = _MISSION_VERB_ALIASES.get(argv[command_index])
+    if not target:
+        return argv
+    return [*argv[:command_index], *target, *argv[command_index + 1:]]
+
+
+def _mission_alias_dispatch(args):
+    """Fallback for direct parser use; normal CLI entry rewrites before parse."""
+    target = " ".join(_MISSION_VERB_ALIASES[args.command])
+    print(f"tokenpak {args.command} is an alias for `tokenpak {target}`.")
+    print(f"Run `tokenpak {target} --help` for details.")
+    return 0
 
 
 # ── Plugin command discovery (tokenpak.commands entry-point group) ────────────
@@ -613,6 +659,18 @@ def _mark_intro_seen():
 
 def _is_first_run() -> bool:
     return not _FIRST_RUN_FLAG.exists()
+
+
+# Per-subcommand --json flags register under varying dest names (status uses
+# `as_json`, preview/others use `json`, etc.). Machine/JSON output must stay a
+# single parseable document, so human first-run/welcome prose is suppressed when
+# any of these are set rather than tied to a single global flag.
+_MACHINE_OUTPUT_FLAGS = ("json", "as_json", "json_output", "json_out")
+
+
+def _is_machine_output(args) -> bool:
+    """True when the resolved command requested machine-readable (JSON) output."""
+    return any(bool(getattr(args, attr, False)) for attr in _MACHINE_OUTPUT_FLAGS)
 
 
 def _print_quick_help():
@@ -841,7 +899,6 @@ def cmd_init(args):
 def cmd_setup(args):
     """Interactive wizard for first-time TokenPak configuration."""
     import os
-    import subprocess
     import time
     from pathlib import Path
 
@@ -920,13 +977,27 @@ def cmd_setup(args):
         print("⚠️  No API keys detected in environment variables.")
         print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY,")
         print("   or sign in with Claude Code (OAuth) — no API key required.")
+        if _interactive_menu_allowed():
+            try:
+                response = input("   Open the guided TokenPak menu now? [Y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                response = "n"
+                print()
+            if response in ("", "y", "yes"):
+                try:
+                    from tokenpak.cli.commands.menu import run_menu
+
+                    run_menu()
+                    return
+                except Exception as exc:
+                    print(f"   Guided menu unavailable: {exc}")
         print("   Example (set ANTHROPIC_API_KEY for your shell):")
         try:
             from tokenpak.cli.commands.setup import env_var_help
 
             print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
         except Exception:
-            print("    export ANTHROPIC_API_KEY='sk-...'")
+            print("    Set ANTHROPIC_API_KEY in your shell before starting TokenPak.")
         return
 
     # Auto-detect primary provider
@@ -1003,16 +1074,15 @@ def cmd_setup(args):
         print("Warning: proxy.py not found. Skipping auto-start.")
         return
 
-    # Start proxy
+    # Start proxy (platform-appropriate detached background process)
+    from tokenpak.platform import process as _process
+
     env = os.environ.copy()
     env["TOKENPAK_PORT"] = str(port)
-    proc = subprocess.Popen(
+    proc = _process.start_background(
         [sys.executable, str(proxy_path)],
         env=env,
         cwd=str(proxy_path.parent),
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
 
     pid_path = Path.home() / ".tokenpak" / "proxy.pid"
@@ -1051,8 +1121,6 @@ def cmd_setup(args):
 
 def cmd_start(args):
     """Start the proxy on localhost:8766 (launches proxy.py)."""
-    import subprocess
-
     port = int(getattr(args, "port", None) or os.environ.get("TOKENPAK_PORT", "8766"))
     log_level = getattr(args, "log_level", None)
     config_path = getattr(args, "config", None)
@@ -1089,14 +1157,23 @@ def cmd_start(args):
         print(f"Proxy already running (port {port}, mode={mode}, {reqs} requests).")
         return
 
-    # Check stale PID file
+    # Check stale PID file (platform-safe liveness probe — os.kill(pid, 0) is a
+    # liveness check on POSIX but would terminate the process on Windows).
+    from tokenpak.platform import process as _process
+
     if pid_path.exists():
         try:
             pid = int(pid_path.read_text().strip())
-            os.kill(pid, 0)
-            print(f"Proxy process exists (PID {pid}) but not responding. Try `tokenpak restart`.")
-            return 1
-        except (ProcessLookupError, ValueError):
+        except ValueError:
+            pid_path.unlink(missing_ok=True)
+            pid = None
+        if pid is not None:
+            if _process.pid_alive(pid):
+                print(
+                    f"Proxy process exists (PID {pid}) but not responding. "
+                    "Try `tokenpak restart`."
+                )
+                return 1
             pid_path.unlink(missing_ok=True)
 
     env = os.environ.copy()
@@ -1119,13 +1196,10 @@ def cmd_start(args):
 
             serve_args = types.SimpleNamespace(port=port, telemetry=False, ingest=False, workers=1)
             return cmd_serve(serve_args)
-        proc = subprocess.Popen(
+        proc = _process.start_background(
             [sys.executable, str(proxy_path)],
             env=env,
             cwd=str(proxy_path.parent),
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
     else:
         cmd = [sys.executable, "-m", "tokenpak.proxy.server", "--port", str(port)]
@@ -1133,13 +1207,7 @@ def cmd_start(args):
             cmd.extend(["--log-level", str(log_level)])
         if config_path:
             cmd.extend(["--config", str(config_path)])
-        proc = subprocess.Popen(
-            cmd,
-            env=env,
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        proc = _process.start_background(cmd, env=env)
 
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(proc.pid))
@@ -1165,7 +1233,7 @@ def cmd_start(args):
 
 def cmd_stop(args):
     """Stop the running proxy."""
-    import signal as _signal
+    from tokenpak.platform import process as _process
 
     pid_path = Path.home() / ".tokenpak" / "proxy.pid"
     if not pid_path.exists():
@@ -1174,14 +1242,20 @@ def cmd_stop(args):
         return 1
     try:
         pid = int(pid_path.read_text().strip())
-        os.kill(pid, _signal.SIGTERM)
-        pid_path.unlink(missing_ok=True)
-        print(f"Proxy stopped (PID {pid}).")
-    except ProcessLookupError:
+    except (ValueError, OSError) as e:
+        print(f"Error stopping proxy: {e}")
+        return 1
+
+    if not _process.pid_alive(pid):
         pid_path.unlink(missing_ok=True)
         print("Proxy was not running (stale PID removed).")
-    except Exception as e:
-        print(f"Error stopping proxy: {e}")
+        return
+
+    if _process.terminate(pid):
+        pid_path.unlink(missing_ok=True)
+        print(f"Proxy stopped (PID {pid}).")
+    else:
+        print(f"Error stopping proxy (PID {pid}): could not signal process.")
         return 1
 
 
@@ -1815,6 +1889,13 @@ def cmd_serve(args):
     # First-run compression notice (stderr only, once per install)
     _maybe_show_compression_notice(safe=getattr(args, "safe", False))
 
+    workers = getattr(args, "workers", 1)
+    if workers is None:
+        workers = 1
+    if workers < 1:
+        print("--workers must be >= 1", file=sys.stderr)
+        sys.exit(1)
+
     if getattr(args, "telemetry", False):
         import uvicorn
 
@@ -1829,7 +1910,6 @@ def cmd_serve(args):
             app.include_router(ingest_router)
         except Exception as _ingest_err:
             print(f"[warn] Ingest router not loaded: {_ingest_err}")
-        workers = getattr(args, "workers", 1)
         print(f"Starting TokenPak telemetry server on port {args.port} (workers={workers})")
         uvicorn.run(app, host="127.0.0.1", port=args.port, workers=workers)
         return
@@ -1847,7 +1927,6 @@ def cmd_serve(args):
         uvicorn.run(app, host="127.0.0.1", port=port)
         return
     # Multi-worker mode: route to ingest API via uvicorn (proxy doesn't support workers)
-    workers = getattr(args, "workers", 1) or 1
     if workers > 1:
         import uvicorn
 
@@ -2249,23 +2328,32 @@ def cmd_dashboard(args):
 
     # --public: show public URL with token
     if getattr(args, "public", False):
+        from tokenpak.cli.commands.dashboard_share import (
+            build_share_plan,
+            render_share_plan,
+            run_quick_tunnel,
+        )
         from tokenpak.core.config_loader import get as _cfg  # noqa: F401
 
         port = int(_cfg("port", 8766, "TOKENPAK_PORT", int))
         token = load_or_create_token()
-        hostname = socket.gethostname()
-        try:
-            ip = socket.gethostbyname(hostname)
-        except Exception:
-            ip = "localhost"
-        url = f"http://{ip}:{port}/dashboard?token={token}"
-        print("\n✅ TokenPak Dashboard (Public)")
-        print("─────────────────────────────────")
-        print(f"URL:   {url}")
-        print(f"Token: {token}")
-        print("\n⚠️  Share this URL only with trusted users.")
-        print("Regenerate token: tokenpak dashboard --new-token\n")
-        webbrowser.open(url)
+        plan = build_share_plan(port=port, token=token)
+        if getattr(args, "tunnel", False):
+            if not plan.proxy_running:
+                print()
+                print(render_share_plan(plan))
+                print()
+                raise SystemExit(1)
+            rc = run_quick_tunnel(port=port, token=token)
+            if rc:
+                raise SystemExit(rc)
+            return
+
+        print()
+        print(render_share_plan(plan))
+        print()
+        if plan.proxy_running and sys.stdout.isatty():
+            webbrowser.open(plan.local_url)
         return
 
     # Default: TUI dashboard
@@ -2376,6 +2464,13 @@ def cmd_claude(args):
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     _maybe_update_nudge()
+    print("Launching Claude Code through TokenPak.")
+    print("Claude Code may ask you to trust this folder on first launch; keep using its normal prompt.")
+    try:
+        if Path.cwd().resolve() == Path.home().resolve():
+            print("Tip: launch from your project directory so Claude Code scopes context to that project.")
+    except Exception:
+        pass
     from .companion import launch
 
     launch(args=list(args.args))
@@ -2393,6 +2488,14 @@ def cmd_codex(args):
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     forwarded = list(args.args)
+    if forwarded and forwarded[0] == "usage":
+        from .companion.codex.usage import main_usage
+
+        sys.exit(main_usage(forwarded[1:]))
+    if forwarded and forwarded[0] == "exec" and "--capture" in forwarded[1:]:
+        from .companion.codex.usage import main_exec_capture
+
+        sys.exit(main_exec_capture(forwarded[1:]))
     if forwarded and forwarded[0] == "doctor":
         from .companion.codex.doctor import main as doctor_main
 
@@ -2674,6 +2777,8 @@ def _build_codex_parser(sub):
             "  tokenpak codex uninstall         # reverse installation\n"
             "  tokenpak codex statusline        # enable native status modules (additive)\n"
             "  tokenpak codex clean             # reclaim orphaned isolated codex homes\n"
+            "  tokenpak codex usage --latest --json\n"
+            "  tokenpak codex exec --capture -- codex exec --json \"summarize this repo\"\n"
             "  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home\n"
             "  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home\n"
             "  tokenpak codex --budget 5.00\n"
@@ -2905,7 +3010,28 @@ def _build_stub_parsers(sub):
         "activate",
         help="Store a Pro/Team/Enterprise license key",
     )
-    p_activate.add_argument("key", nargs="?", default="", help="Your license key")
+    p_activate.add_argument(
+        "key",
+        nargs="?",
+        default="",
+        metavar="KEY",
+        help="License key (legacy; prefer --key-file, --key-stdin, or --prompt-key)",
+    )
+    p_activate.add_argument(
+        "--key-file",
+        metavar="PATH",
+        help="Read the license key from a file",
+    )
+    p_activate.add_argument(
+        "--key-stdin",
+        action="store_true",
+        help="Read the license key from standard input",
+    )
+    p_activate.add_argument(
+        "--prompt-key",
+        action="store_true",
+        help="Prompt for the license key without echo",
+    )
     p_activate.add_argument("--email", default="", help="Optional email for the license")
     p_activate.set_defaults(
         func=lambda args: __import__(
@@ -3172,6 +3298,15 @@ def build_parser():
     p_setup = sub.add_parser("setup", help="Interactive first-time configuration wizard")
     p_setup.set_defaults(func=cmd_setup)
 
+    for alias, target in _MISSION_VERB_ALIASES.items():
+        target_text = " ".join(target)
+        p_alias = sub.add_parser(
+            alias,
+            help=f"Alias for `tokenpak {target_text}`",
+            description=f"Alias for `tokenpak {target_text}`.",
+        )
+        p_alias.set_defaults(func=_mission_alias_dispatch)
+
     p_start = sub.add_parser(
         "start",
         help="Start the proxy (localhost:8766)",
@@ -3435,7 +3570,12 @@ def build_parser():
     p_dashboard.add_argument(
         "--public",
         action="store_true",
-        help="Show public URL with token (accessible from any machine)",
+        help="Show guided sharing options with a dashboard token",
+    )
+    p_dashboard.add_argument(
+        "--tunnel",
+        action="store_true",
+        help="With --public, start a temporary Cloudflare quick tunnel",
     )
     p_dashboard.add_argument(
         "--show-token",
@@ -3679,26 +3819,14 @@ def _cmd_status_legacy(args):
         print()
 
         # Savings summary — prominent 💰 line
-        # cache_read_tokens is in /stats session, not /health stats
-        _stats_session = (stats or {}).get("session", {})
-        cache_read = _stats_session.get("cache_read_tokens", s.get("cache_read_tokens", 0))
-        saved_tok = s.get("saved_tokens", 0)
-        _hits = s.get("cache_hits", 0)
-        _misses = s.get("cache_misses", 0)
-        _total_cache = _hits + _misses
-        _hit_rate = (_hits / _total_cache * 100) if _total_cache > 0 else 0
-        # Cache reads save (full_price - cache_read_price) per token.
-        # Using Anthropic claude-sonnet-4 rates: $3.00/MTok input, $0.30/MTok cache read.
-        _cache_savings = cache_read * 2.70 / 1_000_000
-        # Compression savings: tokens eliminated entirely, valued at input rate.
-        _compression_savings = saved_tok * 3.00 / 1_000_000
-        _total_saved = _cache_savings + _compression_savings
         # Compact savings status bar — prefer today's stats over session stats
+        # Generic provider/client cache reads are observability in this legacy
+        # fallback; without origin data they must not inflate TokenPak savings.
         _today = (stats or {}).get("today", {})
         _today_input = _today.get("input_tokens", 0)
         _today_compressed = _today.get("compressed_tokens", 0)
         _today_cache_read = _today.get("cache_read_tokens", 0)
-        _today_total_saved_tok = _today_compressed + _today_cache_read
+        _today_total_saved_tok = _today_compressed
 
         # Compression % from today's data
         _avg_compression = (_today_compressed / _today_input * 100) if _today_input > 0 else 0.0
@@ -3731,8 +3859,14 @@ def _cmd_status_legacy(args):
 
         if _savings_parts:
             print(f"  💰 Savings: {' | '.join(_savings_parts)}")
+            if _today_cache_read > 0:
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
         else:
-            print("  💰 Savings: no data yet (run some requests first)")
+            if _today_cache_read > 0:
+                print("  💰 Savings: no TokenPak-attributed savings yet")
+                print(f"     Cache reads observed: {_fmt_tokens(_today_cache_read)} tokens (not counted as TokenPak savings)")
+            else:
+                print("  💰 Savings: no data yet (run some requests first)")
         print()
 
         # Today's savings (from telemetry DB)
@@ -3904,33 +4038,127 @@ def cmd_usage(args):
             )
 
 
+SAVINGS_ESTIMATE_NOTE = (
+    "Savings are estimates from recorded telemetry and local pricing rates; "
+    "provider pricing and run-to-run model behavior can change the final bill."
+)
+
+
+def _savings_json_payload(report, days):
+    """Build the machine-readable savings summary.
+
+    Mirrors the receipt definition used by the human ``tokenpak savings``
+    output. When no receipt-backed data exists the result is reported as an
+    explicit no-data state rather than a confident zero, so consumers never
+    mistake "nothing recorded yet" for "zero savings achieved".
+    """
+    has_data = not (report.total_cost == 0.0 and report.savings_amount == 0.0)
+    payload = {
+        "section": "savings",
+        "days": days,
+        "available": has_data,
+        "attribution": {
+            "model": "conservative_tokenpak_caused_savings",
+            "provider_or_client_cache": "observed_not_credited",
+        },
+    }
+    if has_data:
+        payload.update(
+            {
+                "savings_amount": round(report.savings_amount, 6),
+                "savings_pct": round(report.savings_pct, 4),
+                "actual_cost": round(report.total_cost, 6),
+                "baseline_cost": round(report.estimated_without_compression, 6),
+                "cache_hit_rate": round(report.cache_hit_rate, 6),
+                "estimate_note": SAVINGS_ESTIMATE_NOTE,
+            }
+        )
+    else:
+        payload["state"] = "no_data"
+        payload["message"] = (
+            "No receipt-backed savings data yet. "
+            "Run requests through the proxy to start tracking."
+        )
+    return payload
+
+
 def cmd_savings(args):
     """Show compression savings summary."""
     mode = resolve_mode(args)
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Savings are read only from the receipt-backed telemetry engine, which
-    # counts proxy-attributable savings from real cost records. There is no
-    # estimated/derived path: when no receipt-backed data exists, a neutral
-    # "no data yet" state is shown rather than an invented figure.
-    from .telemetry.query import get_savings_report
+    # Canonical conservative savings: the live `savings`
+    # command reports the SAME proxy-attributed figure as `status`/`doctor`,
+    # derived from the one `compute_savings` engine — no separate receipt-backed
+    # path that could disagree on the same install. The window is labelled
+    # explicitly; when there is no data a neutral "no data yet" state is shown
+    # rather than an invented figure.
+    from .telemetry.savings import compute_savings
 
-    report = get_savings_report(days=days)
+    _sv = compute_savings(window=f"{int(days)}d_custom")
+    _has = (not _sv.error) and _sv.requests > 0
+    actual = _sv.actual_cost if _has else 0.0
+    estimated_without = _sv.baseline_cost if _has else 0.0
+    savings_amount = _sv.saved_cost if _has else 0.0
+    savings_pct = _sv.savings_pct if _has else 0.0
+    if _has:
+        _cr = sum(m["cache_read_tokens"] for m in _sv.models)
+        _in = sum(m["input_tokens"] for m in _sv.models)
+        cache_hit_rate = (_cr / (_cr + _in)) if (_cr + _in) > 0 else 0.0
+    else:
+        cache_hit_rate = 0.0
+
+    if getattr(args, "as_json", False):
+        # Machine-readable mode: emit only the JSON document on stdout.
+        # Project the conservative ``compute_savings`` figures onto the
+        # ``SavingsReport`` shape consumed by ``_savings_json_payload``. When
+        # there is no receipt-backed data the derived values are all 0.0, so the
+        # payload reports an explicit no-data state rather than a confident zero.
+        from .telemetry.query_models import SavingsReport
+
+        report = SavingsReport(
+            total_cost=actual,
+            estimated_without_compression=estimated_without,
+            savings_amount=savings_amount,
+            savings_pct=savings_pct,
+            cache_hit_rate=cache_hit_rate,
+        )
+        print(json.dumps(_savings_json_payload(report, days), indent=2, sort_keys=True))
+        return
 
     if mode == OutputMode.RAW:
-        print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
+        print(
+            fmt.raw(
+                {
+                    "section": "savings",
+                    "days": days,
+                    "window": _sv.window_label,
+                    "actual_cost": actual,
+                    "savings_amount": savings_amount,
+                    "savings_pct": savings_pct,
+                    "cache_hit_rate": cache_hit_rate,
+                    "estimated_without_compression": estimated_without,
+                    "estimate_note": SAVINGS_ESTIMATE_NOTE if _has else "",
+                }
+            )
+        )
         return
 
     # Check for empty database
-    if report.total_cost == 0.0 and report.savings_amount == 0.0:
+    if not _has:
         print("No savings data yet. Run your first request through the proxy to start tracking.")
         return
 
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{report.savings_pct:.1f}%", f"${report.savings_amount:.2f}", f"{days}d"]
+                [
+                    f"{savings_pct:.1f}%",
+                    f"${savings_amount:.2f}",
+                    _sv.window_label,
+                    "estimate",
+                ]
             )
         )
         return
@@ -3940,14 +4168,18 @@ def cmd_savings(args):
     print(
         fmt.kv(
             [
-                ("Savings", f"${report.savings_amount:.2f}"),
-                ("Savings %", f"{report.savings_pct:.1f}%"),
-                ("Actual Cost", f"${report.total_cost:.2f}"),
-                ("Baseline", f"${report.estimated_without_compression:.2f}"),
-                ("Cache Hit", f"{report.cache_hit_rate * 100:.1f}%"),
+                ("Window", _sv.window_label),
+                ("Savings", f"${savings_amount:.2f}"),
+                ("Savings %", f"{savings_pct:.1f}%"),
+                ("Actual Cost", f"${actual:.2f}"),
+                ("Baseline", f"${estimated_without:.2f}"),
+                ("Cache Observed", f"{cache_hit_rate * 100:.1f}%"),
+                ("Attribution", "TokenPak-caused only"),
             ]
         )
     )
+    print()
+    print(f"Note: {SAVINGS_ESTIMATE_NOTE}")
 
     # Attribution v2 breakdown (additive; only shown when TOKENPAK_ATTRIBUTION_V2 is set)
     try:
@@ -4190,6 +4422,10 @@ def _build_usage_parser(sub):
 def _build_savings_parser(sub):
     p_savings = sub.add_parser("savings", help="Show savings summary")
     p_savings.add_argument("--days", type=int, default=30, help="Rolling window in days")
+    p_savings.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the savings summary as a single JSON document",
+    )
     p_savings.set_defaults(func=cmd_savings)
 
 
@@ -4293,6 +4529,22 @@ def _build_debug_parser(sub):
     p_export.add_argument("trace_id", help="Trace ID to export")
     p_export.add_argument("--json", action="store_true", dest="json_out", help="Output as JSON")
     p_export.set_defaults(func=cmd_debug_export)
+
+    p_receipt = dsub.add_parser(
+        "receipt", help="Render the Receipt v1 proof object for a recorded request"
+    )
+    p_receipt.add_argument(
+        "request_id",
+        nargs="?",
+        help="Request ID to render a receipt for (omit to print the support-bundle pointer)",
+    )
+    p_receipt.add_argument(
+        "--raw",
+        action="store_true",
+        help="Show the receipt without redaction (default: redaction-safe)",
+    )
+    p_receipt.set_defaults(func=cmd_debug_receipt)
+
     p_debug.set_defaults(func=lambda a: p_debug.print_help())
 
 
@@ -4391,6 +4643,22 @@ def cmd_debug_export(args):
             print(f"{k}: {v}")
 
 
+def cmd_debug_receipt(args):
+    """Render the Receipt v1 proof object for a recorded request.
+
+    Thin shim over the already-tested render path
+    (`tokenpak.cli.commands.debug._render_request_receipt`). Prints the
+    redaction-safe receipt JSON for a recorded request, or a support-bundle
+    pointer when the id is missing / no record exists. ``--raw`` shows the
+    receipt without redaction.
+    """
+    from tokenpak.cli.commands.debug import _render_request_receipt
+
+    request_id = getattr(args, "request_id", None)
+    redact = not getattr(args, "raw", False)
+    print(_render_request_receipt(request_id, redact=redact))
+
+
 def _build_learn_parser(sub):
     """Build `tokenpak learn` subcommand parser."""
     p_learn = sub.add_parser("learn", help="Show or reset learned patterns from telemetry")
@@ -4481,6 +4749,18 @@ _TOKENPAK_CFG = _paths.under("config.json")
 _PROXY_URL = "http://localhost:8766"
 
 
+def _lock_file_display() -> str:
+    if os.environ.get("TOKENPAK_HOME"):
+        return "$TOKENPAK_HOME/tokenpak.lock.json"
+    return "TokenPak lock file"
+
+
+def _config_read_error(exc: Exception) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return "not found"
+    return exc.__class__.__name__
+
+
 def _compute_config_hash(cfg: dict) -> str:
     import hashlib as _hl
 
@@ -4490,14 +4770,36 @@ def _compute_config_hash(cfg: dict) -> str:
 
 
 def _get_proxy_version() -> dict:
-    """Query proxy /version endpoint. Returns dict or raises."""
+    """Query proxy /health endpoint and normalize version fields."""
     import urllib.request as _ur
 
     try:
-        with _ur.urlopen(f"{_PROXY_URL}/version", timeout=3) as resp:
-            return json.loads(resp.read())
+        with _ur.urlopen(f"{_PROXY_URL}/health", timeout=3) as resp:
+            health = json.loads(resp.read())
     except Exception as e:
         return {"error": str(e)}
+
+    runtime = health.get("runtime", {}) if isinstance(health.get("runtime"), dict) else {}
+    health["version"] = (
+        health.get("version")
+        or health.get("proxy_version")
+        or health.get("runtime_version")
+        or "?"
+    )
+    health["uptime"] = (
+        health.get("uptime")
+        or health.get("uptime_seconds")
+        or health.get("uptime_s")
+        or 0
+    )
+    health["pythonVersion"] = (
+        health.get("pythonVersion")
+        or health.get("python_version")
+        or runtime.get("python_version")
+        or "?"
+    )
+    health["configHash"] = health.get("configHash") or health.get("config_hash") or "?"
+    return health
 
 
 def _load_lock() -> dict:
@@ -4604,12 +4906,12 @@ def cmd_version(args):
         print(f"Config hash      : {meta.get('configHash', 'unknown')}")
         print(f"Last updated     : {meta.get('lastUpdated', 'unknown')}")
     except Exception as e:
-        print(f"Config           : ✗ could not read ({e})")
+        print(f"Config           : ✗ could not read ({_config_read_error(e)})")
 
     # Lock file drift check
     lock = _load_lock()
     if lock:
-        print(f"\nLock file        : {_LOCK_FILE}")
+        print(f"\nLock file        : {_lock_file_display()}")
         print(f"  Locked version : {lock.get('proxyVersion', '?')}")
         print(f"  Locked hash    : {lock.get('configHash', '?')}")
         print(f"  Locked by      : {lock.get('lockedBy', '?')} at {lock.get('lockedAt', '?')}")
@@ -4627,7 +4929,7 @@ def cmd_version(args):
         except Exception:
             pass
     else:
-        print(f"\n  Lock file not found at {_LOCK_FILE}")
+        print(f"\n  Lock file not found ({_lock_file_display()})")
 
 
 # ── Update check (shared by `update` and the claude/codex launcher nudge) ──────
@@ -4884,7 +5186,7 @@ def cmd_update(args):
             "lockedBy": "tokenpak-update",
         }
         _save_lock(lock)
-        print(f"  ✓ Lock file updated at {_LOCK_FILE}")
+        print(f"  ✓ Lock file updated ({_lock_file_display()})")
     except Exception as e:
         print(f"  ⚠ Could not update lock file: {e}")
 
@@ -5399,6 +5701,7 @@ def main():
 
     remaining, global_opts = _consume_global_prefix(sys.argv[1:])
     sys.argv = [sys.argv[0], *remaining]
+    sys.argv = _rewrite_mission_verb_alias(sys.argv)
     forced_oss_global = bool(global_opts.get("oss"))
 
     parser = build_parser()
@@ -5537,11 +5840,23 @@ def main():
                 uptime_str = "unknown"
             report = get_savings_report(days=1)
 
+            # Canonical conservative savings: the bare
+            # `tokenpak` summary reports the SAME figure as `tokenpak status`
+            # for the same window, derived from the one `compute_savings`
+            # engine — not a separate receipt-backed number that could disagree.
+            from .telemetry.savings import compute_savings
+
+            _sv = compute_savings(window="today")
+
             # Compact savings summary
             print(f"TokenPak — {uptime_str} uptime")
-            print(
-                f"💰 ${report.savings_amount:.2f} saved today ({report.savings_pct:.0f}% reduction)"
-            )
+            if _sv.error or _sv.requests == 0:
+                print("💰 savings unavailable (no telemetry yet)")
+            else:
+                print(
+                    f"💰 ${_sv.saved_cost:.2f} saved {_sv.window_label} "
+                    f"({_sv.savings_pct:.0f}% reduction)"
+                )
 
             # Get request count from recent events
             from .telemetry.query import get_recent_events
@@ -5572,7 +5887,10 @@ def main():
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    if _is_first_run() and args.command not in ("help",):
+    # Skip entirely in machine/JSON mode: the welcome must never contaminate a
+    # machine stream, and the first-run flag is left unconsumed so a later
+    # interactive run still greets the human.
+    if _is_first_run() and args.command not in ("help",) and not _is_machine_output(args):
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
             "   Run `tokenpak demo` to see compression in action.\n"
@@ -6184,10 +6502,76 @@ def _budget_tracker():
     return get_budget_tracker()
 
 
+def _cost_json_payload(args, tracker, period):
+    """Build the machine-readable cost summary.
+
+    Mirrors the data shown by the human ``tokenpak cost`` summary: the spend
+    for the period, an optional per-model breakdown, the live proxy session
+    (when running), and any configured budget status. Best-effort lookups are
+    guarded so the JSON contract never leaks a traceback.
+    """
+    label = {"daily": "Today", "weekly": "This week", "monthly": "This month"}[period]
+    monitor_total = _monitor_db_cost(period)
+    total = monitor_total if monitor_total > 0 else tracker.total_spent(period)
+    payload = {
+        "section": "cost",
+        "period": period,
+        "label": label,
+        "spent_usd": round(total, 6),
+    }
+
+    if getattr(args, "by_model", False):
+        payload["by_model"] = [
+            {
+                "model": r["model"] or "unknown",
+                "requests": r["requests"],
+                "input_tokens": r["tokens_input"],
+                "output_tokens": r["tokens_output"],
+                "cost_usd": round(r["cost_usd"], 6),
+            }
+            for r in tracker.by_model_summary(period=period)
+        ]
+
+    # Live proxy session (best-effort; absent when the proxy is not running).
+    live_session = None
+    try:
+        stats = _proxy_get("/stats")
+    except Exception:
+        stats = None
+    if stats:
+        session = stats.get("session", {}) or {}
+        if session.get("cost", 0) or session.get("saved_tokens", 0):
+            live_session = {
+                "cost_usd": round(session.get("cost", 0) or 0, 6),
+                "cost_saved_usd": round(session.get("cost_saved", 0) or 0, 6),
+                "saved_tokens": session.get("saved_tokens", 0) or 0,
+            }
+    payload["live_session"] = live_session
+
+    # Budget status (only present when a budget is configured).
+    budgets = {}
+    for p in ("daily", "monthly"):
+        status = tracker.get_status(p)
+        if status:
+            budgets[p] = {
+                "spent_usd": round(status.spent_usd, 6),
+                "limit_usd": round(status.limit_usd, 6),
+                "percent_used": round(status.percent_used, 4),
+                "alert_triggered": bool(status.alert_triggered),
+            }
+    payload["budgets"] = budgets
+    return payload
+
+
 def cmd_cost(args):
     """Show cost summary for a time period."""
     tracker = _budget_tracker()
     period = "monthly" if args.month else ("weekly" if args.week else "daily")
+
+    if getattr(args, "as_json", False):
+        # Machine-readable mode: emit only the JSON document on stdout.
+        print(json.dumps(_cost_json_payload(args, tracker, period), indent=2, sort_keys=True))
+        return
 
     if args.by_model:
         rows = tracker.by_model_summary(period=period)
@@ -6219,6 +6603,16 @@ def cmd_cost(args):
 
     print(f"TokenPak Cost Summary — {label}")
     print(f"  Spent:  ${total:.4f}")
+
+    # Canonical conservative savings — agrees with
+    # status/doctor/savings; explicit window label, never a passthrough
+    # over-claim. Derived from the one `compute_savings` engine.
+    from .telemetry.savings import compute_savings
+
+    _cost_win = {"daily": "today", "weekly": "week", "monthly": "month"}[period]
+    _sv = compute_savings(window=_cost_win)
+    if not _sv.error:
+        print(f"  Saved:  ${_sv.saved_cost:.4f} ({_sv.savings_pct:.1f}%)  [{_sv.window_label}]")
 
     # Show live proxy session cost if available
     stats = _proxy_get("/stats")
@@ -6702,6 +7096,10 @@ def _build_cost_parser(sub):
     p_cost.add_argument("--month", action="store_true", help="Show monthly totals")
     p_cost.add_argument("--by-model", action="store_true", help="Break down by model")
     p_cost.add_argument("--export-csv", action="store_true", help="Export as CSV")
+    p_cost.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit the cost summary as a single JSON document",
+    )
     p_cost.set_defaults(func=cmd_cost)
 
     # Subcommands for cost

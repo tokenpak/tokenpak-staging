@@ -19,7 +19,7 @@ This guide covers production deployment of the TokenPak LLM proxy — from a sin
 | Python | 3.10+ | 3.11+ |
 | OS | Linux / macOS / Windows | Linux (Ubuntu 22.04 LTS+) |
 
-RAM is low because TokenPak is a lightweight async proxy. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
+RAM is low because TokenPak runs a lightweight threaded HTTP proxy by default. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
 
 ### Network Requirements
 
@@ -90,7 +90,7 @@ docker run -d \
  -p 127.0.0.1:8766:8766 \
  -e ANTHROPIC_API_KEY="sk-ant-..." \
  -e OPENAI_API_KEY="sk-..." \
- -v tokenpak-data:/home/tokenpak/.tokenpak \
+ -v tokenpak-data:/var/lib/tokenpak/.tokenpak \
  tokenpak/tokenpak:latest
 ```
 
@@ -293,7 +293,7 @@ services:
  env_file:
  - .env.secrets # ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
  volumes:
- - tokenpak-data:/home/tokenpak/.tokenpak
+ - tokenpak-data:/var/lib/tokenpak/.tokenpak
  healthcheck:
  test: ["CMD", "tokenpak", "status"]
  interval: 30s
@@ -361,15 +361,13 @@ tokenpak savings --lifetime
 
 ### Single Instance (default)
 
-TokenPak is async (uvicorn + starlette) and handles concurrent requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
+TokenPak's default proxy uses a threaded HTTP server and handles concurrent local requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
 
-Tune uvicorn workers:
+For high-concurrency proxy deployments, run multiple TokenPak instances behind a trusted local or private load balancer. The `--workers` flag is for the ASGI ingest/telemetry surfaces and is not the default proxy scaling knob.
 
 ```bash
-tokenpak serve --port 8766 --workers 4
+tokenpak serve --port 8766
 ```
-
-Rule of thumb: `workers = (2 × CPU cores) + 1`.
 
 ### Multi-Instance (load-balanced)
 

@@ -33,6 +33,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from .guidance import _codex_cli_missing_message
+
 if TYPE_CHECKING:
     from tokenpak.companion.config import CompanionConfig
 
@@ -316,8 +318,14 @@ def register(
                 file=sys.stderr,
             )
             return False
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"tokenpak: codex not available: {e}", file=sys.stderr)
+    except FileNotFoundError:
+        print(
+            f"tokenpak: {_codex_cli_missing_message('MCP registration skipped')}",
+            file=sys.stderr,
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        print("tokenpak: MCP registration skipped: codex mcp add timed out", file=sys.stderr)
         return False
 
     ok, detail = apply_policy()

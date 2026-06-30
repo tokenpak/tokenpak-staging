@@ -61,6 +61,7 @@ View API spend
 - `--month` — Show monthly totals
 - `--by-model` — Break down by model
 - `--export-csv` — Export as CSV
+- `--json` — Emit the cost summary as a single JSON document
 
 **Subcommands:**
 
@@ -308,11 +309,11 @@ View and edit config
 - `init`
   - `--force` — Overwrite existing config
   - `--with-env-stub` — Also drop a placeholders-only .env.example under the TokenPak home
-- `doctor`
+- `doctor` — Read-only diagnostics on the configuration subsystem. Runs eight checks (D1–D8) covering config home location, load-order precedence, env var presence, `.env` file hygiene, and user/system file boundary integrity. Surfaces misconfigurations without writing any file. Complements `tokenpak doctor` (which covers the broader system); `config doctor` focuses only on config.
   - `--json` — Output as JSON
   - `--quiet` — Print only the worst finding
   - `--verbose`, `-v` — Include per-check detail
-- `env`
+- `env` — Show all TOKENPAK_* environment variables that are currently active, their values, and their provenance (where each value comes from: process environment, config file, or built-in default). Values matching secret-class key patterns (API_KEY, _TOKEN, _SECRET, etc.) are **always masked**; use `--no-mask` to reveal low-classification values.
   - `--json` — Output as JSON
   - `--no-mask` — Show low-class values unmasked (secret-class values are still masked)
 - `path`
@@ -447,7 +448,8 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show public URL with token (accessible from any machine)
+- `--public` — Show guided sharing options with a dashboard token
+- `--tunnel` — With --public, start a temporary Cloudflare quick tunnel
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
 
@@ -516,6 +518,9 @@ Toggle debug logging
 - `export`
   - `TRACE_ID` — Trace ID to export
   - `--json` — Output as JSON
+- `receipt`
+  - `REQUEST_ID` — Request ID to render a receipt for (omit to print the support-bundle pointer)
+  - `--raw` — Show the receipt without redaction (default: redaction-safe)
 
 ### `tokenpak learn`
 
@@ -660,6 +665,8 @@ Examples:
   tokenpak codex uninstall         # reverse installation
   tokenpak codex statusline        # enable native status modules (additive)
   tokenpak codex clean             # reclaim orphaned isolated codex homes
+  tokenpak codex usage --latest --json
+  tokenpak codex exec --capture -- codex exec --json "summarize this repo"
   TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
   TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
@@ -1082,7 +1089,10 @@ Test search retrieval
 
 **Flags:**
 
-- `KEY` — Your license key (default: )
+- `KEY` — License key (legacy; prefer --key-file, --key-stdin, or --prompt-key) (default: )
+- `--key-file` — Read the license key from a file
+- `--key-stdin` — Read the license key from standard input
+- `--prompt-key` — Prompt for the license key without echo
 - `--email` — Optional email for the license (default: )
 
 ### `tokenpak cache`
@@ -1169,6 +1179,10 @@ Show every feature TokenPak knows about and whether the current license entitles
   - `FEATURE` — Feature key (e.g. T9_replay_system)
   - `--json` — Emit JSON
 
+### `tokenpak guard`
+
+Alias for `tokenpak budget`.
+
 ### `tokenpak help`
 
 Show tier-aware help. Pass a command name for details, or --minimal for compact list.
@@ -1222,6 +1236,32 @@ Examples:
 - `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). 'fleet' is launcher-scoped and never persists into client config — see `tokenpak permissions --help`. — choices: `strict`, `standard`, `auto`, `fleet`
 - `--yes` — Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)
 
+**Guided mode vs print-only:**
+
+When you name a specific client (`tokenpak integrate <client>`) on a TTY (both stdin and stdout are TTYs) without `--apply` or `--no-tui`, the command launches a **guided interactive form**:
+
+1. Detects whether the client is installed on this host.
+2. Shows the exact configuration change it will make (the preview).
+3. For `claude-code` and `codex`, prompts you to pick a permission tier (`strict`, `standard`, `auto`, or `fleet`).
+4. Asks for confirmation before writing any file.
+5. Backs up the existing config automatically; prints a `tokenpak integrate <client> --revert` command to undo.
+
+On a **non-TTY** (CI, piped output, `TOKENPAK_NONINTERACTIVE=1`, or `TERM=dumb`) the guided form is suppressed and `integrate` prints setup instructions only — the same output as `--all` for the named client.
+
+**Shell detection:**
+
+The guided form activates when `sys.stdin.isatty() and sys.stdout.isatty()` are both true. If either stream is redirected (common in CI pipelines or when piping to a file), `integrate` automatically runs in print-only mode. This means `tokenpak integrate claude-code > setup.txt` always writes plain text, never launches a form.
+
+**`--no-tui` escape hatch:**
+
+Pass `--no-tui` anywhere on the command line to force print-only mode even on a fully interactive TTY:
+
+```
+tokenpak --no-tui integrate claude-code
+```
+
+`--no-tui` is a **global flag** — it is stripped from `sys.argv` before subcommand parsers run and does **not** appear in any subcommand's `--help` output. It is honored on `tokenpak integrate <target>` (without `--apply`); when `--apply` is set the flag has no effect (apply is always headless). Use `TOKENPAK_NONINTERACTIVE=1` as the environment-variable equivalent for scripts where the command line cannot be controlled.
+
 ### `tokenpak last`
 
 Display details about the most recent request processed by the proxy.
@@ -1254,6 +1294,62 @@ Show per-model efficiency ranking from receipt-backed telemetry.
 
 ### `tokenpak menu`
 
+Interactive command browser with arrow-key navigation. Runs in the alternate-screen buffer — menu frames never appear in terminal scrollback.
+
+**Two ways to open:**
+
+- `tokenpak` — bare invocation on a TTY launches the menu automatically
+- `tokenpak menu` — explicit subcommand, same result
+
+The menu does **not** launch when stdin or stdout is not a TTY, when the `CI` environment variable is set, when `TOKENPAK_NONINTERACTIVE=1` is set, or when `TERM=dumb`.
+
+**Home screen:**
+
+The home screen shows nine task-focused sections. Each entry shows the equivalent CLI command on the right:
+
+| Section | CLI equivalent |
+|---|---|
+| Start proxy | `tokenpak start` |
+| Run demo | `tokenpak demo` |
+| Proxy status | `tokenpak status` |
+| Spend & savings | `tokenpak cost` |
+| Configure | `tokenpak config` |
+| Permission tier | `tokenpak permissions` |
+| Companion | — |
+| Troubleshoot | `tokenpak doctor` |
+| Browse all commands | — |
+
+A status strip at the top shows Proxy state, Today's cost, and Today's saved. Values come from a cached non-blocking snapshot — unknown figures render as `—` and are never fabricated as `$0.00`.
+
+**Keys:**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate items |
+| `Enter` | Select / run highlighted item |
+| `q` or `Ctrl-C` | Quit the menu |
+| `Esc` | Go back (in submenus); quit (at home screen) |
+| Any printable character | Filter items (type-to-filter) |
+| `Backspace` | Delete last filter character; go back if filter is empty |
+
+Type-to-filter is active on the home screen and the "Browse all commands" section. Matching runs against both the displayed label and a set of search aliases — for example, typing `health` highlights Proxy status.
+
+**Non-interactive fallback:**
+
+When the terminal is not a TTY, `tokenpak menu` prints a numbered plain-text list of home-screen options and exits rather than launching the cursor-driven interface.
+
+**`--no-tui` escape hatch:**
+
+Pass `--no-tui` anywhere on the command line to suppress the interactive menu for bare `tokenpak` invocations:
+
+```
+tokenpak --no-tui
+```
+
+This prints quick-help and proxy uptime instead of opening the TUI. `--no-tui` is a global flag — it is stripped from `sys.argv` before subcommand parsers run and does not appear in any subcommand's `--help` output. It is honored on bare `tokenpak` and `tokenpak integrate <target>` (without `--apply`); the explicit `tokenpak menu` subcommand always launches the TUI directly.
+
+Use `TOKENPAK_NONINTERACTIVE=1` as the environment-variable equivalent for scripts where the command line cannot be controlled.
+
 ### `tokenpak monitor`
 
 Start the live monitor dashboard.
@@ -1278,6 +1374,10 @@ Example:
 - `--strategy` — Optimization aggressiveness (default: balanced) (default: balanced) — choices: `conservative`, `balanced`, `aggressive`
 - `--show-diff` — Show before/after token counts
 - `--json` — Machine-readable JSON output
+
+### `tokenpak pack`
+
+Alias for `tokenpak compress`.
 
 ### `tokenpak pakplan`
 
@@ -1330,6 +1430,10 @@ Example:
 - `--threshold` — Quality score below which blocks are pruned (default: 0.4) (default: 0.4)
 - `--json` — Output raw JSON
 
+### `tokenpak receipt`
+
+Alias for `tokenpak dispatch receipt`.
+
 ### `tokenpak report`
 
 Generate and display daily savings report.
@@ -1339,6 +1443,10 @@ Generate and display daily savings report.
 - `--markdown` — Output markdown format (for messaging)
 - `--json` — Output JSON format
 
+### `tokenpak reuse`
+
+Alias for `tokenpak recipe`.
+
 ### `tokenpak savings`
 
 Show compression savings summary.
@@ -1346,6 +1454,7 @@ Show compression savings summary.
 **Flags:**
 
 - `--days` — Rolling window in days (default: 30)
+- `--json` — Emit the savings summary as a single JSON document
 
 ### `tokenpak telemetry`
 
@@ -1413,6 +1522,10 @@ Example:
 **Subcommands:**
 
 - `repair`
+
+### `tokenpak verify`
+
+Alias for `tokenpak prove`.
 
 ### `tokenpak watch`
 

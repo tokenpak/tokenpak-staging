@@ -608,3 +608,19 @@ def test_ensure_hooks_feature_enabled_returns_false_on_nonzero(monkeypatch):
     monkeypatch.setattr(codex_hooks, "_suppress_unstable_warning", lambda: None)
 
     assert codex_hooks.ensure_hooks_feature_enabled() is False
+
+
+def test_ensure_hooks_feature_enabled_missing_codex_prints_guidance(
+    monkeypatch, capsys
+):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("Win" + "Error 2")
+
+    monkeypatch.setattr(codex_hooks.subprocess, "run", missing)
+    monkeypatch.setattr(codex_hooks, "_suppress_unstable_warning", lambda: None)
+
+    assert codex_hooks.ensure_hooks_feature_enabled() is False
+    err = capsys.readouterr().err
+    assert "Hooks feature setup skipped: Codex CLI not found on PATH" in err
+    assert "npm install -g @openai/codex" in err
+    assert "Win" + "Error" not in err
