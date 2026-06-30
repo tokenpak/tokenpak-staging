@@ -77,7 +77,7 @@ def test_receipt_view_renders_recorded_request(monkeypatch, tmp_path):
     assert payload["schema_version"] == "receipt.v1"
     assert payload["receipt_id"] == f"rcpt_{rid}"
     assert payload["cost"]["estimated_cost_usd"] == {"available": True, "value": 0.018}
-    assert payload["optimization"]["would_have_saved_usd"]["value"] == 0.006
+    assert payload["optimization"]["would_have_saved_tokens"]["value"] == 0.006
     assert payload["context"]["cache_read_tokens"]["value"] == 80
     assert payload["trail"]["agent_id"]["value"] == "proxy-test"
     # No capture exists -> pointer present=False but reports the configured mode.
