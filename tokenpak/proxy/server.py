@@ -3535,6 +3535,26 @@ class ProxyServer:
                 "providers": cb_statuses,
             },
         }
+        # Merge the canonical CLI-facing /health contract so this async emitter
+        # carries the same compilation_mode / stats.requests / latency /
+        # python_version keys as the threaded build_health_response() path.
+        # Without this, `tokenpak doctor` reads "unknown mode / 0 reqs" off a
+        # healthy async proxy purely from schema drift. The operational fields
+        # built above (status, version, uptime, requests_total, circuit
+        # breakers, connection pool) win over the core defaults via ordering.
+        from tokenpak.proxy.stats import _health_contract_core
+
+        with _forecast_latency_lock:
+            _lat_samples = list(_forecast_latencies)
+        _core = _health_contract_core(
+            status=result["status"],
+            version=_tokenpak_version,
+            uptime_seconds=uptime,
+            compilation_mode=self.compilation_mode,
+            requests=requests_total,
+            request_latencies=_lat_samples,
+        )
+        result = {**_core, **result}
         if deep:
             import shutil
 

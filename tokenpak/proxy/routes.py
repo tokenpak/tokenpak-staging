@@ -206,6 +206,14 @@ class ProxyRoutesMixin:
             self._send_json(_health_cache["data"])
             return
 
+        # Shared health-contract inputs so the threaded emitter reports the same
+        # version / uptime_seconds keys as the async ProxyServer.health() path.
+        from tokenpak import __version__ as _tpk_version
+
+        _uptime_seconds = max(
+            0.0, _time_module.time() - SESSION.get("start_time", _time_module.time())
+        )
+
         vault_info = {
             "available": VAULT_INDEX.available,
             "blocks": len(VAULT_INDEX.blocks),
@@ -239,6 +247,8 @@ class ProxyRoutesMixin:
             upstream_timeout=UPSTREAM_TIMEOUT,
             provider_circuits=_provider_circuits,
             request_latencies=list(_request_latencies),
+            version=_tpk_version,
+            uptime_seconds=_uptime_seconds,
         )
         _health_cache["data"] = health_data
         _health_cache["ts"] = now
