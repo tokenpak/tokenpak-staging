@@ -51,6 +51,10 @@ def test_header_resolvers_use_empty_attribution_sentinel() -> None:
 
 def test_proxy_completion_log_call_sites_thread_attribution_fields() -> None:
     server_source = _source("tokenpak/proxy/server.py")
+    async_source = _source("tokenpak/proxy/server_async.py")
+    codex_adapter_source = _source(
+        "tokenpak/proxy/adapters/openai_codex_responses_adapter.py"
+    )
 
     anthropic_block = server_source[
         server_source.index("ps.monitor.log(") : server_source.index(
@@ -70,3 +74,15 @@ def test_proxy_completion_log_call_sites_thread_attribution_fields() -> None:
     assert "session_id=_cx_session_id" in codex_block
     assert "agent_id=_cx_agent_id" in codex_block
     assert "cycle_id=_cx_cycle_id" in codex_block
+
+    async_block = async_source[
+        async_source.index("def _record_telemetry")
+        : async_source.index("# ---------------------------------------------------------------------------", async_source.index("def _record_telemetry"))
+    ]
+    assert "def _resolve_async_monitor_attribution" in async_source
+    assert "monitor.log(" in async_block
+    assert "session_id=session_id" in async_block
+    assert "agent_id=agent_id" in async_block
+    assert "cycle_id=cycle_id" in async_block
+
+    assert "def extract_codex_responses_usage_from_sse_tail" in codex_adapter_source

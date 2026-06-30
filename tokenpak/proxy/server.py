@@ -2446,32 +2446,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     try:
                         _tail = _codex_sse_tail if "_codex_sse_tail" in dir() else b""
                         if _tail:
-                            for _line in _tail.split(b"\n"):
-                                _line = _line.strip()
-                                if not _line.startswith(b"data:"):
-                                    continue
-                                _payload = _line[5:].strip()
-                                if not _payload or _payload == b"[DONE]":
-                                    continue
-                                try:
-                                    _ev = json.loads(_payload)
-                                except Exception:
-                                    continue
-                                _usage = None
-                                if isinstance(_ev, dict):
-                                    _resp_obj = _ev.get("response")
-                                    if isinstance(_resp_obj, dict):
-                                        _usage = _resp_obj.get("usage")
-                                    if _usage is None:
-                                        _usage = _ev.get("usage")
-                                if isinstance(_usage, dict):
-                                    _cx_in = int(_usage.get("input_tokens") or 0)
-                                    _cx_out = int(_usage.get("output_tokens") or 0)
-                                    _cx_details = _usage.get("input_tokens_details")
-                                    if isinstance(_cx_details, dict):
-                                        _cx_cache_read = int(
-                                            _cx_details.get("cached_tokens") or 0
-                                        )
+                            from .adapters.openai_codex_responses_adapter import (
+                                extract_codex_responses_usage_from_sse_tail,
+                            )
+                            _cx_usage = extract_codex_responses_usage_from_sse_tail(_tail)
+                            _cx_in = int(_cx_usage.get("input_tokens") or 0)
+                            _cx_out = int(_cx_usage.get("output_tokens") or 0)
+                            _cx_cache_read = int(_cx_usage.get("cache_read_tokens") or 0)
                     except Exception:
                         _cx_in = 0
                         _cx_out = 0
