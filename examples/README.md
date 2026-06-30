@@ -20,8 +20,8 @@ python examples/basic_compression.py
 **Use case:** First-time SDK users who want a minimal compress workflow.
 
 What it shows:
-- Create a local `TokenPakClient`
-- Compress a large prompt string
+- Use TokenPak's local `HeuristicEngine`
+- Compress a large prompt string offline
 - Compute token savings with `count_tokens`
 - Print a simple cost/savings-style summary
 
@@ -41,8 +41,8 @@ Expected output (shape):
 **Use case:** Very large context payloads where chunking improves memory behavior.
 
 What it shows:
-- Split text into chunks with an iterator
-- Compress each chunk independently
+- Use the script's local example client wrapper
+- Split text into chunks and compress each chunk independently
 - Track peak in-memory chunk token count
 - Stitch chunk outputs into one compressed payload
 

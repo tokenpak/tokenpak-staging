@@ -21,14 +21,14 @@ This installs the core library with heuristic-based compression.
 TokenPak has optional extras for advanced features:
 
 ```bash
-# Install with ML-based compression support
-pip install tokenpak[ml]
+# Exact OpenAI-compatible token counting
+pip install "tokenpak[tokens]"
 
-# Install with all features (recommended)
-pip install tokenpak[ml,tiktoken]
+# LLMLingua compression engine
+pip install "tokenpak[compression]"
 
-# Or install each extra separately
-pip install tokenpak tiktoken
+# Combined authoring/dev smoke path
+pip install "tokenpak[compression,tokens]"
 ```
 
 ## Using a Virtual Environment (Recommended)
@@ -44,8 +44,8 @@ source ~/my_tokenpak_env/bin/activate # Linux/macOS
 # or
 ~/my_tokenpak_env\Scripts\activate # Windows
 
-# Install TokenPak
-pip install tokenpak[ml,tiktoken]
+# Install TokenPak with exact token counting and LLMLingua compression
+pip install "tokenpak[compression,tokens]"
 
 # Deactivate when done
 deactivate
@@ -61,8 +61,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv ~/my_tokenpak_env
 source ~/my_tokenpak_env/bin/activate
 
-# Install TokenPak
-pip install tokenpak[ml,tiktoken]
+# Install TokenPak with exact token counting and LLMLingua compression
+pip install "tokenpak[compression,tokens]"
 ```
 
 ## Verify Your Installation
@@ -78,7 +78,7 @@ Or run a quick test:
 ```bash
 python3 << 'EOF'
 from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 engine = HeuristicEngine()
 text = "This is a test. " * 100
@@ -106,9 +106,9 @@ pip install --upgrade tokenpak
 
 ### Issue: "tiktoken not found" or encoding errors
 
-**Solution:** Install the tiktoken extra:
+**Solution:** Install the `tokens` extra:
 ```bash
-pip install tokenpak[tiktoken]
+pip install "tokenpak[tokens]"
 ```
 
 ### Issue: "Permission denied" when installing

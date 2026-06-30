@@ -20,7 +20,7 @@ try:
     from tokenpak import HeuristicEngine
     from tokenpak.compression.engines.base import CompactionHints
 except ImportError:
-    print("Error: TokenPak not installed. Run: pip install tokenpak[ml,tiktoken]")
+    print("Error: TokenPak not installed. Run: pip install tokenpak")
     sys.exit(1)
 
 
