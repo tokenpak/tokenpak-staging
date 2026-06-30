@@ -85,4 +85,4 @@ def test_proxy_completion_log_call_sites_thread_attribution_fields() -> None:
     assert "agent_id=agent_id" in async_block
     assert "cycle_id=cycle_id" in async_block
 
-    assert "def extract_codex_responses_usage_from_sse_tail" in codex_adapter_source
+    assert "def _extract_codex_responses_usage_from_sse_tail" in codex_adapter_source
