@@ -196,7 +196,7 @@ def _proxy_get(path: str, port: Optional[int] = None) -> "dict | None":
 _FIRST_RUN_FLAG = Path.home() / ".tokenpak" / ".seen_intro"
 
 # Commands shown in quick --help (beginner view)
-_QUICK_COMMANDS = ["setup", "start", "demo", "cost", "status", "metrics"]
+_QUICK_COMMANDS = ["setup", "start", "status", "doctor", "demo", "cost", "savings"]
 
 # All commands grouped for `tokenpak help`
 _COMMAND_GROUPS = {
@@ -683,36 +683,14 @@ def _print_quick_help():
         "Quick Start:\n"
         "  setup        Guided first-run setup\n"
         "  start        Start the proxy (localhost:8766)\n"
-        "  stop         Stop the running proxy\n"
-        "  restart      Restart the proxy\n"
-        "  logs         Show recent proxy logs\n"
-        "  serve        Serve the proxy (alias for start)\n"
+        "  status       Check proxy health\n"
+        "  doctor       Run diagnostics & auto-fix issues\n"
         "  demo         See Prompt Packing in action\n"
         "  cost         View your API spend\n"
         "  savings      View Savings Ledger\n"
-        "  status       Check proxy health\n"
         "\n"
-        "Tools:\n"
-        "  integrate    Client-specific setup guides\n"
-        "  creds        Discover credentials + doctor\n"
-        "  replay       Replay captured sessions\n"
-        "  cache        Show local cache status\n"
-        "  index        Index a directory for compression\n"
-        "  template     Manage prompt templates\n"
-        "  config       Config management (sync, validate, migrate)\n"
-        "  dashboard    Real-time health dashboard\n"
-        "  doctor       Run diagnostics & auto-fix issues\n"
-        "  fingerprint  Fingerprint sync and cache management\n"
-        "  preview      Preview compression dry-run (see token savings)\n"
-        "  compress     Compress text/JSON/code directly\n"
-        "  optimize     Optimize prompts for better Prompt Packing efficiency\n"
-        "  last         Show details of last compressed request\n"
-        "  vault        Vault index health diagnostic and repair\n"
-        "  diff         Show context changes (Pro)\n"
-        "  prune        Prune old audit log entries\n"
-        "  version      Show current version\n"
-        "\n"
-        "Run `tokenpak help` for all commands.\n"
+        "Run `tokenpak help` for common commands including integrate, creds, cache, index, and replay.\n"
+        "Run `tokenpak help --all` for the complete command reference.\n"
         "Run `tokenpak <command> --help` for command details."
     )
 

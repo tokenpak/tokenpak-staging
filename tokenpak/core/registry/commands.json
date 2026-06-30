@@ -202,6 +202,16 @@
       "related": ["validate", "template", "route"]
     },
     {
+      "command": "integrate",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Client-specific setup guides",
+      "aliases": [],
+      "usage": "/tokenpak integrate [client|--all] [--apply]",
+      "detail": "Prints setup instructions for supported clients and SDKs. Without --apply it is a read-only guide.",
+      "related": ["setup", "creds", "config"]
+    },
+    {
       "command": "stats",
       "tier": "oss",
       "category": "Visibility",
