@@ -90,7 +90,7 @@ def codex_responses_payload_fixup(body: bytes) -> bytes:
         return body
 
 
-def extract_codex_responses_usage_from_sse_tail(sse_tail: bytes) -> dict[str, int]:
+def _extract_codex_responses_usage_from_sse_tail(sse_tail: bytes) -> dict[str, int]:
     """Extract final Responses usage counters from a bounded SSE tail.
 
     Returns zeroes on malformed input. Only aggregate token counters are

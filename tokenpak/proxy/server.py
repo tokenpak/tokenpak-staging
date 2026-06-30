@@ -1952,9 +1952,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         _tail = _codex_sse_tail if "_codex_sse_tail" in dir() else b""
                         if _tail:
                             from .adapters.openai_codex_responses_adapter import (
-                                extract_codex_responses_usage_from_sse_tail,
+                                _extract_codex_responses_usage_from_sse_tail,
                             )
-                            _cx_usage = extract_codex_responses_usage_from_sse_tail(_tail)
+                            _cx_usage = _extract_codex_responses_usage_from_sse_tail(_tail)
                             _cx_in = int(_cx_usage.get("input_tokens") or 0)
                             _cx_out = int(_cx_usage.get("output_tokens") or 0)
                             _cx_cache_read = int(_cx_usage.get("cache_read_tokens") or 0)

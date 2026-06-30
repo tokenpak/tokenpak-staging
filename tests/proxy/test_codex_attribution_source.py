@@ -7,7 +7,7 @@ from pathlib import Path
 
 from tokenpak.proxy.adapters.openai_codex_responses_adapter import (
     OpenAICodexResponsesAdapter,
-    extract_codex_responses_usage_from_sse_tail,
+    _extract_codex_responses_usage_from_sse_tail,
 )
 
 
@@ -36,7 +36,7 @@ def test_codex_sse_usage_extraction_reads_completion_usage_only() -> None:
         ]
     )
 
-    usage = extract_codex_responses_usage_from_sse_tail(tail)
+    usage = _extract_codex_responses_usage_from_sse_tail(tail)
 
     assert usage == {
         "input_tokens": 123,
@@ -46,7 +46,7 @@ def test_codex_sse_usage_extraction_reads_completion_usage_only() -> None:
 
 
 def test_codex_sse_usage_extraction_fails_closed_to_zeroes() -> None:
-    assert extract_codex_responses_usage_from_sse_tail(b"data: not-json") == {
+    assert _extract_codex_responses_usage_from_sse_tail(b"data: not-json") == {
         "input_tokens": 0,
         "output_tokens": 0,
         "cache_read_tokens": 0,
@@ -60,7 +60,7 @@ def test_sync_codex_monitor_row_uses_adapter_usage_and_header_attribution() -> N
         : server_source.index("# \u2500\u2500 Circuit breaker: record outcome")
     ]
 
-    assert "extract_codex_responses_usage_from_sse_tail" in codex_block
+    assert "_extract_codex_responses_usage_from_sse_tail" in codex_block
     assert 'cache_origin="upstream"' in codex_block
     assert "session_id=_cx_session_id" in codex_block
     assert "agent_id=_cx_agent_id" in codex_block
