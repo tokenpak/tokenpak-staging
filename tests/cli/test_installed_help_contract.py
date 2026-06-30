@@ -7,7 +7,7 @@ import re
 from contextlib import redirect_stdout
 from io import StringIO
 
-from tokenpak._cli_core import _print_quick_help
+from tokenpak._cli_core import _print_quick_help, build_parser, registered_command_names
 from tokenpak.cli.commands.help import (
     print_command_help,
     print_essential_help,
@@ -24,7 +24,6 @@ CANONICAL_FIRST_RUN = {
     "doctor",
     "status",
     "creds",
-    "cache",
     "index",
     "replay",
 }
@@ -55,6 +54,14 @@ def test_help_tiers_strictly_nest_and_surface_first_run_verbs() -> None:
     assert common <= all_commands
     assert CANONICAL_FIRST_RUN <= common
     assert CANONICAL_FIRST_RUN <= all_commands
+
+
+def test_quick_help_keeps_canonical_first_run_verbs_invokable() -> None:
+    quick = _command_rows(_capture(_print_quick_help))
+    invokable = registered_command_names(build_parser())
+
+    assert CANONICAL_FIRST_RUN <= quick
+    assert CANONICAL_FIRST_RUN <= invokable
 
 
 def test_help_command_resolves_registry_command_integrate() -> None:

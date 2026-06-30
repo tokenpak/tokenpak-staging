@@ -59,7 +59,6 @@ _COMMON_COMMAND_GROUPS = {
         "serve": "Start proxy/telemetry server",
         "integrate": "Client-specific setup guides",
         "creds": "Discover credentials and run diagnostics",
-        "cache": "Show or clear local cache status",
         "index": "Index files for context retrieval",
         "replay": "Inspect and re-run captured sessions",
         "config": "View/edit configuration",

@@ -49,7 +49,7 @@ class TestEssentialHelp:
             # Check command is listed with its description
             assert f"{cmd:<14}" in text or f"  {cmd} " in text, f"Essential command '{cmd}' not in default help"
 
-        for cmd in ("serve", "integrate", "creds", "cache", "index", "replay"):
+        for cmd in ("serve", "integrate", "creds", "index", "replay"):
             assert f"{cmd:<14}" in text or f"  {cmd} " in text, f"Common command '{cmd}' not in default help"
 
         assert "Monitoring:" not in text, "Monitoring section should not appear in default help"
@@ -278,7 +278,7 @@ class TestAcceptanceCriteria:
         for cmd in _ESSENTIAL_COMMANDS:
             assert f"{cmd:<14}" in text or f"  {cmd} " in text
 
-        for cmd in ("serve", "integrate", "creds", "cache", "index", "replay"):
+        for cmd in ("serve", "integrate", "creds", "index", "replay"):
             assert f"{cmd:<14}" in text or f"  {cmd} " in text
 
     def test_criterion_2_more_shows_essential_and_intermediate(self):
