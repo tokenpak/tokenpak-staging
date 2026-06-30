@@ -60,6 +60,10 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
         # Deliberation Receipts under deliberation/receipts/).
         # Added per the canonical layout amendment of 2026-06-12.
         "deliberation",
+        # runtime/ — Runtime Hygiene registry state (per-session manifests,
+        # heartbeats under runtime/sessions/<id>/). Added per the canonical
+        # layout amendment of 2026-06-27 (runtime-hygiene initiative).
+        "runtime",
     }
 )
 
@@ -200,6 +204,16 @@ def update_check_cache() -> Path:
     Pure-path helper — does not create the parent (callers fail-open).
     """
     return under("update_check.json")
+
+
+def runtime_home() -> Path:
+    """Path to the Runtime Hygiene registry root (``<home>/runtime``).
+
+    Pure-path helper — does not create the directory. The registry layer
+    (:mod:`tokenpak.runtime.hygiene_registry`) creates ``runtime/`` and its
+    children with mode 0700 when it persists a session manifest.
+    """
+    return under("runtime")
 
 
 def is_legacy_active() -> bool:
@@ -346,6 +360,7 @@ __all__ = [
     "needs_migration",
     "ensure_home",
     "under",
+    "runtime_home",
     "update_check_cache",
     "is_legacy_active",
     "monitor_db",

@@ -51,6 +51,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from tokenpak import _paths
+
 # ── Mode constants ───────────────────────────────────────────────────
 MODE_SHARED = "shared"
 MODE_WORKSPACE = "workspace"
@@ -77,7 +79,15 @@ RETENTION_MAX_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB
 # ── Path roots ───────────────────────────────────────────────────────
 
 def _tokenpak_root() -> Path:
-    return Path.home() / ".tokenpak"
+    """Canonical TokenPak state-home root (resolved via ``_paths`` policy).
+
+    Routed through :mod:`tokenpak._paths` rather than a hardcoded
+    ``~/.tokenpak`` so codex session/workspace homes resolve under the
+    canonical home (``~/.tpk`` on fresh installs, the legacy ``~/.tokenpak``
+    where it already exists — preserving zero-touch upgrade), consistent with
+    the Runtime Hygiene registry's ``_paths``-resolved layout.
+    """
+    return _paths.home()
 
 
 def sessions_root() -> Path:
@@ -88,6 +98,22 @@ def sessions_root() -> Path:
 def workspaces_root() -> Path:
     """Root for durable per-project (``workspace``) homes."""
     return _tokenpak_root() / "codex-workspaces"
+
+
+def _ensure_state_home(home: Path) -> None:
+    """Create a provisioned state-home directory with mode 0700.
+
+    Runtime Hygiene contract: "State-home directories must be mode 0700". The
+    provisioned codex home holds symlinks to the user's auth/config, so it
+    must not be group/world-accessible. ``mkdir(mode=)`` only applies to the
+    created leaf and is umask-masked, so we chmod afterwards to guarantee 0700
+    even when the directory already existed (durable ``workspace`` homes).
+    """
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        home.chmod(0o700)
+    except OSError:
+        pass
 
 
 def canonical_codex_home() -> Path:
@@ -185,7 +211,7 @@ def provision_codex_home(
         _retention_sweep(sessions_root(), reserve=home)
 
     created = not home.exists()
-    home.mkdir(parents=True, exist_ok=True)
+    _ensure_state_home(home)
     propagated = _propagate_auth_config(home)
     return ProvisionedHome(
         mode=resolved, home=home, created=created, propagated=propagated

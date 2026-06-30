@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import io
+import json
+import stat
 
 import pytest
 
@@ -114,6 +116,55 @@ def test_main_proxy_flag_routes_codex_through_named_profile(
     ]
     assert "OPENAI_BASE_URL" not in captured["env"]
     assert "Proxy active → http://127.0.0.1:8766/v1" in capsys.readouterr().err
+
+
+def test_launch_registers_runtime_hygiene_manifest(monkeypatch, tmp_path):
+    """A codex launch writes a non-cleanup (never_touch) session manifest."""
+    _patch_setup(monkeypatch, tmp_path)
+    monkeypatch.delenv("TOKENPAK_HOME", raising=False)
+
+    def fake_exec(cmd, args, env):
+        raise _ExecCalled
+
+    monkeypatch.setattr(launcher.os, "execvpe", fake_exec)
+
+    with pytest.raises(_ExecCalled):
+        launcher.main([])
+
+    from tokenpak.runtime import hygiene_registry as reg
+
+    manifests = list(reg.sessions_root().glob("codex-*/manifest.json"))
+    assert len(manifests) == 1
+    data = json.loads(manifests[0].read_text())
+    assert data["launch_mode"] == "codex"
+    assert data["cleanup_policy"] == "never_touch"
+    assert data["containment_method"] == "none"
+    assert data["containment_created_by_tokenpak"] is False
+    assert stat.S_IMODE(manifests[0].stat().st_mode) == 0o600
+
+
+def test_manifest_registration_failure_never_blocks_launch(monkeypatch, tmp_path):
+    """A deep registration failure is swallowed; the launcher still execs codex."""
+    _patch_setup(monkeypatch, tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("registry exploded")
+
+    # Make the underlying registration raise; the launcher's best-effort
+    # wrapper must swallow it (non-cleanup launch continues regardless).
+    monkeypatch.setattr("tokenpak.runtime.hygiene.register_session", boom)
+
+    captured = {}
+
+    def fake_exec(cmd, args, env):
+        captured["cmd"] = cmd
+        raise _ExecCalled
+
+    monkeypatch.setattr(launcher.os, "execvpe", fake_exec)
+
+    with pytest.raises(_ExecCalled):
+        launcher.main([])
+    assert captured["cmd"] == "codex"
 
 
 def test_interactive_loading_status_preserves_shell_command_line():

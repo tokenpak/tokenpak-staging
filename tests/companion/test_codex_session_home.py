@@ -9,10 +9,12 @@ orphan detection, retention sweeping, and ``clean``.
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 import pytest
 
+from tokenpak import _paths
 from tokenpak.companion.codex import session_home as sh
 
 
@@ -278,3 +280,35 @@ def test_clean_removing_home_does_not_delete_canonical_creds(fake_home):
     # canonical auth.json (symlink target) must survive rmtree of the home
     assert (fake_home / ".codex" / "auth.json").exists()
     assert (fake_home / ".codex" / "config.toml").exists()
+
+
+# ── canonical _paths routing (Runtime Hygiene contract acceptance #1) ──────
+
+
+def test_roots_resolve_through_canonical_paths(fake_home, monkeypatch):
+    monkeypatch.delenv(_paths.ENV_VAR, raising=False)
+    # No ~/.tpk or ~/.tokenpak yet ⇒ canonical home resolves to ~/.tpk.
+    assert sh.sessions_root() == _paths.home() / "codex-sessions"
+    assert sh.workspaces_root() == _paths.home() / "codex-workspaces"
+    assert sh.sessions_root() == fake_home / ".tpk" / "codex-sessions"
+
+
+def test_legacy_home_is_honored_when_present(fake_home, monkeypatch):
+    monkeypatch.delenv(_paths.ENV_VAR, raising=False)
+    # An existing legacy ~/.tokenpak (and no ~/.tpk) ⇒ roots stay on legacy,
+    # so existing installs are not stranded by the migration.
+    (fake_home / ".tokenpak").mkdir()
+    assert sh.sessions_root() == fake_home / ".tokenpak" / "codex-sessions"
+
+
+# ── 0700 state-home (Runtime Hygiene contract acceptance #2) ───────────────
+
+
+def test_provisioned_home_is_mode_0700(fake_home):
+    res = sh.provision_codex_home("isolated", session_id="perm")
+    assert stat.S_IMODE(res.home.stat().st_mode) == 0o700
+
+
+def test_workspace_home_is_mode_0700(fake_home):
+    res = sh.provision_codex_home("workspace", workspace_dir=fake_home)
+    assert stat.S_IMODE(res.home.stat().st_mode) == 0o700

@@ -88,6 +88,52 @@ def _fleet_banner(env: dict[str, str] | None = None, fleet: bool = False) -> str
     return None
 
 
+def _register_runtime_session(provisioned, codex_args: list[str]) -> None:
+    """Best-effort Runtime Hygiene registration for the codex session.
+
+    The codex launcher exec-replaces itself into ``codex`` (same PID, no
+    TokenPak-created containment), so this is a *non-cleanup* launch: it writes
+    an ``active`` manifest with ``cleanup_policy=never_touch`` for
+    observability, but the session can never gain TERM authority. Per the
+    Runtime Hygiene contract a non-cleanup launch must continue even if the
+    manifest cannot be written, so this is best-effort and silent — a failure
+    must never block or perturb the launcher.
+    """
+    try:
+        import uuid
+
+        import tokenpak
+        from tokenpak.runtime import hygiene
+        from tokenpak.runtime.hygiene_schema import (
+            CleanupPolicy,
+            ContainmentMethod,
+            LaunchMode,
+        )
+
+        from . import session_home
+
+        if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
+            session_id = f"codex-{provisioned.home.name}"
+            state_home = str(provisioned.home)
+        else:
+            session_id = f"codex-{uuid.uuid4().hex}"
+            state_home = str(session_home.canonical_codex_home())
+
+        hygiene.register_session(
+            session_id=session_id,
+            launch_mode=LaunchMode.CODEX,
+            cleanup_policy=CleanupPolicy.NEVER_TOUCH,
+            state_home=state_home,
+            command=codex_args,
+            tokenpak_version=getattr(tokenpak, "__version__", "unknown"),
+            containment_created_by_tokenpak=False,
+            containment_method=ContainmentMethod.NONE,
+        )
+    except Exception:
+        # Registry-awareness must never block the launcher (non-cleanup launch).
+        return
+
+
 def main(args: list[str] | None = None) -> int:
     """Entry point for ``tokenpak codex``."""
     args = list(args if args is not None else sys.argv[1:])
@@ -238,6 +284,12 @@ def main(args: list[str] | None = None) -> int:
     codex_args = ["codex", *forwarded]
     if proxy_url:
         codex_args = ["codex", "-p", "tokenpak-chatgpt", *forwarded]
+
+    # Registry-aware launch: record a non-cleanup session manifest before
+    # exec so Runtime Hygiene can later observe this codex session. Silent and
+    # best-effort — never blocks the launch.
+    _register_runtime_session(provisioned, codex_args)
+
     os.execvpe("codex", codex_args, env)
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
