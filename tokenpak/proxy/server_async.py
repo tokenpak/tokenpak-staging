@@ -29,7 +29,9 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -53,6 +55,11 @@ MAX_CONCURRENCY = int(os.environ.get("TOKENPAK_CONCURRENCY", "200"))
 HTTPX_POOL_SIZE = int(os.environ.get("TOKENPAK_HTTPX_POOL_SIZE", "100"))
 HTTPX_TIMEOUT = float(os.environ.get("TOKENPAK_HTTPX_TIMEOUT", "300"))
 INTERCEPT_HOSTS = {"api.anthropic.com", "api.openai.com"}
+_ATTRIBUTION_HEADER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/+\\-]{0,127}$")
+_INTERNAL_ATTRIBUTION_HEADERS = {
+    "x-tokenpak-agent",
+    "x-tokenpak-cycle",
+}
 
 # ---------------------------------------------------------------------------
 # Module-level shared state (set by ProxyServer before uvicorn starts)
@@ -218,10 +225,55 @@ def _build_forward_headers(request: Request, target_url: str) -> Dict[str, str]:
         "trailer",
         "upgrade",
         "accept-encoding",
+        *_INTERNAL_ATTRIBUTION_HEADERS,
     }
     headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
     headers["host"] = parsed.netloc
     return headers
+
+
+def _header_value(headers: Any, name: str) -> str:
+    """Case-insensitive header lookup for ASGI and plain-dict test headers."""
+    try:
+        if hasattr(headers, "items"):
+            target = name.lower()
+            for key, value in headers.items():
+                if str(key).lower() == target:
+                    return str(value).strip()
+        if hasattr(headers, "get"):
+            for variant in (name, name.lower(), name.title()):
+                value = headers.get(variant)
+                if value:
+                    return str(value).strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _clean_attribution_header(headers: Any, name: str, *, lower: bool = False) -> str:
+    """Return a valid attribution header value, or the empty sentinel."""
+    value = _header_value(headers, name)
+    if not value:
+        return ""
+    if not _ATTRIBUTION_HEADER_RE.fullmatch(value):
+        logging.getLogger(__name__).warning(
+            "tokenpak async: ignored invalid attribution header %s", name
+        )
+        return ""
+    return value.lower() if lower else value
+
+
+def _resolve_async_monitor_attribution(headers: Any) -> tuple[str, str, str]:
+    """Resolve monitor attribution from request headers with honest sentinels."""
+    try:
+        from tokenpak.proxy.request_pipeline import _resolve_session_id
+
+        session_id = _resolve_session_id(headers, "")
+    except Exception:
+        session_id = ""
+    agent_id = _clean_attribution_header(headers, "X-Tokenpak-Agent", lower=True)
+    cycle_id = _clean_attribution_header(headers, "X-Tokenpak-Cycle")
+    return session_id, agent_id, cycle_id
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +481,9 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                         cache_read_tokens,
                         cache_creation_tokens,
                         latency_ms,
+                        status_code=upstream.status_code,
+                        endpoint=target_url,
+                        request_headers=request.headers,
                     )
 
                 response = StreamingResponse(
@@ -480,6 +535,9 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                 cache_read_tokens,
                 cache_creation_tokens,
                 latency_ms,
+                status_code=resp.status_code,
+                endpoint=target_url,
+                request_headers=request.headers,
             )
 
             resp_headers = {
@@ -523,6 +581,10 @@ def _record_telemetry(
     cache_read_tokens: int,
     cache_creation_tokens: int,
     latency_ms: int,
+    *,
+    status_code: int = 200,
+    endpoint: str = "",
+    request_headers: Any = None,
 ) -> None:
     """Record telemetry for a completed request. Thread-safe."""
     if input_tokens == 0:
@@ -563,6 +625,39 @@ def _record_telemetry(
                     ratio=ratio,
                     latency_ms=latency_ms,
                     status="ok",
+                )
+            except Exception:
+                pass
+
+        monitor = getattr(ps, "monitor", None)
+        if monitor is not None:
+            try:
+                session_id, agent_id, cycle_id = _resolve_async_monitor_attribution(
+                    request_headers
+                )
+                compilation_mode = getattr(ps, "compilation_mode", "") or ""
+                if not isinstance(compilation_mode, str):
+                    compilation_mode = ""
+                monitor.log(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                    latency_ms=latency_ms,
+                    status_code=status_code,
+                    endpoint=endpoint,
+                    compilation_mode=compilation_mode,
+                    protected_tokens=protected_tokens,
+                    compressed_tokens=max(0, input_tokens - sent_input_tokens),
+                    injected_tokens=0,
+                    injected_sources="",
+                    cache_read_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                    would_have_saved=int(saved),
+                    cache_origin="unknown",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    cycle_id=cycle_id,
                 )
             except Exception:
                 pass

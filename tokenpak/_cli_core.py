@@ -4743,7 +4743,18 @@ def _build_user_template_parser(sub):
 
 # ── Version Control Commands ──────────────────────────────────────────────────
 
-PROXY_VERSION = "1.1.0"
+# The proxy ships from the same wheel as the CLI, so the "expected" proxy
+# version always equals the installed package version. Deriving it from
+# ``tokenpak.__version__`` (instead of a separate hardcoded literal) keeps
+# ``tokenpak version`` honest across releases. A stale ``"1.1.0"`` constant
+# here advertised a version the package never shipped.
+# The CLI docs generator installs a lightweight mocked top-level ``tokenpak``
+# module before importing this file, so keep import-time docs generation alive.
+try:
+    from tokenpak import __version__ as PROXY_VERSION
+except Exception:  # pragma: no cover - exercised by generated-docs mock import
+    PROXY_VERSION = "unknown"
+
 _LOCK_FILE = _paths.under("tokenpak.lock.json")
 _TOKENPAK_CFG = _paths.under("config.json")
 _PROXY_URL = "http://localhost:8766"
@@ -6290,8 +6301,7 @@ def cmd_trigger_daemon(args):
 
 def cmd_trigger_fire(args):
     """Fire an event string immediately — executes all matching enabled triggers."""
-    import subprocess
-
+    from tokenpak.orchestration.commands import run_trigger_action
     from tokenpak.orchestration.triggers.matcher import match_event
 
     store = _trigger_store()
@@ -6303,18 +6313,14 @@ def cmd_trigger_fire(args):
     print(f"Firing event: {event} ({len(matched)} trigger(s))")
     for t in matched:
         print(f"  -> {t.id}  {t.action}")
-        cmd = t.action
-        if not cmd.startswith("/") and not cmd.startswith("./") and not cmd.startswith("~"):
-            cmd = f"tokenpak {cmd}"
-        try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-            output = (result.stdout + result.stderr).strip()
-            store.log_fire(t, result.returncode, output)
-            if output:
-                print(f"     {output[:200]}")
-        except subprocess.TimeoutExpired:
-            store.log_fire(t, -1, "timeout")
+        # Governed execution: shell=False by default; only ``shell:``-prefixed
+        # actions reach the host shell, so config payloads are not shell-interpreted.
+        result = run_trigger_action(t.action, timeout=30)
+        store.log_fire(t, result.returncode, result.output)
+        if result.timed_out:
             print("     [timeout]")
+        elif result.output:
+            print(f"     {result.output[:200]}")
 
 
 _GIT_POST_COMMIT = """#!/bin/sh

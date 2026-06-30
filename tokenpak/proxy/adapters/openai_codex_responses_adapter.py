@@ -90,6 +90,44 @@ def codex_responses_payload_fixup(body: bytes) -> bytes:
         return body
 
 
+def _extract_codex_responses_usage_from_sse_tail(sse_tail: bytes) -> dict[str, int]:
+    """Extract final Responses usage counters from a bounded SSE tail.
+
+    Returns zeroes on malformed input. Only aggregate token counters are
+    returned; event content and response text are ignored.
+    """
+    result = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+    try:
+        for raw_line in sse_tail.splitlines():
+            line = raw_line.strip()
+            if not line.startswith(b"data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == b"[DONE]":
+                continue
+            try:
+                event = json.loads(payload)
+            except Exception:
+                continue
+            usage = None
+            if isinstance(event, dict):
+                response = event.get("response")
+                if isinstance(response, dict):
+                    usage = response.get("usage")
+                if usage is None:
+                    usage = event.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            result["input_tokens"] = int(usage.get("input_tokens") or 0)
+            result["output_tokens"] = int(usage.get("output_tokens") or 0)
+            details = usage.get("input_tokens_details")
+            if isinstance(details, dict):
+                result["cache_read_tokens"] = int(details.get("cached_tokens") or 0)
+    except Exception:
+        return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+    return result
+
+
 class OpenAICodexResponsesAdapter(OpenAIResponsesAdapter):
     """Codex Responses adapter — same format, different upstream + detection.
 
