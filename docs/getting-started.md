@@ -30,11 +30,14 @@ Get TokenPak running in under 5 minutes.
 
 === "With optional extras"
  ```bash
- # Accurate token counting (recommended)
- pip install tokenpak[tiktoken]
+ # Exact OpenAI-compatible token counting
+ pip install tokenpak[tokens]
 
- # ML-powered compression (advanced)
- pip install tokenpak[ml]
+ # LLMLingua compression engine (advanced)
+ pip install tokenpak[compression]
+
+ # Legacy-style heavy feature bundle
+ pip install tokenpak[full]
  ```
 
 ---

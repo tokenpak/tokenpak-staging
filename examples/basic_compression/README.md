@@ -49,7 +49,7 @@ in large language model applications.
 
 ```python
 from tokenpak import HeuristicEngine
-from tokenpak.engines.base import CompactionHints
+from tokenpak.compression.engines.base import CompactionHints
 
 engine = HeuristicEngine()
 

@@ -64,6 +64,34 @@ Run `tokenpak integrate` to see the full client list with setup guides for each.
 pip install tokenpak
 ```
 
+To upgrade an existing install (a plain `pip install tokenpak` will **not**
+upgrade an already-installed version):
+
+```bash
+pip install -U tokenpak
+# or
+tokenpak update
+```
+
+### Optional features (extras)
+
+The slim install keeps core functionality under 200 MB. Optional features are opt-in:
+
+| Extra | What it adds | Install |
+|---|---|---|
+| `tokens` | Exact OpenAI-compatible token counting (tiktoken) | `pip install tokenpak[tokens]` |
+| `retrieval` | Semantic/vector search (sentence-transformers, ~5 GB with torch) | `pip install tokenpak[retrieval]` |
+| `code-compression` | AST-based code compression (tree-sitter-languages) | `pip install tokenpak[code-compression]` |
+| `intelligence` | A/B optimizer analytics (scipy) | `pip install tokenpak[intelligence]` |
+| `data` | Data analysis features (pandas) | `pip install tokenpak[data]` |
+| `compression` | LLM-based compression engine (llmlingua) | `pip install tokenpak[compression]` |
+| `integrations-litellm` | LiteLLM router middleware (litellm) | `pip install tokenpak[integrations-litellm]` |
+| `dispatch` | Dispatch orchestration subsystem (pydantic, jsonschema) | `pip install tokenpak[dispatch]` |
+| `serve` | FastAPI dashboard, telemetry, ingest, and WebSocket server deps | `pip install tokenpak[serve]` |
+| `full` | Heavy feature bundle for legacy-style installs; does not include utility extras like `tokens` or `serve` | `pip install tokenpak[full]` |
+
+**Upgrading from v1.8.x or earlier?** Six heavy packages (`sentence-transformers`, `tree-sitter-languages`, `scipy`, `pandas`, `llmlingua`, `litellm`) moved from core to optional extras in v1.9.0. Install the extras you need above, or use `pip install tokenpak[full]` to restore the previous heavy-feature bundle. Add `tokenpak[tokens]` separately when you want exact `tiktoken` counts.
+
 See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
 
 Requirements: Python 3.10+. No external dependencies for core functionality.

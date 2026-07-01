@@ -7,10 +7,11 @@
 
 ## API Index
 
-- **TokenPakClient**: SDK client usage pattern (documented in examples; production-facing entrypoint is `ContextPack` + connectors/processors)
+- **ContextPack**: stack-neutral prompt packing via `tokenpak.compression.pack`
+- **HeuristicEngine**: local deterministic compression via `tokenpak.compression.engines`
 - **TokenPakProxy**: Proxy service capabilities (implemented across `proxy.py` and `tokenpak/proxy/*` adapters)
-- **Adapters**: `tokenpak.adapters.*`, `tokenpak.proxy.adapters.*`, `tokenpak.telemetry.adapters.*`
-- **Metrics**: `tokenpak.monitoring.metrics.ProxyMetricsCollector`, telemetry collectors/storage
+- **Adapters**: proxy format adapters under `tokenpak.proxy.adapters.*` and telemetry adapters under `tokenpak.telemetry.adapters.*`
+- **Metrics**: Prometheus text helpers under `tokenpak.metrics.*`, plus telemetry collectors/storage
 - **Cache**: `tokenpak.cache.*`, `tokenpak.telemetry.cache.CacheStore`
 - **Config**: `tokenpak.telemetry.config.*`, policy/config models across modules
 
@@ -25,9 +26,16 @@
 
 ### ContextPack
 ```python
-from tokenpak.pack import ContextPack
-pack = ContextPack()
-result = pack.compile_blocks(raw_blocks, source='notes.md')
+from tokenpak.compression.pack import ContextPack, PackBlock
+
+pack = ContextPack(budget=4000)
+pack.add(PackBlock(
+    id="notes",
+    type="knowledge",
+    content="TokenPak packs context to fit a token budget.",
+    priority="high",
+))
+result = pack.compile()
 ```
 
 ### RequestValidator
@@ -39,26 +47,32 @@ validation = validator.validate(payload)
 
 ### OpenAIAdapter
 ```python
-from tokenpak.adapters.openai import OpenAIAdapter
-adapter = OpenAIAdapter(model='gpt-4o-mini', api_key='...')
-response = adapter.complete(messages)
+from tokenpak.proxy.adapters.openai_chat_adapter import OpenAIChatAdapter
+
+adapter = OpenAIChatAdapter()
+canonical = adapter.normalize(b'{"model":"gpt-4o-mini","messages":[]}')
 ```
 
 ### AnthropicAdapter
 ```python
-from tokenpak.adapters.anthropic import AnthropicAdapter
-adapter = AnthropicAdapter(model='claude-3-5-sonnet-latest', api_key='...')
-response = adapter.complete(messages)
+from tokenpak.proxy.adapters.anthropic_adapter import AnthropicAdapter
+
+adapter = AnthropicAdapter()
+canonical = adapter.normalize(b'{"model":"claude-3-5-sonnet-latest","messages":[]}')
 ```
 
-### ProxyMetricsCollector
+### Metrics text
 ```python
-from tokenpak.monitoring.metrics import ProxyMetricsCollector
-metrics = ProxyMetricsCollector()
-metrics.record_request(provider='openai', status='ok', latency_ms=120)
+from tokenpak.metrics.prometheus import build_metrics_text
+
+metrics_text = build_metrics_text([])
 ```
 
 ## Class Reference
+
+The class inventory below is generated from source and is not the quickstart
+surface. Use the copy-paste examples above for current import paths; generated
+legacy headings are reconciled by the API-reference generator sweep.
 
 ### `tokenpak.adapters.anthropic.AnthropicAdapter`
 
@@ -8173,7 +8187,7 @@ def reset(self, model: Optional[str] = None, task_type: Optional[str] = None) ->
 - **Returns:** `Any`
 - **Description:** Reset ratings. Pass model and/or task_type to reset selectively.
 
-### `tokenpak.engines.base.CompactionEngine`
+### `tokenpak.compression.engines.base.CompactionEngine`
 
 **Bases:** ABC
 
@@ -8197,7 +8211,7 @@ def estimate_tokens(self, text: str) -> int
 - **Returns:** `int`
 - **Description:** Estimate token count for text.
 
-### `tokenpak.engines.heuristic.HeuristicEngine`
+### `tokenpak.compression.engines.heuristic.HeuristicEngine`
 
 **Bases:** CompactionEngine
 
@@ -8225,7 +8239,7 @@ def compact(self, text: str, hints: Optional[CompactionHints] = None) -> str
 - **Returns:** `str`
 - **Description:** Compact using heuristic rules.
 
-### `tokenpak.engines.llmlingua.LLMLinguaEngine`
+### `tokenpak.compression.engines.llmlingua.LLMLinguaEngine`
 
 **Bases:** CompactionEngine
 
@@ -9917,7 +9931,7 @@ def stop(self, timeout: float = 5.0) -> None
 - **Returns:** `None`
 - **Description:** Flush remaining queue entries and stop the background thread.
 
-### `tokenpak.pack.CompiledResult`
+### `tokenpak.compression.pack.CompiledResult`
 
 **Bases:** object
 
@@ -9971,7 +9985,7 @@ def to_json(self) -> Dict[str, Any]
 - **Returns:** `Dict[str, Any]`
 - **Description:** Return the full compiled result as a JSON-serializable dict.
 
-### `tokenpak.pack.ContextPack`
+### `tokenpak.compression.pack.ContextPack`
 
 **Bases:** object
 

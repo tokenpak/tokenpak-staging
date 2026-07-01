@@ -54,8 +54,8 @@ sudo ufw allow out 443/tcp
 pip install tokenpak
 
 # With optional extras
-pip install tokenpak[tiktoken] # accurate token counting (recommended)
-pip install tokenpak[ml] # ML-powered compression via LLMLingua
+pip install tokenpak[tokens] # exact OpenAI-compatible token counting
+pip install tokenpak[compression] # LLMLingua compression engine
 ```
 
 ### Option 2: From Source
@@ -66,7 +66,7 @@ cd tokenpak
 pip install -e .
 
 # With extras
-pip install -e ".[tiktoken,ml]"
+pip install -e ".[tokens,compression]"
 ```
 
 ### Option 3: Docker
@@ -417,20 +417,11 @@ server {
 | Multi-instance / shared telemetry | PostgreSQL | Team > 5, load-balanced |
 | Read-heavy dashboards | PostgreSQL + read replica | Enterprise |
 
-Switch to PostgreSQL:
-
-```bash
-pip install tokenpak[postgres]
-
-# Set connection string
-export TOKENPAK_DB=postgresql://tokenpak:password@db-host:5432/tokenpak
-```
-
-Run migrations:
-
-```bash
-tokenpak db migrate
-```
+PostgreSQL is a deployment architecture target, not a packaged OSS extra today.
+`pyproject.toml` does not expose a PostgreSQL extra, and there is no
+copy-paste install path for switching the local telemetry store from SQLite to
+PostgreSQL in the current public package. Keep SQLite for current deployments
+unless you maintain a separate integration layer.
 
 ### Cache Scaling
 
@@ -439,14 +430,10 @@ tokenpak db migrate
 | Single instance | In-memory (default) | Dev / small teams |
 | Multi-instance | Redis | Load-balanced deployments |
 
-Enable Redis cache:
-
-```bash
-pip install tokenpak[redis]
-export TOKENPAK_CACHE_URL=redis://redis-host:6379/0
-```
-
-Redis gives multi-instance cache sharing so duplicate requests (same prompt, same model) are served from cache across all nodes.
+Redis is also an architecture target, not a packaged OSS extra today.
+`pyproject.toml` does not expose a Redis extra. Do not rely on Redis cache
+sharing unless your deployment owns that integration outside the current public
+package.
 
 ---
 
@@ -534,7 +521,7 @@ Best for: Solo developer, personal use, testing.
 
 ```bash
 # Install
-pip install tokenpak[tiktoken]
+pip install tokenpak[tokens]
 
 # Set API keys in shell profile
 echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> ~/.bashrc
@@ -582,7 +569,7 @@ Internet → ALB (HTTPS:443) → EC2 Auto Scaling Group (tokenpak:8766)
 2. **Install TokenPak:**
  ```bash
  sudo apt update && sudo apt install -y python3.11 python3.11-pip
- pip3 install tokenpak[tiktoken,postgres,redis]
+ pip3 install "tokenpak[serve,tokens]"
  ```
 
 3. **Store secrets in AWS Secrets Manager:**

@@ -19,6 +19,16 @@ Get from zero to savings in 5 minutes. Pick your path:
 pip install tokenpak
 ```
 
+Already installed? Upgrade with `pip install -U tokenpak` or `tokenpak update`
+(a plain `pip install tokenpak` will not upgrade an existing version).
+
+The slim install covers all core functionality. Optional features are available
+as extras — see [Optional features (extras)](../README.md#optional-features-extras)
+in the README for common choices such as `tokens`, `compression`, `retrieval`,
+`serve`, and `full`.
+
+**Upgrading from v1.8.x or earlier?** Six heavy packages moved from core to optional extras in v1.9.0 (`sentence-transformers`, `tree-sitter-languages`, `scipy`, `pandas`, `llmlingua`, `litellm`). Use `pip install tokenpak[full]` to restore the previous heavy-feature bundle, add `tokenpak[tokens]` when you want exact token counts, or install only the extras you need.
+
 ### Minute 2: Start the proxy
 
 ```bash
