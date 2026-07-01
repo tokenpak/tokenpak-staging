@@ -112,6 +112,7 @@ def _print_free_tier_upgrade_hint() -> None:
 
 SEP_INNER = "─────────────────────────────────"
 PROXY_DEFAULT = "http://127.0.0.1:8766"
+STATUS_JSON_SCHEMA_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -1312,7 +1313,7 @@ def _run_minimal(
 
 
 # ---------------------------------------------------------------------------
-# JSON output (machine-readable full dump)
+# JSON output (machine-readable summary)
 # ---------------------------------------------------------------------------
 
 
@@ -1323,16 +1324,22 @@ def _run_json(
     hours: int = 0,
     all_time: bool = False,
 ) -> None:
-    """Dump all status data as JSON."""
-    health = _fetch(f"{proxy_base}/health")
-    stats = _fetch(f"{proxy_base}/stats")
-    cache = _fetch(f"{proxy_base}/cache-stats")
-    proxy_reachable = health is not None
+    """Emit the stable machine-readable status summary.
+
+    This intentionally is not a raw dump of every human/status endpoint. The
+    JSON path is for scripts, so it stays schema-versioned, bounded, and free of
+    novelty copy. Full persistent history remains opt-in via ``--all``.
+    """
+    health = _fetch(f"{proxy_base}/health", timeout=1)
 
     savings_24h = _calculate_fleet_savings(db_path=db_path, period="24h")
     savings_1h = _calculate_fleet_savings(db_path=db_path, period="1h")
     savings_all = _calculate_fleet_savings(db_path=db_path, period=None) if all_time else None
-    tip_cache = _query_tip_cache_attribution(db_path=db_path, days=days, hours=hours)
+    tip_days = days
+    tip_hours = hours
+    if not all_time and days <= 0 and hours <= 0:
+        tip_days = 1
+    tip_cache = _query_tip_cache_attribution(db_path=db_path, days=tip_days, hours=tip_hours)
     resolved_db = db_path or _get_db_path()
 
     def _with_source(value: Dict[str, Any], period: str) -> Dict[str, Any]:
@@ -1345,19 +1352,53 @@ def _run_json(
         }
         return out
 
-    output = {
-        "version": _get_version(),
-        "proxy": {
-            "reachable": proxy_reachable,
-            "health": health,
-            "stats": stats,
-            "cache": cache,
+    def _proxy_summary() -> Dict[str, Any]:
+        if not isinstance(health, dict):
+            return {
+                "reachable": False,
+                "status": "unreachable",
+                "version": None,
+                "uptime_seconds": None,
+                "compilation_mode": None,
+                "requests_total": None,
+                "source": {
+                    "kind": "proxy_http",
+                    "base_url": proxy_base,
+                    "freshness": "unreachable",
+                },
+            }
+
+        stats_block = health.get("stats") if isinstance(health.get("stats"), dict) else {}
+        requests_total = health.get("requests_total")
+        if requests_total is None:
+            requests_total = stats_block.get("requests")
+        if requests_total is None:
+            stats = _fetch(f"{proxy_base}/stats", timeout=1)
+            session_block = stats.get("session", {}) if isinstance(stats, dict) else {}
+            requests_total = session_block.get("session_requests")
+        return {
+            "reachable": True,
+            "status": health.get("status", "unknown"),
+            "version": health.get("version"),
+            "uptime_seconds": health.get("uptime_seconds"),
+            "compilation_mode": health.get("compilation_mode"),
+            "requests_total": requests_total,
             "source": {
                 "kind": "proxy_http",
                 "base_url": proxy_base,
-                "freshness": "live" if proxy_reachable else "unreachable",
+                "freshness": "live",
             },
+        }
+
+    output = {
+        "schema_version": STATUS_JSON_SCHEMA_VERSION,
+        "version": _get_version(),
+        "window": {
+            "default": not all_time and days <= 0 and hours <= 0,
+            "savings": ["1h", "24h"] + (["all_time"] if all_time else []),
+            "tip_cache": "all_time" if all_time else _tip_window_label(tip_days, tip_hours),
         },
+        "proxy": _proxy_summary(),
         "savings": {
             "last_24h": _with_source(savings_24h, "24h") if not savings_24h.get("error") else None,
             "last_1h": _with_source(savings_1h, "1h") if not savings_1h.get("error") else None,
@@ -1521,7 +1562,7 @@ if HAS_CLICK:
     @click.option("--raw", is_flag=True, help="Dump raw JSON (with --full)")
     @click.option("--minimal", is_flag=True, help="One-line savings summary")
     @click.option("--tip-cache", is_flag=True, help="Show compact TIP cache attribution only")
-    @click.option("--json", "as_json", is_flag=True, help="Full JSON data dump")
+    @click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON summary")
     @click.option("--no-meme", is_flag=True, help="Suppress tagline")
     @click.option("--db", "db_path", default=None, help="Monitor DB path override")
     @click.option("--days", default=0, type=int, help="Filter to last N days (combinable with --hours)")

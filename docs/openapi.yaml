@@ -172,8 +172,9 @@ paths:
       operationId: getHealth
       summary: Proxy health check
       description: |
-        Returns the current health of the proxy, including vault index state,
-        router status, circuit breaker state, and session stats.
+        Returns the canonical proxy health contract, including status,
+        version, uptime, compilation mode, total requests, Python version,
+        session stats, latency, and optional component summaries.
         Response is cached for 1 second to reduce overhead.
       tags: [health]
       responses:
@@ -185,7 +186,11 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
               example:
                 status: ok
+                version: 1.10.0
+                uptime_seconds: 3600
                 compilation_mode: hybrid
+                requests_total: 42
+                python_version: 3.12.3
                 vault_index:
                   available: true
                   blocks: 2943
@@ -199,6 +204,10 @@ paths:
                   requests: 42
                   saved_tokens: 18500
                   errors: 0
+                latency:
+                  p50_latency_ms: 25
+                  p99_latency_ms: 60
+                  samples: 42
 
   # ─── Stats ────────────────────────────────────────────────────────────────
 
@@ -674,9 +683,21 @@ components:
         status:
           type: string
           example: ok
+        version:
+          type: string
+          example: 1.10.0
+        uptime_seconds:
+          type: integer
+          example: 3600
         compilation_mode:
           type: string
           enum: [hybrid, compression-only, passthrough]
+        requests_total:
+          type: integer
+          example: 42
+        python_version:
+          type: string
+          example: 3.12.3
         vault_index:
           $ref: "#/components/schemas/VaultIndexSummary"
         router:
@@ -704,6 +725,15 @@ components:
                 type: integer
         stats:
           $ref: "#/components/schemas/SessionStatsSummary"
+        latency:
+          type: object
+          properties:
+            p50_latency_ms:
+              type: number
+            p99_latency_ms:
+              type: number
+            samples:
+              type: integer
 
     # ── Stats ─────────────────────────────────────────────────────────────────
 

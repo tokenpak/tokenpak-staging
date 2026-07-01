@@ -25,7 +25,9 @@ Benchmark run on <dev-host>, 100 req/sec sustained for 5s:
 ## Features Validated (Phase 6)
 
 ### /health endpoint
-Reports: `status`, `uptime_seconds`, `compression_ratio_avg`, `circuit_breakers`, `index_freshness`, `request_timeout_seconds`
+Reports the canonical proxy health contract: `status`, `version`,
+`uptime_seconds`, `compilation_mode`, `requests_total`, `python_version`,
+`stats`, and `latency`.
 
 ```bash
 curl http://localhost:8766/health
@@ -33,7 +35,8 @@ curl http://localhost:8766/health?deep=true # includes memory + disk
 ```
 
 ### Index Freshness Check
-`/health` now reports `index_freshness.age_seconds` — stale if > 600s (10 min).
+Deep health checks may report `index_freshness.age_seconds` — stale if > 600s
+(10 min).
 Index auto-reloads every 5min via `VAULT_INDEX_RELOAD_INTERVAL`.
 
 ### Graceful Adapter Fallback
