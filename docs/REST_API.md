@@ -203,18 +203,9 @@ Proxy health and stats.
 
 ### `GET /v1/health`
 
-Detailed health check.
-
-**Response:**
-```json
-{
- "proxy": "ok",
- "database": "ok",
- "index": "ok",
- "compression_pipeline": "ok",
- "version": "0.1.1"
-}
-```
+Deprecated legacy alias. Use `GET /health` for the canonical proxy health
+contract (`status`, `version`, `uptime_seconds`, `compilation_mode`,
+`requests_total`, `python_version`, `stats`, `latency`).
 
 ---
 
