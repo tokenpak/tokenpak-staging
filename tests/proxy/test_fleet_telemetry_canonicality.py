@@ -58,7 +58,7 @@ def test_proxy_completion_log_call_sites_thread_attribution_fields() -> None:
 
     anthropic_block = server_source[
         server_source.index("ps.monitor.log(") : server_source.index(
-            "# ── Reservation settlement"
+            "# Record cache telemetry"
         )
     ]
     assert "session_id=_mon_session_id" in anthropic_block

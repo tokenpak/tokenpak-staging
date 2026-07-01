@@ -1390,6 +1390,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             fwd_headers.setdefault("OpenAI-Beta", "responses=experimental")
             fwd_headers.setdefault("originator", "codex_cli_rs")
 
+        _is_codex_responses = _upstream_provider == "openai" and (
+            "/v1/responses" in target_url
+            or "codex" in target_url.lower()
+            or "codex" in model.lower()
+        )
+
         # Tracks whether response headers have been committed to the client.
         # When True, the global except handler must NOT call send_response()
         # again — doing so produces garbage bytes after the HTTP response
@@ -1527,7 +1533,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         self.wfile.flush()
                                     except (BrokenPipeError, ConnectionResetError):
                                         break
-                                    if should_log and is_messages:
+                                    if (should_log and is_messages) or _is_codex_responses:
                                         sse_buffer += chunk
                     except _RETRYABLE_UPSTREAM_EXCEPTIONS:
                         # Once we've committed to writing to the client, can't retry —
@@ -1930,7 +1936,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             # `tokenpak status`/queries see ChatGPT-backend traffic. Kept fully
             # separate from the is_messages logging path above. Persists integer
             # token counts + metadata only — never any prompt/response content.
-            if is_codex_responses and ps.monitor is not None:
+            if _is_codex_responses and ps.monitor is not None:
                 try:
                     _cx_status = resp.status_code if "resp" in dir() else 0  # type: ignore
                     # Model from the request body JSON (best-effort), fallback gpt-5.5.
@@ -1949,7 +1955,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _cx_out = 0
                     _cx_cache_read = 0
                     try:
-                        _tail = _codex_sse_tail if "_codex_sse_tail" in dir() else b""
+                        _tail = sse_buffer if "sse_buffer" in dir() else b""
                         if _tail:
                             from .adapters.openai_codex_responses_adapter import (
                                 _extract_codex_responses_usage_from_sse_tail,
