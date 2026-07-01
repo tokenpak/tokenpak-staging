@@ -147,8 +147,8 @@ tokenpak cost
 If you work with a large codebase or notes vault, index it for instant semantic search:
 
 ```bash
-tokenpak index ~/vault
-tokenpak vault search "compression benchmark"
+tokenpak index ~/notes
+tokenpak vault repair # Check index health and rebuild stale entries
 ```
 
 This uses a local SQLite registry — no LLM calls, no cost.
@@ -160,7 +160,7 @@ This uses a local SQLite registry — no LLM calls, no cost.
 Let TokenPak calibrate optimal parallelism for your hardware:
 
 ```bash
-tokenpak calibrate ~/vault --max-workers 8 --rounds 2
+tokenpak calibrate ~/notes --max-workers 8 --rounds 2
 ```
 
 This runs once and saves a profile to `~/.tokenpak/calibration.json`. Future indexing runs use it automatically.
@@ -175,6 +175,25 @@ Protect yourself from runaway costs:
 tokenpak budget set --monthly 50 # $50/month limit
 tokenpak budget alert --at 80% # warn at 80%
 ```
+
+---
+
+## TokenPak home directory
+
+TokenPak keeps its configuration, databases, and caches under a single home
+directory. It is resolved in this order:
+
+1. `TOKENPAK_HOME` — explicit override (e.g. for sandboxes or CI).
+2. `~/.tpk/` — the canonical default used by fresh installs.
+3. `~/.tokenpak/` — a legacy fallback, used automatically only when it already
+   exists and `~/.tpk/` does not, so installs from earlier versions keep
+   working without changes.
+
+Newer docs and examples use the canonical `~/.tpk/` path. Where you still see
+`~/.tokenpak/`, treat it as the legacy-compatible location for the same data.
+To move a legacy install onto the canonical path, run `tokenpak home migrate`,
+which copies `~/.tokenpak/` to `~/.tpk/` and leaves the old tree in place as a
+backup.
 
 ---
 

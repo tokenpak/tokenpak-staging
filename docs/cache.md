@@ -49,7 +49,7 @@ The heuristic is conservative — it slightly over-estimates, so the compression
 
 ### What it is
 
-A SQLite database (`~/.tokenpak/registry.db`) that acts as a persistent index of your codebase or notes vault. When you run `tokenpak index ~/vault`, each file is parsed, its content is extracted, and a content-addressed record is written to the registry.
+A SQLite database (`~/.tpk/registry.db`) that acts as a persistent index of your codebase or notes directory. When you run `tokenpak index ~/notes`, each file is parsed, its content is extracted, and a content-addressed record is written to the registry.
 
 ### What's stored
 
@@ -71,7 +71,7 @@ Each record contains:
 On re-index, TokenPak computes the SHA-256 of each file and compares it to the stored hash. Only modified or new files are re-processed. Unchanged files are skipped.
 
 ```bash
-tokenpak index ~/vault
+tokenpak index ~/notes
 # Indexing 572 files...
 # 541 unchanged (skipped), 31 updated, 2 new → 3.2s
 ```
@@ -82,13 +82,13 @@ Without content hashing, re-indexing a 572-file vault takes ~180s. With it: **~3
 
 ```bash
 # Auto-tune worker count for your hardware
-tokenpak calibrate ~/vault
+tokenpak calibrate ~/notes
 
 # Manual override
-tokenpak index ~/vault --workers 8
+tokenpak index ~/notes --workers 8
 ```
 
-Calibration runs a bounded benchmark (min 1 worker, max `--max-workers`, default 8) and saves the optimal value to `~/.tokenpak/calibration.json`. Subsequent index runs use it automatically.
+Calibration runs a bounded benchmark (min 1 worker, max `--max-workers`, default 8) and saves the optimal value to `~/.tpk/calibration.json`. Subsequent index runs use it automatically.
 
 **Benchmark (572-file vault):**
 
@@ -99,22 +99,18 @@ Workers: 8 → 3.3s ← auto-selected on this machine
 Throughput: ~2,738 files/sec
 ```
 
-### Zero-token search
+### Vault index health
 
-The vault registry enables semantic search without any LLM calls:
+Check and repair your vault index if entries become stale:
 
 ```bash
-tokenpak vault search "compression benchmark results"
-# Returns top-k matching files by relevance score
-# 0 tokens, 22.7ms average latency
+tokenpak vault repair
 ```
-
-Search uses BM25 term matching over indexed symbols and file paths. No embeddings, no external service.
 
 ### File watching
 
 ```bash
-tokenpak index ~/vault --watch
+tokenpak index ~/notes --watch
 ```
 
 With `--watch`, the indexer monitors the directory for changes using filesystem events. Modified files are re-indexed incrementally in the background. The index stays current without manual re-runs.
@@ -122,7 +118,7 @@ With `--watch`, the indexer monitors the directory for changes using filesystem 
 As a systemd service:
 
 ```bash
-systemctl --user start tokenpak-watcher@$(systemd-escape ~/vault)
+systemctl --user start tokenpak-watcher@$(systemd-escape ~/notes)
 ```
 
 ---
@@ -142,9 +138,13 @@ Combined, these can reduce effective cost by 80%+ on workloads with large, repea
 
 ## Cache Locations
 
+Paths below use the canonical TokenPak home `~/.tpk/` (override with
+`TOKENPAK_HOME`). Legacy installs that still live under `~/.tokenpak/` keep
+working; `tokenpak home migrate` moves them to the canonical path.
+
 | Cache | Location | Type | Cleared by |
 |---|---|---|---|
 | Token count | In-process LRU | Memory | Proxy restart |
-| Vault registry | `~/.tokenpak/registry.db` | SQLite | `rm ~/.tokenpak/registry.db` + reindex |
-| Calibration | `~/.tokenpak/calibration.json` | JSON | Delete file + recalibrate |
-| Telemetry | `~/.tokenpak/telemetry.db` | SQLite | `tokenpak maintenance prune` |
+| Vault registry | `~/.tpk/registry.db` | SQLite | `rm ~/.tpk/registry.db` + reindex |
+| Calibration | `~/.tpk/calibration.json` | JSON | Delete file + recalibrate |
+| Telemetry | `~/.tpk/telemetry.db` | SQLite | `tokenpak maintenance prune` |

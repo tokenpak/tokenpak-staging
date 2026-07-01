@@ -61,6 +61,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Installation: install-guide.md
   - Onboarding:
     - Day 1 → Day 30 Journey: onboarding.md
   - Guides:
@@ -73,6 +74,11 @@ nav:
   - CLI Reference: cli-reference.md
   - Python SDK Reference: API_REFERENCE.md
   - REST API Reference: REST_API.md
+  - Protocol & Adapters:
+    - Protocol Specification: PROTOCOL.md
+    - Protocol Quick Reference: PROTOCOL_QUICK.md
+    - Adapter Compatibility Matrix: adapter-compatibility-matrix.md
+  - MultiPak (Pro preview): multipak.md
   - Troubleshooting: troubleshooting.md
   - FAQ: faq.md
   - Deep Dives:

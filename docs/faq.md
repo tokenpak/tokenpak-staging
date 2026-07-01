@@ -43,7 +43,7 @@ The proxy is a transparent passthrough — it only reads/modifies the request bo
 
 ### Does TokenPak send my data anywhere?
 
-No. TokenPak runs entirely locally. Your prompts, responses, API keys, and metadata never leave your machine. The proxy intercepts requests between your client and the provider, compresses them locally, and forwards them. There's no TokenPak cloud service involved.
+Nothing leaves by default. Your prompts, responses, and API keys never leave your machine to any TokenPak service — the proxy compresses requests locally and forwards them straight to your provider, with no TokenPak cloud service in the path. The one exception is opt-in: if you set `TOKENPAK_METRICS_ENABLED=1`, TokenPak sends anonymous usage metrics such as TokenPak, OS, and Python versions, model names, and compression-ratio distributions — never prompt or response content. It's off unless you enable it; see `telemetry.md` for the full list and opt-out details.
 
 ### How does TokenPak affect my API key?
 
@@ -147,10 +147,10 @@ tokenpak config set compression.mode strict
 Your API key isn't reaching the provider. Debug:
 
 ```bash
-tokenpak debug on --requests 1
+tokenpak debug on
 # Make a request...
 tokenpak debug off
-tokenpak trace --last
+tokenpak debug list
 # Check that Authorization header is present and unchanged
 ```
 
@@ -161,7 +161,7 @@ The cost calculation is based on a built-in pricing catalog (`tokenpak/telemetry
 Check which model is being detected:
 
 ```bash
-tokenpak trace --last
+tokenpak debug list
 # Look for "model" field in the output
 ```
 
@@ -204,17 +204,11 @@ tokenpak config set compression.threshold_tokens 2000
 Check which recipe is firing:
 
 ```bash
-tokenpak trace --last
+tokenpak debug list
 # Shows: recipe: python-strip-comments, stages: [...]
 ```
 
-If you're seeing unwanted changes, you can disable specific recipes:
-
-```bash
-tokenpak recipe remove python-strip-comments
-```
-
-Or disable compression for specific request patterns:
+If you're seeing unwanted changes, disable compression for specific request patterns:
 
 ```json
 {
@@ -248,18 +242,23 @@ tokenpak config set pricing.my-model.output_per_1k 0.015
 ```bash
 tokenpak prune --older-than 0d # delete all history
 # or
-rm ~/.tokenpak/stats.db # nuclear option
+rm ~/.tpk/stats.db # nuclear option
 ```
 
 ### Where is my data stored?
 
+Under the TokenPak home directory — `~/.tpk/` by default (override with
+`TOKENPAK_HOME`). Installs created before the `~/.tpk/` default keep using the
+legacy `~/.tokenpak/` home automatically; run `tokenpak home migrate` to move to
+the canonical path.
+
 | Data | Location |
 |------|----------|
-| Configuration | `~/.tokenpak/config.json` |
-| Session database | `~/.tokenpak/monitor.db` (or `TOKENPAK_DB` env var) |
-| Vault index | `.tokenpak/registry.db` |
-| Calibration profile | `~/.tokenpak/calibration.json` |
-| Recipes | `~/.tokenpak/recipes/` |
+| Configuration | `~/.tpk/config.json` |
+| Session database | `~/.tpk/monitor.db` (or `TOKENPAK_DB` env var) |
+| Vault index | `~/.tpk/registry.db` |
+| Calibration profile | `~/.tpk/calibration.json` |
+| Recipes | `~/.tpk/recipes/` |
 
 ---
 
@@ -270,8 +269,8 @@ rm ~/.tokenpak/stats.db # nuclear option
 Run calibration first:
 
 ```bash
-tokenpak calibrate ~/vault --max-workers 8 --rounds 2
-tokenpak index ~/vault --auto-workers
+tokenpak calibrate ~/notes --max-workers 8 --rounds 2
+tokenpak index ~/notes --auto-workers
 ```
 
 ### Vault search returns irrelevant results
@@ -279,13 +278,13 @@ tokenpak index ~/vault --auto-workers
 Re-index your vault:
 
 ```bash
-tokenpak index ~/vault --force
+tokenpak index ~/notes --force
 ```
 
 ### Index is using too much disk space
 
 ```bash
-tokenpak vault blocks --stale
+tokenpak vault repair
 tokenpak prune --older-than 30d
 ```
 
@@ -293,8 +292,8 @@ tokenpak prune --older-than 30d
 
 ```bash
 # Rebuild from scratch
-rm -f ~/.tokenpak/registry.db
-tokenpak index ~/vault
+rm -f ~/.tpk/registry.db
+tokenpak index ~/notes
 ```
 
 ---
@@ -326,7 +325,7 @@ tokenpak budget alert --at 80
 ```
 [INFO] TokenPak proxy starting on :8766
 [INFO] Compression: enabled (hybrid mode, threshold=4500 tokens)
-[INFO] Telemetry: active → ~/.tokenpak/telemetry.db
+[INFO] Telemetry: active → ~/.tpk/telemetry.db
 [INFO] Ready.
 ```
 
