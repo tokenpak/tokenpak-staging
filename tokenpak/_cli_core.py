@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -1014,7 +1015,7 @@ def cmd_logs(args):
     """Show recent proxy logs."""
     log_candidates = [
         Path.home() / ".tokenpak" / "proxy.log",
-        Path("/tmp/tokenpak-proxy.log"),
+        Path(tempfile.gettempdir()) / "tokenpak-proxy.log",
     ]
     lines = getattr(args, "lines", 50)
     for log_path in log_candidates:

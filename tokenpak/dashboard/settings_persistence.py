@@ -241,9 +241,12 @@ def _try_sighup_proxy(updates: dict[str, str]) -> None:
     pid_path = Path.home() / ".tokenpak" / "proxy.pid"
     if not pid_path.exists():
         return
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is None:
+        return
     try:
         pid = int(pid_path.read_text().strip())
-        os.kill(pid, signal.SIGHUP)
+        os.kill(pid, sighup)
     except (ValueError, ProcessLookupError, PermissionError):
         pass
 

@@ -12,7 +12,9 @@ configures MCP, hooks, and AGENTS.md — the launcher is convenience.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+from typing import Callable
 
 from ..config import CompanionConfig
 
@@ -25,6 +27,25 @@ _TOKENPAK_CHATGPT_BASE_URL = "http://127.0.0.1:8766/v1"
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
 _TRUTHY = {"1", "true", "yes"}
+
+
+def _exec_or_run(
+    program: str,
+    argv: list[str],
+    env: dict[str, str],
+    *,
+    record_child_pid: Callable[[int], None] | None = None,
+) -> int:
+    """Replace this process on POSIX; run as a subprocess where execvpe is absent."""
+    if os.name == "nt" or not hasattr(os, "execvpe"):
+        proc = subprocess.Popen(argv, env=env)
+        if record_child_pid is not None:
+            record_child_pid(proc.pid)
+        return proc.wait()
+    if record_child_pid is not None:
+        record_child_pid(os.getpid())
+    os.execvpe(program, argv, env)
+    return 1
 
 
 def _bypass_env_enabled(env: dict[str, str] | None = None) -> bool:
@@ -176,7 +197,11 @@ def main(args: list[str] | None = None) -> int:
     if banner:
         print(banner, file=sys.stderr)
     codex_args = ["codex", *forwarded]
-    os.execvpe("codex", codex_args, env)
+    return _exec_or_run(
+        "codex",
+        codex_args,
+        env,
+    )
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
     return 1

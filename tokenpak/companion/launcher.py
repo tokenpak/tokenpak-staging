@@ -29,10 +29,19 @@ from __future__ import annotations
 import json
 import os
 import random
+import subprocess
 import sys
 from pathlib import Path
 
 from .config import CompanionConfig
+
+
+def _exec_or_run(program: str, argv: list[str], env: dict[str, str]) -> int:
+    """Replace this process on POSIX; run as a subprocess where execvpe is absent."""
+    if os.name == "nt" or not hasattr(os, "execvpe"):
+        return subprocess.run(argv, env=env, check=False).returncode
+    os.execvpe(program, argv, env)
+    return 1
 
 # ---------------------------------------------------------------------------
 # Fleet mode (runtime unattended bypass)
@@ -197,7 +206,7 @@ def main(args: list[str] | None = None) -> int:
     # native ``sessionTitle`` field. We never emit OSC-0 escapes manually;
     # Claude Code repaints the title on its own render loop and would clobber
     # them (this was the root cause of the abandoned OSC-0 tab-title attempt).
-    os.execvpe("claude", claude_args, env)
+    return _exec_or_run("claude", claude_args, env)
 
     # Only reached if exec fails
     print("tokenpak: failed to launch claude", file=sys.stderr)

@@ -117,7 +117,7 @@ def _shared_index_lock(tokenpak_dir: str) -> Generator[None, None, None]:
                 _fcntl.flock(fd, _fcntl.LOCK_UN)
         finally:
             fd.close()
-    except OSError:
+    except (ImportError, OSError):
         # tokenpak_dir absent or lock file unwritable — proceed without lock
         yield
 

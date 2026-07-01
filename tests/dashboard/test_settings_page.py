@@ -22,6 +22,7 @@ pytest.importorskip("fastapi", reason="fastapi not installed (optional dep — i
 from fastapi.testclient import TestClient
 
 try:
+    from tokenpak.dashboard import settings_persistence
     from tokenpak.dashboard.app import create_dashboard_app
     from tokenpak.dashboard.settings_persistence import (
         ENV_FILE_PATH,
@@ -49,6 +50,21 @@ def client():
 def tmp_env_file(tmp_path: Path) -> Path:
     """Return a fresh temp env file path (does NOT pre-create it)."""
     return tmp_path / "tokenpak.env"
+
+
+def test_try_sighup_proxy_noops_when_sighup_missing(tmp_path, monkeypatch):
+    """Windows-like signal modules do not expose SIGHUP."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pid_path = tmp_path / ".tokenpak" / "proxy.pid"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text("123", encoding="utf-8")
+    monkeypatch.delattr(settings_persistence.signal, "SIGHUP", raising=False)
+    kill = patch.object(settings_persistence.os, "kill")
+
+    with kill as mock_kill:
+        settings_persistence._try_sighup_proxy({"TOKENPAK_MODE": "observe"})
+
+    mock_kill.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

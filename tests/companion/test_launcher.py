@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -216,6 +217,52 @@ def test_main_passes_through_extra_args(tmp_path):
                 assert "--no-update-notifier" in exec_list
                 assert "-p" in exec_list
                 assert "test prompt" in exec_list
+
+
+def test_exec_or_run_windows_uses_subprocess(monkeypatch):
+    """Windows fallback runs the child process instead of using os.execvpe."""
+    monkeypatch.setattr(launcher.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        launcher.os,
+        "execvpe",
+        lambda *_a, **_k: pytest.fail("execvpe must not run on Windows"),
+    )
+
+    calls = {}
+
+    def fake_run(argv, env, check):
+        calls["argv"] = argv
+        calls["env"] = env
+        calls["check"] = check
+        return types.SimpleNamespace(returncode=17)
+
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+
+    assert launcher._exec_or_run("claude", ["claude", "--version"], {"X": "1"}) == 17
+    assert calls == {
+        "argv": ["claude", "--version"],
+        "env": {"X": "1"},
+        "check": False,
+    }
+
+
+def test_exec_or_run_posix_uses_execvpe(monkeypatch):
+    """POSIX behavior still replaces the current process."""
+    monkeypatch.setattr(launcher.os, "name", "posix", raising=False)
+    calls = {}
+
+    def fake_exec(program, argv, env):
+        calls["program"] = program
+        calls["argv"] = argv
+        calls["env"] = env
+        raise RuntimeError("exec called")
+
+    monkeypatch.setattr(launcher.os, "execvpe", fake_exec)
+
+    with pytest.raises(RuntimeError, match="exec called"):
+        launcher._exec_or_run("claude", ["claude"], {"Y": "2"})
+
+    assert calls == {"program": "claude", "argv": ["claude"], "env": {"Y": "2"}}
 
 
 # ---------------------------------------------------------------------------
