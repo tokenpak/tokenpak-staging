@@ -31,7 +31,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # ---------------------------------------------------------------------------
 # Public CLI entry: build the parser
@@ -125,7 +125,10 @@ class CheckResult:
     details: str = ""
 
 
-def run_conformance_checks() -> list[CheckResult]:
+def run_conformance_checks(
+    *,
+    registry_factory: Callable[[], Any] | None = None,
+) -> list[CheckResult]:
     """Run the Beta 1 TIP conformance check set.
 
     Order is deterministic so CI logs diff cleanly.
@@ -211,7 +214,10 @@ def run_conformance_checks() -> list[CheckResult]:
             details=str(exc),
         ))
 
-    # 4. Schemas readable + parseable
+    # 4. Adapter contract metadata present + compatible
+    results.extend(_adapter_contract_checks(registry_factory=registry_factory))
+
+    # 5. Schemas readable + parseable
     schema_dir = _schema_dir()
     if not schema_dir.is_dir():
         results.append(CheckResult(
@@ -248,7 +254,7 @@ def run_conformance_checks() -> list[CheckResult]:
                     summary=f"{len(files)} TIP schema(s) parsed cleanly",
                 ))
 
-    # 5. Pak contract importable (prerequisite)
+    # 6. Pak contract importable (prerequisite)
     try:
         from tokenpak.tip import pak as _pak  # noqa: F401
         results.append(CheckResult(
@@ -264,7 +270,7 @@ def run_conformance_checks() -> list[CheckResult]:
             details=str(exc),
         ))
 
-    # 6. Each per-contract module importable
+    # 7. Each per-contract module importable
     for mod in (
         "cache_contract",
         "compression_contract",
@@ -291,6 +297,90 @@ def run_conformance_checks() -> list[CheckResult]:
             ))
 
     return results
+
+
+def _adapter_contract_checks(
+    *,
+    registry_factory: Callable[[], Any] | None = None,
+) -> list[CheckResult]:
+    """Validate default proxy adapters expose the required TIP contract metadata."""
+    try:
+        from tokenpak.proxy.adapters import build_default_registry
+        from tokenpak.tip.adapter_contract import (
+            ASSERTED_TIP_VERSION,
+            AdapterCompatibilityError,
+            validate_adapter_compatibility,
+        )
+    except Exception as exc:
+        return [CheckResult(
+            name="adapters.contract_metadata",
+            status="FAIL",
+            summary="cannot import adapter contract validator",
+            details=str(exc),
+        )]
+
+    try:
+        registry = (registry_factory or build_default_registry)()
+        adapters = list(registry.adapters())
+    except Exception as exc:
+        return [CheckResult(
+            name="adapters.contract_metadata",
+            status="FAIL",
+            summary="cannot build default adapter registry",
+            details=str(exc),
+        )]
+
+    failures: list[str] = []
+    for adapter in adapters:
+        name = getattr(adapter, "source_format", None) or adapter.__class__.__name__
+        source_format = getattr(adapter, "source_format", None)
+        tip_min = getattr(adapter, "tip_min_version", None)
+        tip_max = getattr(adapter, "tip_max_version", None)
+        capabilities = getattr(adapter, "capabilities", None)
+
+        if not isinstance(source_format, str) or not source_format.strip():
+            failures.append(f"{name}: missing source_format")
+        if not isinstance(tip_min, str) or not tip_min.strip():
+            failures.append(f"{name}: missing tip_min_version")
+        if not isinstance(tip_max, str) or not tip_max.strip():
+            failures.append(f"{name}: missing tip_max_version")
+        if not isinstance(capabilities, frozenset):
+            failures.append(f"{name}: capabilities must be frozenset[str]")
+
+        try:
+            validate_adapter_compatibility(
+                adapter.capability_contract(), ASSERTED_TIP_VERSION
+            )
+        except AdapterCompatibilityError as exc:
+            failures.append(f"{name}: {exc}")
+        except Exception as exc:
+            failures.append(f"{name}: cannot build capability contract: {exc}")
+
+    try:
+        self_test = registry.run_startup_self_test(ASSERTED_TIP_VERSION)
+    except Exception as exc:
+        failures.append(f"startup self-test crashed: {exc}")
+    else:
+        if getattr(self_test, "gated_out", None):
+            for fmt, reason in self_test.gated_out:
+                failures.append(f"{fmt}: gated out during startup self-test: {reason}")
+
+    if failures:
+        return [CheckResult(
+            name="adapters.contract_metadata",
+            status="FAIL",
+            summary=f"{len(failures)} adapter contract metadata issue(s)",
+            details="\n".join(failures[:10]),
+        )]
+
+    return [CheckResult(
+        name="adapters.contract_metadata",
+        status="PASS",
+        summary=(
+            f"{len(adapters)} adapter contract(s) validate against "
+            f"{ASSERTED_TIP_VERSION}"
+        ),
+    )]
 
 
 def summarize(results: Iterable[CheckResult]) -> dict:
