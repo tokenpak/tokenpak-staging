@@ -37,7 +37,7 @@ def _run_doctor_checks(monkeypatch, tmp_path, *, health: dict | None) -> dict:
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.setenv("TOKENPAK_HOME", str(fake_home / ".tpk"))
-    monkeypatch.setattr(tokenpak, "__version__", "1.7.1")
+    monkeypatch.setattr(tokenpak, "__version__", "1.10.0")
     monkeypatch.setattr(doctor, "_route_state", lambda: ("not routed", None))
     monkeypatch.setattr(doctor, "_update_state", lambda: ("unknown", None))
     monkeypatch.setattr(
@@ -55,7 +55,7 @@ def _run_doctor_checks(monkeypatch, tmp_path, *, health: dict | None) -> dict:
     return {c["check"]: c for c in payload["checks"]}
 
 
-def _nested_health(version: str = "1.7.1") -> dict:
+def _nested_health(version: str = "1.10.0") -> dict:
     """Contract-shaped /health (sync emitter shape: nested stats + latency)."""
     return {
         "status": "ok",
@@ -69,7 +69,7 @@ def _nested_health(version: str = "1.7.1") -> dict:
     }
 
 
-def _flat_only_health(version: str = "1.7.1") -> dict:
+def _flat_only_health(version: str = "1.10.0") -> dict:
     """A legacy/partial shape carrying only the flat requests_total + mode.
 
     Exercises the robust reader fallback so a healthy proxy never reads "0 reqs"
@@ -107,7 +107,7 @@ def test_flat_only_requests_total_fallback(monkeypatch, tmp_path):
 
 def test_runtime_version_read_from_contract(monkeypatch, tmp_path):
     # version present in the contract → no "version not reported" drift.
-    checks = _run_doctor_checks(monkeypatch, tmp_path, health=_nested_health("1.7.1"))
+    checks = _run_doctor_checks(monkeypatch, tmp_path, health=_nested_health("1.10.0"))
     rv = checks["runtime_version"]
     assert rv["status"] == "pass"
     assert "not reported" not in rv["message"]

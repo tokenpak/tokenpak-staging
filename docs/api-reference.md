@@ -216,7 +216,7 @@ the CLI, doctor, status, and dashboard probes.
 ```json
 {
  "status": "ok",
- "version": "1.7.1",
+ "version": "1.10.0",
  "uptime_seconds": 3600,
  "compilation_mode": "hybrid",
  "requests_total": 42,
