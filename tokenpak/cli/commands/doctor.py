@@ -1266,12 +1266,17 @@ def run_doctor(
         # A direct provider key is only required when no OAuth/session-auth path
         # covers Anthropic; warning otherwise is a false alarm. Reuse canonical
         # credential discovery to decide.
-        try:
-            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+        anthropic_via_oauth = any(
+            os.environ.get(v, "").strip()
+            for v in ("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN2")
+        )
+        if not anthropic_via_oauth:
+            try:
+                from tokenpak.creds.auth_mode import non_direct_key_auth_available
 
-            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
-        except Exception:
-            anthropic_via_oauth = False
+                anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+            except Exception:
+                anthropic_via_oauth = False
 
         if anthropic_via_oauth:
             _record(

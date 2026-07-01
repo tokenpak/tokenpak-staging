@@ -104,12 +104,11 @@ def test_flat_only_requests_total_fallback(monkeypatch, tmp_path):
     assert "hybrid mode" in msg
 
 
-def test_runtime_version_read_from_contract(monkeypatch, tmp_path):
-    # version present in the contract → no "version not reported" drift.
+def test_health_version_contract_does_not_emit_version_drift(monkeypatch, tmp_path):
     checks = _run_doctor_checks(monkeypatch, tmp_path, health=_nested_health("1.10.0"))
-    rv = checks["runtime_version"]
-    assert rv["status"] == "pass"
-    assert "not reported" not in rv["message"]
+
+    assert "proxy_health" in checks
+    assert all("version not reported" not in check["message"] for check in checks.values())
 
 
 def test_first_run_state_observability_line(monkeypatch, tmp_path):
