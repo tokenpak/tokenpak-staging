@@ -1,15 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Recall storage foundation (OSS Phase 1).
 
-This package owns the local-first SQLite schema and migration runner
-that the recall surface — both the OSS read paths and the Pro-tier
-resolver / scoring engine in a later phase — will read from and write
-to.
+This package owns the local-first SQLite schema, migration runner, and
+transparent OSS ranking helper used by the recall surface.
 
-PR-1 scope is the storage shape only: tables, the FTS5 virtual table,
-and the forward-only migration runner. No capture, no recall behavior,
-no ranking, no CLI. See ``schema.py`` for the DDL and ``migrations.py``
-for the runner contract.
+The storage foundation remains open: tables, the FTS5 virtual table,
+the forward-only migration runner, and a deterministic metadata ranker.
+Automatic capture, advanced cross-source recall, hydration, and agentic
+handoff remain outside this package.
 
 Notes:
     - Recall storage foundation is OSS Phase 1 (MultiPak Pro architecture).
@@ -19,6 +17,7 @@ Notes:
 
 from __future__ import annotations
 
+from tokenpak.companion.recall.ranker import rank_paks
 from tokenpak.companion.recall.schema import SCHEMA_VERSION
 from tokenpak.companion.recall.store import (
     LIST_LIMIT_DEFAULT,
@@ -47,4 +46,5 @@ __all__ = [
     "SCHEMA_VERSION",
     "default_recall_db_path",
     "open_recall_store",
+    "rank_paks",
 ]
