@@ -51,6 +51,18 @@ tokenpak status # live snapshot: requests, cache hit rate, models used
 
 That's it. Every request is now routed through tokenpak.
 
+### Editions, security, and compliance
+
+The OSS package is the Apache-2.0 local proxy and CLI. Run
+`tokenpak upgrade --print-url` to print the current Pro page, and see
+[multipak.md](./multipak.md) for the shipped OSS/Pro boundary.
+
+For trust review, start with
+[security architecture](./guides/enterprise/security-architecture.md) and
+[compliance mapping](./guides/enterprise/compliance-mapping.md). Those docs map
+deployment controls and report surfaces; they do not change the beta support
+model or imply hosted processing by the OSS package.
+
 ---
 
 ## SDK Path: Protocol-First
@@ -107,11 +119,13 @@ All requests are automatically compressed before reaching Anthropic. No code cha
 ### "I use the OpenAI SDK"
 
 ```python
+import os
+
 from openai import OpenAI
 
 # Just change base_url — everything else stays the same
 client = OpenAI(
- api_key="your-openai-key",
+ api_key=os.environ["OPENAI_API_KEY"],
  base_url="http://localhost:8766"
 )
 
@@ -124,13 +138,15 @@ response = client.chat.completions.create(
 ### "I use LangChain"
 
 ```python
+import os
+
 from langchain_openai import ChatOpenAI
 
 # Point LangChain at the proxy
 llm = ChatOpenAI(
  model="gpt-4",
  openai_api_base="http://localhost:8766",
- openai_api_key="your-key"
+ openai_api_key=os.environ["OPENAI_API_KEY"]
 )
 
 response = llm.invoke("Your prompt here")
@@ -156,7 +172,7 @@ Check that your client is pointing at `http://localhost:8766` (not `https://`).
 ### "My API key isn't being forwarded"
 
 TokenPak is a passthrough proxy — it never stores or modifies your credentials. Make sure:
-- Your API key is set in your environment: `export ANTHROPIC_API_KEY='sk-...'`
+- Your provider API key is available to your client through your shell or secret manager.
 - Or pass it directly in your client config
 
 ### "I'm not seeing any savings"

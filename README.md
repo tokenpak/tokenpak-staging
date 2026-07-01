@@ -101,7 +101,9 @@ Repeated context is reused from cache instead of re-sent on every call. See [doc
 
 ## Open source & editions
 
-TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are proprietary. Commercial packaging is not published yet.
+TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are proprietary. Commercial packaging is not published yet. Run `tokenpak upgrade --print-url` to print the current Pro page, and see [docs/multipak.md](docs/multipak.md) for the shipped OSS/Pro boundary.
+
+For security and compliance review, start with [security architecture](docs/guides/enterprise/security-architecture.md) and [compliance mapping](docs/guides/enterprise/compliance-mapping.md). These docs map deployment controls and report surfaces; they do not change the beta support model or imply hosted processing by the OSS package.
 
 ---
 
