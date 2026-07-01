@@ -34,7 +34,7 @@ distinct from "we don't know".
 | `cost` | `input_tokens`, `output_tokens`, `estimated_cost_usd` | C03 — what it cost |
 | `context` | `cache_read_tokens`, `cache_creation_tokens`, `included`, `dropped` | C06 / C21 — reuse + include/drop |
 | `spend_guard` | `decision`, `reason`, `requires_approval`, `threshold_hit` | the pre-send verdict |
-| `optimization` | `would_have_saved_usd`, `methods` | C11 — proof of optimization |
+| `optimization` | `would_have_saved_tokens`, `methods` | C11 — proof of optimization |
 | `debug_pointer` | `present`, `trace_id`, `capture_mode`, (`path`) | C18 — where the debug trail is |
 | `trail` | `session_id`, `agent_id`, `cycle_id`, `dispatch_job_id` | C10 / C21 — who/what produced it |
 
@@ -88,7 +88,7 @@ the support-bundle pointer.
 | C03 Unclear AI costs | cost scattered across logs | one object with tokens + `estimated_cost_usd`, or an explicit reason it's unknown |
 | C06 Context overload | reuse invisible | observed cache reuse on every receipt; include/drop slot ready |
 | C10 No clear request trail | no addressable record | stable `receipt_id` + route + session/agent/cycle/job trail |
-| C11 No proof of optimization | savings asserted | `would_have_saved_usd` carried per request, or explicit-unavailable |
+| C11 No proof of optimization | savings asserted | `would_have_saved_tokens` carried per request, or explicit-unavailable |
 | C18 Hard debugging | no pointer | redaction-safe `debug_pointer` to the encrypted/hash capture |
 | C21 Hidden repetition | invisible across agents | `cache_read_tokens` + `agent_id` expose cross-agent reuse |
 
