@@ -10,14 +10,11 @@ and dispatch through ``args.func(args)`` exactly as ``main()`` does — proving 
 from __future__ import annotations
 
 import json
-import sqlite3
 
 
 def _seed_request(monkeypatch, tmp_path) -> str:
-    """Create an isolated monitor DB with one request row; return its id."""
-    from tokenpak import _paths
-    from tokenpak.cli.request_explorer import load_requests
-    from tokenpak.proxy.monitor import Monitor
+    """Create an isolated request-ledger row; return its id."""
+    from tokenpak.cli import request_explorer
 
     home = tmp_path / "home"
     monkeypatch.setenv("TOKENPAK_HOME", str(home))
@@ -32,39 +29,31 @@ def _seed_request(monkeypatch, tmp_path) -> str:
     blob_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(_capture, "_BLOB_DIR", blob_dir)
 
-    db = _paths.monitor_db(mode="write")
-    Monitor(str(db))
-    with sqlite3.connect(str(db)) as conn:
-        conn.execute(
-            """
-            INSERT INTO requests (
-                timestamp, model, request_type, input_tokens, output_tokens,
-                estimated_cost, latency_ms, status_code, endpoint,
-                cache_read_tokens, cache_creation_tokens, would_have_saved,
-                session_id, agent_id
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "2026-06-25T18:05:00Z",
-                "claude-sonnet",
-                "chat",
-                200,
-                50,
-                0.018,
-                71,
-                200,
-                "/v1/messages",
-                80,
-                20,
-                0.006,
-                "sess-x",
-                "proxy-test",
-            ),
-        )
-        conn.commit()
+    ledger = home / "requests.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(request_explorer, "REQUESTS_PATH", ledger)
 
-    return str(load_requests()[0]["id"])
+    row = {
+        "id": "req-rcpt-cli-1",
+        "timestamp": "2026-06-25T18:05:00Z",
+        "model": "claude-sonnet",
+        "request_type": "chat",
+        "input_tokens": 200,
+        "output_tokens": 50,
+        "estimated_cost": 0.018,
+        "latency_ms": 71,
+        "status_code": 200,
+        "endpoint": "/v1/messages",
+        "cache_read_tokens": 80,
+        "cache_creation_tokens": 20,
+        "would_have_saved": 0.006,
+        "cache_origin": "proxy",
+        "session_id": "sess-x",
+        "agent_id": "proxy-test",
+    }
+    ledger.write_text(json.dumps(row) + "\n")
+
+    return str(request_explorer.load_requests()[0]["id"])
 
 
 def _run_cli(argv):
