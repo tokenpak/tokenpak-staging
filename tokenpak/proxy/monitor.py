@@ -48,6 +48,7 @@ BUDGET_ALERT_THRESHOLD_PCT: float = float(_os.environ.get("TOKENPAK_BUDGET_ALERT
 # ---------------------------------------------------------------------------
 
 _DB_CONNECTION = None
+_DB_CONNECTION_PATH = None
 _DB_LOCK = threading.Lock()
 _DB_WRITE_QUEUE = None
 _DB_QUEUE_LOCK = threading.Lock()
@@ -91,13 +92,13 @@ def _db_writer_worker():
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
                             would_have_saved,cache_origin,user_id,
                             cache_creation_ephemeral_1h_tokens,cache_creation_ephemeral_5m_tokens,ttl_attribution,
-                            session_id,agent_id,cycle_id,
+                            session_id,agent_id,cycle_id,attribution_source,
                             ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
                             ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
                             ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
                             ssrm_progress_signal,ssrm_signals_json,skip_reason,
                             dispatch_job_id,dispatch_station_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -113,16 +114,25 @@ def _db_writer_worker():
 
 def _get_db_connection(db_path: str) -> sqlite3.Connection:
     """Get or create persistent SQLite connection with WAL mode enabled."""
-    global _DB_CONNECTION
+    global _DB_CONNECTION, _DB_CONNECTION_PATH
+    db_path_str = str(db_path)
+    if _DB_CONNECTION is not None and _DB_CONNECTION_PATH != db_path_str:
+        try:
+            _DB_CONNECTION.close()
+        except Exception:
+            pass
+        _DB_CONNECTION = None
+        _DB_CONNECTION_PATH = None
     if _DB_CONNECTION is None:
         _DB_CONNECTION = _secure_sqlite_connect(
-            db_path,
+            db_path_str,
             check_same_thread=False,  # Required for ThreadedHTTPServer
         )
+        _DB_CONNECTION_PATH = db_path_str
         _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
         _DB_CONNECTION.execute("PRAGMA synchronous=NORMAL")
         _DB_CONNECTION.execute("PRAGMA busy_timeout=5000")
-        _secure_sqlite_sidecars(db_path)
+        _secure_sqlite_sidecars(db_path_str)
     return _DB_CONNECTION
 
 
@@ -171,6 +181,7 @@ class Monitor:
                     session_id TEXT DEFAULT '',
                     agent_id TEXT DEFAULT '',
                     cycle_id TEXT DEFAULT '',
+                    attribution_source TEXT DEFAULT 'unknown',
                     dispatch_job_id TEXT DEFAULT '',
                     dispatch_station_id TEXT DEFAULT ''
                 )
@@ -267,6 +278,7 @@ class Monitor:
             for _alter in (
                 "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
                 "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
+                "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT 'unknown'",
             ):
                 try:
                     conn.execute(_alter)
@@ -381,6 +393,7 @@ class Monitor:
         session_id="",
         agent_id="",
         cycle_id="",
+        attribution_source="unknown",
         ssrm_decision="",
         ssrm_effective_context_tokens=None,
         ssrm_effective_context_pct=None,
@@ -433,6 +446,7 @@ class Monitor:
             session_id or "",
             agent_id or "",
             cycle_id or "",
+            attribution_source or "unknown",
             ssrm_decision or "",
             ssrm_effective_context_tokens,
             ssrm_effective_context_pct,
@@ -458,14 +472,14 @@ class Monitor:
                     "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
                     "would_have_saved, cache_origin, user_id, "
                     "cache_creation_ephemeral_1h_tokens, cache_creation_ephemeral_5m_tokens, ttl_attribution, "
-                    "session_id, agent_id, cycle_id, "
+                    "session_id, agent_id, cycle_id, attribution_source, "
                     "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
                     "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
                     "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
                     "ssrm_progress_signal, ssrm_signals_json, skip_reason, "
                     "dispatch_job_id, dispatch_station_id) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     insert_params,
                 )
                 _conn.commit()
