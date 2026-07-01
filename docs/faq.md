@@ -294,7 +294,7 @@ tokenpak prune --older-than 30d
 ```bash
 # Rebuild from scratch
 rm -f ~/.tokenpak/registry.db
-tokenpak index ~/vault
+tokenpak index ~/documents
 ```
 
 ---
