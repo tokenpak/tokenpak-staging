@@ -64,6 +64,30 @@ Run `tokenpak integrate` to see the full client list with setup guides for each.
 pip install tokenpak
 ```
 
+For local development, create a virtual environment first, then run the same
+install command inside it:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install tokenpak
+```
+
+If `pip` reports an externally managed Python environment (PEP 668), use a
+virtual environment or `pipx install tokenpak` instead of forcing writes into
+the system Python.
+
+### Credential modes
+
+TokenPak routes requests through your local proxy. It does not issue provider
+credentials for you:
+
+| Mode | When to use it | Credential requirement |
+|---|---|---|
+| OAuth passthrough | Claude Code subscription/OAuth sessions | No provider API key; the client's OAuth bearer token is forwarded unchanged |
+| Direct provider key | OpenAI, Anthropic, Gemini, LiteLLM, or HTTP clients using provider APIs | Set the provider API key in the client, env var, or request header |
+| Manual/env | CI, scripts, or advanced client setup | Export `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or the provider-specific key yourself |
+
 See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
 
 Requirements: Python 3.10+. No external dependencies for core functionality.
