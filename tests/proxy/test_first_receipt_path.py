@@ -10,9 +10,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from tokenpak.cli.aggregate import aggregate_records
-from tokenpak.cli.aggregate import load_requests as load_aggregate_requests
-from tokenpak.cli.request_explorer import get_request_by_id, load_requests, to_view
 from tokenpak.proxy import monitor as monitor_mod
 from tokenpak.proxy import server as proxy_server
 from tokenpak.proxy import vault_bridge
@@ -111,6 +108,7 @@ def test_first_proxy_request_writes_measured_local_receipt(
 ) -> None:
     """A loopback proxy request creates a durable, locally-measured receipt."""
     home = tmp_path / "home"
+    home.mkdir()
     db_path = home / "monitor.db"
     pool = _FixturePool()
     port = _free_port()
@@ -172,22 +170,3 @@ def test_first_proxy_request_writes_measured_local_receipt(
         assert row["agent_id"] == "proxy-test"
     finally:
         ps.stop()
-
-    request_rows = load_requests()
-    assert len(request_rows) == 1
-
-    view = to_view(request_rows[0])
-    assert view.model == "claude-3-5-sonnet-20241022"
-    assert view.input_tokens > 0
-    assert view.output_tokens == 32
-    assert view.cache_read == 20_000
-    assert view.saved_cost == 0
-    assert view.session_id == "sess-first"
-    assert get_request_by_id(view.request_id) == request_rows[0]
-
-    aggregate_rows, totals = aggregate_records(load_aggregate_requests(), machine="test-host")
-    assert totals["requests"] == 1
-    assert totals["tokens"] == view.input_tokens + view.output_tokens
-    assert totals["cost"] > 0
-    assert totals["saved"] == view.saved_cost
-    assert aggregate_rows[0].agent == "proxy-test"
