@@ -147,8 +147,8 @@ tokenpak cost
 If you work with a large codebase or notes vault, index it for instant semantic search:
 
 ```bash
-tokenpak index ~/vault
-tokenpak vault search "compression benchmark"
+tokenpak index ~/notes
+tokenpak vault repair # Check index health and rebuild stale entries
 ```
 
 This uses a local SQLite registry — no LLM calls, no cost.
@@ -160,7 +160,7 @@ This uses a local SQLite registry — no LLM calls, no cost.
 Let TokenPak calibrate optimal parallelism for your hardware:
 
 ```bash
-tokenpak calibrate ~/vault --max-workers 8 --rounds 2
+tokenpak calibrate ~/notes --max-workers 8 --rounds 2
 ```
 
 This runs once and saves a profile to `~/.tokenpak/calibration.json`. Future indexing runs use it automatically.
@@ -181,6 +181,7 @@ tokenpak budget alert --at 80% # warn at 80%
 ## Next Steps
 
 - [Onboarding Guide](onboarding.md) — Day 3 through Day 30: savings reports, custom recipes, budgets, production deployment
+- [Companion & MCP Setup](companion-mcp.md) — run Claude Code / Codex with the companion (budget, journal, vault tools) and the first-run MCP cold-start fix
 - [Proxy Setup](guides/proxy-setup.md) — advanced proxy configuration, SSL, multi-provider
 - [CLI Reference](cli-reference.md) — full command reference
 - [Recipe Development](guides/recipes.md) — custom compression recipes
