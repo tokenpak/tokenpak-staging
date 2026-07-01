@@ -17,6 +17,7 @@ import statistics
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine
+from tokenpak.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------

@@ -11,10 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from tokenpak import _paths
 from tokenpak.compression.complexity import score_complexity
 
-DEFAULT_LEDGER_PATH = str(_paths.under("routing_ledger.db"))
+DEFAULT_LEDGER_PATH = ".tokenpak/routing_ledger.db"
 
 # WAL checkpoint interval (pages)
 _WAL_AUTOCHECKPOINT = 1000

@@ -111,27 +111,46 @@ Notes:
 
 ## Memory sources — bring your own knowledge base
 
-Point the companion at your own Markdown notes so it can surface lessons from
-your knowledge base. No special directory layout is required — any folder of
-`.md` / `.markdown` files works (scanned recursively).
+The companion can surface lessons from your own Markdown notes, not just its
+built-in memory schema. Any folder of `.md` / `.markdown` files works (scanned
+recursively) — no special directory layout is required.
+
+**Tell the companion where your notes live** with the
+`TOKENPAK_COMPANION_MEMORY_DIRS` environment variable. It accepts an
+OS-path-separator- or comma-separated list; `~` is expanded; missing or empty
+entries are dropped (never fatal):
 
 ```bash
-# Ingest a single notes directory
-tokenpak companion ingest --memory-dir ~/notes
-
-# Multiple directories (repeat the flag, or use the env var)
-tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal
 export TOKENPAK_COMPANION_MEMORY_DIRS=~/notes:~/work/journal
-tokenpak companion ingest
-
-# See what's configured
-tokenpak companion status
 ```
 
-`TOKENPAK_COMPANION_MEMORY_DIRS` accepts an OS-path-separator- or
-comma-separated list; `~` is expanded. Missing or empty directories are
-reported, never fatal. The companion extracts lessons from `## Lessons
-Learned` / `## Notes` / task-summary sections of each file.
+The configured directories are parsed into `CompanionConfig.memory_dirs` and
+reported by the `session_info` MCP tool, which also surfaces a hint when no
+memory source is set — so an empty result is self-explaining.
+
+**Ingest with the library API.** `ingest_from_dir` ingests a single directory;
+`ingest_sources` orchestrates every configured source and returns a per-source
+status report:
+
+```python
+from tokenpak.companion.config import CompanionConfig
+from tokenpak.companion.memory.decision_memory import DecisionMemoryDB
+from tokenpak.companion.memory.lesson_ingest import ingest_from_dir, ingest_sources
+
+db = DecisionMemoryDB()
+
+# Ingest a single directory of notes
+n = ingest_from_dir("~/notes", db)
+
+# Or ingest every directory from TOKENPAK_COMPANION_MEMORY_DIRS, with status
+cfg = CompanionConfig.from_env()
+report = ingest_sources(db, memory_dirs=cfg.memory_dirs)
+# -> {"total": int, "sources": [{"path", "kind", "ingested", "reason"}, ...]}
+```
+
+Lessons are extracted from the `## Lessons Learned` / `## Notes` /
+task-summary sections of each file. Missing or unreadable files are skipped,
+never fatal.
 
 ---
 

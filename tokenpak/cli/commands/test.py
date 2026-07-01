@@ -678,12 +678,9 @@ def run(args=None) -> None:
     if not providers:
         print("\n  No providers detected.")
         print("  Set an API key to enable a provider:\n")
-        try:
-            from tokenpak.cli.commands.setup import env_var_help
-
-            print(env_var_help("ANTHROPIC_API_KEY", "sk-..."))
-        except Exception:
-            print("    export ANTHROPIC_API_KEY=sk-...")
+        print("    export ANTHROPIC_API_KEY=sk-...")
+        print("    export OPENAI_API_KEY=sk-...")
+        print("    export GOOGLE_API_KEY=...")
         print()
         return
 

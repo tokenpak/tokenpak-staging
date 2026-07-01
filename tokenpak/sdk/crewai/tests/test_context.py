@@ -1,6 +1,6 @@
-from tokenpak.sdk.crewai.context import TokenPakContext
-from tokenpak.sdk.crewai.crew import TokenPakCrew
-from tokenpak.sdk.crewai.handoff import TokenPakHandoff
+from crewai_tokenpak.context import TokenPakContext
+from crewai_tokenpak.crew import TokenPakCrew
+from crewai_tokenpak.handoff import TokenPakHandoff
 
 
 def test_context_register_agent():

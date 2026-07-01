@@ -30,8 +30,8 @@ tokenpak recipe test my-legal-cleanup.yaml --input-file contract.txt
 # Benchmark compression performance
 tokenpak recipe benchmark my-legal-cleanup.yaml --runs 10
 
-# Copy to your active recipe set
-cp my-legal-cleanup.yaml ~/.tokenpak/recipes/
+# Install to your active recipe set
+tokenpak recipe install my-legal-cleanup.yaml
 ```
 
 ---
@@ -261,15 +261,18 @@ Use an existing category when possible — it helps TokenPak apply category-leve
 
 ## Installing & Sharing Recipes
 
-Recipes are YAML files stored in `~/.tokenpak/recipes/`. To add a recipe, copy the file there directly. You can version recipes in your project's git repo and copy them on deploy.
-
 ```bash
-# Validate a recipe before using it
-tokenpak recipe validate my-recipe.yaml
+# Install a local recipe file
+tokenpak recipe install my-recipe.yaml
 
-# Test a recipe against sample input
-tokenpak recipe test my-recipe.yaml
+# List installed recipes
+tokenpak recipe list
+
+# Remove a recipe
+tokenpak recipe remove my-recipe-name
 ```
+
+Recipes are stored in `~/.tokenpak/recipes/`. You can version them in your project's git repo and install on deploy.
 
 ---
 
@@ -279,4 +282,4 @@ tokenpak recipe test my-recipe.yaml
 - **Never compress code that will be executed** — recipes are for context, not output
 - **Use `regex_replace` with `flags: MULTILINE`** for multiline patterns
 - **Test with real files** from your domain, not toy examples
-- **Check `tokenpak debug list`** to see which recipe fired on a recent request
+- **Check `tokenpak trace --last`** to see which recipe fired on a recent request

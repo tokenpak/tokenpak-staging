@@ -25,13 +25,12 @@ import time
 import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from tokenpak.telemetry.rollups import RollupEngine
@@ -82,42 +81,44 @@ def _detect_cost_spike(storage) -> list:
     """Check if today's cost is >2x the average of the past 7 days."""
     try:
         db_path = storage._db_path if hasattr(storage, "_db_path") else str(storage)
-        with closing(sqlite3.connect(db_path)) as conn:
-            conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
 
-            today = datetime.now().date().isoformat()
-            week_ago = (datetime.now() - timedelta(days=7)).date().isoformat()
+        today = datetime.now().date().isoformat()
+        week_ago = (datetime.now() - timedelta(days=7)).date().isoformat()
 
-            # Get today's total cost
-            cursor = conn.execute(
-                "SELECT SUM(estimated_cost) as total FROM requests WHERE date(timestamp) = ?", (today,)
+        # Get today's total cost
+        cursor = conn.execute(
+            "SELECT SUM(estimated_cost) as total FROM requests WHERE date(timestamp) = ?", (today,)
+        )
+        row = cursor.fetchone()
+        today_cost = row["total"] if row else None
+        if today_cost is None:
+            today_cost = 0.0
+
+        # Get last week's avg (excluding today)
+        cursor = conn.execute(
+            "SELECT AVG(daily_cost) as avg_cost FROM "
+            "(SELECT date(timestamp) as day, SUM(estimated_cost) as daily_cost "
+            "FROM requests WHERE date(timestamp) BETWEEN ? AND ? AND date(timestamp) != ? "
+            "GROUP BY day)",
+            (week_ago, today, today),
+        )
+        row = cursor.fetchone()
+        last_week_avg = row["avg_cost"] if row else None
+        if last_week_avg is None:
+            last_week_avg = 0.0
+
+        conn.close()
+
+        if last_week_avg > 0 and today_cost > 2 * last_week_avg:
+            n = _add_notification(
+                "alert",
+                "Cost Spike Detected",
+                f"Today's cost (${today_cost:.2f}) is > 2x the average",
             )
-            row = cursor.fetchone()
-            today_cost = row["total"] if row else None
-            if today_cost is None:
-                today_cost = 0.0
-
-            # Get last week's avg (excluding today)
-            cursor = conn.execute(
-                "SELECT AVG(daily_cost) as avg_cost FROM "
-                "(SELECT date(timestamp) as day, SUM(estimated_cost) as daily_cost "
-                "FROM requests WHERE date(timestamp) BETWEEN ? AND ? AND date(timestamp) != ? "
-                "GROUP BY day)",
-                (week_ago, today, today),
-            )
-            row = cursor.fetchone()
-            last_week_avg = row["avg_cost"] if row else None
-            if last_week_avg is None:
-                last_week_avg = 0.0
-
-            if last_week_avg > 0 and today_cost > 2 * last_week_avg:
-                n = _add_notification(
-                    "alert",
-                    "Cost Spike Detected",
-                    f"Today's cost (${today_cost:.2f}) is > 2x the average",
-                )
-                return [n]
-            return []
+            return [n]
+        return []
     except Exception as e:
         logger.warning(f"Cost spike detection failed: {e}")
         return []
@@ -127,26 +128,28 @@ def _check_cache_miss_rate(storage) -> list:
     """Check if cache miss rate is >80% in recent requests."""
     try:
         db_path = storage._db_path if hasattr(storage, "_db_path") else str(storage)
-        with closing(sqlite3.connect(db_path)) as conn:
+        conn = sqlite3.connect(db_path)
 
-            # Check the last 1000 requests for cache miss rate
-            cursor = conn.execute(
-                "SELECT COUNT(*) as total, "
-                "SUM(CASE WHEN compilation_mode = 'miss' THEN 1 ELSE 0 END) as misses "
-                "FROM (SELECT * FROM requests ORDER BY timestamp DESC LIMIT 1000)"
-            )
-            row = cursor.fetchone()
-            total = row[0] if row else 0
-            misses = row[1] if row else 0
+        # Check the last 1000 requests for cache miss rate
+        cursor = conn.execute(
+            "SELECT COUNT(*) as total, "
+            "SUM(CASE WHEN compilation_mode = 'miss' THEN 1 ELSE 0 END) as misses "
+            "FROM (SELECT * FROM requests ORDER BY timestamp DESC LIMIT 1000)"
+        )
+        row = cursor.fetchone()
+        total = row[0] if row else 0
+        misses = row[1] if row else 0
 
-            if total > 0:
-                miss_rate = misses / total
-                if miss_rate > 0.8:
-                    n = _add_notification(
-                        "warning", "High Cache Miss Rate", f"Cache miss rate is {miss_rate:.1%}"
-                    )
-                    return [n]
-            return []
+        conn.close()
+
+        if total > 0:
+            miss_rate = misses / total
+            if miss_rate > 0.8:
+                n = _add_notification(
+                    "warning", "High Cache Miss Rate", f"Cache miss rate is {miss_rate:.1%}"
+                )
+                return [n]
+        return []
     except Exception as e:
         logger.warning(f"Cache miss detection failed: {e}")
         return []
@@ -156,21 +159,23 @@ def _check_recent_errors(storage) -> list:
     """Check if there are any errors (status_code >= 400) in recent requests."""
     try:
         db_path = storage._db_path if hasattr(storage, "_db_path") else str(storage)
-        with closing(sqlite3.connect(db_path)) as conn:
+        conn = sqlite3.connect(db_path)
 
-            # Check the last 10000 requests for errors
-            cursor = conn.execute(
-                "SELECT COUNT(*) as error_count FROM "
-                "(SELECT * FROM requests ORDER BY timestamp DESC LIMIT 10000) "
-                "WHERE status_code >= 400"
-            )
-            row = cursor.fetchone()
-            error_count = row[0] if row else 0
+        # Check the last 10000 requests for errors
+        cursor = conn.execute(
+            "SELECT COUNT(*) as error_count FROM "
+            "(SELECT * FROM requests ORDER BY timestamp DESC LIMIT 10000) "
+            "WHERE status_code >= 400"
+        )
+        row = cursor.fetchone()
+        error_count = row[0] if row else 0
 
-            if error_count > 0:
-                n = _add_notification("alert", "Recent Errors", f"{error_count} request(s) failed")
-                return [n]
-            return []
+        conn.close()
+
+        if error_count > 0:
+            n = _add_notification("alert", "Recent Errors", f"{error_count} request(s) failed")
+            return [n]
+        return []
     except Exception as e:
         logger.warning(f"Error detection failed: {e}")
         return []
@@ -764,20 +769,14 @@ def create_dashboard_router(
         }
         return templates.TemplateResponse(request, "settings.html", ctx)
 
-    @router.post("/settings/save")
+    @router.post("/settings/save", response_class=HTMLResponse)
     async def settings_save(request: Request):
-        """Reject unsupported runtime-settings persistence from the dashboard."""
+        """Server-side settings save (stub; most prefs use localStorage)."""
         try:
             await request.json()
         except Exception:
             pass
-        return JSONResponse(
-            {
-                "status": "unsupported",
-                "message": "Dashboard settings are display preferences only; use the CLI or config files for runtime settings.",
-            },
-            status_code=501,
-        )
+        return HTMLResponse(content='{"status":"ok"}', media_type="application/json")
 
     # --- Notification endpoints ---
     @router.get("/notifications")

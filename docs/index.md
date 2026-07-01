@@ -137,11 +137,11 @@ tokenpak savings # Token savings
 # Compression
 tokenpak compress # Dry-run compression
 tokenpak demo # Live demo
-tokenpak debug list # View recent request traces
+tokenpak trace # Debug pipeline
 
 # Vault
 tokenpak index # Index directory
-tokenpak vault repair # Check and repair vault index
+tokenpak vault search # Semantic search
 tokenpak calibrate # Auto-tune performance
 
 # Routing

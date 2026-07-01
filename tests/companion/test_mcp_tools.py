@@ -96,24 +96,12 @@ def _make_state(tmp_path: Path, session_id: str = "") -> CompanionState:
     return CompanionState(config=cfg, session_id=session_id)
 
 
-def test_companion_state_seeds_session_from_config(tmp_path):
-    cfg = CompanionConfig(journal_dir=tmp_path, session_id="sess-config")
-    state = CompanionState(config=cfg)
-    assert state.session_id == "sess-config"
-
-
-def test_companion_state_explicit_session_wins_over_config(tmp_path):
-    cfg = CompanionConfig(journal_dir=tmp_path, session_id="sess-config")
-    state = CompanionState(config=cfg, session_id="sess-explicit")
-    assert state.session_id == "sess-explicit"
-
-
 # ---------------------------------------------------------------------------
 # Tool registry sanity
 # ---------------------------------------------------------------------------
 
 
-def test_tools_registry_has_expected_entries():
+def test_tools_registry_has_seven_entries():
     names = {t.name for t in TOOLS}
     assert names == {
         "estimate_tokens",
@@ -123,8 +111,6 @@ def test_tools_registry_has_expected_entries():
         "journal_read",
         "journal_write",
         "session_info",
-        "vault_search",
-        "vault_retrieve",
     }
 
 
@@ -138,27 +124,20 @@ def test_all_tools_have_handler_callable():
 # ---------------------------------------------------------------------------
 
 
-def test_estimate_tokens_inline_text(tmp_path, monkeypatch):
-    def fake_post(path, body=None, params=None):
-        return 200, {
-            "tokens": 2,
-            "chars": len(body["text"]),
-            "chars_per_token": 5.5,
-        }
-
-    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_post", fake_post)
+def test_estimate_tokens_inline_text(tmp_path):
     state = _make_state(tmp_path)
     result = json.loads(_handle_estimate_tokens(state, {"text": "hello world"}))
     assert result["tokens"] > 0
     assert result["chars"] == len("hello world")
-    assert "chars_per_token" in result
+    assert "method" in result
+    assert result["source"] == "inline text"
 
 
 def test_estimate_tokens_uses_tiktoken(tmp_path):
-    """Proxy-delegated estimator returns a positive token count."""
+    """Verify tiktoken is the method (not heuristic) when available."""
     state = _make_state(tmp_path)
     result = json.loads(_handle_estimate_tokens(state, {"text": "hello world this is a test"}))
-    assert result["tokens"] > 0
+    assert result["method"] == "tiktoken"
 
 
 def test_estimate_tokens_from_file(tmp_path):
@@ -168,6 +147,7 @@ def test_estimate_tokens_from_file(tmp_path):
     result = json.loads(_handle_estimate_tokens(state, {"file_path": str(f)}))
     assert result["tokens"] > 0
     assert result["chars"] == len("the quick brown fox")
+    assert result["source"] == str(f)
 
 
 def test_estimate_tokens_missing_file_returns_error(tmp_path):
@@ -179,7 +159,8 @@ def test_estimate_tokens_missing_file_returns_error(tmp_path):
 def test_estimate_tokens_empty_text(tmp_path):
     state = _make_state(tmp_path)
     result = json.loads(_handle_estimate_tokens(state, {"text": ""}))
-    assert "error" in result
+    assert result["tokens"] == 0
+    assert result["chars"] == 0
 
 
 def test_estimate_tokens_large_text_chunks(tmp_path):
@@ -213,17 +194,17 @@ def test_check_budget_zero_session_cost_initially(tmp_path):
 def test_check_budget_reflects_daily_budget(tmp_path):
     state = _make_state(tmp_path)
     result = json.loads(_handle_check_budget(state, {}))
-    assert "daily_budget_usd" in result
-    assert "budget_set" in result
+    assert result["daily_budget_usd"] == 10.0
+    assert result["budget_set"] is True
 
 
 def test_check_budget_daily_totals_from_tracker(tmp_path):
-    """Budget handler reports proxy-owned daily totals."""
+    """After recording a cost, daily_cost_usd reflects the DB record."""
     state = _make_state(tmp_path)
+    # Record a cost directly to the tracker
     state.budget_tracker.record(input_tokens=1000, output_tokens=500, model="sonnet", session_id="s1")
     result = json.loads(_handle_check_budget(state, {}))
-    assert "daily_cost_usd" in result
-    assert "_tokenpak_scope" in result
+    assert result["daily_cost_usd"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -270,30 +251,28 @@ def test_prune_context_elision_marker_present(tmp_path):
 def test_load_capsule_empty_dir(tmp_path):
     state = _make_state(tmp_path)
     result = json.loads(_handle_load_capsule(state, {}))
-    assert isinstance(result["capsules"], list)
+    assert result["capsules"] == []
 
 
 def test_load_capsule_lists_saved_capsules(tmp_path):
-    """load_capsule lists proxy-owned capsules."""
+    """load_capsule lists capsule files present in capsule_dir."""
     capsule_dir = tmp_path / "capsules"
     capsule_dir.mkdir()
     (capsule_dir / "abc123.md").write_text("## Session Capsule: abc123\nsome content")
     state = _make_state(tmp_path)
     result = json.loads(_handle_load_capsule(state, {}))
-    assert isinstance(result["capsules"], list)
+    assert len(result["capsules"]) == 1
+    assert result["capsules"][0]["session_id"] == "abc123"
 
 
 def test_load_capsule_returns_content_by_session_id(tmp_path):
-    """Specific capsule lookup returns content or a structured not-found error."""
+    """load_capsule loads a capsule file matching session_id."""
     capsule_dir = tmp_path / "capsules"
     capsule_dir.mkdir()
     (capsule_dir / "mysess.md").write_text("## Session Capsule: mysess\nDecisions: ...")
     state = _make_state(tmp_path)
     result = _handle_load_capsule(state, {"session_id": "mysess"})
-    if result.startswith("{"):
-        assert json.loads(result)["error"] == "capsule_not_found"
-    else:
-        assert "Session Capsule" in result
+    assert "Session Capsule" in result
 
 
 def test_load_capsule_missing_session_returns_error(tmp_path):
@@ -319,11 +298,7 @@ def test_journal_write_no_content_returns_error(tmp_path):
     assert "error" in result
 
 
-def test_journal_write_returns_ok(tmp_path, monkeypatch):
-    def fake_post(path, body=None, params=None):
-        return 200, {"status": "ok", "session_id": "sess-abc"}
-
-    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_post", fake_post)
+def test_journal_write_returns_ok(tmp_path):
     state = _make_state(tmp_path, session_id="sess-abc")
     result = json.loads(_handle_journal_write(state, {"content": "a note"}))
     assert result["status"] == "ok"
@@ -389,8 +364,9 @@ def test_session_info_returns_config_block(tmp_path):
 def test_session_info_returns_budget_block(tmp_path):
     state = _make_state(tmp_path)
     result = json.loads(_handle_session_info(state, {}))
-    assert "proxy" in result
-    assert "session_id" in result
+    assert "budget" in result
+    assert "session_cost" in result["budget"]
+    assert "session_requests" in result["budget"]
 
 
 def test_session_info_call_count_increments(tmp_path):

@@ -1,6 +1,6 @@
 """Tests for TokenPakSynthesizer."""
 
-from tokenpak.sdk.llamaindex import TokenPakSynthesizer
+from llamaindex_tokenpak import TokenPakSynthesizer
 
 
 def make_nodes(count=5, tokens_each=1000, scores=None):

@@ -1,14 +1,12 @@
 /**
  * TokenPak BlockRegistry
- * Wraps experimental /blocks/* HTTP endpoints when a custom server provides them.
+ * Wraps the /blocks/* HTTP endpoints.
  * Blocks are reusable named content fragments that can be injected into prompts.
  */
 import { Block, BlockRegistryStats, TokenPakConfig } from './types';
 export declare class BlockRegistry {
     private readonly client;
-    private readonly experimentalEndpoints;
     constructor(config?: TokenPakConfig);
-    private requireExperimentalEndpoint;
     /**
      * Register a new named block.
      *

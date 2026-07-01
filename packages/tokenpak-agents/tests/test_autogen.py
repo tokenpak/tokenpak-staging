@@ -1,8 +1,7 @@
 """Tests for tokenpak_agents.autogen."""
 
+from tokenpak.agent.agentic.handoff import HandoffBlock
 from tokenpak_agents.autogen import TokenPakAssistant, TokenPakGroupChat, TokenPakMessage
-
-from tokenpak.orchestration.handoff import HandoffBlock
 
 
 def test_message_compress_content_no_change_when_short():

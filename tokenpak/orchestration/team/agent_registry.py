@@ -47,8 +47,8 @@ class AgentRegistry:
     Usage::
 
         registry = AgentRegistry("~/.tokenpak/team/agents.json")
-        registry.register("agent-a", capabilities=["compression", "tools"])
-        registry.heartbeat("agent-a")
+        registry.register("cali", capabilities=["compression", "tools"])
+        registry.heartbeat("cali")
         agents = registry.list_agents()
         registry.start_health_checker()
     """

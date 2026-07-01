@@ -18,20 +18,6 @@ INPUT=$(cat)
 
 JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
 
-sql_escape() {
-    printf '%s' "$1" | sed "s/'/''/g"
-}
-
-sqlite_write() {
-    db="$1"
-    sql="$2"
-    sqlite3 "$db" "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; $sql" >/dev/null 2>&1
-}
-
-cost_usd() {
-    awk -v tokens="$1" -v rate="$2" 'BEGIN { printf "%.6f", (tokens + 0) * (rate + 0) / 1000000 }'
-}
-
 if command -v jq >/dev/null 2>&1; then
     SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
     TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
@@ -55,18 +41,14 @@ TOKENS_FMT=$(printf '%d' "$TOKENS" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,
 JOURNAL_DB="$JOURNAL_DIR/journal.db"
 if [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     TIMESTAMP=$(date +%s)
-    SESSION_SQL=$(sql_escape "$SESSION_ID")
-    MODEL_LABEL="${MODEL:-unknown}"
-    MODEL_SQL=$(sql_escape "$MODEL_LABEL")
-    CONTENT_SQL=$(sql_escape "session stopped (~${TOKENS_FMT} total tokens, model: $MODEL_LABEL)")
-    sqlite_write "$JOURNAL_DB" \
-        "INSERT OR IGNORE INTO sessions (session_id, started_at, model)
-         VALUES ('$SESSION_SQL', $TIMESTAMP, '$MODEL_SQL');
-         INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
-         VALUES ('$SESSION_SQL', $TIMESTAMP, 'auto', '$CONTENT_SQL', '{}');
-         UPDATE sessions SET ended_at = $TIMESTAMP, total_requests = (
-             SELECT COUNT(*) FROM entries WHERE session_id = '$SESSION_SQL' AND entry_type = 'auto'
-         ) WHERE session_id = '$SESSION_SQL';"
+    sqlite3 "$JOURNAL_DB" \
+        "INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
+         VALUES ('$SESSION_ID', $TIMESTAMP, 'auto', 'session stopped (~${TOKENS_FMT} total tokens, model: ${MODEL:-unknown})', '{}');" 2>/dev/null
+
+    sqlite3 "$JOURNAL_DB" \
+        "UPDATE sessions SET ended_at = $TIMESTAMP, total_requests = (
+             SELECT COUNT(*) FROM entries WHERE session_id = '$SESSION_ID' AND entry_type = 'auto'
+         ) WHERE session_id = '$SESSION_ID';" 2>/dev/null
 fi
 
 BUDGET_DB="$JOURNAL_DIR/budget.db"
@@ -86,17 +68,14 @@ if [ -f "$BUDGET_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
         [ -z "$RATE" ] && RATE=3
     fi
 
-    COST_DOLLARS=$(cost_usd "$TOKENS" "$RATE")
+    COST_MICRO=$((TOKENS * RATE / 1000))
+    COST_DOLLARS="$((COST_MICRO / 1000)).$(printf '%06d' $((COST_MICRO % 1000000)))"
     TODAY=$(date +%Y-%m-%d)
     TIMESTAMP=$(date +%s)
-    SESSION_SQL=$(sql_escape "$SESSION_ID")
-    MODEL_LABEL="${MODEL:-unknown}"
-    MODEL_SQL=$(sql_escape "$MODEL_LABEL")
-    TODAY_SQL=$(sql_escape "$TODAY")
 
-    sqlite_write "$BUDGET_DB" \
+    sqlite3 "$BUDGET_DB" \
         "INSERT INTO companion_costs (timestamp, date, session_id, model, input_tokens, cached_tokens, output_tokens, estimated_cost)
-         VALUES ($TIMESTAMP, '$TODAY_SQL', '$SESSION_SQL', '$MODEL_SQL', $TOKENS, 0, 0, $COST_DOLLARS);"
+         VALUES ($TIMESTAMP, '$TODAY', '$SESSION_ID', '${MODEL:-unknown}', $TOKENS, 0, 0, $COST_DOLLARS);" 2>/dev/null
 fi
 
 if [ "${TOKENPAK_COMPANION_SHOW_COST:-1}" != "0" ]; then

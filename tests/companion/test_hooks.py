@@ -12,14 +12,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
 import time
 from pathlib import Path
-
-import pytest
 
 _REPO_ROOT = str(Path(__file__).parent.parent.parent)
 _BASH_HOOK = str(Path(_REPO_ROOT) / "tokenpak" / "companion" / "hooks" / "pre_send.sh")
@@ -88,16 +85,6 @@ def test_hook_allow_with_session_id(tmp_path):
         tmp_path=tmp_path,
     )
     assert result.returncode == 0
-
-
-def test_python_hook_writes_current_session(tmp_path):
-    """Python fallback refreshes run/current-session from the hook payload."""
-    result = _run_hook(
-        {"session_id": "py-current", "transcript_path": "", "prompt": "hello"},
-        tmp_path=tmp_path,
-    )
-    assert result.returncode == 0
-    assert (tmp_path / "run" / "current-session").read_text().strip() == "py-current"
 
 
 # ---------------------------------------------------------------------------
@@ -352,16 +339,6 @@ def test_bash_hook_allow_empty_transcript(tmp_path):
     assert result.returncode == 0
 
 
-def test_bash_hook_writes_current_session_before_zero_token_exit(tmp_path):
-    """Normal bash hook refreshes run/current-session before early allow."""
-    hook_input = dict(_SIX_FIELD_INPUT)
-    hook_input["session_id"] = "bash-current"
-    hook_input["transcript_path"] = ""
-    result = _run_bash_hook(hook_input, tmp_path=tmp_path)
-    assert result.returncode == 0
-    assert (tmp_path / "run" / "current-session").read_text().strip() == "bash-current"
-
-
 def test_bash_hook_allow_no_budget_set(tmp_path):
     """Bash hook exits 0 when budget is not set."""
     transcript_path = tmp_path / "session.jsonl"
@@ -507,34 +484,6 @@ def test_bash_hook_show_cost_disabled_no_stderr(tmp_path):
     )
     assert result.returncode == 0
     assert result.stderr == ""
-
-
-@pytest.mark.skipif(shutil.which("jq") is None, reason="dynamic title requires jq")
-def test_bash_hook_emits_native_session_title_once(tmp_path):
-    """Allow-path hook emits Claude Code's native sessionTitle payload once."""
-    hook_input = dict(_SIX_FIELD_INPUT)
-    hook_input.update({
-        "session_id": "surface-title-1",
-        "prompt": "Refactor telemetry statusline guard tests",
-        "transcript_path": "",
-    })
-
-    result = _run_bash_hook(hook_input, tmp_path=tmp_path)
-    assert result.returncode == 0
-    payload = json.loads(result.stdout.strip())
-    output = payload["hookSpecificOutput"]
-    assert output["hookEventName"] == "UserPromptSubmit"
-    assert output["sessionTitle"].startswith("\U0001f4e6 ")
-    assert "Telemetry statusline" in output["sessionTitle"]
-
-    title_state = tmp_path / "titles" / "surface-title-1"
-    title_text = title_state.read_text().strip()
-    assert "Telemetry statusline" in title_text
-    assert output["sessionTitle"] == "\U0001f4e6 " + title_text
-
-    second = _run_bash_hook(hook_input, tmp_path=tmp_path)
-    assert second.returncode == 0
-    assert second.stdout == ""
 
 
 # ---------------------------------------------------------------------------

@@ -54,13 +54,12 @@ from types import TracebackType
 from typing import Any, NamedTuple, Optional
 
 from tokenpak.companion.recall.migrations import apply_migrations, current_version
-from tokenpak.companion.recall.schema import PAK_STATUS_VALUES, SCHEMA_VERSION
+from tokenpak.companion.recall.schema import SCHEMA_VERSION
 
 _DEFAULT_REL_PATH = ".tokenpak/companion/recall.db"
 _ENV_VAR = "TOKENPAK_RECALL_DB"
 
 _log = logging.getLogger(__name__)
-_STATUS_UNSET = object()
 
 
 # Required (non-empty, non-whitespace) fields on ``upsert_pak``.
@@ -86,7 +85,7 @@ LIST_LIMIT_MAX: int = 100
 # NamedTuple constructor positionally.
 _PAK_COLUMNS: str = (
     "pak_id, pak_type, project, topic, source_type, authority, "
-    "title, summary, content_hash, created_at, updated_at, superseded_by, status"
+    "title, summary, content_hash, created_at, updated_at, superseded_by"
 )
 
 
@@ -96,7 +95,7 @@ class PakRow(NamedTuple):
 
     Field order matches :data:`_PAK_COLUMNS` so a positional unpack of
     the SQLite row builds the record without translation. ``project``,
-    ``topic``, ``superseded_by``, and ``status`` are nullable in the schema; the
+    ``topic``, and ``superseded_by`` are nullable in the schema; the
     rest are required.
     """
 
@@ -112,7 +111,6 @@ class PakRow(NamedTuple):
     created_at: str
     updated_at: str
     superseded_by: Optional[str]
-    status: Optional[str]
 
 
 class PakListFilters(NamedTuple):
@@ -195,29 +193,12 @@ class RiskFlagEntry(NamedTuple):
     severity: str
 
 
-class PakRelationEntry(NamedTuple):
-    """One edge in ``pak_relations``.
-
-    ``relation_type`` is intentionally small at this stage: supersession and
-    conflict data are the OSS storage foundation the later resolver consumes.
-    This API records relationship data only; it does not score, rank, or
-    choose between competing rows.
-    """
-
-    related_pak_id: str
-    relation_type: str
-
-
 # Severity values accepted by ``set_pak_risk_flags``. The constant exists
 # so tests / callers can assert against the same string set the schema
 # CHECK constraint enforces. Discovery-style: callers reading this list
 # (or the registry JSON) drive their own validation; the table itself
 # stays the source of truth.
 RISK_FLAG_SEVERITIES: frozenset[str] = frozenset({"info", "warn", "block"})
-
-
-PAK_RELATION_TYPES: frozenset[str] = frozenset({"supersedes", "conflicts_with"})
-"""Relation types accepted by ``set_pak_relations``."""
 
 
 class UpsertResult(NamedTuple):
@@ -324,7 +305,6 @@ class RecallStore:
         project: Optional[str] = None,
         topic: Optional[str] = None,
         superseded_by: Optional[str] = None,
-        status: Optional[str] | object = _STATUS_UNSET,
         now: Optional[str] = None,
     ) -> UpsertResult:
         """Insert or update a single Pak metadata row.
@@ -360,10 +340,6 @@ class RecallStore:
             project: Optional project tag.
             topic: Optional topic tag.
             superseded_by: Optional ``pak_id`` of a superseding row.
-            status: Optional authored lifecycle state. If omitted on update,
-                the existing status is preserved. If omitted while
-                ``superseded_by`` is provided, ``"superseded"`` is recorded.
-                Passing ``None`` explicitly clears the status.
             now: Optional ISO-8601 UTC string for deterministic testing.
 
         Returns:
@@ -392,15 +368,6 @@ class RecallStore:
                 )
         if summary is None:
             summary = ""
-        status_was_supplied = status is not _STATUS_UNSET
-        status_value = None if status is _STATUS_UNSET else status
-        if status_value is None and superseded_by is not None and not status_was_supplied:
-            status_value = "superseded"
-        if status_value is not None and status_value not in PAK_STATUS_VALUES:
-            raise ValueError(
-                f"upsert_pak: status must be one of {sorted(PAK_STATUS_VALUES)!r}, "
-                f"got {status_value!r}"
-            )
 
         ts = now if now is not None else _utc_now_iso8601()
         conn = self._conn
@@ -419,8 +386,8 @@ class RecallStore:
                 conn.execute(
                     "INSERT INTO paks ("
                     "pak_id, pak_type, project, topic, source_type, authority, "
-                    "title, summary, content_hash, created_at, updated_at, superseded_by, status"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "title, summary, content_hash, created_at, updated_at, superseded_by"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         pak_id,
                         pak_type,
@@ -434,7 +401,6 @@ class RecallStore:
                         ts,
                         ts,
                         superseded_by,
-                        status_value,
                     ),
                 )
                 inserted = True
@@ -442,49 +408,26 @@ class RecallStore:
             else:
                 old_hash = row[0]
                 body_changed = old_hash != content_hash
-                if status_was_supplied or superseded_by is not None:
-                    conn.execute(
-                        "UPDATE paks SET "
-                        "pak_type = ?, project = ?, topic = ?, source_type = ?, "
-                        "authority = ?, title = ?, summary = ?, content_hash = ?, "
-                        "updated_at = ?, superseded_by = ?, status = ? "
-                        "WHERE pak_id = ?",
-                        (
-                            pak_type,
-                            project,
-                            topic,
-                            source_type,
-                            authority,
-                            title,
-                            summary,
-                            content_hash,
-                            ts,
-                            superseded_by,
-                            status_value,
-                            pak_id,
-                        ),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE paks SET "
-                        "pak_type = ?, project = ?, topic = ?, source_type = ?, "
-                        "authority = ?, title = ?, summary = ?, content_hash = ?, "
-                        "updated_at = ?, superseded_by = ? "
-                        "WHERE pak_id = ?",
-                        (
-                            pak_type,
-                            project,
-                            topic,
-                            source_type,
-                            authority,
-                            title,
-                            summary,
-                            content_hash,
-                            ts,
-                            superseded_by,
-                            pak_id,
-                        ),
-                    )
+                conn.execute(
+                    "UPDATE paks SET "
+                    "pak_type = ?, project = ?, topic = ?, source_type = ?, "
+                    "authority = ?, title = ?, summary = ?, content_hash = ?, "
+                    "updated_at = ?, superseded_by = ? "
+                    "WHERE pak_id = ?",
+                    (
+                        pak_type,
+                        project,
+                        topic,
+                        source_type,
+                        authority,
+                        title,
+                        summary,
+                        content_hash,
+                        ts,
+                        superseded_by,
+                        pak_id,
+                    ),
+                )
                 inserted = False
                 if body_changed:
                     _log.warning(
@@ -601,129 +544,6 @@ class RecallStore:
         if row is None:
             return None
         return PakRow(*row)
-
-    # Relation write/read surface ------------------------------------------
-
-    def set_pak_relations(
-        self,
-        pak_id: str,
-        relations: Sequence[PakRelationEntry],
-        *,
-        now: Optional[str] = None,
-    ) -> None:
-        """Replace relation edges authored by ``pak_id``.
-
-        ``pak_relations`` is the authoritative one-to-many relationship
-        surface. The legacy ``paks.superseded_by`` column is maintained as a
-        single-valued projection for callers that cannot yet read relations:
-        it is set only when exactly one incoming ``supersedes`` edge targets a
-        Pak, and cleared when zero or multiple superseders exist.
-        """
-        if not pak_id or not pak_id.strip():
-            raise ValueError("set_pak_relations: pak_id must be a non-empty string")
-
-        seen: set[tuple[str, str]] = set()
-        cleaned: list[tuple[str, str]] = []
-        for entry in relations:
-            related_pak_id = entry.related_pak_id
-            relation_type = entry.relation_type
-            if not isinstance(related_pak_id, str) or not related_pak_id.strip():
-                raise ValueError(
-                    "set_pak_relations: related_pak_id must be a non-empty string"
-                )
-            if relation_type not in PAK_RELATION_TYPES:
-                raise ValueError(
-                    f"set_pak_relations: relation_type must be one of "
-                    f"{sorted(PAK_RELATION_TYPES)!r}, got {relation_type!r}"
-                )
-            key = (related_pak_id, relation_type)
-            if key in seen:
-                raise ValueError(
-                    "set_pak_relations: duplicate relation "
-                    f"{relation_type!r} -> {related_pak_id!r} in input"
-                )
-            seen.add(key)
-            cleaned.append(key)
-
-        ts = now if now is not None else _utc_now_iso8601()
-        conn = self._conn
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            if conn.execute("SELECT 1 FROM paks WHERE pak_id = ?", (pak_id,)).fetchone() is None:
-                raise sqlite3.IntegrityError("pak_id does not reference paks")
-
-            previous_superseded = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT related_pak_id FROM pak_relations "
-                    "WHERE pak_id = ? AND relation_type = 'supersedes'",
-                    (pak_id,),
-                ).fetchall()
-            }
-
-            conn.execute("DELETE FROM pak_relations WHERE pak_id = ?", (pak_id,))
-            if cleaned:
-                conn.executemany(
-                    "INSERT INTO pak_relations "
-                    "(pak_id, related_pak_id, relation_type, created_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    [
-                        (pak_id, related_pak_id, relation_type, ts)
-                        for related_pak_id, relation_type in cleaned
-                    ],
-                )
-
-            affected = previous_superseded | {
-                related_pak_id
-                for related_pak_id, relation_type in cleaned
-                if relation_type == "supersedes"
-            }
-            self._refresh_superseded_by_projection(conn, sorted(affected))
-            conn.execute("COMMIT")
-        except Exception:
-            try:
-                conn.execute("ROLLBACK")
-            except sqlite3.OperationalError:
-                pass
-            raise
-
-    def get_pak_relations(self, pak_id: str) -> list[PakRelationEntry]:
-        """Return relation edges authored by ``pak_id`` in stable order."""
-        if not pak_id or not pak_id.strip():
-            return []
-        rows = self._conn.execute(
-            "SELECT related_pak_id, relation_type FROM pak_relations "
-            "WHERE pak_id = ? ORDER BY relation_type ASC, related_pak_id ASC",
-            (pak_id,),
-        ).fetchall()
-        return [PakRelationEntry(related_pak_id=r[0], relation_type=r[1]) for r in rows]
-
-    @staticmethod
-    def _refresh_superseded_by_projection(
-        conn: sqlite3.Connection,
-        target_pak_ids: Sequence[str],
-    ) -> None:
-        for target_pak_id in target_pak_ids:
-            superseders = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT pak_id FROM pak_relations "
-                    "WHERE related_pak_id = ? AND relation_type = 'supersedes' "
-                    "ORDER BY pak_id ASC",
-                    (target_pak_id,),
-                ).fetchall()
-            ]
-            projection = superseders[0] if len(superseders) == 1 else None
-            conn.execute(
-                "UPDATE paks SET superseded_by = ? WHERE pak_id = ?",
-                (projection, target_pak_id),
-            )
-            if projection is not None:
-                conn.execute(
-                    "UPDATE paks SET status = 'superseded' "
-                    "WHERE pak_id = ? AND status IS NULL",
-                    (target_pak_id,),
-                )
 
     # Reason-code + risk-flag join surface ---------------------------------
 
@@ -985,10 +805,7 @@ __all__ = [
     "LIST_LIMIT_MAX",
     "PakListFilters",
     "PakListResult",
-    "PakRelationEntry",
     "PakRow",
-    "PAK_RELATION_TYPES",
-    "PAK_STATUS_VALUES",
     "ReasonCodeEntry",
     "RecallStore",
     "RISK_FLAG_SEVERITIES",

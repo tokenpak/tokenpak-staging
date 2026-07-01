@@ -1,18 +1,13 @@
-"""TokenPak Agent Config — runtime-mutable toggles stored in <tpk-home>/config.json.
+"""TokenPak Agent Config — runtime-mutable toggles stored in ~/.tokenpak/config.json.
 
 This module handles a small set of runtime-mutable toggles (stats_footer, debug,
 capsule_builder, metrics.enabled). These can be changed without restarting the proxy.
 
 Precedence order (highest wins):
   1. Environment variable (TOKENPAK_STATS_FOOTER, TOKENPAK_DEBUG, etc.)
-  2. JSON overrides (<tpk-home>/config.json) — runtime-mutable
-  3. YAML config (<tpk-home>/config.yaml via config_loader.py) — for overlapping keys
+  2. JSON overrides (~/.tokenpak/config.json) — runtime-mutable
+  3. YAML config (~/.tokenpak/config.yaml via config_loader.py) — for overlapping keys
   4. Defaults (False for all toggles)
-
-<tpk-home> resolves through ``tokenpak._paths.home()`` with drift-respect: a
-config.json living only under the legacy ``~/.tokenpak`` keeps being read AND
-written there (state never splits across homes) until ``tokenpak config
-migrate`` reconciles; new files land in the resolved (canonical) home.
 
 The full proxy/routing/compression config is handled by config_loader.py (YAML).
 This module only handles the lightweight toggle layer.
@@ -25,33 +20,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-
-def _config_json_path() -> Path:
-    """Resolve the active config.json path (fresh, at call time).
-
-    <resolved-home>/config.json when present → <legacy-home>/config.json when
-    present (drift-respect — reads and writes stay with the existing file) →
-    <resolved-home>/config.json for new files. Never moves files across homes.
-    """
-    try:
-        from tokenpak import _paths
-    except Exception:
-        return Path(os.path.expanduser("~/.tokenpak/config.json"))
-    resolved = _paths.home() / "config.json"
-    if resolved.exists():
-        return resolved
-    legacy = _paths.legacy_home() / "config.json"
-    if legacy != resolved and legacy.exists():
-        return legacy
-    return resolved
-
-
-def __getattr__(name: str):
-    # Back-compat (PEP 562): CONFIG_PATH stays importable but resolves freshly
-    # per access through the canonical home resolver.
-    if name == "CONFIG_PATH":
-        return _config_json_path()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+CONFIG_PATH = Path(os.path.expanduser("~/.tokenpak/config.json"))
 
 # Keys that map to env var overrides (env takes priority)
 _ENV_OVERRIDES: dict[str, str] = {
@@ -65,17 +34,15 @@ _ENV_OVERRIDES: dict[str, str] = {
 def _load() -> dict[str, Any]:
     """Load config from disk, returning an empty dict if missing or corrupt."""
     try:
-        path = _config_json_path()
-        return json.loads(path.read_text()) if path.exists() else {}
+        return json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
     except (json.JSONDecodeError, OSError):
         return {}
 
 
 def _save(data: dict[str, Any]) -> None:
     """Persist config to disk, creating parent dirs as needed."""
-    path = _config_json_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(data, indent=2))
 
 
 def get_config() -> dict[str, Any]:
@@ -95,31 +62,6 @@ def get_config() -> dict[str, Any]:
         if env_val is not None:
             base[key] = env_val not in ("0", "false", "False", "no")
     return base
-
-
-def redacted_config() -> dict[str, Any]:
-    """Return a display/debug-safe view of :func:`get_config` with secret-class
-    keys masked.
-
-    This is the masked *view* for config dumps / debug rendering. It intentionally
-    does **not** change :func:`get_config`: runtime consumers that legitimately
-    read raw credential values (e.g. the proxy in ``proxy/server_async.py``) keep
-    calling ``get_config()`` and receive raw values. Only display/debug surfaces
-    should render this redacted view.
-
-    Secret classification and masking reuse the single shared masker in
-    ``cli.commands.config_env`` — high/medium secret-class keys collapse to the
-    presence sentinel ``"set"`` (never any portion of the value); low-class tuning
-    values pass through unchanged. No parallel masking logic is defined here.
-
-    The import is function-local on purpose: ``config_env`` lives in the CLI layer,
-    while this module is imported very early (proxy runtime, ``config show``). A
-    module-level import would invert the core→CLI layering and risk a partial-init
-    import cycle; deferring it to call time (always a display context) avoids that.
-    """
-    from tokenpak.cli.commands.config_env import mask_value
-
-    return {key: mask_value(key, value) for key, value in get_config().items()}
 
 
 def set_config(key: str, value: Any) -> None:

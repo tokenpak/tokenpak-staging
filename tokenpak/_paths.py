@@ -56,10 +56,6 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
         # tmp/, overlays/). Added per the canonical layout amendment of
         # 2026-05-20.
         "dispatch",
-        # deliberation/ — Deliberation Dispatch system state (file-based JSON
-        # Deliberation Receipts under deliberation/receipts/).
-        # Added per the canonical layout amendment of 2026-06-12.
-        "deliberation",
     }
 )
 
@@ -70,14 +66,6 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
 _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
     {
         "paks",
-        # cards/ — user-global installed/compiled card manifests per the
-        # Cards authoring layer: ~/.tpk/cards/installed/,
-        # ~/.tpk/cards/compiled/). Path-layout reconciliation pending.
-        "cards",
-        # debug/ — encrypted/hash-only debug capture blobs and key material.
-        # The capture surface predates the resolver migration; keep it visible
-        # as adopted state until the canonical layout is amended.
-        "debug",
     }
 )
 
@@ -192,16 +180,6 @@ def under(*parts: str) -> Path:
     )
 
 
-def update_check_cache() -> Path:
-    """Path to the update-check cache file (last-checked epoch + cached latest version).
-
-    Top-level file under the resolved home (``<home>/update_check.json``). Used by
-    the in-launcher "update available" nudge to throttle PyPI checks to <=1/day.
-    Pure-path helper — does not create the parent (callers fail-open).
-    """
-    return under("update_check.json")
-
-
 def is_legacy_active() -> bool:
     """True when the *resolved* home is the legacy directory.
 
@@ -260,19 +238,9 @@ def _monitor_db_candidates() -> list[Path]:
         env_compat = os.environ.get(_MONITOR_DB_ENV_COMPAT, "").strip()
         if env_compat:
             candidates.append(Path(env_compat).expanduser())
-    if os.environ.get(ENV_VAR, "").strip():
-        candidate = home() / "monitor.db"
-        if candidate not in candidates:
-            candidates.append(candidate)
-        return candidates
-    for candidate in (
-        home() / "monitor.db",
-        canonical_home() / "monitor.db",
-        legacy_home() / "monitor.db",
-        Path.home() / "tokenpak" / "monitor.db",
-    ):
-        if candidate not in candidates:
-            candidates.append(candidate)
+    candidates.append(Path.home() / CANONICAL_DIRNAME / "monitor.db")
+    candidates.append(Path.home() / LEGACY_DIRNAME / "monitor.db")
+    candidates.append(Path.home() / "tokenpak" / "monitor.db")
     return candidates
 
 
@@ -290,12 +258,8 @@ def monitor_db(mode: str = "read") -> Optional[Path]:
         if _is_valid_monitor_db(candidate):
             return candidate
     if mode == "write":
-        target = home() / "monitor.db"
+        target = Path.home() / CANONICAL_DIRNAME / "monitor.db"
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            target.parent.chmod(0o700)
-        except OSError:
-            pass
         return target
     return None
 
@@ -346,7 +310,6 @@ __all__ = [
     "needs_migration",
     "ensure_home",
     "under",
-    "update_check_cache",
     "is_legacy_active",
     "monitor_db",
     "monitor_db_candidates",

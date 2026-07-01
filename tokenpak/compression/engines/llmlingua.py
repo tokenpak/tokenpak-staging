@@ -9,7 +9,7 @@ class LLMLinguaEngine(CompactionEngine):
     """
     ML-powered compaction using Microsoft LLMLingua.
 
-    Requires: pip install tokenpak[compression]
+    Requires: pip install llmlingua
 
     Provides:
     - Higher compression ratios (5-20x vs 2-5x heuristic)
@@ -39,10 +39,7 @@ class LLMLinguaEngine(CompactionEngine):
     def compact(self, text: str, hints: Optional[CompactionHints] = None) -> str:
         """Compact using LLMLingua-2."""
         if not self._available:
-            raise RuntimeError(
-                f"LLMLingua not available: {self._error}. "
-                "Install with: pip install tokenpak[compression]"
-            )
+            raise RuntimeError(f"LLMLingua not available: {self._error}")
 
         if not text:
             return text

@@ -33,26 +33,27 @@ class TestQuickHelp:
 
 
 class TestEssentialHelp:
-    """Test default help output shows the common first-run command tier."""
+    """Test default help output shows only essential commands."""
 
-    def test_default_shows_common_commands(self):
-        """tokenpak help should show common commands by default."""
+    def test_default_shows_essential_only(self):
+        """tokenpak help should show only essential commands by default."""
         output = StringIO()
         with redirect_stdout(output):
             print_essential_help()
         text = output.getvalue()
 
-        assert "Common Commands:" in text
+        # Should mention "Essential Commands"
+        assert "Essential Commands:" in text
 
         # All essential commands should be listed as command names (not just in descriptions)
         for cmd in _ESSENTIAL_COMMANDS:
             # Check command is listed with its description
             assert f"{cmd:<14}" in text or f"  {cmd} " in text, f"Essential command '{cmd}' not in default help"
 
-        for cmd in ("serve", "integrate", "creds", "cache", "index", "replay"):
-            assert f"{cmd:<14}" in text or f"  {cmd} " in text, f"Common command '{cmd}' not in default help"
-
+        # Some intermediate commands may appear in descriptions, but not as listed commands
+        # We check that only essential commands are shown in the command listing section
         assert "Monitoring:" not in text, "Monitoring section should not appear in default help"
+        assert "Configuration:" not in text, "Configuration section should not appear in default help"
 
         # Should guide user to --more and --all
         assert "--more" in text
@@ -174,14 +175,14 @@ class TestMinimalHelp:
 class TestRunDispatch:
     """Test the run() function correctly dispatches based on args."""
 
-    def test_no_args_defaults_to_common(self):
-        """run() with no args should show common help."""
+    def test_no_args_defaults_to_essential(self):
+        """run() with no args should show essential help."""
         output = StringIO()
         with redirect_stdout(output):
             run([])
         text = output.getvalue()
 
-        assert "Common Commands:" in text
+        assert "Essential Commands:" in text
         # Should not show intermediate-only commands like 'watch'
         assert "watch" not in text
 
@@ -266,19 +267,18 @@ class TestCLIIntegration:
 class TestAcceptanceCriteria:
     """Verify all acceptance criteria are met."""
 
-    def test_criterion_1_default_shows_common_first_run_verbs(self):
-        """✅ tokenpak help shows common first-run commands by default."""
+    def test_criterion_1_default_shows_8_essential(self):
+        """✅ tokenpak help shows only 8 essential commands by default."""
         output = StringIO()
         with redirect_stdout(output):
             print_essential_help()
         text = output.getvalue()
 
-        assert "Common Commands:" in text
+        # Check that essential section header is present
+        assert "Essential Commands:" in text
 
+        # All 8 essential commands should be listed
         for cmd in _ESSENTIAL_COMMANDS:
-            assert f"{cmd:<14}" in text or f"  {cmd} " in text
-
-        for cmd in ("serve", "integrate", "creds", "cache", "index", "replay"):
             assert f"{cmd:<14}" in text or f"  {cmd} " in text
 
     def test_criterion_2_more_shows_essential_and_intermediate(self):

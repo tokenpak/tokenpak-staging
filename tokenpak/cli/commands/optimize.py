@@ -20,19 +20,11 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 
 PROXY_BASE = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+_MONITOR_DB = os.environ.get(
+    "TOKENPAK_DB",
+    os.path.expanduser("~/.tokenpak/data/monitor.db"),
+)
 SEP = "────────────────────────────────────────"
-
-
-def _monitor_db_path() -> str:
-    """Resolve monitor.db via the canonical resolver.
-
-    Delegates to ``tokenpak.core.paths.get_db_path`` so optimize reads the
-    SAME database as the proxy writer and the other CLI readers. Resolved at
-    call time so env/home changes take effect without re-import.
-    """
-    from tokenpak.core.paths import get_db_path
-
-    return str(get_db_path("monitor.db"))
 
 from tokenpak.models import get_cheaper_alternative as _get_cheaper_alternative
 from tokenpak.models import get_model_costs as _get_model_costs
@@ -60,7 +52,7 @@ def _proxy_get(path: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
 
 
 def _db_connect() -> Optional[sqlite3.Connection]:
-    db = Path(_monitor_db_path())
+    db = Path(_MONITOR_DB)
     if not db.exists():
         return None
     conn = sqlite3.connect(str(db))

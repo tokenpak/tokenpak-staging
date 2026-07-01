@@ -10,7 +10,6 @@ import sqlite3
 import sys
 import time
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -51,157 +50,11 @@ def _proxy_get(path: str, port: int | None = None, timeout: int = 3) -> dict | N
 # Mirrors install.PROXY_URL so the route check compares against the same value
 # `tokenpak setup` writes. Overridable via TOKENPAK_PROXY_URL for non-default ports.
 CANONICAL_PROXY_URL = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
-_DISK_USAGE_MAX_ENTRIES = 5_000
-_DISK_USAGE_TIMEOUT_SECONDS = 0.25
-
-
-@dataclass(frozen=True)
-class _DiskUsageResult:
-    total_bytes: int
-    files: int
-    entries: int
-    truncated: bool = False
-    reason: str = ""
-
-
-def _measure_disk_usage(
-    root: Path,
-    *,
-    max_entries: int = _DISK_USAGE_MAX_ENTRIES,
-    timeout_s: float = _DISK_USAGE_TIMEOUT_SECONDS,
-) -> _DiskUsageResult:
-    """Return a bounded size estimate for TokenPak state.
-
-    First-run diagnostics must not recursively walk a large local state tree
-    forever. This probe follows no symlinks, stops on either a wall-clock or
-    entry-count cap, and reports a partial warning instead of pretending the
-    measurement was complete.
-    """
-    start = time.monotonic()
-    deadline = start + max(0.0, timeout_s)
-    pending = [root]
-    total_bytes = 0
-    files = 0
-    entries = 0
-
-    def _truncated(reason: str) -> _DiskUsageResult:
-        return _DiskUsageResult(
-            total_bytes=total_bytes,
-            files=files,
-            entries=entries,
-            truncated=True,
-            reason=reason,
-        )
-
-    while pending:
-        if entries >= max_entries:
-            return _truncated(f"entry limit {max_entries}")
-        if time.monotonic() >= deadline:
-            return _truncated(f"timeout {timeout_s:.2f}s")
-
-        current = pending.pop()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    entries += 1
-                    if entries >= max_entries:
-                        return _truncated(f"entry limit {max_entries}")
-                    if time.monotonic() >= deadline:
-                        return _truncated(f"timeout {timeout_s:.2f}s")
-                    try:
-                        if entry.is_file(follow_symlinks=False):
-                            total_bytes += entry.stat(follow_symlinks=False).st_size
-                            files += 1
-                        elif entry.is_dir(follow_symlinks=False):
-                            pending.append(Path(entry.path))
-                    except OSError:
-                        continue
-        except OSError:
-            continue
-
-    return _DiskUsageResult(
-        total_bytes=total_bytes,
-        files=files,
-        entries=entries,
-    )
 
 
 def _claude_settings_path() -> Path:
     """Path to Claude Code's settings.json (~/.claude/settings.json)."""
     return Path.home() / ".claude" / "settings.json"
-
-
-def _api_key_setup_detail() -> str:
-    """Detailed no-key setup guidance shared by default and verbose output."""
-    try:
-        from tokenpak.cli.commands.setup import env_var_help
-
-        examples = env_var_help("ANTHROPIC_API_KEY", "sk-...")
-    except Exception:
-        examples = "    export ANTHROPIC_API_KEY=sk-..."
-    return (
-        "Claude Code OAuth/session auth can use the local proxy with no direct API key.\n"
-        "To add a direct provider key, set one before launching TokenPak:\n"
-        f"{examples}"
-    )
-
-
-def _active_credential_mode() -> tuple[str, str]:
-    """Resolve the active Std 03 §9.2 credential mode for doctor observability.
-
-    Returns ``(mode_label, detail)``. This is **observability only** — it never
-    warns; the Mode-1 OAuth default in particular must surface as healthy state,
-    not a "no API key" alarm. Classification reuses the canonical credential
-    discovery (:func:`tokenpak.creds.providers.discover_all`) so it stays correct
-    as providers are added rather than inventing a parallel notion of auth mode.
-
-    - **Mode 1 — OAuth passthrough:** an OAuth-token env var or a discovered
-      OAuth/bearer credential (Claude CLI / OpenClaw / Codex session).
-    - **Mode 2 — stored key (keyring/0600):** a stored BYOK static key from a
-      non-``env-pool`` provider.
-    - **Mode 3 — env var:** a direct ``*_API_KEY`` supplied via the environment.
-    """
-    oauth_env = any(
-        os.environ.get(v, "").strip()
-        for v in ("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN2")
-    )
-    env_key_present = any(
-        os.environ.get(v, "").strip()
-        for v in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
-    )
-    oauth_cred = False
-    stored_key_cred = False
-    try:
-        from tokenpak.creds.model import KIND_API_KEY
-        from tokenpak.creds.providers import discover_all
-
-        for cred in discover_all():
-            if cred.kind != KIND_API_KEY:
-                oauth_cred = True
-            elif cred.provider != "env-pool":
-                stored_key_cred = True
-    except Exception:
-        pass
-
-    if oauth_env or oauth_cred:
-        return (
-            "Mode 1 — OAuth passthrough",
-            "OAuth/session auth active; no direct API key required",
-        )
-    if stored_key_cred:
-        return (
-            "Mode 2 — stored key (keyring/0600)",
-            "BYOK credential stored via OS keyring or 0600 file fallback",
-        )
-    if env_key_present:
-        return (
-            "Mode 3 — env var",
-            "Provider API key supplied via environment (read-only)",
-        )
-    return (
-        "none detected",
-        "No credential path detected — Claude Code OAuth or `tokenpak setup`",
-    )
 
 
 def _route_state() -> tuple[str, str | None]:
@@ -298,59 +151,6 @@ def _proxy_state() -> str:
         return "unknown"
 
 
-def _health_runtime_version(health: dict | None) -> tuple[str | None, bool, str]:
-    """Return running proxy version plus optional acknowledged-skew note.
-
-    The proxy has used a few field names across releases, so doctor accepts the
-    current ``version`` field plus older explicit names. A deliberate runtime
-    pin can be surfaced by the proxy health payload; doctor still warns on skew
-    but labels it as acknowledged instead of presenting it as silent green.
-    """
-    if not isinstance(health, dict):
-        return (None, False, "")
-
-    raw_version = (
-        health.get("version")
-        or health.get("proxy_version")
-        or health.get("runtime_version")
-    )
-    version = str(raw_version).strip() if raw_version is not None else ""
-    if not version:
-        version = None
-
-    note = ""
-    for key in (
-        "runtime_version_note",
-        "runtime_pin_note",
-        "version_pin_note",
-        "version_pin",
-    ):
-        raw_note = health.get(key)
-        if raw_note:
-            note = str(raw_note).strip()
-            break
-
-    acknowledged = bool(
-        health.get("runtime_version_acknowledged")
-        or health.get("version_skew_acknowledged")
-        or health.get("version_pinned")
-        or note
-    )
-    return (version, acknowledged, note)
-
-
-def _versions_match(installed: str, running: str) -> bool:
-    """Compare package/runtime versions without overfitting formatting."""
-    installed_clean = installed.strip().removeprefix("v")
-    running_clean = running.strip().removeprefix("v")
-    try:
-        from packaging.version import Version as _PV
-
-        return _PV(installed_clean) == _PV(running_clean)
-    except Exception:
-        return installed_clean == running_clean
-
-
 # Lifecycle-summary glyphs (within the doctor 5-emoji allow-list: ✅ ⚠️ ❌).
 _GLYPH = {"green": "✅", "yellow": "⚠️ ", "red": "❌"}
 
@@ -369,8 +169,6 @@ def build_lifecycle_summary(
     proxy_state: str,
     update_state: str,
     update_latest: str | None = None,
-    running_proxy_version: str | None = None,
-    runtime_version_acknowledged: bool = False,
 ) -> str:
     """Build the compact lifecycle panel as a plain string (snapshot-testable).
 
@@ -379,38 +177,13 @@ def build_lifecycle_summary(
     single next-step hint. Unknown probes render ``Unknown`` (never fabricated).
 
     The five rows model the install → setup → route → proxy → update lifecycle:
-      Installed package · Running proxy · Setup · Routed · Proxy · Update
+      Installed · Setup · Routed · Proxy · Update
     """
     # (label, color, value, hint) — value/hint already honest.
     rows: list[tuple[str, str, str, str]] = []
 
-    # Installed package — importable, so always green with the package version.
-    rows.append(("Installed package", "green", f"v{version}", ""))
-
-    # Running proxy — separate from the installed package. A stale daemon should
-    # read as skew, not as a false-green "up to date" package check.
-    if running_proxy_version:
-        running_value = f"v{running_proxy_version.lstrip('v')}"
-        if _versions_match(version, running_proxy_version):
-            rows.append(("Running proxy", "green", running_value, ""))
-        elif runtime_version_acknowledged:
-            rows.append((
-                "Running proxy",
-                "yellow",
-                f"{running_value} (acknowledged)",
-                f"package v{version}",
-            ))
-        else:
-            rows.append((
-                "Running proxy",
-                "yellow",
-                f"{running_value} != package v{version}",
-                "Run: tokenpak restart",
-            ))
-    elif proxy_state == "running":
-        rows.append(("Running proxy", "yellow", "Unknown", "Check /health version"))
-    else:
-        rows.append(("Running proxy", "yellow", "Unknown", "Start proxy to inspect"))
+    # Installed — the package is importable, so always green with the version.
+    rows.append(("Installed", "green", f"v{version}", ""))
 
     # Setup — config.json present under the resolved home?
     if setup_present:
@@ -434,9 +207,9 @@ def build_lifecycle_summary(
     elif proxy_state == "starting":
         rows.append(("Proxy", "yellow", "starting", "wait for boot to finish"))
     elif proxy_state == "stopped":
-        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak restart"))
+        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak proxy restart"))
     else:  # unknown
-        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak restart"))
+        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak proxy restart"))
 
     # Update — from the cached L1 check only.
     if update_state == "available":
@@ -523,6 +296,37 @@ def verify_integration_target(key: str, proxy_url: str) -> tuple[bool, str]:
         return (False, f"verify raised: {exc}")
 
 
+def attribution_coverage(db_path) -> "tuple[int, int, float | None]":
+    """Return ``(known, total, pct)`` attribution coverage over the requests
+    ledger — the share of rows whose origin is genuinely known (non-empty
+    ``attribution_source``). Internal gate measure only; NOT a public number.
+    Degrades to ``(0, 0, None)`` when the db / table / column is absent."""
+    import sqlite3 as _sq
+
+    try:
+        conn = _sq.connect(str(db_path), timeout=2.0)
+    except Exception:
+        return (0, 0, None)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(requests)")]
+        if "attribution_source" not in cols:
+            return (0, 0, None)
+        total = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] or 0
+        known = conn.execute(
+            "SELECT COUNT(*) FROM requests "
+            "WHERE attribution_source IS NOT NULL AND attribution_source != ''"
+        ).fetchone()[0] or 0
+        pct = (100.0 * known / total) if total else None
+        return (known, total, pct)
+    except Exception:
+        return (0, 0, None)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def run_doctor(
     fix: bool = False,
     output_json: bool = False,
@@ -539,32 +343,28 @@ def run_doctor(
         claude_code: Run Claude Code integration checks (ENABLE_TOOL_SEARCH, mode, IDE).
         lifecycle: Render only the compact lifecycle summary panel and exit.
     """
-    from tokenpak import __version__ as installed_version
     from tokenpak import _paths
 
     # Resolve through _paths so doctor reports the canonical home (~/.tpk/) when
     # present, and surfaces the legacy fallback when the user hasn't migrated.
     tokenpak_dir = _paths.home()
-    proxy_port = int(os.environ.get("TOKENPAK_PORT", "8766"))
-    health = _proxy_get("/health", port=proxy_port)
-    runtime_version, runtime_acknowledged, runtime_note = _health_runtime_version(health)
 
     # --- Lifecycle summary (default-visible; --lifecycle = only this) ---------
     # Built from honest, already-resolved probes: route state, the cached L1
     # update check (no fresh network call), the scope#1 cached proxy probe, and
     # config presence. Unknown probes render "Unknown", never a fabricated state.
     def _lifecycle_panel() -> str:
+        from tokenpak import __version__ as _ver
+
         route_st, _ = _route_state()
         upd_st, upd_latest = _update_state()
         return build_lifecycle_summary(
-            version=installed_version,
+            version=_ver,
             setup_present=(tokenpak_dir / "config.json").exists(),
             route_state=route_st,
             proxy_state=_proxy_state(),
             update_state=upd_st,
             update_latest=upd_latest,
-            running_proxy_version=runtime_version,
-            runtime_version_acknowledged=runtime_acknowledged,
         )
 
     if lifecycle and not output_json:
@@ -642,38 +442,9 @@ def run_doctor(
             f"~/.tpk/ boundary    {tokenpak_dir}",
         )
 
-    # === Check 0b: First-run + credential-mode observability (Std 03 §9.3) ======
-    # Surface onboarding/first-run state so a stalled or mis-homed first run is
-    # diagnosable, and report the active §9.2 credential mode AS STATE — never a
-    # "no API key" warning for the Mode-1 OAuth default. Recorded as "pass"
-    # (info) so observability never perturbs the doctor warn/fail counts.
-    seen_intro = (tokenpak_dir / ".seen_intro").exists()
-    home_kind = (
-        "legacy-fallback (~/.tokenpak/)"
-        if _paths.is_legacy_active()
-        else "canonical (~/.tpk/)"
-    )
-    _record(
-        "first_run_state",
-        "pass",
-        "First-run state     "
-        f"sentinel {'present' if seen_intro else 'absent (onboarding not completed)'}"
-        f" — home {home_kind}",
-        detail=(
-            f"home={tokenpak_dir} "
-            f"seen_intro={'present' if seen_intro else 'absent'} "
-            f"home_kind={home_kind}"
-        ),
-    )
-    _cred_mode, _cred_mode_detail = _active_credential_mode()
-    _record(
-        "credential_mode",
-        "pass",
-        f"Credential mode     {_cred_mode}",
-        detail=_cred_mode_detail,
-    )
-
     # === Check 1: Proxy health with latency =====================================
+    proxy_port = int(os.environ.get("TOKENPAK_PORT", "8766"))
+    health = _proxy_get("/health", port=proxy_port)
     if health is not None:
         latency = health.get("latency", {})
         p50 = latency.get("p50_latency_ms")
@@ -681,15 +452,8 @@ def run_doctor(
         p99 = latency.get("p99_latency_ms")
         samples = latency.get("samples", 0)
         outlier = latency.get("outlier_detected", False)
-        # Read the unified /health contract robustly: compilation_mode is
-        # emitted by both the sync and async proxies now, and requests is read
-        # from the nested stats block first, falling back to the flat
-        # requests_total — so neither emitter shape produces a "unknown mode" /
-        # "0 reqs" schema-drift artifact on a healthy proxy.
-        mode = health.get("compilation_mode") or "unknown"
-        requests_total = health.get("stats", {}).get("requests")
-        if requests_total is None:
-            requests_total = health.get("requests_total", 0)
+        mode = health.get("compilation_mode", "unknown")
+        requests_total = health.get("stats", {}).get("requests", 0)
 
         if p50 is not None:
             if p95 is not None:
@@ -708,6 +472,24 @@ def run_doctor(
             f"{requests_total} reqs, {latency_str}",
             detail=f"compilation_mode={mode} requests={requests_total} p95={p95} p99={p99} outlier={outlier}",
         )
+
+        # Attribution coverage — % of ledger rows with a genuinely known origin
+        # (non-empty attribution_source). Internal gate measure; NOT a public
+        # number. Informational only — does not fail/penalize the doctor exit.
+        try:
+            _mon_db = _paths.monitor_db("read")
+        except Exception:
+            _mon_db = None
+        if _mon_db is not None:
+            _cov_known, _cov_total, _cov_pct = attribution_coverage(_mon_db)
+            if _cov_total > 0 and _cov_pct is not None:
+                _record(
+                    "attribution_coverage",
+                    "pass",
+                    f"Attribution         {_cov_pct:.0f}% known origin "
+                    f"({_cov_known}/{_cov_total} reqs)",
+                    detail=f"non-empty attribution_source on {_cov_known}/{_cov_total} requests rows",
+                )
     else:
         # Fall back to TCP check
         try:
@@ -725,7 +507,7 @@ def run_doctor(
                 _record(
                     "proxy_health",
                     "warn",
-                    f"Proxy not running   port {proxy_port} — start with: tokenpak restart",
+                    f"Proxy not running   port {proxy_port} — start with: tokenpak proxy restart",
                 )
         except Exception:
             _record(
@@ -734,58 +516,7 @@ def run_doctor(
                 f"Proxy not reachable port {proxy_port} — check failed",
             )
 
-    # === Check 1b: running runtime version vs installed package ===============
-    if health is None:
-        _record(
-            "runtime_version",
-            "warn",
-            "Running proxy       version unknown — proxy not reachable",
-            detail=f"installed_package=v{installed_version} running_proxy=unknown",
-        )
-    elif runtime_version is None:
-        _record(
-            "runtime_version",
-            "warn",
-            "Running proxy       version not reported by /health",
-            detail=f"installed_package=v{installed_version} running_proxy=missing",
-        )
-    elif _versions_match(installed_version, runtime_version):
-        _record(
-            "runtime_version",
-            "pass",
-            f"Running proxy       v{runtime_version.lstrip('v')} matches installed package v{installed_version}",
-            detail=f"installed_package=v{installed_version} running_proxy=v{runtime_version.lstrip('v')}",
-        )
-    elif runtime_acknowledged:
-        note = f" — {runtime_note}" if runtime_note else ""
-        _record(
-            "runtime_version",
-            "warn",
-            (
-                f"Running proxy       v{runtime_version.lstrip('v')} differs from "
-                f"installed package v{installed_version} (acknowledged){note}"
-            ),
-            detail=(
-                f"installed_package=v{installed_version} "
-                f"running_proxy=v{runtime_version.lstrip('v')} acknowledged=true "
-                f"note={runtime_note}"
-            ),
-        )
-    else:
-        _record(
-            "runtime_version",
-            "warn",
-            (
-                f"Running proxy       v{runtime_version.lstrip('v')} differs from "
-                f"installed package v{installed_version} — restart to adopt"
-            ),
-            detail=(
-                f"installed_package=v{installed_version} "
-                f"running_proxy=v{runtime_version.lstrip('v')} remediation=tokenpak restart"
-            ),
-        )
-
-    # === Check 1c: Routing state (Claude Code → TokenPak proxy) ==================
+    # === Check 1b: Routing state (Claude Code → TokenPak proxy) ==================
     # Promoted into the DEFAULT run (previously only surfaced under --claude-code).
     # Derived from ~/.claude/settings.json env.ANTHROPIC_BASE_URL vs the canonical
     # proxy URL. Honest: a corrupt/unreadable settings file reports "unknown",
@@ -1212,55 +943,48 @@ def run_doctor(
             "Recent error rate   monitor.db not found",
         )
 
-    # === Check 9: Token savings summary (honest, attribution-aware) =============
-    # Route through the same savings engine that ``tokenpak status`` uses so the
-    # doctor figure equals the status figure for the same window. That engine is
-    # cache-origin-aware: it credits only proxy-caused compression and cache
-    # reads, and never conflates client-placed (passthrough) cache with savings.
-    # The old path here did a raw SUM(input_tokens - compressed_tokens) over the
-    # last 100 rows with no origin filter, which over-claimed against an
-    # input-equals-100% denominator.
+    # === Check 9: Token savings summary from last 100 requests ==================
     if db_path.exists():
         try:
-            from tokenpak.cli.commands.status import _calculate_fleet_savings
-
-            # Match the status default window ("today", user-local day) so the
-            # two surfaces report the same number.
-            report = _calculate_fleet_savings(db_path=str(db_path), period="today")
-            err = report.get("error")
-            if err in ("no_data", "db_not_found"):
-                _record(
-                    "token_savings",
-                    "warn",
-                    "Token savings       no request data yet (today)",
-                )
-            elif err:
-                _record(
-                    "token_savings",
-                    "warn",
-                    f"Token savings       could not compute: {err}",
-                )
-            else:
-                totals = report["totals"]
-                models = report["models"]
-                saved_cost = totals["saved"]
-                pct_saved = totals["savings_pct"]
-                req_count = totals["requests"]
-                compressed_tok = sum(m["compressed_tokens"] for m in models)
-                with_cost = totals["with_cost"]
-                cost_str = f"${with_cost:.4f}"
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT "
+                "  COUNT(*) as total, "
+                "  SUM(input_tokens) as total_input, "
+                "  SUM(compressed_tokens) as total_sent, "
+                "  SUM(input_tokens - compressed_tokens) as tokens_saved, "
+                "  SUM(estimated_cost) as total_cost "
+                "FROM ("
+                "  SELECT input_tokens, compressed_tokens, estimated_cost "
+                "  FROM requests "
+                "  WHERE compressed_tokens IS NOT NULL AND input_tokens > 0 "
+                "  ORDER BY id DESC LIMIT 100"
+                ")"
+            )
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] and row[0] > 0:
+                total, total_input, total_sent, tokens_saved, total_cost = row
+                tokens_saved = tokens_saved or 0
+                total_input = total_input or 0
+                pct_saved = (tokens_saved / total_input * 100) if total_input > 0 else 0
+                cost_str = f"${total_cost:.4f}" if total_cost else "$0.0000"
                 _record(
                     "token_savings",
                     "pass",
-                    f"Token savings       ${saved_cost:.4f} saved ({pct_saved:.1f}%) "
-                    f"— {req_count} reqs today, cost {cost_str}",
+                    f"Token savings       {tokens_saved:,} saved ({pct_saved:.1f}%) "
+                    f"— {total} reqs, cost {cost_str}",
                     detail=(
-                        f"saved=${saved_cost:.4f} ({pct_saved:.1f}%) "
-                        f"compressed_tokens={compressed_tok:,} "
-                        f"cache_savings=${totals['cache_savings']:.4f} "
-                        f"compression_savings=${totals['compression_savings']:.4f} "
-                        f"cost={cost_str} window=today"
+                        f"total_input={total_input:,} sent={total_sent:,} "
+                        f"saved={tokens_saved:,} ({pct_saved:.1f}%) cost={cost_str}"
                     ),
+                )
+            else:
+                _record(
+                    "token_savings",
+                    "warn",
+                    "Token savings       no compressed request data yet",
                 )
         except Exception as exc:
             _record(
@@ -1321,53 +1045,6 @@ def run_doctor(
             "Env var conflicts   none detected",
         )
 
-    # === Check 11: Credential exposure (parity with `creds doctor`) =============
-    # d3 spec gap #5 (v2.0-d3-credential-security §7.6, §10 #6): surface the
-    # credential-hazard checks on the primary `tokenpak doctor` verb, not only
-    # the `creds doctor` sub-verb. Reuses the same creds.doctor.run() engine so
-    # the two surfaces can never drift. Never let a credential probe crash the
-    # wider doctor run — degrade to a warn (security-posture and routing
-    # credential-lifecycle).
-    try:
-        from tokenpak.creds import doctor as _creds_doctor
-
-        cred_issues = _creds_doctor.run()
-        cred_errors = [i for i in cred_issues if i.severity == "error"]
-        cred_warns = [i for i in cred_issues if i.severity == "warn"]
-        _cred_detail = "\n".join(
-            f"[{i.severity.upper()}] {i.subject}: {i.detail}" for i in cred_issues
-        )
-        if cred_errors:
-            _record(
-                "credential_exposure",
-                "fail",
-                f"Credential health   {len(cred_errors)} error(s), "
-                f"{len(cred_warns)} warning(s) — run `tokenpak creds doctor`",
-                detail=_cred_detail,
-            )
-        elif cred_warns:
-            _record(
-                "credential_exposure",
-                "warn",
-                f"Credential health   {len(cred_warns)} warning(s) — "
-                "run `tokenpak creds doctor`",
-                detail=_cred_detail,
-            )
-        else:
-            _record(
-                "credential_exposure",
-                "pass",
-                "Credential health   no credential hazards detected",
-            )
-    except Exception as _cred_e:  # a probe failure must not fail unrelated checks
-        _record(
-            "credential_exposure",
-            "warn",
-            "Credential health   could not run credential checks: "
-            f"{type(_cred_e).__name__}",
-            detail=str(_cred_e),
-        )
-
     # === Legacy checks (kept for compatibility) =================================
 
     # Python version
@@ -1407,20 +1084,11 @@ def run_doctor(
     # Disk usage
     try:
         if tokenpak_dir.exists():
-            usage = _measure_disk_usage(tokenpak_dir)
-            size_mb = usage.total_bytes / (1024 * 1024)
-            if usage.truncated:
-                _record(
-                    "disk_usage",
-                    "warn",
-                    f"Disk usage          at least {size_mb:.1f} MB — bounded after "
-                    f"{usage.entries} entries ({usage.reason}); run: tokenpak maintenance",
-                    detail=(
-                        f"bytes_partial={usage.total_bytes} files_partial={usage.files} "
-                        f"entries={usage.entries} reason={usage.reason}"
-                    ),
-                )
-            elif size_mb < 500:
+            total_bytes = sum(
+                f.stat().st_size for f in tokenpak_dir.rglob("*") if f.is_file()
+            )
+            size_mb = total_bytes / (1024 * 1024)
+            if size_mb < 500:
                 _record("disk_usage", "pass", f"Disk usage          {size_mb:.1f} MB — OK")
             else:
                 _record(
@@ -1484,36 +1152,12 @@ def run_doctor(
             f"API keys            {', '.join(found_keys)} — env vars set",
         )
     else:
-        # No direct key env var set. A direct ANTHROPIC_API_KEY is only
-        # genuinely needed when no OAuth / proxy / session-auth path covers
-        # Anthropic; warning otherwise is a false alarm. Reuse the canonical
-        # credential discovery to decide.
-        try:
-            from tokenpak.creds.auth_mode import non_direct_key_auth_available
-
-            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
-        except Exception:
-            anthropic_via_oauth = False
-
-        if anthropic_via_oauth:
-            _record(
-                "api_keys",
-                "pass",
-                "API keys            Anthropic authenticated via OAuth/session "
-                "(no direct API key needed)",
-            )
-        else:
-            detail = _api_key_setup_detail()
-            _record(
-                "api_keys",
-                "warn",
-                "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-                "or GOOGLE_API_KEY",
-                detail=detail,
-            )
-            if not output_json and not verbose:
-                for line in detail.splitlines():
-                    print(f"         {line}")
+        _record(
+            "api_keys",
+            "warn",
+            "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+            "or GOOGLE_API_KEY",
+        )
 
     # Proxy degradation check
     try:

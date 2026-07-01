@@ -17,7 +17,7 @@ pip install crewai-tokenpak
 
 ## Quick Start
 ```python
-from tokenpak.sdk.crewai import TokenPakCrew, TokenPakContext
+from crewai_tokenpak import TokenPakCrew, TokenPakContext
 ctx = TokenPakContext(total_budget=8000)
 ctx.register_agent("researcher", budget=4000)
 ```

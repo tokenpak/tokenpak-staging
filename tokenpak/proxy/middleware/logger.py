@@ -18,16 +18,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 
-from tokenpak.proxy._local_data import (
-    default_log_dir as _default_log_dir,
-)
-from tokenpak.proxy._local_data import (
-    ensure_private_dir as _ensure_private_dir,
-)
-from tokenpak.proxy._local_data import (
-    secure_runtime_file as _secure_runtime_file,
-)
-
 LogLevel = Literal["debug", "info", "warn", "error"]
 Destination = Literal["file", "stdout", "syslog"]
 
@@ -76,7 +66,7 @@ class LoggingConfig:
     retention_days: int = 30
     include_request_body: bool = False
     include_response_body: bool = False
-    log_dir: Optional[str] = None
+    log_dir: Optional[str] = None  # Default: ~/.tokenpak/logs
     async_buffer_size: int = 1000
     flush_interval_sec: int = 5
 
@@ -84,7 +74,8 @@ class LoggingConfig:
         """Resolve log directory path."""
         if self.log_dir:
             return self.log_dir
-        return str(_default_log_dir())
+        home = os.path.expanduser("~")
+        return os.path.join(home, ".tokenpak", "logs")
 
 
 class AsyncLogger:
@@ -116,17 +107,15 @@ class AsyncLogger:
 
         if self.config.destination == "file":
             log_dir = self.config.resolve_log_dir()
-            _ensure_private_dir(log_dir)
+            os.makedirs(log_dir, exist_ok=True)
 
             # Daily rotation
-            log_path = os.path.join(log_dir, f"proxy-{datetime.now().strftime('%Y-%m-%d')}.log")
             handler = logging.handlers.TimedRotatingFileHandler(
-                log_path,
+                os.path.join(log_dir, f"proxy-{datetime.now().strftime('%Y-%m-%d')}.log"),
                 when="midnight",
                 interval=1,
                 backupCount=self.config.retention_days,
             )
-            _secure_runtime_file(log_path)
         elif self.config.destination == "stdout":
             handler = logging.StreamHandler(sys.stdout)
         elif self.config.destination == "syslog":

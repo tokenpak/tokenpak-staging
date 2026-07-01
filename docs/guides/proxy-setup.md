@@ -110,7 +110,7 @@ response = client.chat.completions.create(
 
 ---
 
-### OpenClaw
+### Config-file clients
 
 In your config file:
 ```json
@@ -222,8 +222,10 @@ Override any config value with env vars:
 Run TokenPak as a system service:
 
 ```bash
-# Generate the service unit and enable it
-tokenpak doctor --fix
+# Install the service unit
+tokenpak service install
+
+# Start and enable
 systemctl --user enable tokenpak
 systemctl --user start tokenpak
 
@@ -261,6 +263,6 @@ tokenpak config set proxy.mode strict
 tokenpak debug on --requests 1
 # Make a request, then:
 tokenpak debug off
-tokenpak debug list
+tokenpak trace --last
 # Check that Authorization header was forwarded unchanged
 ```

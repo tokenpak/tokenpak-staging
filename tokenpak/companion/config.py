@@ -20,8 +20,6 @@ TOKENPAK_COMPANION_MEMORY_DIRS  Extra memory/knowledge directories to ingest les
                                 list of directories holding your own Markdown notes —
                                 "bring your own knowledge base", no vault schema
                                 required.  ``~`` is expanded; empty entries dropped.
-TOKENPAK_COMPANION_SESSION_ID   Active platform session id for MCP journal writes.
-TOKENPAK_COMPANION_PROJECT_DIR  Active project/cwd for attribution and recall.
 TOKENPAK_COMPANION_BARE         Strip Claude Code native context (default: 0)
                                 Disables CLAUDE.md, auto memory, prompt history,
                                 system prompt injection, settings/hooks overlay,
@@ -64,7 +62,6 @@ class CompanionConfig:
 
     # Session-scoped (set at launch, immutable after)
     session_id: str = ""
-    session_id_source: str = ""
     project_dir: str = ""
 
     # Derived at runtime (not user-configurable)
@@ -79,18 +76,16 @@ class CompanionConfig:
     @classmethod
     def from_env(cls) -> "CompanionConfig":
         """Build config from environment variables + defaults."""
-        journal_dir = Path(
-            os.environ.get(
-                "TOKENPAK_COMPANION_JOURNAL_DIR",
-                str(Path.home() / ".tokenpak" / "companion"),
-            )
-        )
-        session_id, session_id_source = _active_session_id(journal_dir)
         return cls(
             enabled=_bool("TOKENPAK_COMPANION_ENABLED", True),
             budget_daily_usd=_float("TOKENPAK_COMPANION_BUDGET", 0.0),
             profile=os.environ.get("TOKENPAK_COMPANION_PROFILE", "balanced"),
-            journal_dir=journal_dir,
+            journal_dir=Path(
+                os.environ.get(
+                    "TOKENPAK_COMPANION_JOURNAL_DIR",
+                    str(Path.home() / ".tokenpak" / "companion"),
+                )
+            ),
             hooks_enabled=_bool("TOKENPAK_COMPANION_HOOKS", True),
             mcp_enabled=_bool("TOKENPAK_COMPANION_MCP", True),
             show_cost=_bool("TOKENPAK_COMPANION_SHOW_COST", True),
@@ -99,9 +94,6 @@ class CompanionConfig:
             ),
             bare=_bool("TOKENPAK_COMPANION_BARE", False),
             memory_dirs=_path_list("TOKENPAK_COMPANION_MEMORY_DIRS"),
-            session_id=session_id,
-            session_id_source=session_id_source,
-            project_dir=os.environ.get("TOKENPAK_COMPANION_PROJECT_DIR", "").strip() or _safe_cwd(),
         )
 
     def profile_overrides(self) -> None:
@@ -155,31 +147,3 @@ def _path_list(key: str) -> list[Path]:
         if part:
             out.append(Path(os.path.expanduser(part)))
     return out
-
-
-def _active_session_id(journal_dir: Path) -> tuple[str, str]:
-    """Return active session id plus source: env, file, or empty string."""
-    explicit = os.environ.get("TOKENPAK_COMPANION_SESSION_ID", "").strip()
-    if explicit:
-        return explicit, "env"
-
-    candidates = [journal_dir / "run" / "current-session"]
-    default = Path.home() / ".tokenpak" / "companion" / "run" / "current-session"
-    if default not in candidates:
-        candidates.append(default)
-
-    for path in candidates:
-        try:
-            session_id = path.read_text(errors="replace").splitlines()[0].strip()
-        except (OSError, IndexError):
-            continue
-        if session_id:
-            return session_id, "file"
-    return "", ""
-
-
-def _safe_cwd() -> str:
-    try:
-        return os.getcwd()
-    except OSError:
-        return ""

@@ -240,53 +240,6 @@ def reset_stats_collector() -> None:
         sys.modules[__name__].STATS = _SINGLETON
 
 
-def _health_contract_core(
-    *,
-    status: str,
-    version: str,
-    uptime_seconds: float,
-    compilation_mode: str,
-    requests: int,
-    request_latencies: "list | None" = None,
-    python_version: "str | None" = None,
-) -> dict:
-    """Canonical CLI-facing ``/health`` contract fields.
-
-    This is the single source of truth for the keys every ``/health`` emitter
-    MUST expose so that ``tokenpak doctor`` / ``tokenpak version`` /
-    ``tokenpak status`` never see a divergent shape (the "unknown mode",
-    "0 reqs", "version not reported" schema-drift artifacts). Both the
-    threaded sync emitter (:func:`build_health_response`) and the async
-    emitter (``ProxyServer.health()``) merge this dict, so a reader gets the
-    same keys regardless of which proxy runtime served the request.
-
-    Pure and side-effect-free so it is testable in isolation. ``requests`` is
-    surfaced both flat (``requests_total``) and nested (``stats.requests``)
-    because existing readers consume both forms; emitting both keeps them
-    consistent rather than picking one and breaking the other.
-
-    Underscore-prefixed on purpose: it is an internal helper, not released
-    public API, so the public-API snapshot does not record it by policy.
-    """
-    import platform as _platform
-
-    lats = sorted(request_latencies or [])
-    return {
-        "status": status,
-        "version": version,
-        "uptime_seconds": uptime_seconds,
-        "compilation_mode": compilation_mode,
-        "requests_total": requests,
-        "python_version": python_version or _platform.python_version(),
-        "stats": {"requests": requests},
-        "latency": {
-            "p50_latency_ms": lats[int(len(lats) * 0.50)] if lats else 0,
-            "p99_latency_ms": lats[int(len(lats) * 0.99)] if lats else 0,
-            "samples": len(lats),
-        },
-    }
-
-
 def build_health_response(
     *,
     session: dict,
@@ -309,8 +262,6 @@ def build_health_response(
     upstream_timeout: int,
     provider_circuits: dict,
     request_latencies: list,
-    version: str = "",
-    uptime_seconds: float = 0.0,
 ) -> dict:
     """
     Assemble the /health endpoint response dict.
@@ -338,10 +289,6 @@ def build_health_response(
         upstream_timeout: Upstream timeout in seconds.
         provider_circuits: Dict of circuit-breaker state per provider.
         request_latencies: Sorted list of recent request latency values (ms).
-        version: Running proxy version string for the shared health contract
-            (defaults to "" so legacy callers that omit it still work).
-        uptime_seconds: Proxy uptime in seconds for the shared health contract
-            (defaults to 0.0 for legacy callers).
 
     Returns:
         JSON-serialisable dict suitable for ``self._send_json()``.
@@ -353,7 +300,7 @@ def build_health_response(
         "samples": len(lats),
     }
 
-    response = {
+    return {
         "status": "ok",
         "compilation_mode": compilation_mode,
         "vault_index": vault_info,
@@ -395,20 +342,6 @@ def build_health_response(
         },
         "latency": latency_info,
     }
-    # Merge the canonical CLI-facing contract so this emitter carries the same
-    # version / uptime / requests_total / python_version keys as the async
-    # ProxyServer.health() emitter. The richer values built above (status,
-    # compilation_mode, the full stats block, real latency) intentionally win
-    # over the core defaults via the ordering below.
-    core = _health_contract_core(
-        status=response["status"],
-        version=version,
-        uptime_seconds=uptime_seconds,
-        compilation_mode=compilation_mode,
-        requests=session.get("requests", 0),
-        request_latencies=request_latencies,
-    )
-    return {**core, **response}
 
 
 def build_stats_response(

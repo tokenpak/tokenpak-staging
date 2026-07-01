@@ -33,8 +33,7 @@ Scoping
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
-from typing import Optional
+from typing import Dict, Optional
 
 from tokenpak.cache.semantic_cache import (
     SemanticCache,
@@ -43,8 +42,6 @@ from tokenpak.cache.semantic_cache import (
 )
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_MAX_SCOPE_CACHES = 128
 
 
 class SemanticCacheMiddleware:
@@ -55,16 +52,10 @@ class SemanticCacheMiddleware:
     isolation works out-of-the-box.
     """
 
-    def __init__(
-        self,
-        config: Optional[SemanticCacheConfig] = None,
-        *,
-        max_scope_caches: int = _DEFAULT_MAX_SCOPE_CACHES,
-    ) -> None:
+    def __init__(self, config: Optional[SemanticCacheConfig] = None) -> None:
         self._cfg = config or SemanticCacheConfig()
-        self._max_scope_caches = max(1, int(max_scope_caches))
         # scope_key → SemanticCache
-        self._caches: OrderedDict[str, SemanticCache] = OrderedDict()
+        self._caches: Dict[str, SemanticCache] = {}
         if self._cfg.scope == "global":
             # Pre-create the singleton global cache
             self._caches["__global__"] = SemanticCache(self._cfg)
@@ -157,13 +148,6 @@ class SemanticCacheMiddleware:
 
     def _get_or_create_cache(self, scope_key: str) -> SemanticCache:
         key = self._resolve_scope_key(scope_key)
-        if key in self._caches:
-            cache = self._caches.pop(key)
-            self._caches[key] = cache
-            return cache
-
-        while len(self._caches) >= self._max_scope_caches:
-            self._caches.popitem(last=False)
-
-        self._caches[key] = SemanticCache(self._cfg)
+        if key not in self._caches:
+            self._caches[key] = SemanticCache(self._cfg)
         return self._caches[key]

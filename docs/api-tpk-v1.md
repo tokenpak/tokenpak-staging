@@ -12,21 +12,8 @@ the endpoints the companion MCP server calls — and that external tooling
 - **Optional key auth.** If `TOKENPAK_PROXY_KEY` is set in the proxy's
  environment, all `/tpk/v1/*` requests must include the header
  `X-TPK-Key: <same-value>`.
-- **CORS — default-deny (v1.9.3+).** `/tpk/v1/*` does **not** emit
- `Access-Control-Allow-Origin: *`. Browser requests from a cross-origin
- page will be blocked by default. To allow a specific origin, set the env
- var `TOKENPAK_PROXY_CORS_ORIGINS` to a comma-separated list of **exact**
- origins (e.g. `https://dash.example.com,https://ops.internal`). When a
- request's `Origin` matches the list, the proxy echoes that origin back
- with `Vary: Origin`. Origins not on the list receive no CORS header —
- the browser enforces same-origin policy and the request is denied.
-- **Migration for existing browser callers.** If you were calling
- `/tpk/v1/*` from browser JS before v1.9.3 and assumed `ACAO: *` was
- always present, set `TOKENPAK_PROXY_CORS_ORIGINS` to your app's origin
- in the proxy's environment. Non-browser callers (curl, server-side HTTP,
- the companion MCP tools) are unaffected — CORS headers are only relevant
- when a browser enforces same-origin policy.
-- For remote use, still put a reverse proxy in front for TLS + auth.
+- No CORS today; this is a dev-host API. For remote use, put a reverse proxy
+ in front of it that handles TLS + auth.
 
 ## Error shape
 

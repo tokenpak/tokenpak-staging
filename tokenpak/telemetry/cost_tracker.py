@@ -121,8 +121,8 @@ class CostTracker:
         no tokens, so cost is logged as 0.0 rather than being estimated from
         prompt_tokens alone.  This prevents phantom cost entries in the first
         cost report.
-        See the telemetry-gap analysis in the project history for the
-        original investigation notes.
+        Ref: vault/05_ARCHIVE/tokenpak-oss-prep-2026-03-25/reports/
+             telemetry-gap-2026-03-07.md lines 77-78, 100-109
         """
         from datetime import datetime as _dt
 

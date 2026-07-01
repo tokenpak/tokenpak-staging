@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -77,21 +78,27 @@ def _coerce_float(value: Any) -> float:
 def load_requests(
     path: Optional[Path] = None, since: Optional[datetime] = None
 ) -> List[Dict[str, Any]]:
-    """Load request records from the canonical monitor.db store.
+    """Load request records from JSONL file with optional time filtering.
 
     Args:
-        path: Optional JSONL fixture path for tests and legacy imports. The
-            healthy-install CLI path leaves this unset and reads monitor.db.
+        path: Optional path to requests.jsonl (defaults to ~/.tokenpak/requests.jsonl)
         since: Optional datetime to filter records (skip earlier timestamps)
 
     Returns:
-        list: Loaded request records (empty list if the store doesn't exist)
+        list: Loaded request records (empty list if file doesn't exist)
     """
-    from tokenpak.cli.request_explorer import load_requests as _load_requests
-
-    records = _load_requests(path=path)
+    p = path or REQUESTS_PATH
+    if not p.exists():
+        return []
     rows: List[Dict[str, Any]] = []
-    for record in records:
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         if since:
             ts = _parse_iso(record.get("timestamp", ""))
             if not ts:
@@ -125,13 +132,13 @@ def aggregate_records(
     buckets: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     for rec in records:
-        agent = rec.get("agent") or rec.get("agent_id") or "unknown"
+        agent = rec.get("agent") or "unknown"
         model = rec.get("model") or "unknown"
         input_tokens = _coerce_int(rec.get("input_tokens"))
         output_tokens = _coerce_int(rec.get("output_tokens"))
         tokens = input_tokens + output_tokens
-        cost = _coerce_float(rec.get("cost", rec.get("estimated_cost")))
-        saved = _coerce_float(rec.get("saved_cost", rec.get("would_have_saved")))
+        cost = _coerce_float(rec.get("cost"))
+        saved = _coerce_float(rec.get("saved_cost"))
 
         totals["requests"] += 1
         totals["tokens"] += tokens
