@@ -18,8 +18,7 @@ docker run -p 8766:8766 tokenpak
 
 # With a custom config (optional — built-in defaults are used if omitted)
 docker run -p 8766:8766 \
- -e TOKENPAK_CONFIG=/app/config/config.yaml \
- -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro \
+ -v $(pwd)/config/config.yaml:/home/tokenpak/.tokenpak/config.yaml:ro \
  -v tokenpak-logs:/logs \
  tokenpak
 
@@ -36,8 +35,8 @@ docker run -p 8766:8766 \
 # Copy environment file
 cp .env.example .env
 
-# (Optional) Provide a custom config at config/config.yaml. Omit it to run with
-# built-in defaults.
+# (Optional) Provide a custom config at config/config.yaml — Compose mounts it
+# to /home/tokenpak/.tokenpak/config.yaml. Omit it to run with built-in defaults.
 
 # Start services
 docker-compose up -d
@@ -90,10 +89,7 @@ Mount configuration at container startup:
 
 ```bash
 # Using docker run
-docker run \
-  -e TOKENPAK_CONFIG=/app/config/config.yaml \
-  -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro \
-  tokenpak
+docker run -v $(pwd)/config/config.yaml:/home/tokenpak/.tokenpak/config.yaml:ro tokenpak
 
 # Using docker-compose (automatic)
 docker-compose up
@@ -210,22 +206,11 @@ curl http://localhost:8766/health
 
 ```json
 {
- "status": "ok",
- "version": "1.10.0",
+ "status": "healthy",
+ "version": "1.0.0",
  "uptime_seconds": 3600,
- "compilation_mode": "hybrid",
- "requests_total": 15000,
- "python_version": "3.12.3",
- "stats": {
-   "requests": 15000,
-   "saved_tokens": 18500,
-   "errors": 0
- },
- "latency": {
-   "p50_latency_ms": 25,
-   "p99_latency_ms": 60,
-   "samples": 15000
- }
+ "request_count": 15000,
+ "last_request": "2026-03-10T06:30:00Z"
 }
 ```
 

@@ -359,8 +359,8 @@ def test_check7_pythonpath_drift_incident(tmp_home, monkeypatch):
         f"[Service]\nEnvironment=PYTHONPATH={canonical_pp}\n"
     )
 
-    # Proc environ has a foreign user home instead of the canonical path
-    drifted_pp = "/home/user1/.local/lib/python3.12/site-packages:/home/user1/projects/tokenpak/tokenpak"
+    # Proc environ has /home/sue/ instead of the canonical path
+    drifted_pp = "/home/sue/.local/lib/python3.12/site-packages:/home/sue/vault/01_PROJECTS/tokenpak/tokenpak"
 
     with (
         mock.patch("tokenpak.cli.commands.doctor_claude_code._get_proxy_pid", return_value=pid),
@@ -373,7 +373,7 @@ def test_check7_pythonpath_drift_incident(tmp_home, monkeypatch):
 
     assert result["status"] == "fail"
     assert "DRIFT" in result["message"]
-    assert "user1" in result["detail"] or "user1" in result["message"]
+    assert "sue" in result["detail"] or "sue" in result["message"]
     assert result["remediation"]
 
 

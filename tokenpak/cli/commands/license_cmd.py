@@ -6,10 +6,7 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
 from tokenpak import licensing as _lic
@@ -89,75 +86,33 @@ def run_plan(args: argparse.Namespace) -> int:
     print("")
     print("  Use:")
     print("    tokenpak features            see every feature + entitlement state")
-    print("    tokenpak activate --key-file PATH")
+    print("    tokenpak activate <key>      install a paid license key")
     print("")
     return 0
 
 
-class _ActivationInputError(ValueError):
-    pass
-
-
-def _read_activation_key(args: argparse.Namespace) -> str:
-    positional_key = (getattr(args, "key", "") or "").strip()
-    key_file = getattr(args, "key_file", None)
-    use_stdin = bool(getattr(args, "key_stdin", False))
-    use_prompt = bool(getattr(args, "prompt_key", False))
-
-    source_count = sum(bool(v) for v in (positional_key, key_file, use_stdin, use_prompt))
-    if source_count > 1:
-        raise _ActivationInputError(
-            "activate: choose only one key source "
-            "(--key-file, --key-stdin, --prompt-key, or the legacy positional key)"
-        )
-
-    if key_file:
-        try:
-            return Path(key_file).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise _ActivationInputError(
-                f"activate: could not read --key-file {key_file!r}: {exc}"
-            ) from exc
-    if use_stdin:
-        return sys.stdin.read().strip()
-    if positional_key:
-        return positional_key
-    if use_prompt or sys.stdin.isatty():
-        return getpass.getpass("License key: ").strip()
-
-    raise _ActivationInputError(
-        "activate: provide a license key via --key-file, --key-stdin, "
-        "--prompt-key, or the legacy positional key"
-    )
-
-
 def run_activate(args: argparse.Namespace) -> int:
-    """`tokenpak activate` — store a license key.
+    """`tokenpak activate <key>` — store a license key.
 
     Per Beta 1 hardening (Packet G), this rejects obviously invalid
     inputs (empty, too short, wrong charset, placeholder strings) and
     surfaces a non-zero exit so scripts / CI don't silently treat a
     bad activation as success.
     """
-    try:
-        key = _read_activation_key(args)
-    except _ActivationInputError as exc:
-        print(str(exc), file=sys.stderr)
-        sys.exit(2)
+    import sys as _sys
+
+    key = (getattr(args, "key", "") or "").strip()
     email = (getattr(args, "email", "") or "").strip()
     if not key:
-        print(
-            "activate: provide a non-empty license key via --key-file, "
-            "--key-stdin, --prompt-key, or the legacy positional key",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+        print("activate: provide a license key → tokenpak activate <key>",
+              file=_sys.stderr)
+        _sys.exit(2)
     result = _lic.activate(key, email=email)
     if not result.ok:
-        print(f"✖ activate failed: {result.summary}", file=sys.stderr)
+        print(f"✖ activate failed: {result.summary}", file=_sys.stderr)
         if result.error:
-            print(f"  detail: {result.error}", file=sys.stderr)
-        sys.exit(1)
+            print(f"  detail: {result.error}", file=_sys.stderr)
+        _sys.exit(1)
     print("")
     print(f"  ✅ {result.summary}")
     if result.license and result.license.activated_at:

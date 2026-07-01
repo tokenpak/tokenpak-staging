@@ -145,19 +145,10 @@ def configure_logging(
     logger.setLevel(log_level)
     logger.propagate = False  # don't double-log to root
 
-    # Structural credential redaction at the sink (d3 spec gap #6): every
-    # handler below carries the redaction filter, so a raw Authorization header
-    # logged anywhere under the tokenpak logger is scrubbed before emission —
-    # enforced structurally, not by caller discipline. Imported lazily to keep
-    # logging config free of a hard dependency on the security package at import
-    # time.
-    from tokenpak.security import install_log_redaction
-
     # Stderr handler
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setFormatter(formatter)
     stderr_handler.setLevel(log_level)
-    install_log_redaction(stderr_handler)
     logger.addHandler(stderr_handler)
 
     # Optional file handler
@@ -171,7 +162,6 @@ def configure_logging(
         )
         file_handler.setFormatter(formatter)
         file_handler.setLevel(log_level)
-        install_log_redaction(file_handler)
         logger.addHandler(file_handler)
 
 

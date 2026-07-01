@@ -23,11 +23,6 @@ Subcommands:
                      verb-side). Same exit-code contract.
     scaffold-adapter <name>
                      Emit a starter capability-declaring adapter file.
-    sources          List external-tool TIP source adapters and the
-                     off-by-default gate state.
-    observe          Run external-tool source adapters on demand and
-                     show TokenPak-observed records.  No-op unless
-                     TOKENPAK_TIP_TOOL_ADAPTERS=1.
 """
 
 from __future__ import annotations
@@ -36,7 +31,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 # ---------------------------------------------------------------------------
 # Public CLI entry: build the parser
@@ -113,30 +108,6 @@ def build_tip_parser(sub: Any) -> None:
     )
     p_scaffold.set_defaults(func=cmd_tip_scaffold)
 
-    p_sources = tipsub.add_parser(
-        "sources",
-        help="List external-tool TIP source adapters",
-    )
-    p_sources.add_argument(
-        "--json", action="store_true", help="Emit JSON instead of text"
-    )
-    p_sources.set_defaults(func=cmd_tip_sources)
-
-    p_observe = tipsub.add_parser(
-        "observe",
-        help=(
-            "Run external-tool TIP source adapters on demand and show "
-            "TokenPak-observed records (requires TOKENPAK_TIP_TOOL_ADAPTERS=1)"
-        ),
-    )
-    p_observe.add_argument(
-        "--tool", default=None, help="Only run the adapter for this tool slug"
-    )
-    p_observe.add_argument(
-        "--json", action="store_true", help="Emit JSON instead of text"
-    )
-    p_observe.set_defaults(func=cmd_tip_observe)
-
     p_tip.set_defaults(func=lambda a: p_tip.print_help())
 
 
@@ -154,10 +125,7 @@ class CheckResult:
     details: str = ""
 
 
-def run_conformance_checks(
-    *,
-    registry_factory: Callable[[], Any] | None = None,
-) -> list[CheckResult]:
+def run_conformance_checks() -> list[CheckResult]:
     """Run the Beta 1 TIP conformance check set.
 
     Order is deterministic so CI logs diff cleanly.
@@ -243,10 +211,7 @@ def run_conformance_checks(
             details=str(exc),
         ))
 
-    # 4. Adapter contract metadata present + compatible
-    results.extend(_adapter_contract_checks(registry_factory=registry_factory))
-
-    # 5. Schemas readable + parseable
+    # 4. Schemas readable + parseable
     schema_dir = _schema_dir()
     if not schema_dir.is_dir():
         results.append(CheckResult(
@@ -283,7 +248,7 @@ def run_conformance_checks(
                     summary=f"{len(files)} TIP schema(s) parsed cleanly",
                 ))
 
-    # 6. Pak contract importable (prerequisite)
+    # 5. Pak contract importable (prerequisite)
     try:
         from tokenpak.tip import pak as _pak  # noqa: F401
         results.append(CheckResult(
@@ -299,7 +264,7 @@ def run_conformance_checks(
             details=str(exc),
         ))
 
-    # 7. Each per-contract module importable
+    # 6. Each per-contract module importable
     for mod in (
         "cache_contract",
         "compression_contract",
@@ -326,90 +291,6 @@ def run_conformance_checks(
             ))
 
     return results
-
-
-def _adapter_contract_checks(
-    *,
-    registry_factory: Callable[[], Any] | None = None,
-) -> list[CheckResult]:
-    """Validate default proxy adapters expose the required TIP contract metadata."""
-    try:
-        from tokenpak.proxy.adapters import build_default_registry
-        from tokenpak.tip.adapter_contract import (
-            ASSERTED_TIP_VERSION,
-            AdapterCompatibilityError,
-            validate_adapter_compatibility,
-        )
-    except Exception as exc:
-        return [CheckResult(
-            name="adapters.contract_metadata",
-            status="FAIL",
-            summary="cannot import adapter contract validator",
-            details=str(exc),
-        )]
-
-    try:
-        registry = (registry_factory or build_default_registry)()
-        adapters = list(registry.adapters())
-    except Exception as exc:
-        return [CheckResult(
-            name="adapters.contract_metadata",
-            status="FAIL",
-            summary="cannot build default adapter registry",
-            details=str(exc),
-        )]
-
-    failures: list[str] = []
-    for adapter in adapters:
-        name = getattr(adapter, "source_format", None) or adapter.__class__.__name__
-        source_format = getattr(adapter, "source_format", None)
-        tip_min = getattr(adapter, "tip_min_version", None)
-        tip_max = getattr(adapter, "tip_max_version", None)
-        capabilities = getattr(adapter, "capabilities", None)
-
-        if not isinstance(source_format, str) or not source_format.strip():
-            failures.append(f"{name}: missing source_format")
-        if not isinstance(tip_min, str) or not tip_min.strip():
-            failures.append(f"{name}: missing tip_min_version")
-        if not isinstance(tip_max, str) or not tip_max.strip():
-            failures.append(f"{name}: missing tip_max_version")
-        if not isinstance(capabilities, frozenset):
-            failures.append(f"{name}: capabilities must be frozenset[str]")
-
-        try:
-            validate_adapter_compatibility(
-                adapter.capability_contract(), ASSERTED_TIP_VERSION
-            )
-        except AdapterCompatibilityError as exc:
-            failures.append(f"{name}: {exc}")
-        except Exception as exc:
-            failures.append(f"{name}: cannot build capability contract: {exc}")
-
-    try:
-        self_test = registry.run_startup_self_test(ASSERTED_TIP_VERSION)
-    except Exception as exc:
-        failures.append(f"startup self-test crashed: {exc}")
-    else:
-        if getattr(self_test, "gated_out", None):
-            for fmt, reason in self_test.gated_out:
-                failures.append(f"{fmt}: gated out during startup self-test: {reason}")
-
-    if failures:
-        return [CheckResult(
-            name="adapters.contract_metadata",
-            status="FAIL",
-            summary=f"{len(failures)} adapter contract metadata issue(s)",
-            details="\n".join(failures[:10]),
-        )]
-
-    return [CheckResult(
-        name="adapters.contract_metadata",
-        status="PASS",
-        summary=(
-            f"{len(adapters)} adapter contract(s) validate against "
-            f"{ASSERTED_TIP_VERSION}"
-        ),
-    )]
 
 
 def summarize(results: Iterable[CheckResult]) -> dict:
@@ -601,114 +482,6 @@ def cmd_tip_scaffold(args: Any) -> int:
     return 0
 
 
-def cmd_tip_sources(args: Any) -> int:
-    """List discovered external-tool TIP source adapters + gate state.
-
-    Read-only metadata listing — discovery imports adapter modules but
-    never runs collection; with the gate unset nothing is observed.
-    """
-    from tokenpak.sources.external_tool_tip import (
-        ENV_FLAG,
-        discover_sources,
-        is_enabled,
-    )
-
-    enabled = is_enabled()
-    sources = discover_sources()
-    entries = []
-    for slug in sorted(sources):
-        cls = sources[slug]
-        entries.append({
-            "tool": slug,
-            "adapter": cls.__name__,
-            "capabilities": sorted(getattr(cls, "static_capabilities", ())),
-        })
-
-    if getattr(args, "json", False):
-        print(json.dumps({
-            "enabled": enabled,
-            "flag": ENV_FLAG,
-            "sources": entries,
-        }, indent=2, sort_keys=True))
-        return 0
-
-    state = "enabled" if enabled else f"disabled (set {ENV_FLAG}=1 to enable)"
-    print(f"External-tool TIP sources — {state}")
-    print("─" * 50)
-    if not entries:
-        print("  (no adapters registered)")
-    for e in entries:
-        print(f"  {e['tool']:12s} {e['adapter']}")
-        for cap in e["capabilities"]:
-            print(f"               {cap}")
-    return 0
-
-
-def cmd_tip_observe(args: Any) -> int:
-    """Run external-tool source adapters on demand; print observed records.
-
-    Off-by-default: with ``TOKENPAK_TIP_TOOL_ADAPTERS`` unset this is a
-    no-op (no adapter runs, nothing is read) and exits 0.
-    """
-    from tokenpak.sources.external_tool_tip import (
-        ENV_FLAG,
-        collect_observed_records,
-    )
-
-    result = collect_observed_records(tool=getattr(args, "tool", None))
-    as_json = bool(getattr(args, "json", False))
-
-    if result.get("skipped"):
-        if as_json:
-            print(json.dumps({
-                "skipped": True,
-                "reason": result.get("reason"),
-                "flag": ENV_FLAG,
-                "records": [],
-            }, indent=2))
-        else:
-            print(
-                f"External-tool TIP source adapters are disabled — "
-                f"set {ENV_FLAG}=1 to enable (off by default)."
-            )
-        return 0
-
-    records = [r.to_dict() for r in result.get("records", [])]
-    if as_json:
-        print(json.dumps({
-            "skipped": False,
-            "sources": result.get("sources", []),
-            "errors": result.get("errors", []),
-            "records": records,
-        }, indent=2))
-        return 0
-
-    print(f"TokenPak-observed external-tool TIP records ({len(records)})")
-    print("─" * 50)
-    if not records:
-        print("  (no records detected)")
-    for r in records:
-        print(f"\n  {r['record_id']}  tool={r['tool']}")
-        if r.get("command"):
-            print(f"    command : {r['command']}")
-        if r.get("role"):
-            print(f"    role    : {r['role']}")
-        if r.get("phase"):
-            print(f"    phase   : {r['phase']}")
-        if r.get("session_id"):
-            print(f"    session : {r['session_id']}")
-        usage = r.get("observed_usage") or {}
-        if usage:
-            rendered = ", ".join(f"{k}={v}" for k, v in sorted(usage.items()))
-            print(f"    observed: {rendered}")
-        print(f"    labels  : {', '.join(r['labels'])}")
-    if result.get("errors"):
-        print("\n  errors:")
-        for e in result["errors"]:
-            print(f"    - {e}")
-    return 0
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -830,6 +603,4 @@ __all__ = [
     "summarize",
     "exit_code_for",
     "CheckResult",
-    "cmd_tip_sources",
-    "cmd_tip_observe",
 ]

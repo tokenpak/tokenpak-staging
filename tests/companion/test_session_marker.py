@@ -3,9 +3,8 @@
 
 The pre_send hook (one process) persists the live session id to a run-dir
 marker; the long-lived MCP server (another process) reads it back via
-``current_session_id`` and binds ``CompanionState.session_id`` at startup and
-before each tool dispatch. These tests cover both ends plus the hook entry
-point.
+``current_session_id`` and binds ``CompanionState.session_id`` before each
+tool dispatch. These tests cover both ends plus the hook entry point.
 """
 
 from __future__ import annotations
@@ -130,7 +129,7 @@ def test_session_marker_binds_state_on_dispatch(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_server, "_send", lambda obj: sent.append(obj))
 
     state = CompanionState()
-    assert state.session_id == "sess-bound"
+    assert state.session_id == ""
     _call_unknown_tool(state, sent)
     assert state.session_id == "sess-bound"
 

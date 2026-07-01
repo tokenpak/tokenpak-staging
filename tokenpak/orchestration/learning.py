@@ -821,72 +821,60 @@ def record_lesson(
 ) -> "object":
     """Record a lesson observation via the memory promotion system.
 
-    Delegates to ``MemoryPromoter``. New lessons start at Tier 1 and are promoted
-    automatically as success evidence accumulates; see ``run_memory_promotion``
-    for the demotion/expiry sweep.
+    Delegates to memory_promoter.record_lesson(). New lessons start at Tier 1
+    and may be promoted via run_memory_promotion() once sufficient evidence
+    is accumulated.
 
     Args:
         lesson_id:         Unique lesson key (e.g. "model_routing_CODING").
         content:           Human-readable description of what was learned.
-        outcome:           >= 0.5 = success, < 0.5 = failure, None = unknown.
+        outcome:           1.0 = success, 0.0 = failure, None = unknown.
         specificity_score: How actionable the lesson is (0.0–1.0).
         material_savings:  Estimated reduction in future work (0.0–1.0).
-        metadata:          Optional extra context (not persisted by the store).
-        memory_path:       Override path to the memory promoter store.
+        metadata:          Optional extra context.
+        memory_path:       Override path to memory_tiers.json.
 
     Returns:
-        The Lesson dataclass for ``lesson_id``.
+        Lesson dataclass from memory_promoter.
     """
-    from tokenpak.orchestration.memory_promoter import MemoryPromoter
+    from tokenpak.orchestration.memory_promoter import (
+        DEFAULT_MEMORY_PATH,
+    )
+    from tokenpak.orchestration.memory_promoter import (
+        record_lesson as _record,
+    )
 
-    promoter = MemoryPromoter(memory_path) if memory_path else MemoryPromoter()
-    if promoter.get_lesson(lesson_id) is None:
-        # MemoryPromoter tracks savings as a percentage (0–100); the wrapper API
-        # expresses material_savings as a 0.0–1.0 fraction.
-        promoter.add_lesson(
-            lesson_id=lesson_id,
-            content=content,
-            specificity_score=specificity_score,
-            savings_pct=material_savings * 100.0,
-        )
-    if outcome is not None:
-        if outcome >= 0.5:
-            promoter.record_success(lesson_id)
-        else:
-            promoter.record_failure(lesson_id)
-    return promoter.get_lesson(lesson_id)
+    return _record(
+        lesson_id=lesson_id,
+        content=content,
+        outcome=outcome,
+        specificity_score=specificity_score,
+        material_savings=material_savings,
+        metadata=metadata,
+        memory_path=memory_path or DEFAULT_MEMORY_PATH,
+    )
 
 
 def run_memory_promotion(
     memory_path: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Run a demotion/expiry sweep over all tracked lessons.
+    """Run a full promotion + demotion sweep over all tracked lessons.
 
-    Promotion in ``MemoryPromoter`` is evidence-driven — applied as soon as a
-    lesson's tier gates pass during success recording — so a standalone sweep
-    demotes contradicted/expired lessons and removes expired Tier-1 lessons.
+    Promotes lessons that pass tier gates, demotes expired/unused ones,
+    and removes Tier-1 lessons that have exceeded their TTL.
 
     Args:
-        memory_path: Override path to the memory promoter store.
+        memory_path: Override path to memory_tiers.json.
 
     Returns:
-        Dict of {lesson_id: action_taken} for every lesson the sweep modified.
+        Dict of {lesson_id: action_taken} for all modified lessons.
     """
-    from tokenpak.orchestration.memory_promoter import MemoryPromoter
+    from tokenpak.orchestration.memory_promoter import (
+        DEFAULT_MEMORY_PATH,
+        promote_all,
+    )
 
-    promoter = MemoryPromoter(memory_path) if memory_path else MemoryPromoter()
-    tiers_before = {
-        lesson.lesson_id: lesson.tier for lesson in promoter.get_all_lessons()
-    }
-    promoter.cleanup_expired()
-    actions: Dict[str, str] = {}
-    for lesson_id, old_tier in tiers_before.items():
-        lesson = promoter.get_lesson(lesson_id)
-        if lesson is None:
-            actions[lesson_id] = "removed"
-        elif lesson.tier < old_tier:
-            actions[lesson_id] = f"demoted_to_tier_{lesson.tier}"
-    return actions
+    return promote_all(memory_path=memory_path or DEFAULT_MEMORY_PATH)
 
 
 def get_durable_lessons(
@@ -895,15 +883,19 @@ def get_durable_lessons(
     """Return all Tier 4 (Durable / permanent) lessons.
 
     Args:
-        memory_path: Override path to the memory promoter store.
+        memory_path: Override path to memory_tiers.json.
 
     Returns:
         List of Lesson dataclasses.
     """
-    from tokenpak.orchestration.memory_promoter import MemoryPromoter
+    from tokenpak.orchestration.memory_promoter import (
+        DEFAULT_MEMORY_PATH,
+    )
+    from tokenpak.orchestration.memory_promoter import (
+        get_durable_lessons as _get_durable,
+    )
 
-    promoter = MemoryPromoter(memory_path) if memory_path else MemoryPromoter()
-    return promoter.get_tier_lessons(4)
+    return _get_durable(memory_path=memory_path or DEFAULT_MEMORY_PATH)
 
 
 # ---------------------------------------------------------------------------

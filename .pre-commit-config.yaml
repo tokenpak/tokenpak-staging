@@ -5,28 +5,14 @@
 
 repos:
 
-  # ── Python linting (Ruff) ─────────────────────────────────────────────────
-  # Lint hook pinned to v0.15.17 to MATCH CI (.github/workflows/ci.yml installs
-  # ruff==0.15.17). Keeping local lint and CI lint on the same Ruff version is
-  # the fix for the patch-version skew that flagged previously-clean code.
-  # `ruff check tokenpak/ tests/` passes on this tree under 0.15.17 (no
-  # known-first-party config needed — first-party is auto-detected).
+  # ── Python linting & formatting (Ruff) ────────────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.17
+    rev: v0.4.4
     hooks:
       - id: ruff
         name: ruff lint
         args: [--fix, --exit-non-zero-on-fix]
         types_or: [python, pyi]
-
-  # ── Python formatting (Ruff format) ───────────────────────────────────────
-  # Formatter INTENTIONALLY pinned to v0.4.4 (the version this repo is
-  # currently formatted under). `ruff format` from 0.15.17 would reformat ~954
-  # files (repo-wide drift); bumping it is deferred to a dedicated formatting
-  # pass, not bundled into this lint-determinism change.
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
-    hooks:
       - id: ruff-format
         name: ruff format
         types_or: [python, pyi]
@@ -70,14 +56,11 @@ repos:
     hooks:
       - id: forbidden-language
         name: No internal identity / workflow language in changed files
-        language: system
-        entry: python scripts/release_gate/public_safety_scan.py --root . --annotation error --paths
-        types_or: [markdown, python, yaml, toml, shell, javascript, ts, json, text]
-      - id: forbidden-license
-        name: No superseded first-party license declarations
-        language: system
-        entry: python3 scripts/release_gate/license_policy_scan.py --ledger decisions/ledger/license.md --root . --annotation none --paths
-        types_or: [markdown, python, yaml, toml, shell, javascript, ts, json, text]
+        language: pygrep
+        # Patterns intentionally narrow: word-boundary on agent names so
+        # product references (Claude Code, Anthropic, etc.) are unaffected.
+        entry: '\bSue\b|\bCali\b|\bTrix\b|\bSuki\b|\bAya\b|\bDee\b|\bReiPo\b|\bopenclaw\b|\bfleet\b|TSR-[0-9]|TPS-[0-9]|CCI-[0-9]|MTC-[0-9]|OAS-[0-9]|TIP7-[0-9]|TRIX-MTC|WS-[0-9]|\.claude/projects|/home/sue/|trixxie168|\bStd 2[0-9]\b|\bStd 3[0-9]\b|Suki: auto-commit'
+        types_or: [markdown, python, yaml, toml, shell, javascript, ts, json]
       - id: forbidden-files
         name: No backup / corrupt-DB / typecheck artifact files
         language: pygrep

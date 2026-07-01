@@ -126,7 +126,7 @@ def extract_lessons(filepath: str) -> List[Dict[str, Any]]:
     return lessons
 
 
-_MARKDOWN_SUFFIXES = ('.md', '.markdown')
+MARKDOWN_SUFFIXES = ('.md', '.markdown')
 
 
 def _record_lessons(lessons: List[Dict[str, Any]], db: DecisionMemoryDB, source: str) -> int:
@@ -137,7 +137,7 @@ def _record_lessons(lessons: List[Dict[str, Any]], db: DecisionMemoryDB, source:
     hash can do so.  NOTE: ``DecisionMemoryDB.record`` currently always inserts
     (it does not upsert on the query hash), so re-running ingestion re-inserts —
     this matches the existing vault-path behavior and is intentionally not
-    changed here (out of this packet's scope).
+    changed here (out of scope for this change).
     """
     count = 0
     for lesson in lessons:
@@ -179,7 +179,7 @@ def ingest_from_dir(directory: str, db: DecisionMemoryDB) -> int:
     total_ingested = 0
     for root, _dirs, files in os.walk(directory):
         for filename in sorted(files):
-            if filename.lower().endswith(_MARKDOWN_SUFFIXES):
+            if filename.lower().endswith(MARKDOWN_SUFFIXES):
                 filepath = os.path.join(root, filename)
                 try:
                     lessons = extract_lessons(filepath)
@@ -255,7 +255,7 @@ def ingest_from_vault(vault_dir: str, db: DecisionMemoryDB) -> int:
     """
     Walk vault daily logs and ingest all lessons into the DecisionMemoryDB.
 
-    Scans all files matching ``<vault_dir>/<agent>/memory/YYYY-MM-DD.md``
+    Scans all files matching ``<vault_dir>/03_AGENT_PACKS/<agent>/memory/YYYY-MM-DD.md``
     and extracts lessons, populating the database.  This is the vault-schema
     path; for arbitrary user note directories use :func:`ingest_from_dir`.
 

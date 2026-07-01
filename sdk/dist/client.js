@@ -10,7 +10,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TokenPakHttpClient = void 0;
 const axios_1 = __importDefault(require("axios"));
 const types_1 = require("./types");
-const DEFAULT_BASE_URL = 'http://127.0.0.1:8766';
+const DEFAULT_BASE_URL = 'http://localhost:8000';
 const DEFAULT_TIMEOUT_MS = 30000;
 class TokenPakHttpClient {
     constructor(config = {}) {
@@ -20,7 +20,7 @@ class TokenPakHttpClient {
             timeout: config.timeout ?? DEFAULT_TIMEOUT_MS,
             headers: {
                 'Content-Type': 'application/json',
-                ...(config.apiKey ? { 'X-TPK-Key': config.apiKey } : {}),
+                ...(config.apiKey ? { 'X-API-Key': config.apiKey } : {}),
                 ...config.headers,
             },
         });
@@ -44,17 +44,7 @@ class TokenPakHttpClient {
         }
     }
     async health() {
-        const raw = await this.get('/tpk/v1/health');
-        return {
-            status: 'ok',
-            version: raw.version,
-            uptimeSeconds: raw.uptime_s ?? 0,
-            stats: {
-                requests: 0,
-                tokensSaved: 0,
-                cacheHits: 0,
-            },
-        };
+        return this.get('/health');
     }
     wrapError(err) {
         if (axios_1.default.isAxiosError(err)) {

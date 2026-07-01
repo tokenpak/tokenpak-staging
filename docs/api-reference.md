@@ -61,7 +61,7 @@ List recorded sessions with optional filters.
  "id": "sess_abc123",
  "timestamp": "2026-03-05T14:23:11Z",
  "model": "claude-3-5-sonnet-20241022",
- "agent": "cali",
+ "agent": "agent-alpha",
  "tokens_in": 4231,
  "tokens_in_compressed": 2847,
  "tokens_out": 612,
@@ -109,7 +109,7 @@ Team-wide aggregated stats. Requires admin token.
  },
  "by_agent": [
  {
- "agent": "cali",
+ "agent": "agent-alpha",
  "requests": 542,
  "cost_usd": 19.40,
  "tokens_saved": 1320000
@@ -127,7 +127,7 @@ Per-agent detail. Requires admin token.
 **Response:**
 ```json
 {
- "agent": "cali",
+ "agent": "agent-alpha",
  "requests_today": 14,
  "cost_today_usd": 0.42,
  "requests_month": 542,
@@ -203,34 +203,31 @@ Proxy health and stats.
 
 ### `GET /health`
 
-Structured health check. Returns the canonical proxy health contract used by
-the CLI, doctor, status, and dashboard probes.
+Structured health check. Returns component status, uptime, version, and actionable suggestions when degraded.
 
 **No authentication required.**
 
 **HTTP status codes:**
 - `200` — healthy or degraded
-- `503` — unavailable during startup/shutdown or critical failures
+- `503` — critical (all providers down)
 
 **Response:**
 ```json
 {
- "status": "ok",
- "version": "1.10.0",
- "uptime_seconds": 3600,
- "compilation_mode": "hybrid",
- "requests_total": 42,
- "python_version": "3.12.3",
- "stats": {
- "requests": 42,
- "saved_tokens": 18500,
- "errors": 0
+ "status": "healthy",
+ "uptime": 3600,
+ "version": "1.0.0",
+ "timestamp": "2026-03-16T19:10:00Z",
+ "components": {
+ "cache": { "status": "ok", "entries": 42 },
+ "provider_connections": {
+ "anthropic": { "status": "ok", "circuit_open": false, "failures": 0 },
+ "openai": { "status": "ok", "circuit_open": false, "failures": 0 },
+ "google": { "status": "ok", "circuit_open": false, "failures": 0 }
  },
- "latency": {
- "p50_latency_ms": 25,
- "p99_latency_ms": 60,
- "samples": 42
- }
+ "config": { "status": "ok" }
+ },
+ "suggestions": []
 }
 ```
 
@@ -238,8 +235,9 @@ the CLI, doctor, status, and dashboard probes.
 
 | Value | Meaning | HTTP |
 |-------|---------|------|
-| `ok` | Proxy is running and accepting probes | 200 |
-| `degraded` | Proxy is running with degraded subcomponents | 200 |
+| `healthy` | All components nominal | 200 |
+| `degraded` | One or more providers circuit-open, or error rate >10% | 200 |
+| `critical` | All providers unreachable | 503 |
 
 ---
 
@@ -266,8 +264,20 @@ Kubernetes/Docker readiness probe. Returns `200` only when the proxy has fully i
 
 ### `GET /v1/health`
 
-> **Deprecated** — use `GET /health` instead. The canonical health contract is
-> the unversioned `/health` response above.
+> **Deprecated** — use `GET /health` instead (see above).
+
+Detailed health check (legacy).
+
+**Response:**
+```json
+{
+ "proxy": "ok",
+ "database": "ok",
+ "index": "ok",
+ "compression_pipeline": "ok",
+ "version": "0.1.1"
+}
+```
 
 ---
 

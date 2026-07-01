@@ -8,7 +8,7 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 
@@ -40,10 +40,9 @@ class HealthChecker:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Check tables exist (canonical telemetry tables)
+            # Check tables exist
             cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name IN ('tp_events', 'tp_rollup_daily_model')"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events', 'rollups')"
             )
             tables = cursor.fetchall()
 
@@ -51,7 +50,7 @@ class HealthChecker:
                 return "error", "Missing required tables"
 
             # Quick integrity check
-            cursor.execute("SELECT COUNT(*) FROM tp_events LIMIT 1")
+            cursor.execute("SELECT COUNT(*) FROM events LIMIT 1")
             cursor.fetchone()
 
             conn.close()
@@ -73,7 +72,7 @@ class HealthChecker:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            cursor.execute("SELECT MAX(date) FROM tp_rollup_daily_model")
+            cursor.execute("SELECT MAX(created_at) FROM rollups")
             last_rollup = cursor.fetchone()[0]
 
             if not last_rollup:
@@ -98,28 +97,23 @@ class HealthChecker:
             cursor = conn.cursor()
 
             # Total events
-            cursor.execute("SELECT COUNT(*) FROM tp_events")
+            cursor.execute("SELECT COUNT(*) FROM events")
             events_total = cursor.fetchone()[0]
 
-            # Events today (canonical store keys time as epoch column ``ts``)
-            cursor.execute("SELECT COUNT(*) FROM tp_events WHERE DATE(ts, 'unixepoch') = DATE('now')")
+            # Events today
+            cursor.execute("SELECT COUNT(*) FROM events WHERE DATE(created_at) = DATE('now')")
             events_today = cursor.fetchone()[0]
 
-            # Last ingest — ``ts`` is epoch; surface it as an ISO string
-            cursor.execute("SELECT MAX(ts) FROM tp_events")
-            last_ingest_ts = cursor.fetchone()[0]
-            last_ingest = (
-                datetime.fromtimestamp(last_ingest_ts, tz=timezone.utc).isoformat()
-                if last_ingest_ts is not None
-                else None
-            )
+            # Last ingest
+            cursor.execute("SELECT MAX(created_at) FROM events")
+            last_ingest = cursor.fetchone()[0]
 
             # DB size
             db_size = os.path.getsize(self.db_path)
             db_size_mb = db_size / (1024 * 1024)
 
-            # Last rollup (canonical rollups key on ``date`` TEXT)
-            cursor.execute("SELECT MAX(date) FROM tp_rollup_daily_model")
+            # Last rollup
+            cursor.execute("SELECT MAX(created_at) FROM rollups")
             rollup_last_run = cursor.fetchone()[0]
 
             conn.close()

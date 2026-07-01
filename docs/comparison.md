@@ -45,7 +45,7 @@ This matters for three reasons:
 TokenPak's compression is deterministic: the same input produces the same compressed output every time. This means you can benchmark it in CI and trust the numbers. The [headline benchmark](BENCHMARKS.md) ships in the CI pipeline and runs on every commit — no black-box "up to 5×" marketing claims.
 
 Savings are route-specific. Direct API, CLI, and uncached repeated-agent loops
-are the best fit for Prompt Packing. Claude Code/TUI routes can show lower
+are the best fit for context compression. Claude Code/TUI routes can show lower
 incremental savings when the provider cache already handled repeated context.
 `tokenpak status` and `tokenpak status --tip-cache` split provider/client cache
 from TokenPak compression and TokenPak managed-cache savings, so observed
@@ -99,7 +99,7 @@ None of the alternatives in the table above were designed around Claude Code's c
 | **Per-mode profiles** (CLI / TUI / tmux / SDK / IDE / cron auto-detected) | ✅ 6 profiles, auto-detected via session headers | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Vault context injection post-cache-boundary** | ✅ Yes — injected before upstream call, respects `cache_control` boundary | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Multi-provider failover presenting as Anthropic-compatible** | ✅ Yes — Bedrock / Vertex / OpenAI behind a single `ANTHROPIC_BASE_URL` | ⚠️ Routing only (changes base URL) | ❌ No | ⚠️ Routing only (changes SDK target) | ⚠️ Routing only (changes SDK target) | ❌ No | ⚠️ Routing only (changes SDK target) |
-| **One-step Claude Code setup** (`tokenpak integrate claude-code`) | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| **One-command Claude Code installer** (`tokenpak install --claude-code`) | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **`tokenpak doctor --claude-code` health check** | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Inline savings reporting** (TUI footer / IDE header / SSE event) | ✅ Yes — 3 surfaces, per-turn | ❌ No (dashboard only) | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Per-host config drift detection** | ✅ Yes — flags when profile or vault config diverges across hosts | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |

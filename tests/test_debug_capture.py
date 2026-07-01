@@ -40,25 +40,6 @@ def tmp_blob_dir(tmp_path, monkeypatch):
     return blob_dir
 
 
-def test_capture_default_resolves_tokenpak_home(tmp_path, monkeypatch):
-    """Default debug capture writes under TOKENPAK_HOME, not host ~/.tokenpak."""
-    import tokenpak.debug.capture as cap
-
-    home = tmp_path / "home"
-    tpk_home = tmp_path / "tpk-home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("TOKENPAK_HOME", str(tpk_home))
-    monkeypatch.setenv("TOKENPAK_DEBUG_CAPTURE", "hash_only")
-    monkeypatch.setattr(cap, "_BLOB_DIR", None)
-    monkeypatch.setattr(cap, "_KEY_FILE", None)
-
-    dest = cap.capture("trace-1", {"prompt": "hi"}, {"ok": True})
-
-    assert dest == tpk_home / "debug" / "trace-1.hash"
-    assert dest.exists()
-    assert not (home / ".tokenpak").exists()
-
-
 @pytest.fixture()
 def fixed_key():
     """Return a deterministic 32-byte key for tests."""

@@ -186,32 +186,13 @@ def load_license() -> License:
     return License.from_dict(data)
 
 
-def _chmod_if_supported(path: Path, mode: int) -> None:
-    if os.name == "nt":
-        return
-    os.chmod(path, mode)
-
-
 def save_license(lic: License) -> None:
-    """Persist license to disk with owner-only permissions."""
+    """Persist license to disk (atomic write)."""
     p = _license_path()
-    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not os.environ.get("TOKENPAK_LICENSE_FILE"):
-        _chmod_if_supported(p.parent, 0o700)
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(lic.to_dict(), indent=2))
-            handle.write("\n")
-        os.replace(tmp, p)
-        _chmod_if_supported(p, 0o600)
-    except Exception:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    tmp.write_text(json.dumps(lic.to_dict(), indent=2), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def delete_license() -> bool:
@@ -250,8 +231,8 @@ def _devshim_tier(key: str) -> str:
     """Parse the requested tier out of a dev-shim key.
 
     Shape: ``TPK-DEVSHIM-<TIER>-<anything>``. Recognizes any *paid* tier
-    name from the canonical tier constants (no separate hardcoded list —
-    discovery stays dynamic); defaults to Pro when no tier segment
+    name from the canonical tier constants (no separate hardcoded list,
+    per ``feedback_always_dynamic``); defaults to Pro when no tier segment
     is present.
     """
     paid = {TIER_PRO, TIER_TEAM, TIER_ENTERPRISE}
@@ -557,7 +538,7 @@ def discover_plans() -> list[dict[str, Any]]:
     Tier presence is data-driven: a tier appears in the catalog only if
     at least one feature is gated to it, which means adding a new
     feature with a new tier automatically shows up here — no hardcoded
-    list to maintain (discovery stays dynamic).
+    list to maintain (``feedback_always_dynamic.md``).
 
     Pricing data is read from a discovery file at
     ``<TOKENPAK_HOME>/pricing.json`` when present; otherwise the

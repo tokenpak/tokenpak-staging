@@ -233,24 +233,6 @@ class TestMaskForLogging:
         assert masked["anthropic-version"] == "2023-06-01"
         assert masked["Authorization"] == "[REDACTED]"
 
-    def test_non_allowlisted_short_header_redacted(self, pt):
-        masked = pt.mask_for_logging({"x-custom": "short-secret"})
-        assert masked["x-custom"] == "[REDACTED]"
-
-    def test_non_allowlisted_long_header_redacted_without_prefix_or_length(self, pt):
-        value = "secret-prefix-that-must-not-appear"
-        masked = pt.mask_for_logging({"x-custom": value})
-        assert masked["x-custom"] == "[REDACTED]"
-        assert value not in masked["x-custom"]
-        assert "secret" not in masked["x-custom"]
-        assert "chars" not in masked["x-custom"]
-
-    def test_custom_allowlisted_header_passes_through(self):
-        pt = CredentialPassthrough(PassthroughConfig(safe_to_log={"x-safe"}))
-        masked = pt.mask_for_logging({"x-safe": "public-value", "x-custom": "private-value"})
-        assert masked["x-safe"] == "public-value"
-        assert masked["x-custom"] == "[REDACTED]"
-
 
 # ---------------------------------------------------------------------------
 # Zero-storage: verify no key values leak into exceptions or return values

@@ -1,9 +1,0 @@
-# Deprecated compatibility note.
-#
-# Public conformance now delegates internal-reference scanning to
-# scripts/release_gate/public_safety_scan.py. This keeps the public repo on
-# structural pattern classes and leaves exact private identifiers in the
-# internal standards/vault register.
-#
-# Runtime source of truth:
-#   scripts/release_gate/public_safety_scan.py

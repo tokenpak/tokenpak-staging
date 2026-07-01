@@ -8,8 +8,7 @@ and miss-reason telemetry.
 NOTE ON LAYERING: This module is in ``tokenpak.services.optimization`` (Level 3).
 It imports ``SemanticCache`` from ``tokenpak.cache`` (Level 0/1) directly,
 without going through ``tokenpak.proxy.middleware.semantic_cache_middleware``
-(Level 4), maintaining the downward-only dependency rule from
-``01-architecture-standard.md §2``.
+(Level 4), maintaining the downward-only dependency rule.
 
 NOTE ON WIRE FORMAT: ``SemanticCache.store()`` is wire-format-migration compliant — it stores
 raw bytes + content_type + wire_format. The stage serializes ``response: dict``
@@ -41,7 +40,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import OrderedDict
 from typing import Any, Dict, Optional
 
 from .cache_key import extract_query_text, is_streaming, make_scope_key
@@ -53,7 +51,6 @@ from .stage import EligibilityResult
 _log = logging.getLogger(__name__)
 
 _TIP_CACHE_SEMANTIC_V1 = "tip.cache.semantic.v1"
-_DEFAULT_MAX_SCOPE_CACHES = 128
 
 # ---------------------------------------------------------------------------
 # Context extension
@@ -99,16 +96,10 @@ class SemanticCacheStage:
     name: str = "semantic_cache"
     required_capabilities: frozenset = frozenset({_TIP_CACHE_SEMANTIC_V1})
 
-    def __init__(
-        self,
-        env: Optional[Dict[str, str]] = None,
-        *,
-        max_scope_caches: int = _DEFAULT_MAX_SCOPE_CACHES,
-    ) -> None:
+    def __init__(self, env: Optional[Dict[str, str]] = None) -> None:
         self._env = env
-        self._max_scope_caches = max(1, int(max_scope_caches))
         # scope_key → SemanticCache (session-scoped isolation without the proxy middleware)
-        self._caches: OrderedDict[str, Any] = OrderedDict()
+        self._caches: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # OptimizationStage protocol
@@ -181,11 +172,6 @@ class SemanticCacheStage:
             _set_cache_result(ctx, trace)
             return ctx
 
-        if not scope_key:
-            trace.miss_reason = CacheMissReason.NO_STABLE_SCOPE
-            _set_cache_result(ctx, trace)
-            return ctx
-
         trace.scope_key_prefix = scope_key[:8]
 
         try:
@@ -251,8 +237,6 @@ class SemanticCacheStage:
             return
 
         scope_key = make_scope_key(ctx)
-        if not scope_key:
-            return
         try:
             cache = self._get_or_create_cache(scope_key, policy)
             # store raw bytes + content_type + wire_format
@@ -277,25 +261,18 @@ class SemanticCacheStage:
 
         Uses tokenpak.cache.semantic_cache.SemanticCache (Level 0) directly —
         avoids importing from proxy.middleware (Level 4) which would violate
-        the downward-only dependency rule (01-architecture-standard.md §2).
+        the downward-only dependency rule.
         """
         from tokenpak.cache.semantic_cache import SemanticCache, SemanticCacheConfig
 
-        if scope_key in self._caches:
-            cache = self._caches.pop(scope_key)
-            self._caches[scope_key] = cache
-            return cache
-
-        while len(self._caches) >= self._max_scope_caches:
-            self._caches.popitem(last=False)
-
-        cfg = SemanticCacheConfig(
-            enabled=True,
-            scope=getattr(policy, "scope", "session"),
-            ttl_seconds=getattr(policy, "ttl_seconds", 300),
-            similarity_threshold=getattr(policy, "similarity_threshold", 0.96),
-        )
-        self._caches[scope_key] = SemanticCache(cfg)
+        if scope_key not in self._caches:
+            cfg = SemanticCacheConfig(
+                enabled=True,
+                scope=getattr(policy, "scope", "session"),
+                ttl_seconds=getattr(policy, "ttl_seconds", 300),
+                similarity_threshold=getattr(policy, "similarity_threshold", 0.96),
+            )
+            self._caches[scope_key] = SemanticCache(cfg)
         return self._caches[scope_key]
 
 

@@ -8,11 +8,9 @@ ownership bugs.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from . import store
 from .doctor import Issue
@@ -182,27 +180,15 @@ def cmd_add(args: list[str]) -> int:
     Flags fill in non-interactively; whatever's missing is prompted on
     a TTY. On non-TTY stdin with missing flags we fail instead of
     hanging.
-
-    The secret may be supplied without exposing it in argv via
-    ``--key-stdin``/``--token-stdin`` (read one line from stdin),
-    ``--key-file``/``--token-file PATH``, or the ``TOKENPAK_CRED_SECRET``
-    environment variable. A literal ``--key``/``--token`` still works for
-    backward compatibility but prints a warning (the value lands in shell
-    history and ``/proc/<pid>/cmdline``).
     """
     parsed = _parse_kv_flags(
         args,
-        known=(
-            "--id", "--platform", "--kind", "--key", "--token", "--scope", "--account",
-            "--key-file", "--token-file",
-        ),
-        bool_flags=("--key-stdin", "--token-stdin"),
+        known=("--id", "--platform", "--kind", "--key", "--token", "--scope", "--account"),
     )
     if parsed is None:
         print(
             "usage: tokenpak creds add --id X --platform Y --kind (api_key|bearer) "
-            "(--key-stdin | --key-file PATH | TOKENPAK_CRED_SECRET=... | --key Z) "
-            "[--scope host,host] [--account label]",
+            "--key Z [--scope host,host] [--account label]",
             file=sys.stderr,
         )
         return 2
@@ -238,19 +224,9 @@ def cmd_add(args: list[str]) -> int:
         return 2
 
     secret_flag = "--key" if kind == "api_key" else "--token"
-    # Warn whenever a literal secret rides in argv (it lands in shell history
-    # and /proc/<pid>/cmdline) — independent of which route we actually use,
-    # because the exposure happens at the shell, not at selection time. The
-    # warning never echoes the secret value. Compat-first: we still accept it.
-    if parsed.get("--key") is not None or parsed.get("--token") is not None:
-        print(
-            f"tokenpak creds add: WARNING: passing a secret via {secret_flag} exposes it in "
-            "shell history and /proc/<pid>/cmdline. Prefer --key-stdin/--token-stdin, "
-            "--key-file/--token-file PATH, or the TOKENPAK_CRED_SECRET env var. The literal "
-            f"{secret_flag} flag will be deprecated in a future release.",
-            file=sys.stderr,
-        )
-    secret = _resolve_add_secret(parsed, kind, secret_flag)
+    secret = parsed.get(secret_flag) or parsed.get("--key") or parsed.get("--token")
+    if not secret:
+        secret = _prompt_secret(f"{secret_flag.lstrip('-')} (input hidden)", required=True)
     if not secret:
         return 2
 
@@ -304,17 +280,8 @@ def cmd_remove(args: list[str]) -> int:
     return 1
 
 
-def _parse_kv_flags(
-    args: list[str],
-    known: tuple[str, ...],
-    bool_flags: tuple[str, ...] = (),
-) -> "dict[str, str] | None":
-    """Tiny argparse-free flag parser. Returns None on parse error.
-
-    ``known`` flags take a value (``--id X`` or ``--id=X``). ``bool_flags``
-    are valueless switches (``--key-stdin``); a present switch is recorded
-    with an empty-string value, so use ``... is not None`` to test presence.
-    """
+def _parse_kv_flags(args: list[str], known: tuple[str, ...]) -> "dict[str, str] | None":
+    """Tiny argparse-free flag parser. Returns None on parse error."""
     out: dict[str, str] = {}
     i = 0
     while i < len(args):
@@ -323,11 +290,6 @@ def _parse_kv_flags(
             i += 1
             continue
         if tok.startswith("--"):
-            # Valueless boolean switch (must not consume the next token).
-            if tok in bool_flags:
-                out[tok] = ""
-                i += 1
-                continue
             if "=" in tok:
                 name, _, val = tok.partition("=")
             elif i + 1 < len(args):
@@ -367,64 +329,6 @@ def _prompt_secret(label: str, required: bool = False) -> str:
         return getpass.getpass(f"  {label}: ").strip()
     except (EOFError, KeyboardInterrupt):
         return ""
-
-
-# Kind-agnostic environment channel for the secret — the scriptable
-# non-interactive route that never places the secret on the command line.
-_SECRET_ENV = "TOKENPAK_CRED_SECRET"
-
-
-def _read_secret_file(path: str) -> "str | None":
-    """Read a secret from *path*, stripping a single trailing newline.
-
-    A file paste typically appends a newline; we strip trailing CR/LF but
-    keep any internal characters the secret legitimately contains. Returns
-    None (and prints a non-secret error) if the file can't be read.
-    """
-    try:
-        raw = Path(path).expanduser().read_text()
-    except OSError as exc:
-        print(f"tokenpak creds add: cannot read secret file {path!r}: {exc}", file=sys.stderr)
-        return None
-    return raw.rstrip("\r\n")
-
-
-def _resolve_add_secret(parsed: dict, kind: str, secret_flag: str) -> "str | None":
-    """Resolve the BYOK secret via the safest available route.
-
-    Precedence (first hit wins): ``--key-stdin``/``--token-stdin`` ->
-    ``--key-file``/``--token-file`` -> ``TOKENPAK_CRED_SECRET`` env -> literal
-    ``--key``/``--token`` -> hidden interactive prompt. Never echoes the
-    secret. The literal-argv warning is emitted by the caller so it fires
-    even when a safe route supersedes the literal value.
-    """
-    label = secret_flag.lstrip("-")
-
-    # 1. stdin — one line, either spelling accepted.
-    if parsed.get("--key-stdin") is not None or parsed.get("--token-stdin") is not None:
-        secret = sys.stdin.readline().rstrip("\r\n")
-        if not secret:
-            print("tokenpak creds add: secret stdin route given but stdin was empty", file=sys.stderr)
-            return None
-        return secret
-
-    # 2. file — either spelling accepted.
-    file_path = parsed.get("--key-file") or parsed.get("--token-file")
-    if file_path:
-        return _read_secret_file(file_path) or None
-
-    # 3. environment.
-    env_val = os.environ.get(_SECRET_ENV)
-    if env_val:
-        return env_val
-
-    # 4. literal argv flag (caller has already warned).
-    literal = parsed.get(secret_flag) or parsed.get("--key") or parsed.get("--token")
-    if literal:
-        return literal
-
-    # 5. hidden interactive prompt (TTY only).
-    return _prompt_secret(f"{label} (input hidden)", required=True) or None
 
 
 def main(argv: list[str] | None = None) -> int:

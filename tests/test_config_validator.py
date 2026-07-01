@@ -242,7 +242,7 @@ class TestValidateFile:
             json.dump({
                 "port": 8766,
                 "vault": {
-                    "index_path": "~/.tokenpak",
+                    "index_path": "~/vault/.tokenpak",
                     "inject_min_score": -1.5  # Invalid
                 }
             }, f)

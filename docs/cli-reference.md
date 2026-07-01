@@ -18,7 +18,7 @@ Prompt Packing. The proxy listens on localhost:PORT and forwards
 compressed requests to your configured LLM providers.
 
 Example:
-  tokenpak start --port 8888
+  tokenpak start --port 8888 --workers 4
 
 (See also `tokenpak serve` for telemetry/ingest variants.)
 The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
@@ -26,6 +26,7 @@ The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
 **Flags:**
 
 - `--port` — Port to listen on (default: 8766) (default: 8766)
+- `--workers` — Number of worker processes (default: 2) (default: 2)
 - `--log-level` — Logging level (default: info) (default: info) — choices: `debug`, `info`, `warning`, `error`
 
 ### `tokenpak stop`
@@ -61,7 +62,6 @@ View API spend
 - `--month` — Show monthly totals
 - `--by-model` — Break down by model
 - `--export-csv` — Export as CSV
-- `--json` — Emit the cost summary as a single JSON document
 
 **Subcommands:**
 
@@ -84,11 +84,8 @@ Check proxy health
 - `--no-meme` — Suppress tagline
 - `--days` — Filter to last N days (combinable with --hours)
 - `--hours` — Filter to last N hours (combinable with --days)
-- `--window` — Time window: <N>m|<N>h|<N>d|<N>mo (e.g. 30m, 4h, 7d, 2mo)
-- `--all` — Show full persistent history (all time)
 - `--fleet` — Fleet rollup view — reads rollup_daily
 - `--since` — With --fleet: window in days, e.g. '7d' (default: 7d)
-- `--explain` — Explain a request's savings/skip reasons by id; with no id, show value-tier notes
 
 ### `tokenpak upgrade`
 
@@ -309,11 +306,11 @@ View and edit config
 - `init`
   - `--force` — Overwrite existing config
   - `--with-env-stub` — Also drop a placeholders-only .env.example under the TokenPak home
-- `doctor` — Read-only diagnostics on the configuration subsystem. Runs eight checks (D1–D8) covering config home location, load-order precedence, env var presence, `.env` file hygiene, and user/system file boundary integrity. Surfaces misconfigurations without writing any file. Complements `tokenpak doctor` (which covers the broader system); `config doctor` focuses only on config.
+- `doctor`
   - `--json` — Output as JSON
   - `--quiet` — Print only the worst finding
   - `--verbose`, `-v` — Include per-check detail
-- `env` — Show all TOKENPAK_* environment variables that are currently active, their values, and their provenance (where each value comes from: process environment, config file, or built-in default). Values matching secret-class key patterns (API_KEY, _TOKEN, _SECRET, etc.) are **always masked**; use `--no-mask` to reveal low-classification values.
+- `env`
   - `--json` — Output as JSON
   - `--no-mask` — Show low-class values unmasked (secret-class values are still masked)
 - `path`
@@ -448,8 +445,7 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show guided sharing options with a dashboard token
-- `--tunnel` — With --public, start a temporary Cloudflare quick tunnel
+- `--public` — Show public URL with token (accessible from any machine)
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
 
@@ -518,9 +514,6 @@ Toggle debug logging
 - `export`
   - `TRACE_ID` — Trace ID to export
   - `--json` — Output as JSON
-- `receipt`
-  - `REQUEST_ID` — Request ID to render a receipt for (omit to print the support-bundle pointer)
-  - `--raw` — Show the receipt without redaction (default: redaction-safe)
 
 ### `tokenpak learn`
 
@@ -589,7 +582,7 @@ TokenPak Dispatch — scoped, station-based, resumable, gated work packages with
 - `run`
   - `REQUEST` — The request text to dispatch
   - `--route` — Force an explicit Route (e.g. code_task); overrides auto-routing
-  - `--autonomy` — Autonomy mode override (default depends on caller — §14.2) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
+  - `--autonomy` — Autonomy mode override (default depends on caller) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
   - `--ci` — CI/automation caller; default autonomy = auto_dispatch_limited
   - `--dry-run` — Draft only; default autonomy = draft
   - `--confirm` — Treat an approval-gated route as approved (record the bound route)
@@ -663,12 +656,6 @@ Examples:
   tokenpak codex --install-only    # set up without launching Codex
   tokenpak codex doctor            # verify installation
   tokenpak codex uninstall         # reverse installation
-  tokenpak codex statusline        # enable native status modules (additive)
-  tokenpak codex clean             # reclaim orphaned isolated codex homes
-  tokenpak codex usage --latest --json
-  tokenpak codex exec --capture -- codex exec --json "summarize this repo"
-  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
-  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
@@ -683,7 +670,7 @@ Examples:
 
 Inspect, manage, and dry-run-route credentials tokenpak can see from
 all registered providers (Codex CLI, Claude CLI, env vars,
-~/.tokenpak/credentials.toml, external agent profiles).
+~/.tokenpak/credentials.toml, and external client profiles).
 
 Proxy fast-path integration still deferred — `creds route` is a
 dry-run (what would I pick) with no side effects.
@@ -731,58 +718,6 @@ MultiPak Pro Phase 1 OSS surface. Read-only Vault Pak operations work without Pr
   - `PAK_FILE` — Path to a Pak file to install
   - `--force` — Overwrite if a Pak with the same id is already installed
 - `status`
-  - `--json` — Emit JSON instead of text
-
-### `tokenpak cards`
-
-TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into canonical TokenPak contracts. The runtime trusts only validated compiled manifests; raw Markdown is never executed. Note: `tokenpak cards` operates on authoring sources, `tokenpak pak` on runtime Pak objects — they are not aliases.
-
-**Subcommands:**
-
-- `discover`
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `validate`
-  - `PATH` — Card file to validate (default: all)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--strict` — Require exact card == adapter capability equality
-  - `--json` — Emit JSON instead of text
-- `compile` — Validates then compiles cards into canonical JSON manifests under .tokenpak/cache/cards/compiled/. Only validated compiled manifests are runtime inputs.
-  - `PATH` — Card file to compile (default: all)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--strict` — Require exact card == adapter capability equality
-  - `--json` — Emit JSON instead of text
-- `install`
-  - `PATH` — Card file to install (default: all)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--strict` — Require exact card == adapter capability equality
-  - `--json` — Emit JSON instead of text
-- `list`
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `inspect`
-  - `NAME` — Card name (frontmatter `name:`)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `preview` — OSS preview is a static declared scope/filter dump — no scored recall, no hydration, no render-to-messages injection. Live unranked candidates additionally require a registered connector (Phase 2). --pro probes the Pro Local daemon and falls back to the static dump when absent.
-  - `NAME` — Card name (frontmatter `name:`)
-  - `--pro` — Use Pro Local scoring when available
-  - `--query` — Recall query (used with --pro)
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `scaffold` — Scaffolds into the project (integrations/<name>/ for tip cards, paks/ for pak cards) — NEVER into the installed package tree.
-  - `--type` — Card type to scaffold (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--kind` — tip_kind for tip cards (Phase 1: provider_adapter) (default: provider_adapter)
-  - `--name` — Card name (lowercase slug)
-  - `--json` — Emit JSON instead of text
-- `doctor`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--json` — Emit JSON instead of text
 
 ### `tokenpak test`
@@ -1089,56 +1024,16 @@ Test search retrieval
 
 **Flags:**
 
-- `KEY` — License key (legacy; prefer --key-file, --key-stdin, or --prompt-key) (default: )
-- `--key-file` — Read the license key from a file
-- `--key-stdin` — Read the license key from standard input
-- `--prompt-key` — Prompt for the license key without echo
+- `KEY` — Your license key (default: )
 - `--email` — Optional email for the license (default: )
-
-### `tokenpak cache`
-
-**Flags:**
-
-- `--json`
-
-**Subcommands:**
-
-- `status`
-  - `--json`
-- `clear`
-  - `--id` — Clear only this fingerprint ID (default: all)
-  - `--yes`, `-y` — Skip confirmation prompt
 
 ### `tokenpak check-alerts`
 
 Evaluate alert rules and return exit code 1 if any fired.
 
-### `tokenpak companion`
-
-Point the tokenpak companion at your own Markdown notes/knowledge
-base — no special vault layout required.
-
-Examples:
-  tokenpak companion ingest --memory-dir ~/notes
-  tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal
-  TOKENPAK_COMPANION_MEMORY_DIRS=~/notes tokenpak companion ingest
-  tokenpak companion status
-
-**Subcommands:**
-
-- `ingest`
-  - `--memory-dir` — Directory of Markdown notes to ingest (repeatable). Falls back to TOKENPAK_COMPANION_MEMORY_DIRS if omitted.
-  - `--json` — Also print a JSON result
-- `status`
-
 ### `tokenpak compare`
 
-Show recorded cost for the last N requests.
-
-    Reports the actual recorded cost per request. Per-request cache/savings
-    attribution is not available from the receipt-backed event store, so it is
-    shown as a neutral unavailable state rather than estimated from a fabricated
-    cache-hit assumption.
+Show before/after cost comparison for last N requests.
 
 **Flags:**
 
@@ -1178,10 +1073,6 @@ Show every feature TokenPak knows about and whether the current license entitles
 - `explain`
   - `FEATURE` — Feature key (e.g. T9_replay_system)
   - `--json` — Emit JSON
-
-### `tokenpak guard`
-
-Alias for `tokenpak budget`.
 
 ### `tokenpak help`
 
@@ -1236,32 +1127,6 @@ Examples:
 - `--tier` — Permission tier to apply with --apply (claude-code / codex only; default: standard). 'fleet' is launcher-scoped and never persists into client config — see `tokenpak permissions --help`. — choices: `strict`, `standard`, `auto`, `fleet`
 - `--yes` — Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)
 
-**Guided mode vs print-only:**
-
-When you name a specific client (`tokenpak integrate <client>`) on a TTY (both stdin and stdout are TTYs) without `--apply` or `--no-tui`, the command launches a **guided interactive form**:
-
-1. Detects whether the client is installed on this host.
-2. Shows the exact configuration change it will make (the preview).
-3. For `claude-code` and `codex`, prompts you to pick a permission tier (`strict`, `standard`, `auto`, or `fleet`).
-4. Asks for confirmation before writing any file.
-5. Backs up the existing config automatically; prints a `tokenpak integrate <client> --revert` command to undo.
-
-On a **non-TTY** (CI, piped output, `TOKENPAK_NONINTERACTIVE=1`, or `TERM=dumb`) the guided form is suppressed and `integrate` prints setup instructions only — the same output as `--all` for the named client.
-
-**Shell detection:**
-
-The guided form activates when `sys.stdin.isatty() and sys.stdout.isatty()` are both true. If either stream is redirected (common in CI pipelines or when piping to a file), `integrate` automatically runs in print-only mode. This means `tokenpak integrate claude-code > setup.txt` always writes plain text, never launches a form.
-
-**`--no-tui` escape hatch:**
-
-Pass `--no-tui` anywhere on the command line to force print-only mode even on a fully interactive TTY:
-
-```
-tokenpak --no-tui integrate claude-code
-```
-
-`--no-tui` is a **global flag** — it is stripped from `sys.argv` before subcommand parsers run and does **not** appear in any subcommand's `--help` output. It is honored on `tokenpak integrate <target>` (without `--apply`); when `--apply` is set the flag has no effect (apply is always headless). Use `TOKENPAK_NONINTERACTIVE=1` as the environment-variable equivalent for scripts where the command line cannot be controlled.
-
 ### `tokenpak last`
 
 Display details about the most recent request processed by the proxy.
@@ -1280,7 +1145,7 @@ Example:
 
 ### `tokenpak leaderboard`
 
-Show per-model efficiency ranking from receipt-backed telemetry.
+Show per-model efficiency ranking.
 
 **Flags:**
 
@@ -1293,62 +1158,6 @@ Show per-model efficiency ranking from receipt-backed telemetry.
 - `--json` — Machine-readable JSON output
 
 ### `tokenpak menu`
-
-Interactive command browser with arrow-key navigation. Runs in the alternate-screen buffer — menu frames never appear in terminal scrollback.
-
-**Two ways to open:**
-
-- `tokenpak` — bare invocation on a TTY launches the menu automatically
-- `tokenpak menu` — explicit subcommand, same result
-
-The menu does **not** launch when stdin or stdout is not a TTY, when the `CI` environment variable is set, when `TOKENPAK_NONINTERACTIVE=1` is set, or when `TERM=dumb`.
-
-**Home screen:**
-
-The home screen shows nine task-focused sections. Each entry shows the equivalent CLI command on the right:
-
-| Section | CLI equivalent |
-|---|---|
-| Start proxy | `tokenpak start` |
-| Run demo | `tokenpak demo` |
-| Proxy status | `tokenpak status` |
-| Spend & savings | `tokenpak cost` |
-| Configure | `tokenpak config` |
-| Permission tier | `tokenpak permissions` |
-| Companion | — |
-| Troubleshoot | `tokenpak doctor` |
-| Browse all commands | — |
-
-A status strip at the top shows Proxy state, Today's cost, and Today's saved. Values come from a cached non-blocking snapshot — unknown figures render as `—` and are never fabricated as `$0.00`.
-
-**Keys:**
-
-| Key | Action |
-|---|---|
-| `↑` / `↓` | Navigate items |
-| `Enter` | Select / run highlighted item |
-| `q` or `Ctrl-C` | Quit the menu |
-| `Esc` | Go back (in submenus); quit (at home screen) |
-| Any printable character | Filter items (type-to-filter) |
-| `Backspace` | Delete last filter character; go back if filter is empty |
-
-Type-to-filter is active on the home screen and the "Browse all commands" section. Matching runs against both the displayed label and a set of search aliases — for example, typing `health` highlights Proxy status.
-
-**Non-interactive fallback:**
-
-When the terminal is not a TTY, `tokenpak menu` prints a numbered plain-text list of home-screen options and exits rather than launching the cursor-driven interface.
-
-**`--no-tui` escape hatch:**
-
-Pass `--no-tui` anywhere on the command line to suppress the interactive menu for bare `tokenpak` invocations:
-
-```
-tokenpak --no-tui
-```
-
-This prints quick-help and proxy uptime instead of opening the TUI. `--no-tui` is a global flag — it is stripped from `sys.argv` before subcommand parsers run and does not appear in any subcommand's `--help` output. It is honored on bare `tokenpak` and `tokenpak integrate <target>` (without `--apply`); the explicit `tokenpak menu` subcommand always launches the TUI directly.
-
-Use `TOKENPAK_NONINTERACTIVE=1` as the environment-variable equivalent for scripts where the command line cannot be controlled.
 
 ### `tokenpak monitor`
 
@@ -1374,10 +1183,6 @@ Example:
 - `--strategy` — Optimization aggressiveness (default: balanced) (default: balanced) — choices: `conservative`, `balanced`, `aggressive`
 - `--show-diff` — Show before/after token counts
 - `--json` — Machine-readable JSON output
-
-### `tokenpak pack`
-
-Alias for `tokenpak compress`.
 
 ### `tokenpak pakplan`
 
@@ -1430,10 +1235,6 @@ Example:
 - `--threshold` — Quality score below which blocks are pruned (default: 0.4) (default: 0.4)
 - `--json` — Output raw JSON
 
-### `tokenpak receipt`
-
-Alias for `tokenpak dispatch receipt`.
-
 ### `tokenpak report`
 
 Generate and display daily savings report.
@@ -1443,10 +1244,6 @@ Generate and display daily savings report.
 - `--markdown` — Output markdown format (for messaging)
 - `--json` — Output JSON format
 
-### `tokenpak reuse`
-
-Alias for `tokenpak recipe`.
-
 ### `tokenpak savings`
 
 Show compression savings summary.
@@ -1454,7 +1251,6 @@ Show compression savings summary.
 **Flags:**
 
 - `--days` — Rolling window in days (default: 30)
-- `--json` — Emit the savings summary as a single JSON document
 
 ### `tokenpak telemetry`
 
@@ -1485,11 +1281,6 @@ TIP is the protocol layer that adapter providers and platform integrations decla
 - `scaffold-adapter`
   - `NAME` — Adapter name (e.g. 'my-platform')
   - `--output`, `-o` — Output file path (default: ./<name>_adapter.py)
-- `sources`
-  - `--json` — Emit JSON instead of text
-- `observe`
-  - `--tool` — Only run the adapter for this tool slug
-  - `--json` — Emit JSON instead of text
 
 ### `tokenpak usage`
 
@@ -1522,10 +1313,6 @@ Example:
 **Subcommands:**
 
 - `repair`
-
-### `tokenpak verify`
-
-Alias for `tokenpak prove`.
 
 ### `tokenpak watch`
 

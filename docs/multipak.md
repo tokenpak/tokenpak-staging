@@ -56,14 +56,14 @@ MultiPak Pro Phase 1 status
 |---|---|---|
 | `tokenpak pak inspect <pak-id-or-file>` | Vault: ✅, others: ❌ | `--json` for machine output |
 | `tokenpak pak export <pak-id> -o <dir>` | Vault: ✅, others: ❌ | Vault Paks export to `pak.json` |
-| `tokenpak pak import <pak-file>` | ✅ always | Copies a Pak file into the local store with checksum verification |
+| `tokenpak pak import <dir> -o <pak>` | ❌ Pro | Capture pipeline is Pro-only |
 | `tokenpak pak status` | ✅ always | Diagnostic; never errors |
 
 Exit codes follow the relevant standard: `0` success, `1` user-facing error (missing Pak, Pro required), `2` argparse usage error.
 
 ### Pak ID format
 
-Vault Paks: `vault:<source-path>#<sha256-prefix>` — for example, `vault:~/project/README.md#abc12345`. The `#` is significant — when used in URLs (e.g., `/pak/v1/inspect/<pak-id>`), percent-encode it as `%23`.
+Vault Paks: `vault:<source-path>#<sha256-prefix>` — for example, `vault:/home/me/proj/README.md#abc12345`. The `#` is significant — when used in URLs (e.g., `/pak/v1/inspect/<pak-id>`), percent-encode it as `%23`.
 
 Other subtypes (Pro): `interaction:<session>:<entry>`, `decision:<id>`, `recall:<query-hash>`, `handoff:<target>:<id>`.
 
@@ -99,11 +99,11 @@ Every Pro-gated endpoint returns this shape, so clients can treat `error == "not
 }
 ```
 
-`daemon_state` mirrors TokenPak's Pro daemon telemetry. Phase 1 only emits `"active"` or `"unavailable"`. Phase 2 adds `"tip_mismatch"` and the four state-machine values (`offline-grace`, `offline-expired`, `user-revoked`, `billing-grace`).
+`daemon_state` mirrors the relevant standard telemetry. Phase 1 only emits `"active"` or `"unavailable"`. Phase 2 adds `"tip_mismatch"` and the four state-machine values (`offline-grace`, `offline-expired`, `user-revoked`, `billing-grace`).
 
 ## Configuration — `pro.multipak.enabled`
 
-Default `false` while MultiPak remains opt-in during the post-bootstrap soak period.
+Default `false` (opt-in until 1-week soak post-bootstrap).
 
 ```yaml
 # ~/.tokenpak/config.yaml
@@ -116,7 +116,7 @@ The OSS read-only path (Vault Pak inspection, `/pak/v1/status`) **works regardle
 
 ## Companion journal coexistence
 
-The OSS companion journal continues to auto-capture every prompt — local-only, no upload. This is the existing entry point per the [companion guide](../tokenpak/companion/GUIDE.md). Promotion of a journal entry to a MultiPak Interaction Pak is the **opt-in step**:
+Per the relevant standard the OSS companion journal continues to auto-capture every prompt — local-only, no upload. This is the existing entry point per the [companion guide](https://github.com/tokenpak/tokenpak/blob/main/tokenpak/companion/GUIDE.md). Promotion of a journal entry to a MultiPak Interaction Pak is the **opt-in step**:
 
 ```python
 from tokenpak.companion.journal.pak_aware import (
@@ -137,9 +137,9 @@ for entry in list_promotion_candidates(db, session_id="my-session"):
 
 Phase 1 OSS code never auto-promotes. The Pro daemon (Phase 2+) consumes this surface to enumerate entries it should consider for Interaction Pak promotion.
 
-## Privacy contract
+## Privacy contract (the relevant standard)
 
-**No memory content ever crosses the license-validation boundary.** The Pak schema is structurally disjoint from license-payload field prefixes (`license_token`, `tenant_id`, `fingerprint`, `issuer`, `signature`) — enforced by the Phase 0 contract tests and periodic conformance audits.
+**No memory content ever crosses the license-validation boundary** (the relevant standard). The Pak schema is structurally disjoint from license-payload field prefixes (`license_token`, `tenant_id`, `fingerprint`, `issuer`, `signature`) — enforced by the Phase 0 contract tests and the quarterly audit.
 
 Pak content stays local. The license refresh request carries only the license token, the per-install ed25519 public key, and the hardware-bound machine fingerprint — never Paks, anchors, prompts, completions, or telemetry.
 
@@ -149,14 +149,8 @@ Pak content stays local. The license refresh request carries only the license to
 |---|---|---|
 | **0** | TIP capability constants + Pak/ContextPackage contracts | ✅ shipped (PR #101 / registry PR #4) |
 | **1** | Vault Pak adapter + Pak-aware journal + `tokenpak pak` CLI + `/pak/v1/*` stubs | ⏳ this PR |
-| 2 | Capture pipeline + recall + ranking + SQLite FTS | gated |
+| 2 | Capture pipeline + recall + ranking + SQLite FTS | gated by the relevant standard |
 | 3 | Context Package builder + Handoff Pak + VS Code + MCP adapters | gated |
 | 4 | Anchor Hydration + coverage scoring + audit log | gated |
 | 5 | Encrypted store + retention engine + dashboard surfaces | gated |
 | 6 | Embeddings (deferred per Decision #8) + supersession + auto-promotion | gated |
-
-## References
-
-- Pro daemon process model, license registry, and fallback contract
-- TIP capability negotiation rules
-- Provider-adapter additive contract and offline-test convention

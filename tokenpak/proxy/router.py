@@ -14,12 +14,8 @@ from urllib.parse import urlparse
 PROVIDER_URLS = {
     "anthropic": "https://api.anthropic.com",
     "openai": "https://api.openai.com",
-    # openai-codex: subscription OAuth model (gpt-5.x-codex series).
-    # NOTE: the working adapter path forwards ChatGPT-OAuth Codex traffic to
-    # chatgpt.com/backend-api (the ChatGPT backend), NOT api.openai.com — see
-    # tokenpak/proxy/adapters/openai_codex_responses_adapter.py and the
-    # /v1/responses ChatGPT-OAuth branch in server.do_POST. This base URL stays
-    # as the api.openai.com default only for legacy API-key routing.
+    # openai-codex: subscription OAuth model (gpt-5.x-codex series)
+    # Uses api.openai.com with OAuth Bearer token instead of API key.
     # Preferred endpoint: /v1/responses (Responses API)
     "openai-codex": "https://api.openai.com",
     "google": "https://generativelanguage.googleapis.com",

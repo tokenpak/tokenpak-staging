@@ -78,8 +78,20 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # _query_savings / _query_by_model — savings analytics (used by tests)
 # ---------------------------------------------------------------------------
+import sqlite3 as _sqlite3
 
 _MONITOR_DB = ""
+
+
+def _period_to_days(period: str) -> int:
+    """Convert period string like '24h', '7d', '30d' to number of days."""
+    period = period.strip()
+    if period.endswith("h"):
+        hours = int(period[:-1])
+        return max(1, (hours + 23) // 24)
+    if period.endswith("d"):
+        return int(period[:-1])
+    return 1
 
 
 def _query_savings(period: str = "24h", model: str | None = None) -> dict:
@@ -88,41 +100,43 @@ def _query_savings(period: str = "24h", model: str | None = None) -> dict:
     if not path:
         return {"error": "DB not found", "requests": 0}
     try:
-        from tokenpak.cli.commands.status import _calculate_fleet_savings
-
-        report = _calculate_fleet_savings(db_path=path, period=period)
-        if report.get("error"):
-            return {"error": report["error"], "requests": 0}
-        models = report["models"]
+        days = _period_to_days(period)
+        con = _sqlite3.connect(path)
+        con.row_factory = _sqlite3.Row
+        clauses = ["date(timestamp) >= date('now', ?)"]
+        params: list = [f"-{days} days"]
         if model:
-            models = [row for row in models if row["model"] == model]
-        requests = sum(row["requests"] for row in models)
-        total_compressed = sum(row["input_tokens"] for row in models)
-        tokens_saved = sum(row["compressed_tokens"] for row in models)
-        total_raw = total_compressed + tokens_saved
+            clauses.append("model = ?")
+            params.append(model)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT
+                COUNT(*) AS requests,
+                COALESCE(AVG(input_tokens), 0) AS avg_raw_tokens,
+                COALESCE(AVG(CASE WHEN compressed_tokens > 0
+                                  THEN compressed_tokens
+                                  ELSE input_tokens END), 0) AS avg_compressed_tokens,
+                COALESCE(SUM(input_tokens), 0) AS total_raw,
+                COALESCE(SUM(CASE WHEN compressed_tokens > 0
+                                  THEN compressed_tokens
+                                  ELSE input_tokens END), 0) AS total_compressed
+            FROM requests {where}
+        """
+        row = con.execute(sql, params).fetchone()
+        con.close()
+        if not row:
+            return {"requests": 0, "avg_raw_tokens": 0, "avg_compressed_tokens": 0,
+                    "tokens_saved_total": 0, "reduction_pct": 0.0}
+        total_raw = row["total_raw"] or 0
+        total_comp = row["total_compressed"] or 0
+        tokens_saved = total_raw - total_comp
         reduction_pct = (tokens_saved / total_raw * 100.0) if total_raw > 0 else 0.0
-        totals = report["totals"]
-        if model:
-            without_cost = sum(row["without_cost"] for row in models)
-            with_cost = sum(row["with_cost"] for row in models)
-            totals = {
-                "without_cost": without_cost,
-                "with_cost": with_cost,
-                "savings_pct": (
-                    (without_cost - with_cost) / without_cost * 100.0
-                    if without_cost > 0
-                    else 0.0
-                ),
-            }
         return {
-            "requests": requests,
-            "avg_raw_tokens": int(total_raw / requests) if requests else 0,
-            "avg_compressed_tokens": int(total_compressed / requests) if requests else 0,
+            "requests": row["requests"],
+            "avg_raw_tokens": int(row["avg_raw_tokens"]),
+            "avg_compressed_tokens": int(row["avg_compressed_tokens"]),
             "tokens_saved_total": int(tokens_saved),
             "reduction_pct": reduction_pct,
-            "cost_without_tokenpak": totals["without_cost"],
-            "cost_with_tokenpak": totals["with_cost"],
-            "cost_reduction_pct": totals["savings_pct"],
         }
     except Exception:
         return {"error": "query failed", "requests": 0}
@@ -134,28 +148,31 @@ def _query_by_model(period: str = "24h", db_path: str = "") -> list:
     if not path:
         return []
     try:
-        from tokenpak.cli.commands.status import _calculate_fleet_savings
-
-        report = _calculate_fleet_savings(db_path=path, period=period)
-        if report.get("error"):
-            return []
-        rows = []
-        for row in report["models"]:
-            requests = row["requests"]
-            total_compressed = row["input_tokens"]
-            tokens_saved = row["compressed_tokens"]
-            total_raw = total_compressed + tokens_saved
-            rows.append({
-                "model": row["model"],
-                "requests": requests,
-                "avg_raw_tokens": int(total_raw / requests) if requests else 0,
-                "avg_compressed_tokens": int(total_compressed / requests) if requests else 0,
-                "tokens_saved_total": int(tokens_saved),
-                "reduction_pct": (tokens_saved / total_raw * 100.0) if total_raw > 0 else 0.0,
-                "cost_without_tokenpak": row["without_cost"],
-                "cost_with_tokenpak": row["with_cost"],
-                "cost_reduction_pct": row["savings_pct"],
-            })
-        return rows
+        days = _period_to_days(period)
+        con = _sqlite3.connect(path)
+        con.row_factory = _sqlite3.Row
+        sql = """
+            SELECT model,
+                   COUNT(*) AS requests,
+                   AVG(input_tokens) AS avg_raw_tokens,
+                   AVG(CASE WHEN compressed_tokens > 0
+                             THEN compressed_tokens
+                             ELSE input_tokens END) AS avg_compressed_tokens,
+                   SUM(input_tokens) - SUM(CASE WHEN compressed_tokens > 0
+                                                THEN compressed_tokens
+                                                ELSE input_tokens END) AS tokens_saved_total,
+                   CASE WHEN SUM(input_tokens) > 0
+                        THEN (SUM(input_tokens) - SUM(CASE WHEN compressed_tokens > 0
+                                                           THEN compressed_tokens
+                                                           ELSE input_tokens END))
+                             * 100.0 / SUM(input_tokens)
+                        ELSE 0.0 END AS reduction_pct
+            FROM requests
+            WHERE date(timestamp) >= date('now', ?)
+            GROUP BY model
+        """
+        rows = con.execute(sql, (f"-{days} days",)).fetchall()
+        con.close()
+        return [dict(r) for r in rows]
     except Exception:
         return []

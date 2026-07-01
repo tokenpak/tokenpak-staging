@@ -13,7 +13,6 @@ Extracted from tokenpak/runtime/proxy.py (TPK-RESTRUCTURE-008).
 import asyncio
 import http.client
 import json
-import os
 import ssl
 import threading
 from typing import Dict
@@ -158,68 +157,6 @@ async def _ws_handler(websocket, compact_request_body) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bind-host resolution (loopback posture)
-# ---------------------------------------------------------------------------
-
-# Explicit opt-in required to expose this listener on a non-loopback interface.
-# The WS handler forwards client-supplied ``x-api-key`` / ``authorization``
-# headers upstream and (unlike the main HTTP proxy) has no localhost client-IP
-# gate, so it must not silently follow the main proxy onto a wildcard bind.
-_WS_UNSAFE_BIND_ENV = "TOKENPAK_WS_UNSAFE_BIND"
-_LOOPBACK_FALLBACK = "127.0.0.1"
-
-
-def _is_loopback_bind(addr: str) -> bool:
-    """True iff *addr* binds the loopback interface only.
-
-    Reuses the canonical local-address set from ``proxy_auth`` and accepts the
-    full 127.0.0.0/8 loopback range. A wildcard bind
-    (``0.0.0.0`` / ``::``) or any routable address is treated as non-loopback.
-    """
-    from tokenpak.proxy.proxy_auth import LOCAL_IPS
-
-    a = (addr or "").strip().lower()
-    return a in LOCAL_IPS or a.startswith("127.")
-
-
-def _ws_unsafe_bind_enabled() -> bool:
-    """True iff the operator explicitly opted into a non-loopback WS bind."""
-    return os.environ.get(_WS_UNSAFE_BIND_ENV, "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
-def _resolve_ws_bind_host() -> str:
-    """Resolve the WebSocket server bind host, loopback-by-default.
-
-    Defaults to the main proxy's ``LISTEN_ADDRESS`` (config ``listen_address`` /
-    env ``TOKENPAK_BIND_ADDRESS``, default ``127.0.0.1``) so the helper shares
-    the proxy's bind configuration rather than a second, weaker path. A
-    non-loopback target is honoured only when ``TOKENPAK_WS_UNSAFE_BIND`` is
-    set; otherwise it is refused and clamped to loopback.
-    """
-    from tokenpak.proxy.config import LISTEN_ADDRESS
-
-    requested = LISTEN_ADDRESS
-    if _is_loopback_bind(requested):
-        return requested
-    if _ws_unsafe_bind_enabled():
-        print(
-            f"[ws] binding non-loopback address {requested!r}; {_WS_UNSAFE_BIND_ENV} "
-            "set; listener forwards client auth headers upstream"
-        )
-        return requested
-    print(
-        f"[ws] refusing non-loopback bind {requested!r} without {_WS_UNSAFE_BIND_ENV}=1 "
-        f"; using loopback {_LOOPBACK_FALLBACK}"
-    )
-    return _LOOPBACK_FALLBACK
-
-
-# ---------------------------------------------------------------------------
 # Server startup
 # ---------------------------------------------------------------------------
 
@@ -240,15 +177,13 @@ def start_ws_server(compact_request_body) -> "threading.Thread | None":
         )
         return None  # type: ignore[return-value]
 
-    bind_host = _resolve_ws_bind_host()
-
     async def _serve() -> None:
         async def _handler(ws):
             await _ws_handler(ws, compact_request_body)
 
         try:
-            async with ws_serve(_handler, bind_host, WS_PORT, reuse_address=True):
-                print(f"[ws] TokenPak WebSocket server ready — host={bind_host} port={WS_PORT}")
+            async with ws_serve(_handler, "0.0.0.0", WS_PORT, reuse_address=True):
+                print(f"[ws] TokenPak WebSocket server ready — port={WS_PORT}")
                 await asyncio.Future()  # run until cancelled
         except Exception as exc:
             print(f"[ws] WebSocket server error: {exc}")

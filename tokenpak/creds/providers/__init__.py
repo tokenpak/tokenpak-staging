@@ -4,13 +4,12 @@
 Adding a new provider is one function: define ``discover()`` that
 returns ``list[Credential]`` and add the module to :data:`BUILTIN_PROVIDERS`.
 No registry enumeration in calling code — the driver walks this list
-at runtime so discovery stays dynamic.
+at runtime so discovery stays dynamic per ``feedback_always_dynamic.md``.
 """
 
 from __future__ import annotations
 
 import logging
-from importlib import import_module
 from typing import Callable
 
 from ..model import Credential
@@ -23,16 +22,10 @@ log = logging.getLogger(__name__)
 BUILTIN_PROVIDERS: list[tuple[str, Callable[[], list[Credential]]]] = []
 
 
-def _platform_bridge_provider():
-    return import_module("." + "open" + "claw", __package__)
-
-
 def _register():
     """Lazy-register built-ins. Lets each provider module import cleanly
     without side-effects on import order."""
-    from . import claude_cli, codex_cli, env_pool, user_config
-
-    platform_bridge = _platform_bridge_provider()
+    from . import claude_cli, codex_cli, env_pool, openclaw, user_config
 
     BUILTIN_PROVIDERS.clear()
     BUILTIN_PROVIDERS.extend(
@@ -41,7 +34,7 @@ def _register():
             ("claude-cli", claude_cli.discover),
             ("env-pool", env_pool.discover),
             ("user-config", user_config.discover),
-            ("open" "claw", platform_bridge.discover),
+            ("openclaw", openclaw.discover),
         ]
     )
 
@@ -73,16 +66,14 @@ def resolve_secret(cred: Credential) -> "str | None":
     rather than raising, so callers can report "credential not
     resolvable" without a traceback in their logs.
     """
-    from . import claude_cli, codex_cli, env_pool, user_config
-
-    platform_bridge = _platform_bridge_provider()
+    from . import claude_cli, codex_cli, env_pool, openclaw, user_config
 
     resolvers = {
         codex_cli.PROVIDER_NAME: codex_cli.resolve,
         claude_cli.PROVIDER_NAME: claude_cli.resolve,
         env_pool.PROVIDER_NAME: env_pool.resolve,
         user_config.PROVIDER_NAME: user_config.resolve,
-        platform_bridge.PROVIDER_NAME: platform_bridge.resolve,
+        openclaw.PROVIDER_NAME: openclaw.resolve,
     }
     resolver = resolvers.get(cred.provider)
     if resolver is None:

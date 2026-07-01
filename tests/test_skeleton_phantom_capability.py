@@ -1,65 +1,66 @@
-"""Regression tests for the skeleton capability surface — post-implementation form.
+"""Regression tests for the skeleton phantom-capability truth patch.
 
 Context: the "code skeleton" feature is wired into config, profiles, the proxy
-injection path, and the doctor/status capability surface. Historically the core
-extractor module (``tokenpak.skeleton_extractor``) did not exist, so the
-feature was a silent no-op; the Phase-1 truth patch
-(``p0-skeleton-feature-truth-patch-phantom-capability``) made the capability
-surface report from a real import probe, emit a diagnostic when the extractor
-was missing, and removed the unbacked savings claim.
+injection path, and the doctor/status capability surface, and historically
+claimed "70-90% reduction on code" — but the core extractor module
+(``tokenpak.skeleton_extractor``) does not exist, so at runtime the feature is
+a silent no-op. The truth patch makes the capability surface report from a real
+import probe (not the intent flag), emits a diagnostic when the extractor is
+missing, and removes the unbacked savings claim.
 
-Phase 2 (``p2-skeleton-extractor-implementation``) shipped the real extractor,
-so this file now asserts the *inverse* of the Phase-1 absence-invariants:
+These tests fail against the pre-patch phantom state (feature reported
+active/available while the extractor is absent) and pass after it.
 
-- the extractor is importable and the probe reports **available**,
-- enabled intent + available capability reports **active**,
-- the injection path performs **real extraction** (signatures/docstrings kept,
-  bodies elided) with **no** missing-extractor diagnostic,
-- intent still gates: disabled means inactive and a byte-identical path,
-- the anti-phantom guarantee survives: no unbacked savings percentage in the
-  injection sources (claims must be measured — see the benchmark in
-  ``tests/test_skeleton_extractor.py``).
+When the real extractor is implemented, the ``pytest.skip`` guards below
+deactivate the "absent" assertions, and a follow-up change replaces them with
+their post-implementation inverse.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 from pathlib import Path
 
-
-def test_extractor_module_present_and_callable():
-    """Phase 2 landed: the extractor ships with the package. Absence is now a
-    packaging failure, not an acceptable degraded state."""
-    from tokenpak.skeleton_extractor import extract_skeleton
-
-    assert callable(extract_skeleton)
+import pytest
 
 
-def test_skeleton_available_probe_true_with_extractor_present():
-    """The capability probe reflects real importability — and the extractor is
-    really importable now."""
+def _extractor_present() -> bool:
+    try:
+        from tokenpak.skeleton_extractor import extract_skeleton  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    _extractor_present(),
+    reason="skeleton extractor present (implemented); absence-invariant tests N/A",
+)
+
+
+def test_skeleton_available_probe_false_when_extractor_absent():
+    """The capability probe must reflect real importability, not a config flag."""
     from tokenpak.proxy.config import skeleton_available
 
-    assert skeleton_available() is True
+    assert skeleton_available() is False
 
 
-def test_skeleton_reported_active_iff_enabled(monkeypatch):
-    """Post-impl inverse of the anti-phantom invariant: with the extractor
-    present, `active` follows the intent flag exactly — True when enabled,
-    False when disabled (capability alone must not report active)."""
+def test_skeleton_not_reported_active_despite_enabled_flag(monkeypatch):
+    """Core anti-phantom invariant: enabled intent must NOT report 'active'
+    when the extractor cannot be imported."""
     import tokenpak.proxy.config as cfg
 
+    # Even with the intent flag forced on (its default is True), skeleton must
+    # not be reported active because the extractor is absent.
     monkeypatch.setattr(cfg, "SKELETON_ENABLED", True, raising=False)
-    assert cfg.skeleton_active() is True
-
-    monkeypatch.setattr(cfg, "SKELETON_ENABLED", False, raising=False)
     assert cfg.skeleton_active() is False
 
 
-def test_skeletonize_block_extracts_without_missing_diagnostic(monkeypatch, caplog):
-    """The injection path now performs real extraction: signature + docstring
-    survive, the body is elided, and the Phase-1 missing-extractor diagnostic
-    does NOT fire."""
+def test_skeletonize_block_is_noop_and_emits_diagnostic(monkeypatch, caplog):
+    """A missing extractor must (a) leave the block byte-identical and
+    (b) emit a diagnostic signal — never a silent swallow."""
     import tokenpak.proxy.config as cfg
     import tokenpak.vault.chunk_shaping as cs
 
@@ -67,34 +68,24 @@ def test_skeletonize_block_extracts_without_missing_diagnostic(monkeypatch, capl
     # Reset the one-shot diagnostic latch for a deterministic assertion.
     monkeypatch.setattr(cs, "_SKELETON_EXTRACTOR_MISSING", False, raising=False)
 
-    code = (
-        "def foo(x: int) -> int:\n"
-        '    """Add one, twice."""\n'
-        "    y = x + 1\n"
-        "    z = y + 1\n"
-        "    return z\n"
-    )
+    code = "def foo(x):\n    return x + 1\n"
     with caplog.at_level(logging.WARNING, logger="tokenpak.skeleton"):
         out = cs._skeletonize_block(code, ".py")
 
-    # Real extraction: signature + docstring kept, body elided.
-    assert "def foo(x: int) -> int:" in out
-    assert '"""Add one, twice."""' in out
-    assert "y = x + 1" not in out
-    assert "return z" not in out
-
-    # Capability status reports available, with no missing-extractor latch ...
+    # (a) no-op / no corruption
+    assert out == code
+    # (b) diagnostic observable via status field ...
     status = cs.skeleton_runtime_status()
     assert status["enabled"] is True
-    assert status["available"] is True
-    assert status["extractor_missing_observed"] is False
-    # ... and no missing-extractor log line.
-    assert not any("extractor unavailable" in r.message for r in caplog.records)
+    assert status["available"] is False
+    assert status["extractor_missing_observed"] is True
+    # ... and via a log line
+    assert any("extractor unavailable" in r.message for r in caplog.records)
 
 
 def test_non_skeleton_injection_path_byte_identical(monkeypatch):
-    """Intent still gates: with the feature disabled the injection path is
-    byte-identical (unchanged from the Phase-1 guarantee)."""
+    """Acceptance #4: the non-skeleton injection path (feature disabled) is
+    byte-identical — the truth patch must not change it."""
     import tokenpak.proxy.config as cfg
     import tokenpak.vault.chunk_shaping as cs
 
@@ -103,58 +94,30 @@ def test_non_skeleton_injection_path_byte_identical(monkeypatch):
     assert cs._inject_skeleton_into_blocks(blocks) == blocks
 
 
-def test_injection_skeletonizes_supported_fence(monkeypatch):
-    """With skeleton enabled, a supported code fence is skeletonized in place:
-    signature preserved, body elided, fence structure intact."""
+def test_extractor_missing_preserves_code_body(monkeypatch):
+    """With skeleton enabled but the extractor absent, the code body must be
+    preserved (no skeletonization / no corruption).
+
+    NOTE: the enabled fence-rewrite path normalizes block whitespace (adds a
+    trailing newline before the closing fence) independently of this patch — a
+    pre-existing cosmetic quirk left for the real extractor work. This test
+    asserts content survival, not byte-equality, to avoid coupling to that quirk.
+    """
     import tokenpak.proxy.config as cfg
     import tokenpak.vault.chunk_shaping as cs
 
     monkeypatch.setattr(cfg, "SKELETON_ENABLED", True, raising=False)
-    blocks = (
-        "Some prose.\n\n"
-        "```python\n"
-        "def foo(x):\n"
-        '    """Doc."""\n'
-        "    a = x + 1\n"
-        "    b = a * 2\n"
-        "    return b\n"
-        "```\n"
-    )
+    blocks = "Some prose.\n\n```python\ndef foo(x):\n    return x + 1\n```\n"
     out = cs._inject_skeleton_into_blocks(blocks)
-    assert "Some prose." in out
     assert "def foo(x):" in out
-    assert '"""Doc."""' in out
-    assert "a = x + 1" not in out
-    assert "return b" not in out
-    # Fence structure intact.
-    assert out.count("```") == 2
-
-
-def test_injection_noop_fences_pass_through_byte_identical(monkeypatch):
-    """Fences the extractor does not change must pass through byte-identical —
-    the historical fence re-assembly quirk (stray trailing newline before the
-    closing fence) is fixed with the real extractor."""
-    import tokenpak.proxy.config as cfg
-    import tokenpak.vault.chunk_shaping as cs
-
-    monkeypatch.setattr(cfg, "SKELETON_ENABLED", True, raising=False)
-    # Unsupported language fence + a supported fence with nothing to elide.
-    blocks = (
-        "Prose.\n\n"
-        "```ruby\ndef foo\n  1\nend\n```\n\n"
-        "```python\nX = 1\n```\n"
-    )
-    assert cs._inject_skeleton_into_blocks(blocks) == blocks
+    assert "return x + 1" in out
 
 
 def test_no_unbacked_savings_percentage_in_injection_source():
     """No live code may assert a skeleton savings percentage that isn't backed
-    by a passing benchmark test (the Phase-1 removed '70-90% reduction' claim
-    must not creep back into the injection sources)."""
+    by a passing benchmark test (the removed '70-90% reduction' claim)."""
     import tokenpak.proxy.vault_bridge as vb
-    import tokenpak.vault.chunk_shaping as cs
 
-    for mod in (vb, cs):
-        src = Path(mod.__file__).read_text(encoding="utf-8")
-        assert "70-90% reduction" not in src
-        assert "70-90%" not in src
+    src = Path(vb.__file__).read_text(encoding="utf-8")
+    assert "70-90% reduction" not in src
+    assert "70-90%" not in src

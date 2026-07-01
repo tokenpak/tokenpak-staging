@@ -1,6 +1,5 @@
 import pytest
-
-from tokenpak.sdk.langchain.retrievers import TokenPakRetriever
+from langchain_tokenpak.retrievers import TokenPakRetriever
 
 
 class MockDoc:

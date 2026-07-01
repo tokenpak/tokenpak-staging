@@ -12,9 +12,7 @@ configures MCP, hooks, and AGENTS.md — the launcher is convenience.
 from __future__ import annotations
 
 import os
-import random
 import sys
-from typing import TextIO
 
 from ..config import CompanionConfig
 
@@ -97,117 +95,62 @@ def main(args: list[str] | None = None) -> int:
         install_only = True
         args = [a for a in args if a != "--install-only"]
 
-    # Opt-in: route codex through the local TokenPak proxy via a dedicated
-    # named profile. Stripped from the args before they reach codex. Default
-    # (no --proxy) behaviour is byte-identical to before this flag existed.
-    use_proxy = False
-    if "--proxy" in args:
-        use_proxy = True
-        args = [a for a in args if a != "--proxy"]
-
     config = CompanionConfig.from_env()
     config.profile_overrides()
 
     config.journal_dir.mkdir(parents=True, exist_ok=True)
-    progress = _LoadingStatus(sys.stderr)
-
-    # ── Step 0a: Resolve CODEX_HOME isolation mode ───────────
-    # workspace = default isolation unit (per-project), isolated =
-    # advanced (per-session). shared = current behavior (literal default).
-    # Provisioning + preflight run before any exec so a contended home
-    # is surfaced instead of hung on.
-    from . import session_home, state_lock
-
-    codex_home = None
-    try:
-        mode = session_home.resolve_mode()
-        if mode == session_home.MODE_ATTACH:
-            progress.clear()
-            print(
-                "tokenpak: TOKENPAK_CODEX_SESSION_MODE=attach is deferred; "
-                "falling back to shared mode",
-                file=sys.stderr,
-            )
-            mode = session_home.MODE_SHARED
-        provisioned = session_home.provision_codex_home(mode)
-        codex_home = provisioned.home
-    except Exception as exc:  # never let isolation block the launcher
-        progress.clear()
-        print(
-            f"tokenpak: codex home provisioning failed ({exc}); "
-            "using default ~/.codex",
-            file=sys.stderr,
-        )
-        provisioned = None
-
-    # State-lock preflight against the home that Codex will actually use.
-    if not install_only:
-        lock = state_lock.probe(codex_home)
-        if lock.locked:
-            progress.clear()
-            print(state_lock.remediation_hint(lock), file=sys.stderr)
-            return 1
 
     # ── Step 0: Refresh model-rate snapshot for shell hooks ──
     from .rates_snapshot import refresh as refresh_rates
 
-    progress.step("refreshing Codex companion rates")
-    refresh_rates()
+    rates_path = refresh_rates()
+    print(f"tokenpak: rates snapshot refreshed ({rates_path})", file=sys.stderr)
 
     # ── Step 1: Register MCP server ──────────────────────────
     from .mcp_config import get_env_vars, register
 
-    progress.step("registering Codex MCP server")
     env_vars = get_env_vars(config)
-    if not register(env_vars=env_vars):
-        progress.clear()
+    if register(env_vars=env_vars):
+        print("tokenpak: MCP server registered", file=sys.stderr)
+    else:
         print("tokenpak: MCP registration failed (continuing)", file=sys.stderr)
 
     # ── Step 2: Install hooks ────────────────────────────────
     if config.hooks_enabled:
         from .hooks import ensure_hooks_feature_enabled, install_hooks
 
-        progress.step("installing Codex hooks")
         if ensure_hooks_feature_enabled():
-            install_hooks(target="global")
+            hooks_path = install_hooks(target="global")
+            print(f"tokenpak: hooks installed ({hooks_path})", file=sys.stderr)
         else:
-            progress.clear()
             print(
                 "tokenpak: hooks feature could not be enabled",
                 file=sys.stderr,
             )
-    else:
-        progress.step("skipping Codex hooks")
 
     # ── Step 3: Install AGENTS.md ────────────────────────────
     from .agents_md import install_agents_md
 
-    progress.step("installing Codex AGENTS.md")
-    install_agents_md(target="global")
+    agents_path = install_agents_md(target="global")
+    print(f"tokenpak: AGENTS.md installed ({agents_path})", file=sys.stderr)
 
     # ── Step 4: Install skills ───────────────────────────────
     from .skills_installer import install_skills
 
-    progress.step("installing TokenPak skills")
-    install_skills()
+    installed = install_skills()
+    if installed:
+        print(f"tokenpak: {len(installed)} skills installed", file=sys.stderr)
 
     # ── Step 5: Banner ───────────────────────────────────────
-    proxy_url = ""
-    if use_proxy and not install_only:
-        progress.step("installing TokenPak proxy profile")
-        try:
-            _install_tokenpak_chatgpt_profile()
-            proxy_url = _TOKENPAK_CHATGPT_BASE_URL
-        except Exception as exc:
-            progress.clear()
-            print(
-                f"tokenpak: --proxy profile install failed ({exc}); "
-                "launching codex without proxy profile",
-                file=sys.stderr,
-            )
-
-    progress.clear()
-    _print_ready_banner(config, proxy_url, sys.stderr)
+    budget_phrase = (
+        f"budget ${config.budget_daily_usd:.2f}/day"
+        if config.budget_daily_usd > 0
+        else "no budget cap"
+    )
+    print(
+        f"tokenpak: companion ready for codex ({config.profile}, {budget_phrase})",
+        file=sys.stderr,
+    )
 
     if install_only:
         print(
@@ -221,14 +164,11 @@ def main(args: list[str] | None = None) -> int:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(config.budget_daily_usd)
 
     env = os.environ.copy()
-    env.update(env_vars)
-
-    # Point the child Codex process at the provisioned home and record the
-    # PID sentinel (same PID survives execvpe, so it stays accurate). Do this
-    # before the bypass-flag injection so the bypass logic sees the final env.
-    if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
-        env = session_home.apply_to_env(provisioned.home, env)
-        session_home.record_pid(provisioned.home)
+    if config.profile != "balanced":
+        env["TOKENPAK_COMPANION_PROFILE"] = config.profile
+    default_journal_dir = str(config.journal_dir.__class__.home() / ".tokenpak" / "companion")
+    if str(config.journal_dir) != default_journal_dir:
+        env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
 
     fleet = _fleet_state_enabled()
     forwarded = _maybe_inject_bypass_flag(args, env, fleet=fleet)
@@ -236,97 +176,7 @@ def main(args: list[str] | None = None) -> int:
     if banner:
         print(banner, file=sys.stderr)
     codex_args = ["codex", *forwarded]
-    if proxy_url:
-        codex_args = ["codex", "-p", "tokenpak-chatgpt", *forwarded]
     os.execvpe("codex", codex_args, env)
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
     return 1
-
-
-class _LoadingStatus:
-    """Transient setup status for interactive terminals, plain lines for logs."""
-
-    def __init__(self, stream: TextIO) -> None:
-        self.stream = stream
-        self.interactive = bool(getattr(stream, "isatty", lambda: False)())
-        self._active = False
-        self._started = False
-
-    def step(self, message: str) -> None:
-        if self.interactive:
-            if not self._started:
-                self.stream.write("\n")
-                self._started = True
-            self.stream.write(f"\r{_CLEAR_LINE}{_DIM}tokenpak: {message}...{_RESET}")
-            self.stream.flush()
-            self._active = True
-            return
-        print(f"tokenpak: {message}...", file=self.stream)
-
-    def clear(self) -> None:
-        if not self.interactive or not self._active:
-            return
-        self.stream.write(f"\r{_CLEAR_LINE}")
-        self.stream.flush()
-        self._active = False
-
-
-def _print_ready_banner(
-    config: CompanionConfig,
-    proxy_url: str,
-    stream: TextIO,
-) -> None:
-    """Print the Codex companion banner using the Claude launcher style."""
-    from tokenpak.cli.commands.status import MEME_LINES, _get_version
-
-    mode = config.profile.capitalize()
-    budget = (
-        f"${config.budget_daily_usd:.2f}/day"
-        if config.budget_daily_usd > 0
-        else "Unlimited"
-    )
-    meme = random.choice(MEME_LINES)
-    version = _get_version()
-
-    print(file=stream)
-    print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Codex Companion", file=stream)
-    print(f"     {_DIM}TokenPak {version}{_RESET}", file=stream)
-    print(f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{_RESET}", file=stream)
-    if proxy_url:
-        print(f"     {_DIM}Proxy active \u2192 {proxy_url}{_RESET}", file=stream)
-    print(file=stream)
-    print(f"     {_DIM}{meme}{_RESET}", file=stream)
-    print(file=stream)
-
-
-# Exact contents of the dedicated named profile written under --proxy. This is
-# the ONLY file the launcher writes into ~/.codex, and only when --proxy is
-# passed. The global ~/.codex/config.toml and ~/.codex/AGENTS.md are never
-# touched.
-_TOKENPAK_CHATGPT_PROFILE_TOML = f"""model_provider = "tokenpak-chatgpt"
-
-[model_providers.tokenpak-chatgpt]
-name = "TokenPak ChatGPT"
-base_url = "{_TOKENPAK_CHATGPT_BASE_URL}"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = false
-stream_idle_timeout_ms = 300000
-"""
-
-
-def _install_tokenpak_chatgpt_profile() -> str:
-    """Write the named ``tokenpak-chatgpt`` profile file. Returns its path.
-
-    Creates ``~/.codex`` if missing and writes
-    ``~/.codex/tokenpak-chatgpt.config.toml`` with the exact provider block.
-    Never edits ``~/.codex/config.toml`` or ``~/.codex/AGENTS.md``.
-    """
-    from pathlib import Path
-
-    codex_dir = Path.home() / ".codex"
-    codex_dir.mkdir(parents=True, exist_ok=True)
-    profile_path = codex_dir / "tokenpak-chatgpt.config.toml"
-    profile_path.write_text(_TOKENPAK_CHATGPT_PROFILE_TOML, encoding="utf-8")
-    return str(profile_path)
