@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-06-18T00:45:53Z",
-  "package_version": "1.9.2",
+  "generated_at": "2026-07-01T18:02:02Z",
+  "package_version": "1.10.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -1494,6 +1494,10 @@
     {
       "module": "tokenpak.cli.commands.status",
       "name": "SEP_INNER"
+    },
+    {
+      "module": "tokenpak.cli.commands.status",
+      "name": "STATUS_JSON_SCHEMA_VERSION"
     },
     {
       "module": "tokenpak.cli.commands.status",
