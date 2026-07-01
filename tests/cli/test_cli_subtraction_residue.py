@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 import tokenpak
@@ -25,6 +26,23 @@ def test_no_stale_hardcoded_proxy_version_literal():
     """The stale ``PROXY_VERSION = "1.1.0"`` literal must not return."""
     src = inspect.getsource(_cli_core)
     assert 'PROXY_VERSION = "1.1.0"' not in src
+
+
+def test_cmd_version_reports_honest_expected_proxy(monkeypatch, capsys):
+    """The rendered expected proxy version must track the package version."""
+    monkeypatch.setattr(_cli_core, "_get_proxy_version", lambda: {"error": "offline"})
+    _cli_core.cmd_version(Namespace())
+    out = capsys.readouterr().out
+    assert f"Proxy (expected) : {tokenpak.__version__}" in out
+    assert "Proxy (expected) : 1.1.0" not in out
+
+
+def test_advertised_connectors_exclude_notimplemented_stubs():
+    """The advertised connector registry must list only working connectors."""
+    sources = __import__("tokenpak.sources", fromlist=[""])
+    advertised = set(sources.list_connectors())
+    for stub in ("notion", "google_drive", "github"):
+        assert stub not in advertised
 
 
 def test_version_probe_uses_health_endpoint():
