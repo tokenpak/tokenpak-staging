@@ -165,3 +165,13 @@ tokenpak/proxy/proxy_watchdog.py:AUTH_PROFILES_FILE = Path.home() / ".tokenpak" 
 tokenpak/proxy/failover.py:_CONFIG_PATH = Path(os.path.expanduser("~/.tokenpak/config.yaml"))
 tokenpak/proxy/intelligence/deep_health.py:        db_path = os.path.expanduser("~/.tokenpak/data/monitor.db")
 tokenpak/proxy/intelligence/deep_health.py:        index_path = os.path.expanduser("~/.tokenpak/data/pricing_index.json")
+tokenpak/_cli_core.py:_TOKENPAK_CFG = Path.home() / ".tokenpak" / "config.json"
+tokenpak/cli/_impl.py:        os.path.expanduser("~/.tokenpak/data/monitor.db"),
+tokenpak/cli/commands/budget.py:    os.path.expanduser("~/.tokenpak/data/monitor.db"),
+tokenpak/cli/commands/doctor_claude_code.py:    return Path.home() / ".tokenpak" / "monitor.db"
+tokenpak/cli/commands/optimize.py:    os.path.expanduser("~/.tokenpak/data/monitor.db"),
+tokenpak/cli/commands/serve.py:    _marker = pathlib.Path.home() / ".tokenpak" / ".compression-default-notice-shown"
+tokenpak/companion/config.py:                    str(Path.home() / ".tokenpak" / "companion"),
+tokenpak/core/config.py:CONFIG_PATH = Path(os.path.expanduser("~/.tokenpak/config.json"))
+tokenpak/core/config_loader.py:CONFIG_PATH = Path(os.environ.get("TOKENPAK_CONFIG", str(Path.home() / ".tokenpak" / "config.yaml")))
+tokenpak/core/version_check.py:TOKENPAK_CFG = Path.home() / ".tokenpak" / "config.json"

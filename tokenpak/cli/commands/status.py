@@ -111,10 +111,6 @@ def _print_free_tier_upgrade_hint() -> None:
 
 SEP_INNER = "─────────────────────────────────"
 PROXY_DEFAULT = "http://127.0.0.1:8766"
-DB_DEFAULT = os.environ.get(
-    "TOKENPAK_DB",
-    os.path.expanduser("~/tokenpak/monitor.db"),
-)
 
 
 # ---------------------------------------------------------------------------
@@ -141,16 +137,16 @@ def _get_db_path() -> str:
     The previous hand-rolled list omitted ``~/.tpk`` (the canonical TPK home),
     so the dashboard could read a different DB than the proxy writes once
     ``~/.tpk/monitor.db`` exists — the latent split-brain this fixes.
-    Falls back to the legacy default only if no valid DB is found.
+    Returns the resolver's canonical fresh-install path if no valid DB is
+    found.
     """
     try:
-        from tokenpak import _paths
         resolved = _paths.monitor_db(mode="read")
         if resolved is not None:
             return str(resolved)
     except Exception:
         pass
-    return DB_DEFAULT
+    return str(_paths.monitor_db(mode="write"))
 
 
 def _connect_db(db_path: Optional[str] = None) -> Optional[sqlite3.Connection]:
@@ -873,6 +869,7 @@ def run(
     hours: int = 0,
     fleet: bool = False,
     since: Optional[str] = None,
+    all_time: bool = False,
 ) -> None:
     """Print savings-first status to stdout.
 
@@ -887,6 +884,7 @@ def run(
       --hours N      Filter to last N hours (combinable with --days)
       --fleet        Fleet rollup view (reads rollup_daily table)
       --since Nd     With --fleet: window in days (e.g. '7d')
+      --all          Include all-time persistent history in JSON output
     """
     if fleet:
         from tokenpak.cli._impl import run_fleet
@@ -1609,6 +1607,7 @@ if HAS_CLICK:
     @click.option("--db", "db_path", default=None, help="Monitor DB path override")
     @click.option("--days", default=0, type=int, help="Filter to last N days (combinable with --hours)")
     @click.option("--hours", default=0, type=int, help="Filter to last N hours (combinable with --days)")
+    @click.option("--all", "all_time", is_flag=True, help="Show full persistent history (all time)")
     @click.option("--fleet", is_flag=True, help="Fleet rollup view — reads rollup_daily")
     @click.option("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
     def status_cmd(
@@ -1622,6 +1621,7 @@ if HAS_CLICK:
         db_path: Optional[str],
         days: int,
         hours: int,
+        all_time: bool,
         fleet: bool,
         since: Optional[str],
     ) -> None:
@@ -1639,6 +1639,7 @@ if HAS_CLICK:
           tokenpak status --days 1            # last 24 hours
           tokenpak status --hours 6           # last 6 hours
           tokenpak status --days 1 --hours 6  # last 30 hours
+          tokenpak status --json --all        # include all-time history
           tokenpak status --full              # legacy technical output
           tokenpak status --minimal           # one-liner for scripts
           tokenpak status --tip-cache         # compact TIP attribution
@@ -1658,6 +1659,7 @@ if HAS_CLICK:
             db_path=db_path,
             days=days,
             hours=hours,
+            all_time=all_time,
             fleet=fleet,
             since=since,
         )
