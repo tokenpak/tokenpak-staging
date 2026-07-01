@@ -88,6 +88,7 @@ Then point your LLM client at `http://localhost:8766`. That's it. See [Getting S
 | Document | Description |
 |----------|-------------|
 | [Getting Started](getting-started.md) | 5-minute setup guide |
+| [Using TokenPak in CI](ci.md) | Non-interactive install and JSON status checks |
 | [CLI Reference](cli-reference.md) | All commands and flags |
 | [REST API Reference](REST_API.md) | REST endpoints |
 | [Embedding API Reference](embedding-api-reference.md) | Embedding proxy: providers, failover, env vars |

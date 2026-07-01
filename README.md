@@ -107,7 +107,7 @@ TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are 
 
 ## Support
 
-- **Docs:** [docs/quickstart.md](docs/quickstart.md) · [API reference](docs/api-tpk-v1.md)
+- **Docs:** [docs/quickstart.md](docs/quickstart.md) · [CI guide](docs/ci.md) · [API reference](docs/api-tpk-v1.md)
 - **Issues:** [github.com/tokenpak/tokenpak/issues](https://github.com/tokenpak/tokenpak/issues)
 - **Discussions:** [github.com/tokenpak/tokenpak/discussions](https://github.com/tokenpak/tokenpak/discussions)
 - **Email:** hello@tokenpak.ai
