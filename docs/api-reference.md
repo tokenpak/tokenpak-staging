@@ -203,31 +203,34 @@ Proxy health and stats.
 
 ### `GET /health`
 
-Structured health check. Returns component status, uptime, version, and actionable suggestions when degraded.
+Structured health check. Returns the canonical proxy health contract used by
+the CLI, doctor, status, and dashboard probes.
 
 **No authentication required.**
 
 **HTTP status codes:**
 - `200` — healthy or degraded
-- `503` — critical (all providers down)
+- `503` — unavailable during startup/shutdown or critical failures
 
 **Response:**
 ```json
 {
- "status": "healthy",
- "uptime": 3600,
- "version": "1.0.0",
- "timestamp": "2026-03-16T19:10:00Z",
- "components": {
- "cache": { "status": "ok", "entries": 42 },
- "provider_connections": {
- "anthropic": { "status": "ok", "circuit_open": false, "failures": 0 },
- "openai": { "status": "ok", "circuit_open": false, "failures": 0 },
- "google": { "status": "ok", "circuit_open": false, "failures": 0 }
+ "status": "ok",
+ "version": "1.7.1",
+ "uptime_seconds": 3600,
+ "compilation_mode": "hybrid",
+ "requests_total": 42,
+ "python_version": "3.12.3",
+ "stats": {
+ "requests": 42,
+ "saved_tokens": 18500,
+ "errors": 0
  },
- "config": { "status": "ok" }
- },
- "suggestions": []
+ "latency": {
+ "p50_latency_ms": 25,
+ "p99_latency_ms": 60,
+ "samples": 42
+ }
 }
 ```
 
@@ -235,9 +238,8 @@ Structured health check. Returns component status, uptime, version, and actionab
 
 | Value | Meaning | HTTP |
 |-------|---------|------|
-| `healthy` | All components nominal | 200 |
-| `degraded` | One or more providers circuit-open, or error rate >10% | 200 |
-| `critical` | All providers unreachable | 503 |
+| `ok` | Proxy is running and accepting probes | 200 |
+| `degraded` | Proxy is running with degraded subcomponents | 200 |
 
 ---
 
@@ -264,20 +266,8 @@ Kubernetes/Docker readiness probe. Returns `200` only when the proxy has fully i
 
 ### `GET /v1/health`
 
-> **Deprecated** — use `GET /health` instead (see above).
-
-Detailed health check (legacy).
-
-**Response:**
-```json
-{
- "proxy": "ok",
- "database": "ok",
- "index": "ok",
- "compression_pipeline": "ok",
- "version": "0.1.1"
-}
-```
+> **Deprecated** — use `GET /health` instead. The canonical health contract is
+> the unversioned `/health` response above.
 
 ---
 
