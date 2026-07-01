@@ -40,6 +40,7 @@ BUDGET_ALERT_THRESHOLD_PCT: float = float(_os.environ.get("TOKENPAK_BUDGET_ALERT
 # ---------------------------------------------------------------------------
 
 _DB_CONNECTION = None
+_DB_CONNECTION_PATH = None
 _DB_LOCK = threading.Lock()
 _DB_WRITE_QUEUE = None
 _DB_QUEUE_LOCK = threading.Lock()
@@ -100,12 +101,21 @@ def _db_writer_worker():
 
 def _get_db_connection(db_path: str) -> sqlite3.Connection:
     """Get or create persistent SQLite connection with WAL mode enabled."""
-    global _DB_CONNECTION
+    global _DB_CONNECTION, _DB_CONNECTION_PATH
+    db_path_str = str(db_path)
+    if _DB_CONNECTION is not None and _DB_CONNECTION_PATH != db_path_str:
+        try:
+            _DB_CONNECTION.close()
+        except Exception:
+            pass
+        _DB_CONNECTION = None
+        _DB_CONNECTION_PATH = None
     if _DB_CONNECTION is None:
         _DB_CONNECTION = sqlite3.connect(
-            db_path,
+            db_path_str,
             check_same_thread=False,  # Required for ThreadedHTTPServer
         )
+        _DB_CONNECTION_PATH = db_path_str
         _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
         _DB_CONNECTION.execute("PRAGMA synchronous=NORMAL")
         _DB_CONNECTION.execute("PRAGMA busy_timeout=5000")
@@ -154,7 +164,7 @@ class Monitor:
                 session_id TEXT DEFAULT '',
                 agent_id TEXT DEFAULT '',
                 cycle_id TEXT DEFAULT '',
-                attribution_source TEXT DEFAULT ''
+                attribution_source TEXT DEFAULT 'unknown'
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -241,10 +251,9 @@ class Monitor:
         for _alter in (
             "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
             "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
-            # attribution_source <- platform-origin extractor (Path C). Non-empty
-            # only when origin is genuinely known; '' sentinel otherwise (never
-            # fabricated). Idempotent — may pre-exist from a peer migration.
-            "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT ''",
+            # attribution_source <- platform-origin extractor (Path C). Use a
+            # non-empty fallback when origin is not known.
+            "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT 'unknown'",
         ):
             try:
                 conn.execute(_alter)
@@ -314,7 +323,7 @@ class Monitor:
         session_id="",
         agent_id="",
         cycle_id="",
-        attribution_source="",
+        attribution_source="unknown",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -352,7 +361,7 @@ class Monitor:
             session_id or "",
             agent_id or "",
             cycle_id or "",
-            attribution_source or "",
+            attribution_source or "unknown",
         )
         _queued = False
         try:
