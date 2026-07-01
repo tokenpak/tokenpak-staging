@@ -294,7 +294,7 @@ After=network.target
 [Service]
 Type=simple
 User=tokenpak
-ExecStart=/usr/local/bin/tokenpak serve --port 8766 --workers 4
+ExecStart=/usr/local/bin/tokenpak serve --port 8766
 Restart=on-failure
 RestartSec=5
 Environment=TOKENPAK_LOG_LEVEL=info
