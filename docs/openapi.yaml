@@ -186,7 +186,7 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
               example:
                 status: ok
-                version: 1.7.1
+                version: 1.10.0
                 uptime_seconds: 3600
                 compilation_mode: hybrid
                 requests_total: 42
@@ -685,7 +685,7 @@ components:
           example: ok
         version:
           type: string
-          example: 1.7.1
+          example: 1.10.0
         uptime_seconds:
           type: integer
           example: 3600
