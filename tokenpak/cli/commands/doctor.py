@@ -57,6 +57,79 @@ def _claude_settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
+def _api_key_setup_detail() -> str:
+    """Detailed no-key setup guidance shared by default and verbose output."""
+    try:
+        from tokenpak.cli.commands.setup import env_var_help
+
+        examples = env_var_help("ANTHROPIC_API_KEY", "sk-...")
+    except Exception:
+        examples = "    export ANTHROPIC_API_KEY=sk-..."
+    return (
+        "Claude Code OAuth/session auth can use the local proxy with no direct API key.\n"
+        "To add a direct provider key, set one before launching TokenPak:\n"
+        f"{examples}"
+    )
+
+
+def _active_credential_mode() -> tuple[str, str]:
+    """Resolve the active credential mode for doctor observability.
+
+    Returns ``(mode_label, detail)``. This is **observability only** — it never
+    warns; the Mode-1 OAuth default in particular must surface as healthy state,
+    not a "no API key" alarm. Classification reuses the canonical credential
+    discovery (:func:`tokenpak.creds.providers.discover_all`) so it stays correct
+    as providers are added rather than inventing a parallel notion of auth mode.
+
+    - **Mode 1 — OAuth passthrough:** an OAuth-token env var or a discovered
+      OAuth/bearer credential (Claude CLI / OpenClaw / Codex session).
+    - **Mode 2 — stored key (keyring/0600):** a stored BYOK static key from a
+      non-``env-pool`` provider.
+    - **Mode 3 — env var:** a direct ``*_API_KEY`` supplied via the environment.
+    """
+    oauth_env = any(
+        os.environ.get(v, "").strip()
+        for v in ("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN2")
+    )
+    env_key_present = any(
+        os.environ.get(v, "").strip()
+        for v in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
+    )
+    oauth_cred = False
+    stored_key_cred = False
+    try:
+        from tokenpak.creds.model import KIND_API_KEY
+        from tokenpak.creds.providers import discover_all
+
+        for cred in discover_all():
+            if cred.kind != KIND_API_KEY:
+                oauth_cred = True
+            elif cred.provider != "env-pool":
+                stored_key_cred = True
+    except Exception:
+        pass
+
+    if oauth_env or oauth_cred:
+        return (
+            "Mode 1 — OAuth passthrough",
+            "OAuth/session auth active; no direct API key required",
+        )
+    if stored_key_cred:
+        return (
+            "Mode 2 — stored key (keyring/0600)",
+            "BYOK credential stored via OS keyring or 0600 file fallback",
+        )
+    if env_key_present:
+        return (
+            "Mode 3 — env var",
+            "Provider API key supplied via environment (read-only)",
+        )
+    return (
+        "none detected",
+        "No credential path detected — Claude Code OAuth or `tokenpak setup`",
+    )
+
+
 def _route_state() -> tuple[str, str | None]:
     """Resolve Claude Code → TokenPak proxy routing state, honestly.
 
@@ -442,6 +515,37 @@ def run_doctor(
             f"~/.tpk/ boundary    {tokenpak_dir}",
         )
 
+    # === Check 0b: First-run + credential-mode observability ====================
+    # Surface onboarding/first-run state so a stalled or mis-homed first run is
+    # diagnosable, and report the active credential mode AS STATE — never a
+    # "no API key" warning for the Mode-1 OAuth default. Recorded as "pass"
+    # (info) so observability never perturbs the doctor warn/fail counts.
+    seen_intro = (tokenpak_dir / ".seen_intro").exists()
+    home_kind = (
+        "legacy-fallback (~/.tokenpak/)"
+        if _paths.is_legacy_active()
+        else "canonical (~/.tpk/)"
+    )
+    _record(
+        "first_run_state",
+        "pass",
+        "First-run state     "
+        f"sentinel {'present' if seen_intro else 'absent (onboarding not completed)'}"
+        f" — home {home_kind}",
+        detail=(
+            f"home={tokenpak_dir} "
+            f"seen_intro={'present' if seen_intro else 'absent'} "
+            f"home_kind={home_kind}"
+        ),
+    )
+    _cred_mode, _cred_mode_detail = _active_credential_mode()
+    _record(
+        "credential_mode",
+        "pass",
+        f"Credential mode     {_cred_mode}",
+        detail=_cred_mode_detail,
+    )
+
     # === Check 1: Proxy health with latency =====================================
     proxy_port = int(os.environ.get("TOKENPAK_PORT", "8766"))
     health = _proxy_get("/health", port=proxy_port)
@@ -452,8 +556,15 @@ def run_doctor(
         p99 = latency.get("p99_latency_ms")
         samples = latency.get("samples", 0)
         outlier = latency.get("outlier_detected", False)
-        mode = health.get("compilation_mode", "unknown")
-        requests_total = health.get("stats", {}).get("requests", 0)
+        # Read the unified /health contract robustly: compilation_mode is
+        # emitted by both the sync and async proxies now, and requests is read
+        # from the nested stats block first, falling back to the flat
+        # requests_total — so neither emitter shape produces a "unknown mode" /
+        # "0 reqs" schema-drift artifact on a healthy proxy.
+        mode = health.get("compilation_mode") or "unknown"
+        requests_total = health.get("stats", {}).get("requests")
+        if requests_total is None:
+            requests_total = health.get("requests_total", 0)
 
         if p50 is not None:
             if p95 is not None:
@@ -1152,12 +1263,35 @@ def run_doctor(
             f"API keys            {', '.join(found_keys)} — env vars set",
         )
     else:
-        _record(
-            "api_keys",
-            "warn",
-            "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "or GOOGLE_API_KEY",
-        )
+        # A direct provider key is only required when no OAuth/session-auth path
+        # covers Anthropic; warning otherwise is a false alarm. Reuse canonical
+        # credential discovery to decide.
+        try:
+            from tokenpak.creds.auth_mode import non_direct_key_auth_available
+
+            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
+        except Exception:
+            anthropic_via_oauth = False
+
+        if anthropic_via_oauth:
+            _record(
+                "api_keys",
+                "pass",
+                "API keys            Anthropic authenticated via OAuth/session "
+                "(no direct API key needed)",
+            )
+        else:
+            detail = _api_key_setup_detail()
+            _record(
+                "api_keys",
+                "warn",
+                "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+                "or GOOGLE_API_KEY",
+                detail=detail,
+            )
+            if not output_json and not verbose:
+                for line in detail.splitlines():
+                    print(f"         {line}")
 
     # Proxy degradation check
     try:
