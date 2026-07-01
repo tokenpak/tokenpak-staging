@@ -1785,6 +1785,10 @@
     },
     {
       "module": "tokenpak.cli.commands.status",
+      "name": "STATUS_JSON_SCHEMA_VERSION"
+    },
+    {
+      "module": "tokenpak.cli.commands.status",
       "name": "get_rates"
     },
     {
