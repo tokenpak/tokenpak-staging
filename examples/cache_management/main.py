@@ -6,7 +6,7 @@ Demonstrates TokenPak's CacheManager for avoiding redundant LLM calls.
 Problem: Repeatedly compressing or processing the same content wastes compute.
 Solution: CacheManager stores results with TTL, giving instant cache hits.
 
-Expected behavior: Repeated queries reuse cached compression results.
+Expected benefit: Near-zero latency on repeated queries (100x+ speedup).
 Setup: pip install tokenpak
 """
 
@@ -24,20 +24,18 @@ def basic_cache_demo():
     """Show basic cache get/set/hit patterns."""
     print("=== Basic Cache Demo ===\n")
 
-    cache = CacheManager()
+    cache = CacheManager(default_ttl=300)  # 5-minute TTL
 
     # Cache a compressed result
     cache.set("my_key", "compressed content here", ttl=60)
 
     # Retrieve it
-    value = cache.get("my_key")
-    hit = value is not None
+    hit, value = cache.get("my_key")
     print(f"Cache hit:  {hit}")
     print(f"Value:      {value!r}")
 
     # Miss on unknown key
-    value2 = cache.get("unknown_key")
-    hit2 = value2 is not None
+    hit2, value2 = cache.get("unknown_key")
     print(f"\nCache miss: {not hit2}")
     print(f"Value:      {value2!r}")
 
@@ -46,7 +44,7 @@ def compression_cache_demo():
     """Cache compression results to avoid reprocessing."""
     print("\n=== Compression Cache Demo ===\n")
 
-    cache = CacheManager()
+    cache = CacheManager(default_ttl=300)
     engine = HeuristicEngine()
 
     documents = [
@@ -62,8 +60,8 @@ def compression_cache_demo():
         # Use content hash as cache key
         cache_key = hashlib.sha256(doc.encode()).hexdigest()[:16]
 
-        cached = cache.get(cache_key)
-        if cached is not None:
+        hit, cached = cache.get(cache_key)
+        if hit:
             print(f"Doc {i+1}: ✅ Cache HIT  — {len(cached)} chars (saved recompression!)")
             hits += 1
         else:
@@ -89,13 +87,13 @@ def ttl_demo():
     cache.set("short_lived", "expires soon", ttl=0.1)  # 100ms TTL
     cache.set("long_lived", "stays around", ttl=3600)
 
-    hit1 = cache.get("short_lived") is not None
+    hit1, _ = cache.get("short_lived")
     print(f"Immediately after set — short_lived hit: {hit1}")
 
     time.sleep(0.2)  # Wait for TTL to expire
 
-    hit2 = cache.get("short_lived") is not None
-    hit3 = cache.get("long_lived") is not None
+    hit2, _ = cache.get("short_lived")
+    hit3, _ = cache.get("long_lived")
     print(f"After 200ms           — short_lived hit: {hit2} (expired)")
     print(f"After 200ms           — long_lived hit:  {hit3} (still valid)")
 

@@ -11,6 +11,7 @@ the requests table so the command is useful before the first cron run.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,19 +22,17 @@ from typing import Any, Dict, List, Optional
 
 
 def _resolve_db_path(db_path: Optional[str] = None) -> str:
-    """Resolve monitor.db path via the canonical resolver.
-
-    Delegates to ``tokenpak.core.paths.get_db_path`` (which routes through
-    ``tokenpak._paths.monitor_db()``) so fleet status reads the SAME database
-    as every other reader/writer — env override, canonical, and legacy
-    locations are all handled by the one candidate chain. Resolved at call
-    time so env/home changes take effect without re-import.
-    """
+    """Resolve monitor.db path. Checks env, then common locations."""
     if db_path:
         return db_path
-    from tokenpak.core.paths import get_db_path
-
-    return str(get_db_path("monitor.db"))
+    for candidate in [
+        os.environ.get("TOKENPAK_DB", ""),
+        os.path.expanduser("~/tokenpak/monitor.db"),
+        os.path.expanduser("~/.tokenpak/data/monitor.db"),
+    ]:
+        if candidate and Path(candidate).exists():
+            return candidate
+    return os.path.expanduser("~/tokenpak/monitor.db")
 
 
 def _open_db(db_path: str) -> Optional[sqlite3.Connection]:

@@ -13,26 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
-import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
-from .._local_data import (
-    resolve_spend_guard_db_path as _resolve_spend_guard_db_path,
-)
-from .._local_data import (
-    secure_sqlite_connect as _secure_sqlite_connect,
-)
-from .._local_data import (
-    sqlite_schema_cache_key as _sqlite_schema_cache_key,
-)
-
 _log = logging.getLogger(__name__)
-_SCHEMA_LOCK = threading.Lock()
-_SCHEMA_READY: set[tuple[str, int, int]] = set()
 
 # Single source of truth for event_type values (used by analytics queries).
 EVENT_TYPES = frozenset({
@@ -51,65 +39,47 @@ EVENT_TYPES = frozenset({
     "anti_loop_hit",    # cached block returned without re-estimation
     "pending_waiting",  # subsequent request while pending exists
     "replay_race",      # race on double-consume
-    "yes_grant_created",     # session-scoped grant written on POSITIVE/allow=session
-    "yes_grant_bypass",      # held-band block bypassed by an active grant (per redemption)
-    "yes_grant_exhausted",   # grant's max=$ budget spent → fell back to block band
-    "yes_grant_expired",     # grant past expires_at → fell back to block band
-    "yes_grant_read_error",  # grant-table read failed → fail-closed to block band
-    "yes_grant_discarded",   # NEGATIVE intent / [TIP: cancel] discarded an active grant
-    "reservation_block",       # concurrent admission denied (Standard 29 §15)
-    "reservation_tip_bypass",  # TIP-approved send recorded as a forced hold
-    "reservation_settled",     # hold released after provider settlement
 })
 
 
-def _db_path(audit_db_path: Optional[str]) -> Path:
-    return _resolve_spend_guard_db_path(audit_db_path)
+def _db_path(audit_db_path: str) -> Path:
+    p = Path(os.path.expanduser(audit_db_path))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    schema_key = _sqlite_schema_cache_key(conn)
-    if schema_key in _SCHEMA_READY:
-        return
-    with _SCHEMA_LOCK:
-        if schema_key in _SCHEMA_READY:
-            return
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS spend_guard_audit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts REAL NOT NULL,
-                session_id TEXT NOT NULL DEFAULT '',
-                event_type TEXT NOT NULL,
-                decision TEXT NOT NULL DEFAULT '',
-                reason TEXT NOT NULL DEFAULT '',
-                projected_tokens INTEGER NOT NULL DEFAULT 0,
-                projected_cost_usd REAL NOT NULL DEFAULT 0.0,
-                pending_id TEXT NOT NULL DEFAULT '',
-                request_hash TEXT NOT NULL DEFAULT '',
-                tip_directive_json TEXT NOT NULL DEFAULT '',
-                extra_json TEXT NOT NULL DEFAULT ''
-            )
-            """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS spend_guard_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            session_id TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL,
+            decision TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            projected_tokens INTEGER NOT NULL DEFAULT 0,
+            projected_cost_usd REAL NOT NULL DEFAULT 0.0,
+            pending_id TEXT NOT NULL DEFAULT '',
+            request_hash TEXT NOT NULL DEFAULT '',
+            tip_directive_json TEXT NOT NULL DEFAULT '',
+            extra_json TEXT NOT NULL DEFAULT ''
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_audit_session_ts "
-            "ON spend_guard_audit(session_id, ts)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_audit_event_ts "
-            "ON spend_guard_audit(event_type, ts)"
-        )
-        conn.commit()
-        if schema_key is not None:
-            _SCHEMA_READY.add(schema_key)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_session_ts "
+        "ON spend_guard_audit(session_id, ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_event_ts "
+        "ON spend_guard_audit(event_type, ts)"
+    )
+    conn.commit()
 
 
 def write_audit(
-    audit_db_path: Optional[str] = None,
+    audit_db_path: str,
     *,
     event_type: str,
     session_id: str,
@@ -124,9 +94,8 @@ def write_audit(
     """Insert one audit row. Best-effort — never raises into caller."""
     try:
         path = _db_path(audit_db_path)
-        conn = _secure_sqlite_connect(path, timeout=30.0)
+        conn = sqlite3.connect(str(path), timeout=2.0)
         try:
-            conn.execute("PRAGMA busy_timeout=30000")
             _ensure_schema(conn)
             tip_json = ""
             if tip is not None:
@@ -168,17 +137,16 @@ def write_audit(
 
 
 def query_recent(
-    audit_db_path: Optional[str] = None,
+    audit_db_path: str,
     *,
     session_id: Optional[str] = None,
     limit: int = 100,
 ) -> list[dict]:
     """Read the most recent audit rows. Used by tests and `tokenpak doctor`."""
     path = _db_path(audit_db_path)
-    conn = _secure_sqlite_connect(path, timeout=30.0)
+    conn = sqlite3.connect(str(path), timeout=2.0)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA busy_timeout=30000")
         _ensure_schema(conn)
         if session_id:
             rows = conn.execute(

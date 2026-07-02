@@ -1,4 +1,4 @@
-"""DispatchJob record (Dispatch contract §4.1)."""
+"""DispatchJob record."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from .enums import AutonomyMode, DispatchJobStatus
 
 
 class DispatchJob(DispatchBaseModel):
-    """Top-level intake record for a dispatched request (Dispatch contract §4.1).
+    """Top-level intake record for a dispatched request.
 
-    ``status`` is the Dispatch execution-tier state machine (§6), independent of
-    the task-packet status enum. ``source_task_packet_id`` is the task-packet
+    ``status`` is the Dispatch execution-tier state machine, independent of
+    the task-packet enum. ``source_task_packet_id`` is the task-packet
     crosswalk hook: ``None`` means the job is standalone (not task-packet-linked).
     """
 

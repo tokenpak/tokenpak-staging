@@ -47,10 +47,6 @@ CLAUDE_CODE_HEADER_ALLOWLIST: frozenset = frozenset((
     "x-stainless-runtime",
     "x-stainless-runtime-version",
     "x-stainless-timeout",
-    # Dispatch correlation headers — forwarded so dispatch job/station
-    # attribution can be threaded onto monitor.db rows. Additive only.
-    "x-tokenpak-dispatch-job-id",
-    "x-tokenpak-dispatch-station-id",
 ))
 
 # Headers that should never be forwarded (hop-by-hop + proxy internals).

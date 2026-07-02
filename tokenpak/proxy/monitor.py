@@ -8,16 +8,8 @@ Original location: class Monitor (lines 2320-3204) + SQLite helpers (lines 2248-
 import sqlite3
 import sys
 import threading
-from contextlib import closing
 from datetime import datetime
 from queue import Empty, Queue
-
-from tokenpak.proxy._local_data import (
-    secure_sqlite_connect as _secure_sqlite_connect,
-)
-from tokenpak.proxy._local_data import (
-    secure_sqlite_sidecars as _secure_sqlite_sidecars,
-)
 
 # ---------------------------------------------------------------------------
 # Migration system (optional — graceful fallback)
@@ -91,13 +83,8 @@ def _db_writer_worker():
                             compressed_tokens,injected_tokens,injected_sources,cache_read_tokens,cache_creation_tokens,
                             would_have_saved,cache_origin,user_id,
                             cache_creation_ephemeral_1h_tokens,cache_creation_ephemeral_5m_tokens,ttl_attribution,
-                            session_id,agent_id,cycle_id,
-                            ssrm_decision,ssrm_effective_context_tokens,ssrm_effective_context_pct,
-                            ssrm_cache_read_ratio,ssrm_projected_next_context_pct,
-                            ssrm_fingerprint_repeat_count,ssrm_session_age_turns,
-                            ssrm_progress_signal,ssrm_signals_json,skip_reason,
-                            dispatch_job_id,dispatch_station_id)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            session_id,agent_id,cycle_id,attribution_source)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         insert_params,
                     )
                     conn.commit()
@@ -115,14 +102,13 @@ def _get_db_connection(db_path: str) -> sqlite3.Connection:
     """Get or create persistent SQLite connection with WAL mode enabled."""
     global _DB_CONNECTION
     if _DB_CONNECTION is None:
-        _DB_CONNECTION = _secure_sqlite_connect(
+        _DB_CONNECTION = sqlite3.connect(
             db_path,
             check_same_thread=False,  # Required for ThreadedHTTPServer
         )
         _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
         _DB_CONNECTION.execute("PRAGMA synchronous=NORMAL")
         _DB_CONNECTION.execute("PRAGMA busy_timeout=5000")
-        _secure_sqlite_sidecars(db_path)
     return _DB_CONNECTION
 
 
@@ -143,216 +129,163 @@ class Monitor:
             pass
 
     def _init_db(self):
-        with closing(_secure_sqlite_connect(self.db_path)) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    request_type TEXT,
-                    input_tokens INTEGER,
-                    output_tokens INTEGER,
-                    estimated_cost REAL,
-                    latency_ms INTEGER,
-                    status_code INTEGER,
-                    endpoint TEXT,
-                    compilation_mode TEXT,
-                    protected_tokens INTEGER,
-                    compressed_tokens INTEGER,
-                    injected_tokens INTEGER DEFAULT 0,
-                    injected_sources TEXT DEFAULT '',
-                    cache_read_tokens INTEGER DEFAULT 0,
-                    cache_creation_tokens INTEGER DEFAULT 0,
-                    would_have_saved INTEGER DEFAULT 0,
-                    user_id TEXT DEFAULT '',
-                    session_id TEXT DEFAULT '',
-                    agent_id TEXT DEFAULT '',
-                    cycle_id TEXT DEFAULT '',
-                    dispatch_job_id TEXT DEFAULT '',
-                    dispatch_station_id TEXT DEFAULT ''
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
-            # Add columns if upgrading from v3
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_type TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                estimated_cost REAL,
+                latency_ms INTEGER,
+                status_code INTEGER,
+                endpoint TEXT,
+                compilation_mode TEXT,
+                protected_tokens INTEGER,
+                compressed_tokens INTEGER,
+                injected_tokens INTEGER DEFAULT 0,
+                injected_sources TEXT DEFAULT '',
+                cache_read_tokens INTEGER DEFAULT 0,
+                cache_creation_tokens INTEGER DEFAULT 0,
+                would_have_saved INTEGER DEFAULT 0,
+                user_id TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                agent_id TEXT DEFAULT '',
+                cycle_id TEXT DEFAULT '',
+                attribution_source TEXT DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
+        # Add columns if upgrading from v3
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN injected_tokens INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN injected_sources TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN would_have_saved INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN cache_origin TEXT DEFAULT 'unknown'")
+        except sqlite3.OperationalError:
+            pass
+        # Anthropic prompt-cache TTL attribution (additive, backward-compatible).
+        # Older rows have NULL/0 here; readers must COALESCE for aggregation.
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_1h_tokens INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_5m_tokens INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN ttl_attribution TEXT DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
+        # P0-06 (A6): user_id holds the SHA-256 hex of the proxy auth bearer
+        # token when the proxy auth gate accepted the request via the bearer
+        # path. Empty string for localhost / pre-A6 rows. Hash only — never the
+        # raw token.
+        try:
+            conn.execute("ALTER TABLE requests ADD COLUMN user_id TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        # Reasoning-usage columns (Provider-Native Compatibility Foundation,
+        # Packet A 2026-05-16). Populated by the dynamic per-provider parser
+        # registry under tokenpak.services.providers. Null/0 for pre-feature
+        # rows and for providers without reasoning usage surfaces.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER DEFAULT NULL",
+            "ALTER TABLE requests ADD COLUMN visible_output_tokens INTEGER DEFAULT NULL",
+            "ALTER TABLE requests ADD COLUMN total_billable_tokens INTEGER DEFAULT NULL",
+            "ALTER TABLE requests ADD COLUMN reasoning_effort TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN reasoning_usage_source TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN provider_usage_ref TEXT DEFAULT ''",
+        ):
             try:
-                conn.execute("ALTER TABLE requests ADD COLUMN injected_tokens INTEGER DEFAULT 0")
+                conn.execute(_alter)
             except sqlite3.OperationalError:
                 pass
+        # Stream-mode telemetry columns (Provider-Native Compatibility
+        # Foundation, Packet D 2026-05-16). Populated when the stream
+        # translator or byte-passthrough decision path resolves; empty
+        # string for non-streaming or pre-feature rows.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN stream_mode TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN event_transform_applied INTEGER DEFAULT 0",
+        ):
             try:
-                conn.execute("ALTER TABLE requests ADD COLUMN injected_sources TEXT DEFAULT ''")
+                conn.execute(_alter)
             except sqlite3.OperationalError:
                 pass
+        # D5 (finishes Fix A): agent/cycle attribution columns on requests.
+        # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
+        # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
+        # 'unknown', never fabricated). Idempotent — columns may pre-exist
+        # from a peer migration. Telemetry contract: '' sentinel, not NULL.
+        for _alter in (
+            "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
+            "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
+            # attribution_source <- platform-origin extractor (Path C). Non-empty
+            # only when origin is genuinely known; '' sentinel otherwise (never
+            # fabricated). Idempotent — may pre-exist from a peer migration.
+            "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT ''",
+        ):
             try:
-                conn.execute("ALTER TABLE requests ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+                conn.execute(_alter)
             except sqlite3.OperationalError:
                 pass
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN would_have_saved INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN cache_origin TEXT DEFAULT 'unknown'")
-            except sqlite3.OperationalError:
-                pass
-            # Per-request optimization drop/skip reason (e.g. 'route-unknown',
-            # 'flag-off', 'capability-missing'). Additive + idempotent; legacy rows
-            # keep ''. Populated when a caller threads the in-flight stage reason
-            # (see Monitor.log ``skip_reason``); read by ``tokenpak status --explain``.
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN skip_reason TEXT DEFAULT ''")
-            except sqlite3.OperationalError:
-                pass
-            # Anthropic prompt-cache TTL attribution (additive, backward-compatible).
-            # Older rows have NULL/0 here; readers must COALESCE for aggregation.
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_1h_tokens INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_5m_tokens INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN ttl_attribution TEXT DEFAULT NULL")
-            except sqlite3.OperationalError:
-                pass
-            # P0-06 (A6): user_id holds the SHA-256 hex of the proxy auth bearer
-            # token when the proxy auth gate accepted the request via the bearer
-            # path. Empty string for localhost / pre-A6 rows. Hash only — never the
-            # raw token.
-            try:
-                conn.execute("ALTER TABLE requests ADD COLUMN user_id TEXT DEFAULT ''")
-            except sqlite3.OperationalError:
-                pass
-            # Reasoning-usage columns (Provider-Native Compatibility Foundation,
-            # Packet A 2026-05-16). Populated by the dynamic per-provider parser
-            # registry under tokenpak.services.providers. Null/0 for pre-feature
-            # rows and for providers without reasoning usage surfaces.
-            for _alter in (
-                "ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER DEFAULT NULL",
-                "ALTER TABLE requests ADD COLUMN visible_output_tokens INTEGER DEFAULT NULL",
-                "ALTER TABLE requests ADD COLUMN total_billable_tokens INTEGER DEFAULT NULL",
-                "ALTER TABLE requests ADD COLUMN reasoning_effort TEXT DEFAULT ''",
-                "ALTER TABLE requests ADD COLUMN reasoning_usage_source TEXT DEFAULT ''",
-                "ALTER TABLE requests ADD COLUMN provider_usage_ref TEXT DEFAULT ''",
-            ):
-                try:
-                    conn.execute(_alter)
-                except sqlite3.OperationalError:
-                    pass
-            # Stream-mode telemetry columns (Provider-Native Compatibility
-            # Foundation, Packet D 2026-05-16). Populated when the stream
-            # translator or byte-passthrough decision path resolves; empty
-            # string for non-streaming or pre-feature rows.
-            for _alter in (
-                "ALTER TABLE requests ADD COLUMN stream_mode TEXT DEFAULT ''",
-                "ALTER TABLE requests ADD COLUMN event_transform_applied INTEGER DEFAULT 0",
-            ):
-                try:
-                    conn.execute(_alter)
-                except sqlite3.OperationalError:
-                    pass
-            # D5 (finishes Fix A): agent/cycle attribution columns on requests.
-            # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
-            # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
-            # 'unknown', never fabricated). Idempotent — columns may pre-exist
-            # from a peer migration. Telemetry contract: '' sentinel, not NULL.
-            for _alter in (
-                "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
-                "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
-            ):
-                try:
-                    conn.execute(_alter)
-                except sqlite3.OperationalError:
-                    pass
-            # SSRM Phase 1 — 9 new advisory-only columns. All nullable /
-            # defaulted so old client INSERT statements still work. No
-            # behavior change; columns are populated only when ssrm.enabled=true.
-            for _col_sql in (
-                "ALTER TABLE requests ADD COLUMN ssrm_decision TEXT DEFAULT ''",
-                "ALTER TABLE requests ADD COLUMN ssrm_effective_context_tokens INTEGER",
-                "ALTER TABLE requests ADD COLUMN ssrm_effective_context_pct REAL",
-                "ALTER TABLE requests ADD COLUMN ssrm_cache_read_ratio REAL",
-                "ALTER TABLE requests ADD COLUMN ssrm_projected_next_context_pct REAL",
-                "ALTER TABLE requests ADD COLUMN ssrm_fingerprint_repeat_count INTEGER DEFAULT 0",
-                "ALTER TABLE requests ADD COLUMN ssrm_session_age_turns INTEGER DEFAULT 0",
-                "ALTER TABLE requests ADD COLUMN ssrm_progress_signal TEXT",
-                "ALTER TABLE requests ADD COLUMN ssrm_signals_json TEXT",
-            ):
-                try:
-                    conn.execute(_col_sql)
-                except sqlite3.OperationalError:
-                    pass
-            # Dispatch correlation columns (P-TELEMETRY-01). dispatch_job_id <-
-            # X-Tokenpak-Dispatch-Job-Id header; dispatch_station_id <-
-            # X-Tokenpak-Dispatch-Station-Id. Additive + idempotent — columns may
-            # pre-exist from a peer migration. Telemetry contract: '' sentinel for
-            # legacy/unattributed rows, never NULL, never fabricated.
-            for _alter in (
-                "ALTER TABLE requests ADD COLUMN dispatch_job_id TEXT DEFAULT ''",
-                "ALTER TABLE requests ADD COLUMN dispatch_station_id TEXT DEFAULT ''",
-            ):
-                try:
-                    conn.execute(_alter)
-                except sqlite3.OperationalError:
-                    pass
+        conn.commit()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS budget_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                agent_id TEXT DEFAULT "",
+                period TEXT DEFAULT "daily",
+                budget_usd REAL,
+                spent_usd REAL,
+                pct_used REAL,
+                triggered INTEGER DEFAULT 1
+            )
+        """)
+        conn.commit()
+
+        # session_id on requests + mutation_audit table
+        try:
+            from tokenpak.proxy.db import ensure_schema as _ccg02_ensure_schema
+            _ccg02_ensure_schema(conn)
             conn.commit()
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS budget_alerts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    agent_id TEXT DEFAULT "",
-                    period TEXT DEFAULT "daily",
-                    budget_usd REAL,
-                    spent_usd REAL,
-                    pct_used REAL,
-                    triggered INTEGER DEFAULT 1
-                )
-            """)
-            conn.commit()
+        except Exception as e:
+            print(f"⚠️  schema migration error (non-fatal): {e}")
 
-            # session_id on requests + mutation_audit table
-            try:
-                from tokenpak.proxy.db import ensure_schema as _ccg02_ensure_schema
-                _ccg02_ensure_schema(conn)
-                conn.commit()
-            except Exception as e:
-                print(f"⚠️  schema migration error (non-fatal): {e}")
+        # Run migrations to bring DB schema up to current version
+        try:
+            if MIGRATION_AVAILABLE:
+                try:
+                    db_migrate(conn)
+                    version = get_current_schema_version(conn)
+                    print(f"✅ DB schema version: {version}")
+                except Exception as e:
+                    print(f"⚠️  Migration error (non-fatal): {e}")
+        except NameError:
+            pass
 
-            # Index session_id AFTER the column is guaranteed (fresh schema has it;
-            # legacy pre-phase1 DBs get it from ensure_schema above). Lets the SSRM
-            # lookup (signals._monitor_recent_for_session: WHERE session_id=? ORDER
-            # BY id DESC LIMIT N) seek instead of full-scanning the requests table
-            # under live-writer load. Additive + idempotent; guarded for any DB
-            # still missing the column.
-            try:
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_requests_session_id ON requests(session_id)"
-                )
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass
-
-            # Run migrations to bring DB schema up to current version
-            try:
-                if MIGRATION_AVAILABLE:
-                    try:
-                        db_migrate(conn)
-                        version = get_current_schema_version(conn)
-                        print(f"✅ DB schema version: {version}")
-                    except Exception as e:
-                        print(f"⚠️  Migration error (non-fatal): {e}")
-            except NameError:
-                pass
-
-        _secure_sqlite_sidecars(self.db_path)
+        conn.close()
         global _DB_CONNECTION
         _DB_CONNECTION = None  # reset so next call reopens fresh
 
@@ -381,18 +314,7 @@ class Monitor:
         session_id="",
         agent_id="",
         cycle_id="",
-        ssrm_decision="",
-        ssrm_effective_context_tokens=None,
-        ssrm_effective_context_pct=None,
-        ssrm_cache_read_ratio=None,
-        ssrm_projected_next_context_pct=None,
-        ssrm_fingerprint_repeat_count=0,
-        ssrm_session_age_turns=0,
-        ssrm_progress_signal=None,
-        ssrm_signals_json=None,
-        skip_reason="",
-        dispatch_job_id="",
-        dispatch_station_id="",
+        attribution_source="",
     ):
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -404,9 +326,6 @@ class Monitor:
         # "" for localhost / pre-A6 callers. The raw token MUST never be passed
         # in — callers always use ``proxy_auth.hash_token(...)`` first.
         # Enqueue write instead of writing directly (async, <0.1ms return)
-        # SSRM Phase 1: 9 trailing ssrm_* params are advisory-only telemetry.
-        # Populated only when ssrm.enabled=true; otherwise the column values
-        # are empty/NULL and reading them is a no-op.
         insert_params = (
             datetime.now().isoformat(),
             model,
@@ -433,42 +352,26 @@ class Monitor:
             session_id or "",
             agent_id or "",
             cycle_id or "",
-            ssrm_decision or "",
-            ssrm_effective_context_tokens,
-            ssrm_effective_context_pct,
-            ssrm_cache_read_ratio,
-            ssrm_projected_next_context_pct,
-            int(ssrm_fingerprint_repeat_count or 0),
-            int(ssrm_session_age_turns or 0),
-            ssrm_progress_signal,
-            ssrm_signals_json,
-            skip_reason or "",
-            dispatch_job_id or "",
-            dispatch_station_id or "",
+            attribution_source or "",
         )
         _queued = False
         try:
             _DB_WRITE_QUEUE.put_nowait((self.db_path, insert_params))
             _queued = True
         except (NameError, Exception):
-            with closing(_secure_sqlite_connect(self.db_path)) as _conn:
-                _conn.execute(
-                    "INSERT INTO requests (timestamp, model, request_type, input_tokens, output_tokens, "
-                    "estimated_cost, latency_ms, status_code, endpoint, compilation_mode, protected_tokens, "
-                    "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
-                    "would_have_saved, cache_origin, user_id, "
-                    "cache_creation_ephemeral_1h_tokens, cache_creation_ephemeral_5m_tokens, ttl_attribution, "
-                    "session_id, agent_id, cycle_id, "
-                    "ssrm_decision, ssrm_effective_context_tokens, ssrm_effective_context_pct, "
-                    "ssrm_cache_read_ratio, ssrm_projected_next_context_pct, "
-                    "ssrm_fingerprint_repeat_count, ssrm_session_age_turns, "
-                    "ssrm_progress_signal, ssrm_signals_json, skip_reason, "
-                    "dispatch_job_id, dispatch_station_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    insert_params,
-                )
-                _conn.commit()
+            _conn = sqlite3.connect(str(self.db_path))
+            _conn.execute(
+                "INSERT INTO requests (timestamp, model, request_type, input_tokens, output_tokens, "
+                "estimated_cost, latency_ms, status_code, endpoint, compilation_mode, protected_tokens, "
+                "compressed_tokens, injected_tokens, injected_sources, cache_read_tokens, cache_creation_tokens, "
+                "would_have_saved, cache_origin, user_id, "
+                "cache_creation_ephemeral_1h_tokens, cache_creation_ephemeral_5m_tokens, ttl_attribution, "
+                "session_id, agent_id, cycle_id, attribution_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                insert_params,
+            )
+            _conn.commit()
+            _conn.close()
         try:
             # When queued async, cost not yet in DB — pass it as current_cost.
             # When written synchronously (fallback), cost already in DB — pass 0.
@@ -538,7 +441,7 @@ class Monitor:
             threshold_pct = 80.0
         if daily_limit <= 0:
             return
-        conn = _secure_sqlite_connect(self.db_path)
+        conn = sqlite3.connect(str(self.db_path))
         try:
             spent = conn.execute(
                 'SELECT COALESCE(SUM(estimated_cost), 0) FROM requests WHERE date(timestamp) = date("now")'
@@ -574,7 +477,7 @@ class Monitor:
             threshold_pct = _threshold_pct if _threshold_pct is not None else BUDGET_ALERT_THRESHOLD_PCT
         except NameError:
             threshold_pct = 80.0
-        conn = _secure_sqlite_connect(self.db_path)
+        conn = sqlite3.connect(str(self.db_path))
         try:
             spent = conn.execute(
                 'SELECT COALESCE(SUM(estimated_cost), 0) FROM requests WHERE date(timestamp) = date("now")'

@@ -225,14 +225,6 @@ class RetryEngine:
         Hook: (context, partial_state) -> bool (True = accepted).
     on_human_alert : callable | None
         Hook: (alert_dict) -> None. Default: logs at CRITICAL level.
-    deterministic : bool
-        ``[TIP: deterministic=on]`` reproducible eval mode (TIP versioning
-        standard). When True, ALL escalation is disabled: exactly one attempt of
-        ``fn`` is made; on failure the engine fails LOUDLY — partial state is
-        saved, the human alert fires, and ``RetryExhaustedError`` is raised.
-        No Level-0 retries, no model downgrade (route stays locked to the
-        originating model), no provider switch (no cross-provider fallback),
-        no agent handoff. Default False (existing behavior unchanged).
     """
 
     def __init__(
@@ -248,7 +240,6 @@ class RetryEngine:
         on_provider_switch: Optional[Callable[[str], str]] = None,
         on_handoff: Optional[Callable[[dict, dict], bool]] = None,
         on_human_alert: Optional[Callable[[dict], None]] = None,
-        deterministic: bool = False,
     ):
         # Load persistent config
         cfg = _load_retry_config()
@@ -257,7 +248,7 @@ class RetryEngine:
         self.context = context
         self.partial_state: dict = partial_state if partial_state is not None else {}
         self.state_dir = Path(state_dir or DEFAULT_STATE_DIR)
-        self.agent_id = agent_id or os.environ.get("TOKENPAK_AGENT", "default")
+        self.agent_id = agent_id or os.environ.get("TOKENPAK_AGENT", "cali")
         self.wait_seconds = wait_seconds or cfg.get("wait_seconds", [1.0, 2.0, 4.0])
 
         # Per-error routing: defaults ← config file ← caller override
@@ -270,7 +261,6 @@ class RetryEngine:
         self._model_chain: list[str] = cfg.get("downgrade_chain", MODEL_DOWNGRADE_PATH)
         self._provider_chain: list[str] = cfg.get("provider_chain", PROVIDER_FALLBACK_PATH)
 
-        self.deterministic = bool(deterministic)
         self.on_model_downgrade = on_model_downgrade or self._default_model_downgrade
         self.on_provider_switch = on_provider_switch or self._default_provider_switch
         self.on_handoff = on_handoff
@@ -482,15 +472,7 @@ class RetryEngine:
 
         Returns the task result on success.
         Raises RetryExhaustedError after Level 4.
-
-        Deterministic mode (``deterministic=True``): a single attempt with no
-        escalation — failure goes straight to Level 4 (save state + alert +
-        raise). Never silent: the failure path is logged as
-        ``deterministic_no_retry``.
         """
-        if self.deterministic:
-            return self._run_deterministic()
-
         self._log_event("run_start")
 
         escalation_levels = [
@@ -544,40 +526,3 @@ class RetryEngine:
             partial_state=self.partial_state,
             attempts=self.attempts,  # type: ignore
         )
-
-    def _run_deterministic(self) -> Any:
-        """Single-attempt, fail-loud execution for deterministic eval mode.
-
-        Reproducible-eval contract: proxy/orchestration retries disabled, no
-        model downgrade, no cross-provider fallback, no handoff. One attempt of
-        ``fn``; any failure saves partial state, fires the human alert, and
-        raises :class:`RetryExhaustedError`.
-        """
-        self._log_event("run_start", deterministic=True)
-        try:
-            result = self.fn(self.context, self.partial_state)
-        except Exception as exc:
-            status = _extract_http_status(exc)
-            self.attempts.append(
-                RetryAttempt(
-                    level=0,
-                    description="deterministic single attempt (retries/escalation disabled)",
-                    error=str(exc),
-                    http_status=status,
-                )
-            )
-            self._log_event(
-                "deterministic_no_retry",
-                error=str(exc),
-                http_status=status,
-            )
-            self._level4_human_alert(exc)
-            raise RetryExhaustedError(
-                context=self.context,
-                partial_state=self.partial_state,
-                attempts=self.attempts,  # type: ignore
-            ) from exc
-        self._log_event(
-            "run_success", level=0, description="deterministic single attempt",
-        )
-        return result

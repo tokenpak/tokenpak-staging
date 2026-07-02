@@ -13,10 +13,10 @@ Your goal today: install TokenPak, start the proxy, send one request, and confir
 ### Install
 
 ```bash
-pip install tokenpak
+pip install "tokenpak[serve]"
 ```
 
-Plain `pip install tokenpak` includes the local HTTP proxy used by `tokenpak serve`. Install `tokenpak[serve]` only when you also need the FastAPI dashboard, telemetry, or ingest ASGI surfaces.
+The `[serve]` extra installs FastAPI, required for the proxy server. If you only want the compression SDK (no proxy), use plain `pip install tokenpak`.
 
 Confirm it installed:
 
@@ -355,13 +355,20 @@ For longer-term monitoring, the `/metrics` endpoint exposes Prometheus-compatibl
 Every request is logged locally. Query recent activity:
 
 ```bash
-tokenpak debug list
+tokenpak trace --last 50
 ```
 
-Export a specific request trace for analysis:
+Filter by model or cost:
 
 ```bash
-tokenpak debug export <trace_id> --json > trace.json
+tokenpak trace --last 50 --model claude-3-5-sonnet
+tokenpak trace --last 50 --min-cost 0.01
+```
+
+Export the full log for analysis:
+
+```bash
+tokenpak trace --export --format json > audit.json
 ```
 
 ### Production Checklist
@@ -371,7 +378,7 @@ tokenpak debug export <trace_id> --json > trace.json
 - [ ] `curl http://localhost:8766/health` returns `"status": "ok"`
 - [ ] Monthly budget is set
 - [ ] At least one alert channel is configured
-- [ ] `tokenpak debug list` returns recent request data
+- [ ] `tokenpak trace --last 50` returns recent request data
 - [ ] You know how to query the audit log
 
 ---

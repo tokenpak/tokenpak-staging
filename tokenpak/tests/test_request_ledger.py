@@ -1,8 +1,8 @@
 """Unit tests for request_ledger.py — request record appending and ledger management."""
 
 import json
-import sqlite3
 from datetime import datetime
+from unittest.mock import patch
 
 from tokenpak.telemetry.request_ledger import (
     MAX_REQUESTS,
@@ -72,39 +72,17 @@ class TestAppendRequest:
             parsed = json.loads(line)
             assert parsed["request_id"] == records[i]["request_id"]
 
-    def test_append_request_uses_monitor_db_when_path_none(self, tmp_path, monkeypatch):
-        """Default appends use monitor.db, not the retired requests.jsonl writer."""
-        from tokenpak import _paths
+    def test_append_request_uses_default_path_when_none(self, tmp_path):
+        """Test that None path defaults to REQUESTS_PATH."""
+        with patch("tokenpak.telemetry.request_ledger.REQUESTS_PATH", tmp_path / "default.jsonl"):
+            record = {"request_id": "req-default"}
+            append_request(record, path=None)
 
-        home = tmp_path / "home"
-        monkeypatch.setenv("TOKENPAK_HOME", str(home))
-        monkeypatch.delenv("TOKENPAK_DB", raising=False)
-        monkeypatch.delenv("TOKENPAK_MONITOR_DB", raising=False)
-
-        append_request(
-            {
-                "model": "claude-sonnet",
-                "input_tokens": 10,
-                "output_tokens": 5,
-                "cost": 0.001,
-                "saved_cost": 0.0002,
-                "agent": "unit-test",
-            },
-            path=None,
-        )
-
-        assert not (home / "requests.jsonl").exists()
-        db_path = _paths.monitor_db(mode="read")
-        assert db_path == home / "monitor.db"
-        with sqlite3.connect(str(db_path)) as conn:
-            row = conn.execute(
-                """
-                SELECT model, input_tokens, output_tokens, estimated_cost,
-                       would_have_saved, agent_id
-                FROM requests
-                """
-            ).fetchone()
-        assert row == ("claude-sonnet", 10, 5, 0.001, 0.0002, "unit-test")
+            ledger_path = tmp_path / "default.jsonl"
+            assert ledger_path.exists()
+            content = ledger_path.read_text().strip()
+            written = json.loads(content)
+            assert written["request_id"] == "req-default"
 
     def test_append_request_creates_parent_directory_if_missing(self, tmp_path):
         """Test that append_request creates nested directories as needed."""

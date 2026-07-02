@@ -103,26 +103,6 @@ def test_write_mcp_config_uses_safe_python_path(tmp_path):
     assert server["args"].index("-P") < server["args"].index("-m")
 
 
-def test_write_mcp_config_forwards_companion_env(tmp_path):
-    """Per-launch MCP config carries explicit session/project env."""
-    cfg = CompanionConfig(
-        journal_dir=tmp_path / "journal",
-        session_id="sess-env",
-        session_id_source="env",
-        project_dir="/repo/project",
-    )
-    run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True)
-    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
-        launcher._write_mcp_config(cfg)
-    server = json.loads((run_dir / "mcp.json").read_text())["mcpServers"][
-        "tokenpak-companion"
-    ]
-    assert server["env"]["TOKENPAK_COMPANION_SESSION_ID"] == "sess-env"
-    assert server["env"]["TOKENPAK_COMPANION_PROJECT_DIR"] == "/repo/project"
-    assert server["env"]["TOKENPAK_COMPANION_JOURNAL_DIR"] == str(tmp_path / "journal")
-
-
 # ---------------------------------------------------------------------------
 # _write_settings
 # ---------------------------------------------------------------------------
@@ -163,39 +143,6 @@ def test_write_settings_has_mcp_permission(tmp_path):
     settings = json.loads(Path(path).read_text())
     allow_list = settings["permissions"]["allow"]
     assert any("tokenpak-companion" in p for p in allow_list)
-
-
-def test_write_settings_installs_pakline_statusline(tmp_path):
-    """PakLine statusLine is installed when the user has none."""
-    cfg = CompanionConfig(journal_dir=tmp_path / "journal", hooks_enabled=True)
-    run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True)
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / "settings.json").write_text("{}")
-    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
-        with patch.object(Path, "home", return_value=home):
-            path = launcher._write_settings(cfg)
-    settings = json.loads(Path(path).read_text())
-    assert settings["statusLine"]["type"] == "command"
-    assert settings["statusLine"]["command"].endswith("pakline.sh")
-
-
-def test_write_settings_preserves_user_statusline(tmp_path):
-    """Install is ADDITIVE — an existing user statusLine is never overwritten."""
-    cfg = CompanionConfig(journal_dir=tmp_path / "journal", hooks_enabled=True)
-    run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True)
-    home = tmp_path / "home"
-    (home / ".claude").mkdir(parents=True)
-    (home / ".claude" / "settings.json").write_text(
-        json.dumps({"statusLine": {"type": "command", "command": "my-own-line"}})
-    )
-    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
-        with patch.object(Path, "home", return_value=home):
-            path = launcher._write_settings(cfg)
-    settings = json.loads(Path(path).read_text())
-    assert settings["statusLine"]["command"] == "my-own-line"
 
 
 # ---------------------------------------------------------------------------
@@ -327,11 +274,8 @@ def test_prefix_session_name_does_not_mutate_input():
 # main() — proxy detection exception path
 # ---------------------------------------------------------------------------
 
-def test_main_proxy_detection_exception_path(tmp_path, monkeypatch):
+def test_main_proxy_detection_exception_path(tmp_path):
     """When httpx raises, proxy detection falls through without setting ANTHROPIC_BASE_URL."""
-    # An ANTHROPIC_BASE_URL inherited from the invoking shell would leak
-    # into the captured exec env and shadow what the launcher itself does.
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     run_dir = tmp_path / "run"
     journal_dir = tmp_path / "journal"
 

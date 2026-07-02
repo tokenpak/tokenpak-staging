@@ -1,0 +1,137 @@
+"""tokenpak/agent/cli/commands/serve.py
+
+Phase 5A: `tokenpak serve` command
+====================================
+Starts the ingest API server on the specified port.
+
+Usage:
+    tokenpak serve [--port PORT] [--host HOST] [--workers N]
+
+Workers:
+    --workers N     Spawn N worker processes (each on its own CPU core).
+                    Default: max(1, os.cpu_count() // 2).
+                    Workers restart automatically on crash.
+                    Graceful shutdown sends SIGTERM to all workers.
+                    Telemetry (SQLite WAL) is safe for concurrent workers.
+
+Single-worker mode (N=1) uses the in-process app object directly so that
+hot-reload / test fixtures can inject a custom factory.  Multi-worker mode
+passes the app as an import string + factory=True so uvicorn's multiprocess
+supervisor can fork fresh worker processes.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+
+logger = logging.getLogger(__name__)
+
+# Import string used by uvicorn when workers > 1.
+# Uvicorn calls create_ingest_app() in each worker process.
+_APP_FACTORY_IMPORT = "tokenpak.vault.ingest.api:create_ingest_app"
+
+
+def _default_workers() -> int:
+    """Return default worker count: max(1, cpu_count // 2)."""
+    cpu = os.cpu_count() or 1
+    return max(1, cpu // 2)
+
+
+def _apply_safe_defaults() -> None:
+    """Restore pre-1.1 passthrough defaults atomically (--safe flag).
+
+    Sets the four compression-related env vars to their old values BEFORE
+    any proxy modules are imported so that all downstream config reads see
+    the legacy behavior.
+    """
+    os.environ["TOKENPAK_COMPACT"] = "0"
+    os.environ["TOKENPAK_COMPACT_THRESHOLD_TOKENS"] = "4500"
+    os.environ["TOKENPAK_BUDGET_CONTROLLER"] = "0"
+    # TOKENPAK_VALIDATION_GATE was True in both old and new defaults — no change.
+
+
+def _maybe_show_compression_notice(safe: bool) -> None:
+    """Emit first-run compression default notice to stderr (once per install)."""
+    if safe:
+        return
+    import pathlib
+    _marker = pathlib.Path.home() / ".tokenpak" / ".compression-default-notice-shown"
+    if not _marker.exists():
+        print(
+            "tokenpak now compresses by default — disable with 'tokenpak serve --safe'",
+            file=sys.stderr,
+        )
+        try:
+            _marker.parent.mkdir(parents=True, exist_ok=True)
+            _marker.touch()
+        except OSError:
+            pass  # non-fatal — notice will repeat on next start
+
+
+def run_serve_cmd(args) -> None:
+    """Start the TokenPak ingest API server."""
+    # --safe: restore legacy passthrough defaults BEFORE any proxy imports
+    if getattr(args, "safe", False):
+        _apply_safe_defaults()
+
+    # First-run compression notice (stderr only, once per install)
+    _maybe_show_compression_notice(safe=getattr(args, "safe", False))
+
+    try:
+        import uvicorn
+    except ImportError:
+        print("✖ uvicorn is required: pip install uvicorn", file=sys.stderr)
+        sys.exit(1)
+
+    host = getattr(args, "host", "127.0.0.1") or "127.0.0.1"
+    port = getattr(args, "port", 8766) or 8766
+    workers = getattr(args, "workers", None)
+
+    if workers is None:
+        workers = _default_workers()
+
+    if workers < 1:
+        print("✖ --workers must be >= 1", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"TokenPak Ingest API — http://{host}:{port}")
+    print(f"  Workers:             {workers} (CPU cores: {os.cpu_count() or '?'})")
+    print("  POST /ingest         single entry")
+    print("  POST /ingest/batch   batch entries")
+    print("  GET  /health         health check")
+    print()
+
+    if workers == 1:
+        # Single-worker: use in-process app object (compatible with tests/hot-reload)
+        try:
+            from tokenpak.vault.ingest.api import create_ingest_app
+        except ImportError as e:
+            print(f"✖ Failed to load ingest API: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        app = create_ingest_app()
+        uvicorn.run(app, host=host, port=port)
+
+    else:
+        # Multi-worker: pass import string + factory=True so uvicorn forks workers
+        # that each call create_ingest_app() in their own process.
+        #
+        # Crash recovery: uvicorn's multiprocess supervisor (UvicornWorker) restarts
+        # any worker that exits unexpectedly, up to the configured limit.
+        #
+        # Graceful shutdown: SIGTERM/SIGINT propagated to all workers; each drains
+        # active requests then exits cleanly.
+        #
+        # SQLite telemetry: WAL mode allows concurrent readers + independent writers
+        # from separate processes without corruption.
+        print("  Mode: multi-process (workers restart on crash, graceful shutdown)")
+        print()
+        uvicorn.run(
+            _APP_FACTORY_IMPORT,
+            host=host,
+            port=port,
+            workers=workers,
+            factory=True,
+        )

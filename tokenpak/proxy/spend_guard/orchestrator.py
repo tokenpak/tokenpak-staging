@@ -6,9 +6,9 @@ inbound bytes and gets back a tagged outcome. All multi-step interaction
 (estimate → policy → pending → intent → replay → audit) lives here so the
 proxy hot path stays small.
 
-This module is layered: the core wires estimate + policy + pending; optional
-layers add intent parsing, TIP-header handling, and audit logging. Each
-optional layer is imported lazily so the core runs whether or not it is present.
+This module is built up in stages. The initial revision wires
+estimate + policy + pending only. Subsequent revisions add intent parsing,
+TIP-header handling, and audit logging.
 """
 
 from __future__ import annotations
@@ -75,8 +75,8 @@ def evaluate(
     if not cfg.enabled:
         return GuardOutcome.passthrough(body)
 
-    # TIP-header layer: parse + strip. Imported lazily so the core runs even
-    # before this layer is present. Until tip_header.py exists, treat as no-op.
+    # TIP header parse + strip. Imported lazily so the earlier stages can
+    # run before this lands. Until tip_header.py exists, treat as no-op.
     tip_directive = None
     forward_body = body
     try:
@@ -87,25 +87,8 @@ def evaluate(
     except Exception as e:
         _log.debug("spend_guard: TIP header parse failed: %s", e)
 
-    # Composite Yes-grant key (Standard 29 §"Yes-grant scope", W1):
-    # (session_id, fleet_id, principal/agent_id). Extract the principal
-    # dimensions once so every grant path (create/redeem/discard) keys
-    # identically. Case-insensitive header lookup; lowercased for stable keys.
-    agent_id = _header(headers, "x-tokenpak-agent").lower()
-    fleet_id = _header(headers, "x-tokenpak-fleet").lower()
-
-    # W5 visibility: when Yes-grants are configured to cover rolling caps,
-    # log on every request so the weakened fleet protection stays auditable.
-    if cfg.yes_grant_covers_rolling_caps:
-        _log.warning(
-            "spend_guard: yes_grant_covers_rolling_caps=True — Yes-grants are "
-            "bypassing rolling caps; fleet-level spend protection is weakened "
-            "(Standard 29 §'Yes-grant scope', W5)."
-        )
-
-    # TIP cancel — discard any pending (and any active grant) and acknowledge.
+    # TIP cancel — discard any pending and acknowledge.
     if tip_directive is not None and tip_directive.cancel:
-        _discard_grant(cfg, session_id, fleet_id, agent_id)
         store = PendingStore(cfg.audit_db_path)
         existing = store.get_by_session(session_id)
         if existing:
@@ -122,26 +105,19 @@ def evaluate(
         # Nothing to cancel — treat as no-op forward (with TIP stripped).
         return GuardOutcome(kind="forward_modified", body=forward_body)
 
-    # Intent layer: pending check + intent parse. Lazy import for the same
-    # reason — the core can run before the intent parser is present.
+    # Pending check + intent parse. Lazy import for the same
+    # reason — the earlier stage can land before the intent parser exists.
     store = PendingStore(cfg.audit_db_path)
     existing_pending = store.get_by_session(session_id)
     if existing_pending is not None:
         try:
-            from .intent import Intent, parse_intent
+            from .intent import parse_intent
             from .replay import resolve_pending
             intent = parse_intent(forward_body)
-            # allow=N / bare-integer reply ("20"): a positive count is itself an
-            # approval — treated as POSITIVE so the held request replays — that
-            # also pre-approves the next N-1 blocked sends via a count grant.
-            count = _approval_count(forward_body, tip_directive)
-            effective_intent = intent
-            if count is not None and intent != Intent.NEGATIVE:
-                effective_intent = Intent.POSITIVE
             outcome = resolve_pending(
                 store=store,
                 pending=existing_pending,
-                intent=effective_intent,
+                intent=intent,
                 tip=tip_directive,
                 cfg=cfg,
                 builders={
@@ -153,25 +129,11 @@ def evaluate(
             _audit(cfg, outcome.audit_event or "pending", session_id,
                    decision_str=outcome.kind, pending_id=existing_pending.pending_id,
                    tip=tip_directive)
-            # Yes-grant lifecycle on the approval turn. A turn-scoped Yes
-            # (POSITIVE intent or [TIP: allow=session]) opens a grant so the
-            # rest of the turn skips the soft-block prompt; allow=N opens a
-            # count-bounded grant; an explicit allow=once / bare bypass keeps
-            # single-request semantics. A NEGATIVE/cancel tears any grant down.
-            if outcome.kind == "replay":
-                if count is not None:
-                    _create_grant(cfg, session_id, fleet_id, agent_id,
-                                  tip_directive, existing_pending.pending_id,
-                                  count=count)
-                elif _should_create_grant(intent, tip_directive):
-                    _create_grant(cfg, session_id, fleet_id, agent_id,
-                                  tip_directive, existing_pending.pending_id)
-            elif outcome.kind == "cancel":
-                _discard_grant(cfg, session_id, fleet_id, agent_id)
             return outcome
         except ImportError:
-            # Fallback before the intent layer: subsequent requests during a pending
-            # block are themselves blocked with a "waiting approval" message.
+            # Fallback before the intent parser lands: subsequent requests
+            # during a pending block are themselves blocked with a
+            # "waiting approval" message.
             _audit(cfg, "pending_waiting", session_id,
                    decision_str="block", pending_id=existing_pending.pending_id,
                    tip=tip_directive)
@@ -182,13 +144,6 @@ def evaluate(
                 pending_id=existing_pending.pending_id,
                 audit_event="pending_waiting",
             )
-
-    # No pending for this session. If a Yes-grant is active and this request
-    # carries a NEGATIVE/cancel signal, tear the grant down before it can be
-    # redeemed (design §Cancel; acceptance (d)).
-    _maybe_discard_grant_on_negative(
-        cfg, session_id, fleet_id, agent_id, forward_body, tip_directive
-    )
 
     # ── Anti-loop: if the same request_hash was blocked very recently,
     #    return the cached block without re-running the estimator.
@@ -266,17 +221,6 @@ def evaluate(
                     )
                 )
                 if not tip_allowed:
-                    # W5: a Yes-grant does NOT cover rolling caps by default.
-                    # Only when yes_grant_covers_rolling_caps is explicitly on
-                    # may an active grant bypass the cap.
-                    grant_bypass = None
-                    if cfg.yes_grant_covers_rolling_caps:
-                        grant_bypass = _try_grant_redeem(
-                            cfg, session_id, fleet_id, agent_id, est,
-                            forward_body, body, tip_directive,
-                        )
-                    if grant_bypass is not None:
-                        return grant_bypass
                     _audit(cfg, "rolling_cap_block", session_id,
                            decision_str="rolling_cap_block",
                            projected_cost=est.projected_cost_usd, tip=tip_directive)
@@ -339,17 +283,6 @@ def evaluate(
 
     # ── Allow / warn → forward
     if decision.decision in ("allow", "warn"):
-        # Concurrent-reservation admission (Standard 29 §15): atomically hold
-        # this request's projection against the shared rolling-cap budget so
-        # simultaneous sub-cap requests can't jointly exceed it. A denial
-        # returns 402 here — the provider is never called. TIP-approved sends
-        # are recorded as forced holds (accounted, never denied).
-        reservation_id, resv_block = _try_reserve(
-            cfg, session_id, fleet_id, agent_id, est,
-            forward_body, tip_directive, model_max_context_tokens,
-        )
-        if resv_block is not None:
-            return resv_block
         if decision.decision == "warn":
             _audit(cfg, "warn", session_id, decision_str="warn",
                    projected_cost=est.projected_cost_usd, tip=tip_directive)
@@ -357,18 +290,8 @@ def evaluate(
         if tip_directive is not None:
             _audit(cfg, "tip_bypass", session_id, decision_str="allow",
                    projected_cost=est.projected_cost_usd, tip=tip_directive)
-        # Proactive count: a fresh (non-reply) request carrying [TIP: allow=N]
-        # approves THIS send as #1 and pre-arms a count grant for the next N-1
-        # blocked sends — same mental model as replying N to a 402, so the
-        # "prepend [TIP: allow=N]" promise holds without a reply round-trip.
-        # (Reached only after the hard-block and rolling-cap checks above, so
-        # those bands stay non-bypassable; allow=1 opens no grant.)
-        if tip_directive is not None and getattr(tip_directive, "allow_count", None):
-            _create_grant(cfg, session_id, fleet_id, agent_id,
-                          tip_directive, "", count=tip_directive.allow_count)
         kind = "forward_modified" if forward_body is not body else "forward"
-        return GuardOutcome(kind=kind, body=forward_body, decision=decision,
-                            reservation_id=reservation_id)
+        return GuardOutcome(kind=kind, body=forward_body, decision=decision)
 
     # ── Hard-block → return immediately, no pending stored
     if decision.decision == "hard_block":
@@ -381,18 +304,6 @@ def evaluate(
             decision=decision,
             audit_event="hard_block",
         )
-
-    # ── Block → an active Yes-grant lets the rest of the turn through
-    #    without re-prompting (the whole point of session-scoped grants).
-    #    Redemption increments the grant's budget/TTL bookkeeping and audits
-    #    per-redemption (W2); a read error fails closed to the block band (W3).
-    if decision.decision == "block":
-        redeemed = _try_grant_redeem(
-            cfg, session_id, fleet_id, agent_id, est,
-            forward_body, body, tip_directive,
-        )
-        if redeemed is not None:
-            return redeemed
 
     # ── Block → store pending, return block JSON
     pending = store.store(
@@ -417,96 +328,6 @@ def evaluate(
         pending_id=pending.pending_id,
         audit_event="block",
     )
-
-
-def _try_reserve(cfg, session_id, fleet_id, agent_id, est, forward_body,
-                 tip, model_max_context_tokens):
-    """Concurrent-reservation admission for one about-to-forward request
-    (Standard 29 §15). Returns ``(reservation_id, block_outcome)`` — at most
-    one is set; ``(None, None)`` when reservations are disabled or on any
-    internal error (fail-open, same posture as the rolling-cap plane —
-    fleet protection must never take the hot path down)."""
-    if not getattr(cfg, "reservations_enabled", False):
-        return None, None
-    try:
-        import json as _json
-
-        from .block_response import build_reservation_block
-        from .reservation import (
-            DENIED,
-            ReservationStore,
-            pessimistic_output_reservation,
-        )
-        from .rolling_caps import RollingCapsConfig, compute_rolling_usage
-
-        # Settled rolling baseline (blank-on-failure inside the helper).
-        settled = compute_rolling_usage(agent_id, cfg.rolling_caps_window_seconds)
-        caps = RollingCapsConfig(
-            enabled=True,
-            window_seconds=cfg.rolling_caps_window_seconds,
-            per_agent_max_cost_usd=cfg.rolling_caps_per_agent_max_cost_usd,
-            per_agent_max_tokens_total=cfg.rolling_caps_per_agent_max_tokens_total,
-            per_agent_max_cache_read_tokens=cfg.rolling_caps_per_agent_max_cache_read_tokens,
-            per_fleet_max_cost_usd=cfg.rolling_caps_per_fleet_max_cost_usd,
-            per_fleet_max_tokens_total=cfg.rolling_caps_per_fleet_max_tokens_total,
-            per_fleet_max_cache_read_tokens=cfg.rolling_caps_per_fleet_max_cache_read_tokens,
-        )
-
-        # Output reservation: the caller's max_tokens when set, else the
-        # pessimistic interim default (Packet-2 capability registry refines).
-        max_tokens = None
-        try:
-            v = _json.loads(forward_body).get("max_tokens")
-            if isinstance(v, int) and v > 0:
-                max_tokens = v
-        except Exception:
-            pass
-        reserved_output = pessimistic_output_reservation(
-            max_tokens, model_max_context_tokens, est.projected_input_tokens
-        )
-
-        # Operator-approved sends (TIP bypass/allow) are never denied but
-        # still hold budget so other admissions see them.
-        tip_approved = tip is not None and (
-            tip.bypass or tip.allow_scope is not None
-            or getattr(tip, "allow_count", None)
-        )
-        status, reservation, breach = ReservationStore(cfg.audit_db_path).reserve(
-            session_id=session_id,
-            fleet_id=fleet_id,
-            agent_id=agent_id,
-            projected_input_tokens=est.projected_input_tokens,
-            reserved_output_tokens=reserved_output,
-            projected_cost_usd=est.projected_cost_usd,
-            settled_usage=settled,
-            caps=caps,
-            ttl_seconds=cfg.reservation_ttl_seconds,
-            force=tip_approved,
-        )
-        if status == DENIED:
-            _audit(cfg, "reservation_block", session_id,
-                   decision_str="reservation_block",
-                   projected_cost=est.projected_cost_usd, tip=tip,
-                   extra={"cap_dimension": breach.cap_dimension,
-                          "settled_used": breach.settled_used,
-                          "reserved_active": breach.reserved_active})
-            return None, GuardOutcome(
-                kind="block",
-                response_body=build_reservation_block(breach),
-                http_status=402,
-                audit_event="reservation_block",
-            )
-        if tip_approved:
-            _audit(cfg, "reservation_tip_bypass", session_id,
-                   decision_str="allow",
-                   projected_cost=est.projected_cost_usd, tip=tip,
-                   extra={"reservation_id": reservation.reservation_id})
-        return reservation.reservation_id, None
-    except ImportError:
-        return None, None
-    except Exception as e:
-        _log.debug("spend_guard: reservation admission failed (passthrough): %s", e)
-        return None, None
 
 
 def _synthetic_decision(recent: PendingRequest):
@@ -539,171 +360,7 @@ def _audit(cfg, event_type, session_id, **fields) -> None:
         write_audit(cfg.audit_db_path, event_type=event_type,
                     session_id=session_id, **fields)
     except ImportError:
-        # audit layer not present
+        # audit module not yet landed
         pass
     except Exception as e:
         _log.debug("spend_guard: audit write failed: %s", e)
-
-
-# ── Yes-grant helpers (Standard 29 §"Yes-grant scope") ─────────────────────
-# All best-effort: a grant only removes the interactive Yes/No prompt, it is
-# never a spend exemption. Every helper swallows its own errors so the guard
-# hot path stays alive; the one place we care about read errors (redeem) audits
-# and fails CLOSED to the block band (W3).
-
-
-def _header(headers: dict, name: str) -> str:
-    """Case-insensitive header lookup → stripped value (or "")."""
-    if not headers:
-        return ""
-    target = name.lower()
-    for k, v in headers.items():
-        if str(k).lower() == target:
-            return str(v).strip()
-    return ""
-
-
-def _should_create_grant(intent, tip) -> bool:
-    """Decide whether the approval turn opens a turn-scoped grant.
-
-    POSITIVE intent or ``[TIP: allow=session]`` → grant. An explicit
-    ``[TIP: allow=once]`` (or a bare bypass) keeps single-request semantics
-    and opens NO grant (preserves the prior single-request default).
-    """
-    if tip is not None:
-        if tip.allow_scope == "session":
-            return True
-        if tip.allow_scope == "once":
-            return False
-    try:
-        from .intent import Intent
-        if intent == Intent.POSITIVE:
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def _approval_count(body, tip) -> Optional[int]:
-    """The pre-approval count for this turn, or ``None``.
-
-    Sourced from ``[TIP: allow=<N>]`` (``tip.allow_count``) or a bare-integer
-    reply (``"20"``). Returns a positive int, or ``None`` when neither is
-    present or the value is invalid (0 / negative / non-integer).
-    """
-    if tip is not None:
-        n = getattr(tip, "allow_count", None)
-        if isinstance(n, int) and n >= 1:
-            return n
-    try:
-        from .intent import parse_count
-        return parse_count(body)
-    except Exception:
-        return None
-
-
-def _create_grant(cfg, session_id, fleet_id, agent_id, tip, pending_id, count=None) -> None:
-    """Open a session-scoped Yes-grant for the composite key (W1).
-
-    TTL defaults to ``cfg.yes_grant_ttl_seconds``; ``[TIP: ttl=<sec>]`` and
-    ``[TIP: max=$<usd>]`` override the window / attach a dollar ceiling (W4).
-    ``count`` (allow=N) attaches a request-count ceiling: the held request
-    being approved is send #1, so the grant covers the remaining ``N-1`` blocked
-    sends (allow=N == answering "yes" N times). ``count<=1`` opens no grant —
-    a single approval, identical to ``allow=once``. Audits ``yes_grant_created``
-    (W2). Best-effort — never raises.
-    """
-    try:
-        from .grants import GrantStore
-        ttl = cfg.yes_grant_ttl_seconds
-        max_cost = None
-        kind = "session"
-        remaining_count = None
-        if tip is not None:
-            if tip.ttl_seconds:
-                ttl = tip.ttl_seconds
-            if tip.max_cost_usd is not None:
-                max_cost = tip.max_cost_usd
-            if tip.allow_scope == "session":
-                kind = "tip_session"
-        if count is not None:
-            remaining_count = int(count) - 1
-            kind = "count"
-            if remaining_count < 1:
-                # allow=1 (== a single yes / allow=once): no multi-request grant.
-                return
-        GrantStore(cfg.audit_db_path).create(
-            session_id=session_id, fleet_id=fleet_id, agent_id=agent_id,
-            ttl_seconds=ttl, granted_by_pending_id=pending_id or "",
-            grant_kind=kind, max_cost_usd=max_cost, remaining_count=remaining_count,
-        )
-        _audit(cfg, "yes_grant_created", session_id,
-               decision_str="allow", pending_id=pending_id, tip=tip)
-    except Exception as e:
-        _log.debug("spend_guard: grant create failed: %s", e)
-
-
-def _discard_grant(cfg, session_id, fleet_id, agent_id) -> None:
-    """Tear down any active grant for the composite key (NEGATIVE / cancel)."""
-    try:
-        from .grants import GrantStore
-        if GrantStore(cfg.audit_db_path).discard(session_id, fleet_id, agent_id):
-            _audit(cfg, "yes_grant_discarded", session_id, decision_str="cancel")
-    except Exception as e:
-        _log.debug("spend_guard: grant discard failed: %s", e)
-
-
-def _maybe_discard_grant_on_negative(cfg, session_id, fleet_id, agent_id, body, tip) -> None:
-    """With no pending in flight, a NEGATIVE intent or ``[TIP: cancel]`` still
-    tears down an active grant before it can be redeemed (design §Cancel,
-    acceptance (d))."""
-    negative = False
-    if tip is not None and tip.cancel:
-        negative = True
-    if not negative:
-        try:
-            from .intent import Intent, parse_intent
-            if parse_intent(body) == Intent.NEGATIVE:
-                negative = True
-        except Exception:
-            pass
-    if negative:
-        _discard_grant(cfg, session_id, fleet_id, agent_id)
-
-
-def _try_grant_redeem(cfg, session_id, fleet_id, agent_id, est, forward_body, body, tip):
-    """Redeem an active grant for this held request, if one exists.
-
-    Returns a forward :class:`GuardOutcome` on ``REDEEMED`` (auditing
-    ``yes_grant_bypass`` per redemption — W2). Returns ``None`` on
-    ``NO_GRANT`` / ``EXPIRED`` / ``EXHAUSTED`` (auditing the latter two) so the
-    caller falls through to the normal block band. On any grant-table read
-    error, audits ``yes_grant_read_error`` and returns ``None`` — fail-closed
-    to the block band (W3).
-    """
-    if not agent_id and not session_id:
-        return None
-    try:
-        from .grants import EXHAUSTED, EXPIRED, REDEEMED, GrantStore
-        status, _grant = GrantStore(cfg.audit_db_path).redeem(
-            session_id, fleet_id, agent_id, float(est.projected_cost_usd),
-        )
-    except Exception as e:
-        _log.debug("spend_guard: grant redeem failed (fail-closed): %s", e)
-        _audit(cfg, "yes_grant_read_error", session_id, decision_str="block",
-               projected_cost=est.projected_cost_usd)
-        return None
-
-    if status == REDEEMED:
-        _audit(cfg, "yes_grant_bypass", session_id, decision_str="allow",
-               projected_cost=est.projected_cost_usd, tip=tip)
-        kind = "forward_modified" if forward_body is not body else "forward"
-        return GuardOutcome(kind=kind, body=forward_body,
-                            audit_event="yes_grant_bypass")
-    if status == EXPIRED:
-        _audit(cfg, "yes_grant_expired", session_id, decision_str="block",
-               projected_cost=est.projected_cost_usd)
-    elif status == EXHAUSTED:
-        _audit(cfg, "yes_grant_exhausted", session_id, decision_str="block",
-               projected_cost=est.projected_cost_usd)
-    return None

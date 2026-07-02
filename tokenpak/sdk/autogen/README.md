@@ -28,7 +28,7 @@ pip install autogen-tokenpak
 Compress conversation history to fit within a token budget:
 
 ```python
-from tokenpak.sdk.autogen import compress_messages
+from autogen_tokenpak import compress_messages
 
 messages = [
     {"role": "system", "content": "You are a helpful assistant."},
@@ -45,7 +45,7 @@ compressed = compress_messages(messages, budget=4000)
 Wrap an AutoGen agent to automatically compress message history during conversation:
 
 ```python
-from tokenpak.sdk.autogen import TokenPakAssistant
+from autogen_tokenpak import TokenPakAssistant
 from autogen import AssistantAgent
 
 agent = AssistantAgent(name="assistant", llm_config={"model": "gpt-4"})
@@ -60,7 +60,7 @@ assistant.initiate_chat(recipient, message="Hello!")
 Compress group chat history for multi-agent conversations:
 
 ```python
-from tokenpak.sdk.autogen import TokenPakGroupChat
+from autogen_tokenpak import TokenPakGroupChat
 
 groupchat = GroupChat(agents=[agent1, agent2], messages=[], ...)
 compressed_groupchat = TokenPakGroupChat(groupchat, manager, budget=8000)

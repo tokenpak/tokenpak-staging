@@ -17,8 +17,9 @@ import argparse
 import sys
 
 try:
+    from tokenpak.engines.base import CompactionHints
+
     from tokenpak import HeuristicEngine
-    from tokenpak.compression.engines.base import CompactionHints
 except ImportError:
     print("Error: TokenPak not installed. Run: pip install tokenpak")
     sys.exit(1)

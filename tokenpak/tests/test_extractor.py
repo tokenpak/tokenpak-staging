@@ -66,9 +66,9 @@ class TestExtractFilePaths:
         assert "/home/user/config.yaml" in paths
 
     def test_home_relative_path(self, extractor):
-        result = extractor.extract("Config lives at ~/notes/config.yaml")
+        result = extractor.extract("Config lives at ~/vault/config.yaml")
         paths = [e.value for e in result.entities if e.type == EntityType.FILE_PATH]
-        assert any("notes/config.yaml" in p for p in paths)
+        assert any("vault/config.yaml" in p for p in paths)
 
     def test_short_path_filtered(self, extractor):
         # A path of 2 chars or fewer is filtered in _extract_paths

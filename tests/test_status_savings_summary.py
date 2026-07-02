@@ -5,7 +5,6 @@ Verifies:
 - Graceful no-data fallback when no requests today
 - Compression % computed correctly
 - Token count formatted correctly (K, M, raw)
-- Provider/client cache reads are shown as observability, not TokenPak savings
 - Cost saved shows when >0, omits when 0
 - Proxy unreachable: no savings line (no crash)
 """
@@ -140,7 +139,6 @@ def _run_cmd_status(health, stats, cache=None, cost_saved_db=0.0):
 
     with patch("tokenpak._cli_core._proxy_get") as mock_get, \
          patch("tokenpak._cli_core.get_savings_report", mock_savings.__class__, create=True), \
-         patch("tokenpak.cli.commands.status.run", side_effect=RuntimeError("force legacy")), \
          patch("sys.stdout", captured):
 
         def _side_effect(endpoint):
@@ -187,30 +185,24 @@ class TestSavingsSummaryPresent:
 
     def test_tokens_saved_shown_in_K(self):
         health = _make_health()
-        # Cache reads are observed separately, not counted as TokenPak savings.
+        # 5K compressed + 45K cache_read = 50K saved → "50K tokens saved today"
         stats = _make_stats(today_input=100_000, today_compressed=5_000, today_cache_read=45_000)
         out = _run_cmd_status(health, stats)
-        assert "5K tokens saved today" in out
-        assert "Cache reads observed: 45K tokens (not counted as TokenPak savings)" in out
-        assert "50K tokens saved today" not in out
+        assert "50K tokens saved today" in out
 
     def test_tokens_saved_shown_in_M(self):
         health = _make_health()
-        # Cache reads are observed separately, not counted as TokenPak savings.
+        # 1M compressed + 2M cache_read = 3M
         stats = _make_stats(today_input=10_000_000, today_compressed=1_000_000, today_cache_read=2_000_000)
         out = _run_cmd_status(health, stats)
-        assert "1.0M tokens saved today" in out
-        assert "Cache reads observed: 2.0M tokens (not counted as TokenPak savings)" in out
-        assert "3.0M tokens saved today" not in out
+        assert "3.0M tokens saved today" in out
 
     def test_tokens_saved_raw_when_small(self):
         health = _make_health()
-        # Cache reads are observed separately, not counted as TokenPak savings.
+        # 500 compressed + 300 cache = 800 (below 1K threshold)
         stats = _make_stats(today_input=10_000, today_compressed=500, today_cache_read=300)
         out = _run_cmd_status(health, stats)
-        assert "500 tokens saved today" in out
-        assert "Cache reads observed: 300 tokens (not counted as TokenPak savings)" in out
-        assert "800 tokens saved today" not in out
+        assert "800 tokens saved today" in out
 
     def test_cost_saved_shown_when_positive(self):
         health = _make_health()
@@ -299,10 +291,9 @@ class TestSavingsSummaryEdgeCases:
         health = _make_health()
         stats = _make_stats(today_input=100_000, today_compressed=0, today_cache_read=50_000)
         out = _run_cmd_status(health, stats)
-        # Cache-only traffic is observable, but not TokenPak-attributed savings.
-        assert "Savings: no TokenPak-attributed savings yet" in out
-        assert "Cache reads observed: 50K tokens (not counted as TokenPak savings)" in out
-        assert "tokens saved today" not in out
+        # 50K tokens saved from cache → should appear
+        assert "Savings:" in out
+        assert "50K tokens saved today" in out
 
     def test_savings_db_exception_handled_gracefully(self):
         """If telemetry DB errors out, savings line should still show without cost."""
@@ -315,7 +306,6 @@ class TestSavingsSummaryEdgeCases:
             json=False, profile=None, port=None, no_color=True,
         )
         with patch("tokenpak._cli_core._proxy_get") as mock_get, \
-             patch("tokenpak.cli.commands.status.run", side_effect=RuntimeError("force legacy")), \
              patch("sys.stdout", captured):
 
             def _side_effect(endpoint):

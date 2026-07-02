@@ -1,8 +1,7 @@
 """Tests for tokenpak_agents.crewai."""
 
 from tokenpak_agents.crewai import TokenPakContext, TokenPakCrew, TokenPakHandoff
-
-from tokenpak.orchestration.handoff import HandoffBlock
+from tokenpak.agent.agentic.handoff import HandoffBlock
 
 
 def test_context_default_per_agent_budget():

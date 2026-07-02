@@ -10,12 +10,6 @@ from typing import List, Type
 from tokenpak.plugins.base import CompressorPlugin
 
 logger = logging.getLogger(__name__)
-_CWD_PLUGIN_CONFIG_ENV = "TOKENPAK_ALLOW_CWD_PLUGIN_CONFIG"
-
-
-def _env_truthy(name: str) -> bool:
-    """Return whether an opt-in env var is explicitly enabled."""
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class PluginRegistry:
@@ -80,11 +74,11 @@ class PluginRegistry:
             self._load_plugin_path(path)
 
     def _discover_from_config(self) -> None:
-        """Load plugins from config.yaml ``plugins.enabled``.
+        """Load plugins from config.yaml ``plugins.enabled`` (or legacy ``tokenpak.config.json``).
 
         Resolution order:
           1. config.yaml ``plugins.enabled`` list (canonical)
-          2. Legacy CWD ``tokenpak.config.json`` only with explicit opt-in
+          2. Legacy ``tokenpak.config.json`` ``plugins`` key in CWD (backward compat)
         """
         from tokenpak.core.config_loader import get as config_get
 
@@ -98,27 +92,16 @@ class PluginRegistry:
         except Exception as exc:
             logger.debug("Could not read plugins.enabled from config.yaml: %s", exc)
 
-        # 2. Legacy fallback: tokenpak.config.json in CWD (explicit migration support)
+        # 2. Legacy fallback: tokenpak.config.json in CWD (migration support)
         legacy_path = Path("tokenpak.config.json")
-        if legacy_path.exists() and not _env_truthy(_CWD_PLUGIN_CONFIG_ENV):
-            logger.warning(
-                "Ignoring tokenpak.config.json in the current working directory; "
-                "move plugins to config.yaml under 'plugins.enabled' or set %s=1 "
-                "for a one-off migration run",
-                _CWD_PLUGIN_CONFIG_ENV,
-            )
-            return
-
         if legacy_path.exists():
             try:
                 data = json.loads(legacy_path.read_text())
                 plugin_list = data.get("plugins", [])
                 if plugin_list:
                     logger.warning(
-                        "tokenpak.config.json in the current working directory is "
-                        "deprecated and only loaded because %s is enabled; move plugins "
-                        "to config.yaml under 'plugins.enabled' key",
-                        _CWD_PLUGIN_CONFIG_ENV,
+                        "tokenpak.config.json is deprecated — move plugins list to "
+                        "config.yaml under 'plugins.enabled' key"
                     )
                     for path in plugin_list:
                         self._load_plugin_path(path)

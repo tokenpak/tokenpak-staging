@@ -142,13 +142,11 @@ HTTP100_KEEPALIVE_ENABLED: bool = _cfg("features.http100_keepalive", False, "TOK
 #
 # SKELETON_ENABLED above is an *intent* flag only. The skeleton feature is
 # functional solely when the extractor module (tokenpak.skeleton_extractor)
-# can actually be imported. The extractor ships with the package (Phase 2,
-# p2-skeleton-extractor-implementation), so on a healthy install the probe
-# reports available — but the capability surface (doctor / status / health)
-# must still report from this *real probe*, not from the intent flag, so a
-# broken or partial install can never report "active" while chunk_shaping
-# falls back to its no-op path. Report via skeleton_active(), not
-# SKELETON_ENABLED.
+# can actually be imported. That module is optional and may be absent — in
+# which case chunk_shaping falls back to a no-op. The capability surface
+# (doctor / status / health) must therefore report from a *real probe*, not
+# from the intent flag; otherwise the feature reports "active" while doing
+# nothing. Report via skeleton_active(), not SKELETON_ENABLED.
 # ---------------------------------------------------------------------------
 def skeleton_available() -> bool:
     """Real capability probe: True iff the skeleton extractor is importable."""
@@ -179,7 +177,6 @@ def skeleton_active() -> bool:
 # constants here keeps the proxy/config.py inventory consistent and makes
 # them visible to anyone grepping for tunables.
 # Authoritative behavior: tokenpak/proxy/spend_guard/policy.py:load_config()
-# Standard: standards/29-spend-guard-agent-contract.md §5
 # v1.5.2 (Kevin DECISION 2026-05-11 rev 2): default basis is
 # context-window-utilisation %. Dollar bands stay reachable as opt-in
 # profile overrides — see SPEND_GUARD_*_COST_USD knobs below.
@@ -213,7 +210,7 @@ SPEND_GUARD_BLOCK_TOKENS: int = _cfg(
 )
 # Dollar bands default to 0.0 (disabled) under v1.5.2. The canonical
 # defense is the context-window-% basis; dollar caps are opt-in profile
-# overrides (Standard 29 §5.1). Setting any of these to a positive value
+# overrides. Setting any of these to a positive value
 # engages the dollar plane and emits a DeprecationWarning.
 SPEND_GUARD_BLOCK_COST_USD: float = _cfg(
     "spend_guard.block_cost_usd", 0.0, "TOKENPAK_SPEND_GUARD_BLOCK_COST_USD", float

@@ -5,7 +5,7 @@ Lists every feature the running tokenpak install advertises along with
 its entitlement state for the active license. Built dynamically from
 the licensing module's ``_GATES`` table — never hardcoded — so adding a
 new gated feature there immediately surfaces here without CLI edits
-(discovery stays dynamic — no hardcoded enumeration).
+(``feedback_always_dynamic.md``).
 
 Subcommands:
     (default)              List all features grouped by tier
@@ -69,7 +69,7 @@ def cmd_features_list(args: Any) -> int:
 
     # Free features are everything not in _GATES — there is no closed
     # enumeration of them, so we surface a single advisory row rather
-    # than fabricating a list (discovery stays dynamic — no hardcoded enumeration).
+    # than fabricating a list (per `feedback_always_dynamic.md`).
     rows.append({
         "feature": "(other)",
         "required_tier": _lic.TIER_FREE,

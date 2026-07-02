@@ -28,9 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tokenpak import _paths
-
 # ── Constants ─────────────────────────────────────────────────────────────────
+
+_BLOB_DIR = Path.home() / ".tokenpak" / "debug"
+_KEY_FILE = _BLOB_DIR / ".key"
 
 _MAGIC = b"TPKD"
 _VERSION = b"\x01"
@@ -38,17 +39,6 @@ _HEADER_LEN = 5   # magic(4) + version(1)
 _NONCE_LEN = 12
 _TAG_LEN = 16
 _MIN_BLOB_LEN = _HEADER_LEN + _NONCE_LEN + _TAG_LEN  # 33
-_BLOB_DIR: Path | None = None
-_KEY_FILE: Path | None = None
-
-
-def _blob_dir() -> Path:
-    """Default debug-capture directory under the resolved TokenPak home."""
-    return _BLOB_DIR or _paths.under("debug")
-
-
-def _key_file() -> Path:
-    return _KEY_FILE or (_blob_dir() / ".key")
 
 
 # ── CaptureMode ───────────────────────────────────────────────────────────────
@@ -89,19 +79,17 @@ def _load_or_generate_key() -> bytes:
             )
         return raw
 
-    blob_dir = _blob_dir()
-    key_file = _key_file()
-    blob_dir.mkdir(parents=True, exist_ok=True)
-    if key_file.exists():
-        raw = bytes.fromhex(key_file.read_text().strip())
+    _BLOB_DIR.mkdir(parents=True, exist_ok=True)
+    if _KEY_FILE.exists():
+        raw = bytes.fromhex(_KEY_FILE.read_text().strip())
         if len(raw) != 32:
-            raise ValueError(f"Corrupt key file at {key_file}; delete and retry")
+            raise ValueError(f"Corrupt key file at {_KEY_FILE}; delete and retry")
         return raw
 
     # Auto-generate
     new_key = secrets.token_bytes(32)
-    key_file.write_text(new_key.hex())
-    key_file.chmod(0o600)
+    _KEY_FILE.write_text(new_key.hex())
+    _KEY_FILE.chmod(0o600)
     return new_key
 
 
@@ -258,7 +246,7 @@ def capture(
 ) -> Path | None:
     """Capture a request/response pair according to *mode*.
 
-    Does nothing when mode is OFF. Writes to the resolved debug-capture dir.
+    Does nothing when mode is OFF.  Writes to ``_BLOB_DIR``.
 
     Args:
         trace_id: Unique identifier for this trace (used as filename).
@@ -276,18 +264,17 @@ def capture(
     if mode == CaptureMode.OFF:
         return None
 
-    blob_dir = _blob_dir()
-    blob_dir.mkdir(parents=True, exist_ok=True)
+    _BLOB_DIR.mkdir(parents=True, exist_ok=True)
     record = _build_record(trace_id, request, response, metadata, mode)
 
     if mode == CaptureMode.HASH_ONLY:
-        dest = blob_dir / f"{trace_id}.hash"
+        dest = _BLOB_DIR / f"{trace_id}.hash"
         dest.write_text(json.dumps(record, indent=2))
         return dest
 
     # ENCRYPTED mode
     blob = encrypt_blob(record, key=key)
-    dest = blob_dir / f"{trace_id}.enc"
+    dest = _BLOB_DIR / f"{trace_id}.enc"
     dest.write_bytes(blob)
     return dest
 
@@ -302,7 +289,7 @@ def list_captures(debug_dir: Path | None = None) -> list[dict[str, Any]]:
     For hash-only captures, ``timestamp`` is also included (parsed from the
     JSON header without decrypting encrypted blobs).
     """
-    base = debug_dir or _blob_dir()
+    base = debug_dir or _BLOB_DIR
     if not base.exists():
         return []
 
@@ -350,7 +337,7 @@ def export_capture(
         FileNotFoundError: If no capture exists for *trace_id*.
         ValueError: On decryption failure.
     """
-    base = debug_dir or _blob_dir()
+    base = debug_dir or _BLOB_DIR
     enc_path = base / f"{trace_id}.enc"
     hash_path = base / f"{trace_id}.hash"
 

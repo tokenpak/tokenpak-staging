@@ -12,16 +12,19 @@ Setup: pip install tokenpak fastapi uvicorn
 
 import sys
 import os
+import time
 import json
 from typing import Callable
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.base import BaseHTTPMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from tokenpak import HeuristicEngine
+from tokenpak.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------

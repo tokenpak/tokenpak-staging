@@ -37,6 +37,11 @@
       kpiShowCompressionRatio: false,
       kpiShowLatency: true,
     },
+    data: {
+      captureMode: 'off',
+      debugSamplingRate: 5,
+      retentionPeriod: '30d',
+    },
     savedViews: [],
   };
 
@@ -234,13 +239,33 @@
   }
 
   function renderData() {
-    return '<h2 class="tp-settings-section-title">Local Data</h2>' +
+    var d = state.data;
+    return '<h2 class="tp-settings-section-title">Data &amp; Capture Settings</h2>' +
+      '<div class="tp-settings-warning" role="alert">⚠ Changes to capture mode and retention may affect storage usage and data availability.</div>' +
       '<div class="tp-settings-group">' +
+      '<label class="tp-settings-label">Segment Capture Mode' +
+      '<select class="tp-settings-select" data-section="data" data-key="captureMode">' +
+      '<option value="off"' + sel(d.captureMode,'off') + '>Off (default)</option>' +
+      '<option value="counts"' + sel(d.captureMode,'counts') + '>Token counts only</option>' +
+      '<option value="full"' + sel(d.captureMode,'full') + '>Full segment detail</option>' +
+      '<option value="payload"' + sel(d.captureMode,'payload') + '>Full payload (redacted)</option>' +
+      '</select></label>' +
+      '<label class="tp-settings-label">Debug Sampling Rate: <span id="tp-sampling-display">' + d.debugSamplingRate + '%</span>' +
+      '<input type="range" class="tp-settings-slider" min="0" max="100" step="5" value="' + d.debugSamplingRate + '" data-section="data" data-key="debugSamplingRate" aria-label="Debug sampling rate">' +
+      '</label>' +
+      '<label class="tp-settings-label">Retention Period' +
+      '<select class="tp-settings-select" data-section="data" data-key="retentionPeriod">' +
+      '<option value="7d"' + sel(d.retentionPeriod,'7d') + '>7 days</option>' +
+      '<option value="30d"' + sel(d.retentionPeriod,'30d') + '>30 days</option>' +
+      '<option value="90d"' + sel(d.retentionPeriod,'90d') + '>90 days</option>' +
+      '</select></label>' +
       '<div class="tp-settings-info-row">' +
-      '<span class="tp-settings-label">Local request log</span>' +
-      '<span class="tp-muted">Metadata-only; stored on this machine</span>' +
-      '</div>' +
-      '<p class="tp-muted">Runtime capture, sampling, retention, and deletion are managed outside the dashboard.</p>' +
+      '<span class="tp-settings-label">Database Size</span>' +
+      '<span id="tp-db-size-value" class="tp-muted">Loading…</span>' +
+      '</div></div>' +
+      '<div class="tp-settings-footer">' +
+      '<button class="tp-btn tp-btn--secondary" id="tp-reset-data">Reset to Defaults</button>' +
+      '<button class="tp-btn tp-btn--danger" id="tp-clear-data">Clear All Data</button>' +
       '</div>';
   }
 
@@ -279,7 +304,7 @@
     if (!panel) return;
     if (currentSection === 'personal') { panel.innerHTML = renderPersonal(); }
     else if (currentSection === 'dashboard') { panel.innerHTML = renderDashboard(); }
-    else if (currentSection === 'data') { panel.innerHTML = renderData(); }
+    else if (currentSection === 'data') { panel.innerHTML = renderData(); loadDbSize(); }
     else if (currentSection === 'system') { panel.innerHTML = renderSystem(); bindSystemEvents(); }
     else {
       var sec = SECTIONS.filter(function(s) { return s.id === currentSection; })[0];
@@ -338,6 +363,17 @@
     }
   }
 
+  // ─── DB Size ─────────────────────────────────────────────────────────────
+
+  function loadDbSize() {
+    var el = document.getElementById('tp-db-size-value');
+    if (!el) return;
+    fetch('/dashboard/settings/system/db-size')
+      .then(function(r) { return r.json(); })
+      .then(function(d) { el.textContent = d.size_human || (d.size_bytes + ' bytes'); })
+      .catch(function() { el.textContent = 'Unavailable'; });
+  }
+
   // ─── Bind Events ─────────────────────────────────────────────────────────
 
   function bindSectionEvents() {
@@ -386,7 +422,7 @@
       });
     });
     // Reset buttons
-    ['personal','dashboard'].forEach(function(sec) {
+    ['personal','dashboard','data'].forEach(function(sec) {
       var btn = document.getElementById('tp-reset-' + sec);
       if (!btn) return;
       btn.addEventListener('click', function() {
@@ -398,6 +434,20 @@
         });
       });
     });
+    // Clear data
+    var clearBtn = document.getElementById('tp-clear-data');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function() {
+        showConfirmModal('Clear All Data',
+          'This will permanently delete all telemetry data. This cannot be undone.',
+          function() {
+            fetch('/dashboard/settings/system/clear-data', { method: 'POST' })
+              .then(function(r) { return r.json(); })
+              .then(function() { showToast('All data cleared', 'warning'); })
+              .catch(function() { showToast('Failed to clear data', 'error'); });
+          });
+      });
+    }
     bindSavedViewEvents();
   }
 

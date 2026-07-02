@@ -1,8 +1,8 @@
 {
   "_meta": {
-    "version": "v4",
+    "version": "v3",
     "description": "Unified model registry seed data — costs are USD per 1,000,000 tokens",
-    "updated": "2026-06-23",
+    "updated": "2026-04-16",
     "notes": [
       "This is the single source of truth for model metadata across tokenpak",
       "Family rules in _families.py handle unknown models automatically",
@@ -22,65 +22,26 @@
     "sonnet": {"url": "https://api.anthropic.com/v1/messages", "model": "claude-sonnet-4-6"}
   },
   "models": {
-    "claude-fable-5": {
-      "provider": "anthropic",
-      "tier": 4,
-      "input": 10.00,
-      "output": 50.00,
-      "cache_read": 1.00,
-      "cache_write": 12.50,
-      "translations": {
-        "bedrock": "anthropic.claude-fable-5",
-        "vertex": "claude-fable-5"
-      },
-      "aliases": ["fable"]
-    },
-    "claude-opus-4-8": {
-      "provider": "anthropic",
-      "tier": 4,
-      "input": 5.00,
-      "output": 25.00,
-      "cache_read": 0.50,
-      "cache_write": 6.25,
-      "translations": {
-        "bedrock": "anthropic.claude-opus-4-8",
-        "vertex": "claude-opus-4-8"
-      },
-      "aliases": []
-    },
-    "claude-opus-4-7": {
-      "provider": "anthropic",
-      "tier": 4,
-      "input": 5.00,
-      "output": 25.00,
-      "cache_read": 0.50,
-      "cache_write": 6.25,
-      "translations": {
-        "bedrock": "anthropic.claude-opus-4-7",
-        "vertex": "claude-opus-4-7"
-      },
-      "aliases": []
-    },
     "claude-opus-4-6": {
       "provider": "anthropic",
       "tier": 4,
-      "input": 5.00,
-      "output": 25.00,
-      "cache_read": 0.50,
-      "cache_write": 6.25,
+      "input": 15.00,
+      "output": 75.00,
+      "cache_read": 1.50,
+      "cache_write": 18.75,
       "translations": {
-        "bedrock": "anthropic.claude-opus-4-6-v1",
-        "vertex": "claude-opus-4-6"
+        "bedrock": "anthropic.claude-opus-4-6-20260101-v1:0",
+        "vertex": "claude-opus-4-6@20260101"
       },
       "aliases": ["opus"]
     },
     "claude-opus-4-5": {
       "provider": "anthropic",
       "tier": 3,
-      "input": 5.00,
-      "output": 25.00,
-      "cache_read": 0.50,
-      "cache_write": 6.25,
+      "input": 15.00,
+      "output": 75.00,
+      "cache_read": 1.50,
+      "cache_write": 18.75,
       "translations": {},
       "aliases": []
     },

@@ -4,7 +4,7 @@
  * @module types
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TokenPakUnsupportedEndpointError = exports.TokenPakTimeoutError = exports.TokenPakConnectionError = exports.TokenPakError = void 0;
+exports.TokenPakTimeoutError = exports.TokenPakConnectionError = exports.TokenPakError = void 0;
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -31,12 +31,4 @@ class TokenPakTimeoutError extends TokenPakError {
     }
 }
 exports.TokenPakTimeoutError = TokenPakTimeoutError;
-class TokenPakUnsupportedEndpointError extends TokenPakError {
-    constructor(feature, path) {
-        super(`${feature} requires ${path}, which is not part of the shipped TokenPak app API. ` +
-            'Pass { experimentalEndpoints: true } only when your server implements that legacy endpoint.');
-        this.name = 'TokenPakUnsupportedEndpointError';
-    }
-}
-exports.TokenPakUnsupportedEndpointError = TokenPakUnsupportedEndpointError;
 //# sourceMappingURL=types.js.map

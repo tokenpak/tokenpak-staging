@@ -2,7 +2,7 @@
 """OSS-side activate → Pro daemon /v1/features wiring tests (Cycle 5).
 
 Covers every state the wiring must distinguish per the design at
-the OSS activate-wiring design (see project history):
+``~/vault/01_PROJECTS/tokenpak/beta-polishing-2026-05-13/design-oss-activate-wiring-2026-05-15.md``:
 
 - daemon unreachable (no sock-info file)
 - daemon returns verified Pro envelope

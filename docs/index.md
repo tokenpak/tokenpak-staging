@@ -141,7 +141,7 @@ tokenpak debug list # View recent request traces
 
 # Vault
 tokenpak index # Index directory
-tokenpak vault repair # Check and repair vault index
+tokenpak vault search # Semantic search
 tokenpak calibrate # Auto-tune performance
 
 # Routing

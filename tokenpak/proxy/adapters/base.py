@@ -2,53 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, Mapping, Optional, Tuple
+from typing import Any, Callable, FrozenSet, Mapping, Optional, Tuple
 
 from .canonical import CanonicalRequest
 
-if TYPE_CHECKING:
-    from tokenpak.tip.adapter_contract import AdapterCapabilityContract
-
 TokenCounter = Callable[[str], int]
-
-
-# --- cacheable-injection trace helpers (shared across adapters) ---
-def cacheable_layer_hash(text: str) -> str:
-    """Deterministic short hash of an injection layer's text (cacheable-injection design).
-
-    Used to attribute the stable vs volatile injection layers without exposing
-    raw prompt content. Empty text hashes to "" so absent layers are unambiguous.
-    """
-    if not text:
-        return ""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def cacheable_fill_trace(
-    trace: Dict[str, Any],
-    stable_text: str,
-    volatile_text: str,
-    cache_origin: str,
-) -> None:
-    """Populate a cacheable-injection trace dict in place.
-
-    cache_origin ∈ {proxy, client, unknown} per the status attribution contract:
-      proxy   — TokenPak stamped cache_control on the stable layer (attributable)
-      client  — the client manages cache_control (e.g. explicit TTL); not ours
-      unknown — no cacheable placement / non-attributable
-    """
-    trace.update(
-        {
-            "stable_hash": cacheable_layer_hash(stable_text),
-            "volatile_hash": cacheable_layer_hash(volatile_text),
-            "stable_present": bool(stable_text),
-            "volatile_present": bool(volatile_text),
-            "cache_origin": cache_origin,
-        }
-    )
 
 
 class FormatAdapter(ABC):
@@ -58,25 +18,6 @@ class FormatAdapter(ABC):
     # TIP-1.0 capability labels this adapter publishes. Subclasses override
     # with a frozenset of ``tip.<group>.<feature>`` label strings.
     capabilities: FrozenSet[str] = frozenset()
-    # Inclusive TIP version range this adapter supports. Defaults accept any
-    # minor within TIP-1 (TIP-1.0 .. TIP-1.x); subclasses override to narrow.
-    tip_min_version: str = "TIP-1.0"
-    tip_max_version: str = "TIP-1.x"
-
-    def capability_contract(self) -> "AdapterCapabilityContract":
-        """Return this adapter's declared TIP capability contract.
-
-        Built from ``source_format`` / ``capabilities`` / ``tip_min_version`` /
-        ``tip_max_version``. The proxy validates this at adapter load / startup.
-        """
-        from tokenpak.tip.adapter_contract import AdapterCapabilityContract
-
-        return AdapterCapabilityContract(
-            adapter_name=self.source_format,
-            tip_min_version=self.tip_min_version,
-            tip_max_version=self.tip_max_version,
-            capabilities=frozenset(self.capabilities),
-        )
 
     @abstractmethod
     def detect(self, path: str, headers: Mapping[str, str], body: Optional[bytes]) -> bool:
@@ -160,55 +101,17 @@ class FormatAdapter(ABC):
             last_user = " ".join(words[:50])
         return last_user
 
-    def inject_system_context(
-        self,
-        body: bytes,
-        injection_text: Optional[str] = None,
-        *,
-        stable_text: Optional[str] = None,
-        volatile_text: Optional[str] = None,
-        trace_out: Optional[Dict[str, Any]] = None,
-    ) -> bytes:
-        """Generic injection. Two modes:
-
-        - Legacy (positional ``injection_text``): append as a single block —
-          unchanged behavior.
-        - two-layer cacheable-injection (``stable_text`` / ``volatile_text`` keywords):
-          generic adapters have no provider cache semantics, so both layers are
-          appended as ordered text (stable before volatile) and the trace reports
-          ``cache_origin="unknown"`` (no proxy-attributable cache placement).
-        """
-        two_layer = stable_text is not None or volatile_text is not None
-        if not two_layer:
-            injection_text = injection_text or ""
-            canonical = self.normalize(body)
-            system = canonical.system
-            if isinstance(system, str):
-                canonical.system = f"{system}\n\n{injection_text}" if system else injection_text
-            elif isinstance(system, list):
-                system.append({"type": "text", "text": injection_text})
-            else:
-                canonical.system = injection_text
-            if trace_out is not None:
-                cacheable_fill_trace(trace_out, "", injection_text, cache_origin="unknown")
-            return self.denormalize(canonical)
-
-        stable_text = stable_text or ""
-        volatile_text = volatile_text or ""
+    def inject_system_context(self, body: bytes, injection_text: str) -> bytes:
         canonical = self.normalize(body)
         system = canonical.system
-        combined = "\n\n".join(p for p in (stable_text, volatile_text) if p)
+
         if isinstance(system, str):
-            canonical.system = f"{system}\n\n{combined}" if system else combined
+            canonical.system = f"{system}\n\n{injection_text}" if system else injection_text
         elif isinstance(system, list):
-            if stable_text:
-                system.append({"type": "text", "text": stable_text})
-            if volatile_text:
-                system.append({"type": "text", "text": volatile_text})
+            system.append({"type": "text", "text": injection_text})
         else:
-            canonical.system = combined
-        if trace_out is not None:
-            cacheable_fill_trace(trace_out, stable_text, volatile_text, cache_origin="unknown")
+            canonical.system = injection_text
+
         return self.denormalize(canonical)
 
     def _extract_sse_output_tokens(self, sse_bytes: bytes) -> int:

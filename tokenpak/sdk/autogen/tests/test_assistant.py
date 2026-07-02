@@ -1,6 +1,6 @@
-from tokenpak.sdk.autogen.assistant import TokenPakAssistant
-from tokenpak.sdk.autogen.groupchat import TokenPakGroupChat
-from tokenpak.sdk.autogen.message import TokenPakMessage, compress_messages
+from autogen_tokenpak.assistant import TokenPakAssistant
+from autogen_tokenpak.groupchat import TokenPakGroupChat
+from autogen_tokenpak.message import TokenPakMessage, compress_messages
 
 
 def test_message_basic():
