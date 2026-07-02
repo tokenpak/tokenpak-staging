@@ -16,15 +16,18 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from ..config import CompanionConfig
 from .mcp_config import SERVER_NAME
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
 from .rates_snapshot import count as rates_count
+from .skills_installer import _default_target as _skills_target
+from .skills_installer import _legacy_target as _legacy_skills_target
 from .skills_installer import bundled_skill_names
 
-CheckFn = Callable[[], "tuple[bool, str]"]
+Status = Literal["PASS", "WARN", "FAIL"]
+CheckFn = Callable[[], "tuple[bool | Status, str]"]
 
 
 # ── Individual checks ────────────────────────────────────────────────
@@ -116,7 +119,7 @@ def check_agents_md() -> "tuple[bool, str]":
 
 
 def check_skills_installed() -> "tuple[bool, str]":
-    target = Path.home() / ".codex" / "skills"
+    target = _skills_target()
     if not target.exists():
         return False, f"{target} missing"
     bundled = bundled_skill_names()
@@ -124,6 +127,25 @@ def check_skills_installed() -> "tuple[bool, str]":
     if missing:
         return False, f"missing skills: {missing}"
     return True, f"{len(bundled)} skills present"
+
+
+def _check_legacy_skills_orphans() -> "tuple[Status, str]":
+    legacy = _legacy_skills_target()
+    if not legacy.exists():
+        return "PASS", "no legacy ~/.codex/skills orphans"
+
+    bundled = bundled_skill_names()
+    orphans = [name for name in bundled if (legacy / name).exists()]
+    if not orphans:
+        return "PASS", "legacy ~/.codex/skills has no TokenPak skill orphans"
+    return (
+        "WARN",
+        "legacy ~/.codex/skills TokenPak orphans present: "
+        f"{orphans}. The warning path points at the legacy .codex copy. "
+        "Current file validation and debug prompt loading show valid frontmatter, "
+        "so the actionable defect is duplicate non-atomic skill synchronization, "
+        "not invalid skill metadata.",
+    )
 
 
 def check_databases() -> "tuple[bool, str]":
@@ -216,6 +238,7 @@ CHECKS: list["tuple[str, CheckFn]"] = [
     ("hooks.json schema", check_hooks_json),
     ("AGENTS.md", check_agents_md),
     ("skills installed", check_skills_installed),
+    ("skills legacy orphans", _check_legacy_skills_orphans),
     ("storage dbs", check_databases),
     ("rates snapshot", check_rates_snapshot),
     ("MCP import", check_mcp_import),
@@ -231,24 +254,30 @@ def run(refresh_rates: bool = False) -> int:
         path = refresh()
         print(f"refreshed rates snapshot: {path}")
 
-    results: list["tuple[str, bool, str]"] = []
+    results: list["tuple[str, Status, str]"] = []
     for name, fn in CHECKS:
         try:
-            ok, detail = fn()
+            raw_status, detail = fn()
+            if isinstance(raw_status, bool):
+                status: Status = "PASS" if raw_status else "FAIL"
+            else:
+                status = raw_status
         except Exception as exc:
-            ok, detail = False, f"check raised: {exc.__class__.__name__}: {exc}"
-        results.append((name, ok, detail))
+            status, detail = "FAIL", f"check raised: {exc.__class__.__name__}: {exc}"
+        results.append((name, status, detail))
 
     name_width = max(len(n) for n, _, _ in results)
     all_ok = True
-    for name, ok, detail in results:
-        tag = "PASS" if ok else "FAIL"
-        print(f"  [{tag}] {name.ljust(name_width)}  {detail}")
-        all_ok = all_ok and ok
+    for name, status, detail in results:
+        print(f"  [{status}] {name.ljust(name_width)}  {detail}")
+        all_ok = all_ok and status != "FAIL"
 
-    passed = sum(1 for _, ok, _ in results if ok)
+    passed = sum(1 for _, status, _ in results if status == "PASS")
+    warned = sum(1 for _, status, _ in results if status == "WARN")
     total = len(results)
     summary = f"{passed}/{total} checks passed"
+    if warned:
+        summary = f"{summary}, {warned} warning(s)"
     print()
     print(summary if all_ok else f"{summary} — some checks failed")
     return 0 if all_ok else 1
