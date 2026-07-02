@@ -36,7 +36,7 @@ import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from tokenpak.companion.recall import (
     LIST_LIMIT_DEFAULT,
@@ -156,7 +156,7 @@ def try_handle_get(handler: Any) -> bool:
 
     # ── /tpk/v1/vault/block/{block_id} ───────────────────────────────────
     if path.startswith("/tpk/v1/vault/block/"):
-        block_id = path[len("/tpk/v1/vault/block/"):]
+        block_id = unquote(path[len("/tpk/v1/vault/block/"):])
         _handle_vault_block(handler, block_id)
         return True
 
