@@ -270,8 +270,8 @@ _DISPATCH_RUNTIME_SENTINEL = "tokenpak.orchestration.dispatch.dispatch"
 
 # The ``[dispatch]`` extra deps (§ pyproject optional-dependencies). The Dispatch
 # record models are pydantic-native and JSON-Schema round-trips use jsonschema;
-# both are kept out of the slim core (Std 02 §9 / Constitution 00), so a base
-# install can have the runtime *source* present yet lack these.
+# both are kept out of the slim core by design, so a base install can have the
+# runtime *source* present yet lack these.
 _DISPATCH_DEPS: tuple[str, ...] = ("pydantic", "jsonschema")
 
 _DISPATCH_RUNTIME_UNAVAILABLE_MSG = (
