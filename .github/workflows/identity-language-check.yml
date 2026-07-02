@@ -582,3 +582,15 @@ jobs:
             exit 1
           fi
           echo "Identity / language check OK."
+
+      - name: Scan changed files with shared structural scanner
+        run: |
+          set -euo pipefail
+          if [ ! -s changed-files.txt ]; then
+            echo "No relevant files changed; skipping."
+            exit 0
+          fi
+          python scripts/release_gate/public_safety_scan.py \
+            --paths-from changed-files.txt \
+            --root . \
+            --annotation error
