@@ -622,6 +622,10 @@ TokenPak Dispatch — scoped, station-based, resumable, gated work packages with
 - `receipt`
   - `JOB_ID` — Dispatch job id (job_…)
   - `--json` — Emit machine-readable JSON instead of human-readable output
+- `routes`
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `workers`
+  - `--json` — Emit machine-readable JSON instead of human-readable output
 
 ---
 
