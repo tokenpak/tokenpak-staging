@@ -21,7 +21,7 @@ The harness is **opt-in**: the ``p8_latency`` pytest marker (registered in
 the default / slim / dev / full suites collect them but ``skip`` (see
 ``requires_p8_optin``) so default-suite behaviour is unchanged.
 
-Honesty contract (methodology §5): every record self-reports its noise bin and a
+Honesty contract (methodology section 5): every record self-reports its noise bin and a
 ``claim`` label. Only a clean run on a fleet-class / modest deployment host is
 ``claim``-eligible; beefy-only and shared-CI runs are ``non_claim`` / ``trend_only``
 and can never become a canonical fleet-performance baseline.
@@ -50,7 +50,7 @@ BASELINES_PATH = Path(__file__).with_name("p8_latency_baselines.jsonl")
 #: Marker name; kept in one place so the tests and the gate agree.
 P8_MARKER = "p8_latency"
 
-# Default sample sizes. Methodology §3 specifies N=1000 (+100 warmup) for the
+# Default sample sizes. Methodology section 3 specifies N=1000 (+100 warmup) for the
 # in-process targets and N=500 (+50 warmup) for the SSE targets. The in-test
 # default is a fast smoke size so ``pytest -m p8_latency`` stays well under the
 # 30s suite timeout; a real baseline capture sets TOKENPAK_P8_SAMPLES to the
@@ -60,7 +60,7 @@ DEFAULT_WARMUP = 50
 DEFAULT_STREAM_SAMPLES = 200
 DEFAULT_STREAM_WARMUP = 30
 
-# Noise bin thresholds (methodology §5), in milliseconds, on the idle-loop p99.
+# Noise bin thresholds (methodology section 5), in milliseconds, on the idle-loop p99.
 NOISE_CLEAN_MAX_MS = 2.0
 NOISE_NOISY_MAX_MS = 15.0
 NOISE_PROBE_READS = 1000
@@ -181,7 +181,7 @@ def difference_distribution(
 
 
 # ---------------------------------------------------------------------------
-# Noise probe (methodology §5)
+# Noise probe (methodology section 5)
 # ---------------------------------------------------------------------------
 
 @dataclass

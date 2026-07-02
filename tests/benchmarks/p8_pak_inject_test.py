@@ -1,4 +1,4 @@
-"""P8 §3.4 — PAK retrieval/injection overhead.
+"""P8 section 3.4 - PAK retrieval/injection overhead.
 
 Isolates the byte-splice cost of injecting a canonical PAK (a 4KB system-prompt
 block) into the outbound request body: JSON parse of the 1KB ``messages`` body,
@@ -6,7 +6,7 @@ composition of the injected ``system`` block, and re-serialisation. Reported as
 the difference versus the same parse/serialise round-trip without injection, so
 only the injection-added cost remains.
 
-Per methodology §3.4, semantic-cache PAK *retrieval* (scoring/ranking) is a
+Per methodology section 3.4, semantic-cache PAK *retrieval* (scoring/ranking) is a
 separate measurement layered on top of this and is intentionally out of scope
 here; this target measures the body byte-splice the proxy performs on every
 injected request.
@@ -60,7 +60,7 @@ def test_pak_inject_overhead(request):
         method=(
             "real JSON body byte-splice: parse 1KB messages body + inject 4KB "
             "system PAK + re-serialise, vs parse/serialise round-trip without "
-            "injection (methodology §3.4 body-splice; semantic retrieval deferred)"
+            "injection (methodology section 3.4 body-splice; semantic retrieval deferred)"
         ),
         target_fn=target,
         baseline_fn=baseline,

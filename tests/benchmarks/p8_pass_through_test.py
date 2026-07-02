@@ -1,4 +1,4 @@
-"""P8 §3.1 — pass-through overhead.
+"""P8 section 3.1 - pass-through overhead.
 
 Isolates the raw proxy framing cost on a byte-preserved passthrough: building
 the forwarded-header dict (``tokenpak.proxy.headers.forward_headers``) plus the
@@ -68,7 +68,7 @@ def test_pass_through_overhead(request):
         method=(
             "in-process proxy framing: forward_headers(headers) + body byte "
             "passthrough vs dict/bytes copy; loopback-free, isolates proxy-added "
-            "framing overhead (methodology §3.1)"
+            "framing overhead (methodology section 3.1)"
         ),
         target_fn=target,
         baseline_fn=baseline,

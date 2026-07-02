@@ -1,4 +1,4 @@
-"""P8 §3.2 — telemetry overhead.
+"""P8 section 3.2 - telemetry overhead.
 
 Isolates the request-path latency added by ``Monitor.log()`` on top of
 pass-through. NB: the production Monitor is **async** — ``log()`` enqueues the
@@ -26,7 +26,7 @@ pytestmark = pytest.mark.p8_latency
 
 
 def _tmpfs_db_path(tmp_path_factory) -> str:
-    # Prefer tmpfs (/dev/shm) to isolate from disk noise (methodology §3.2);
+    # Prefer tmpfs (/dev/shm) to isolate from disk noise (methodology section 3.2);
     # fall back to a pytest tmp dir when /dev/shm is unavailable.
     shm = "/dev/shm"
     base = shm if os.path.isdir(shm) and os.access(shm, os.W_OK) else None
@@ -69,7 +69,7 @@ def test_telemetry_overhead(request, tmp_path_factory):
             method=(
                 "real Monitor.log() per-request cost (async enqueue onto the "
                 "background write queue; SQLite insert into tmpfs DB is drained "
-                "off the request hot path) vs no-op (methodology §3.2)"
+                "off the request hot path) vs no-op (methodology section 3.2)"
             ),
             target_fn=target,
             baseline_fn=baseline,

@@ -234,7 +234,7 @@ testpaths = [
 python_files = [
     "test_*.py",
     # Narrow suffix pattern for the opt-in P8 latency targets only (their
-    # filenames are fixed by the P8 methodology §6 file map). Scoped to
+    # filenames are fixed by the P8 methodology file map). Scoped to
     # `p8_*_test.py` so no other `*_test.py` file (e.g. companion_benchmark/)
     # is newly collected; the P8 targets self-skip outside `-m p8_latency`.
     "p8_*_test.py",

@@ -1,4 +1,4 @@
-"""P8 §3.6 — full-stream overhead.
+"""P8 section 3.6 - full-stream overhead.
 
 Isolates the per-chunk parse / token-accounting overhead the proxy incurs across
 an entire streamed response (≥20 SSE events): the real
@@ -22,7 +22,7 @@ from .p8_latency_harness import requires_p8_optin, run_difference_target
 
 pytestmark = pytest.mark.p8_latency
 
-_NUM_DELTAS = 24  # ≥20 events per methodology §3.5/§3.6
+_NUM_DELTAS = 24  # At least 20 events per methodology sections 3.5 and 3.6.
 
 
 def _full_stream_bytes() -> bytes:
@@ -76,7 +76,7 @@ def test_full_stream_overhead(request):
         method=(
             "real extract_sse_tokens() per-chunk accounting over a ≥20-event "
             "stream vs utf-8 decode of the same bytes; loopback-free per-chunk "
-            "parse overhead (methodology §3.6)"
+            "parse overhead (methodology section 3.6)"
         ),
         target_fn=target,
         baseline_fn=baseline,

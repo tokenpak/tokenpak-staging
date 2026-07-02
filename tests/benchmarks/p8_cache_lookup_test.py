@@ -1,4 +1,4 @@
-"""P8 §3.3 — cache lookup (miss) overhead.
+"""P8 section 3.3 - cache lookup (miss) overhead.
 
 Isolates the cost of a TIP-style cache lookup when the cache is configured but
 the key is a guaranteed **miss**: cache-key derivation plus the negative dict
@@ -6,7 +6,7 @@ lookup. Measured against a real ``VolatileCache`` pre-warmed with K entries
 (K ∈ {0, 100, 10_000} as separate records, per the methodology), with the
 lookup key always absent. Reported as the difference versus a no-op baseline.
 
-Cache-hit response replay is intentionally out of scope (methodology §3.3 note):
+Cache-hit response replay is intentionally out of scope (methodology section 3.3 note):
 hits avoid the upstream call entirely and warrant their own measurement.
 
 Opt-in: ``pytest -m p8_latency``.
@@ -48,7 +48,7 @@ def test_cache_lookup_miss_overhead(request):
             target="cache_lookup_miss",
             method=(
                 f"real VolatileCache.get(miss) (key derivation + negative lookup), "
-                f"K={k} pre-warmed entries, vs no-op (methodology §3.3)"
+                f"K={k} pre-warmed entries, vs no-op (methodology section 3.3)"
             ),
             target_fn=target,
             baseline_fn=baseline,

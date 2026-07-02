@@ -1,4 +1,4 @@
-"""P8 §3.5 — SSE first-token delay.
+"""P8 section 3.5 - SSE first-token delay.
 
 Isolates the parse-before-forward cost the proxy incurs on the first SSE event:
 decoding and JSON-parsing the leading ``message_start`` event window via the
@@ -58,7 +58,7 @@ def test_sse_first_token_overhead(request):
         method=(
             "real iter_sse_events() parse of the first message_start event vs "
             "utf-8 decode of the same bytes; loopback-free parse-before-forward "
-            "overhead (methodology §3.5)"
+            "overhead (methodology section 3.5)"
         ),
         target_fn=target,
         baseline_fn=baseline,
