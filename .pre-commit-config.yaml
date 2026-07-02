@@ -61,11 +61,13 @@ repos:
         # product references (Claude Code, Anthropic, etc.) are unaffected.
         entry: '\bSue\b|\bCali\b|\bTrix\b|\bSuki\b|\bAya\b|\bDee\b|\bReiPo\b|\bopenclaw\b|\bfleet\b|TSR-[0-9]|TPS-[0-9]|CCI-[0-9]|MTC-[0-9]|OAS-[0-9]|TIP7-[0-9]|TRIX-MTC|WS-[0-9]|\.claude/projects|/home/sue/|trixxie168|\bStd 2[0-9]\b|\bStd 3[0-9]\b|Suki: auto-commit'
         types_or: [markdown, python, yaml, toml, shell, javascript, ts, json]
+        exclude: '^(scripts/release_gate/check_release_leaks\.py|scripts/release_gate/public_safety_scan\.py|\.github/workflows/identity-language-check\.yml|\.pre-commit-config\.yaml)$'
       - id: public-safety-structural
         name: Shared public-safety structural scan
         language: system
         entry: python scripts/release_gate/public_safety_scan.py --root . --annotation error --paths
         types_or: [markdown, python, yaml, toml, shell, javascript, ts, json, text]
+        exclude: '^(scripts/release_gate/check_release_leaks\.py|scripts/release_gate/public_safety_scan\.py|\.github/workflows/identity-language-check\.yml|\.pre-commit-config\.yaml)$'
       - id: forbidden-files
         name: No backup / corrupt-DB / typecheck artifact files
         language: pygrep
