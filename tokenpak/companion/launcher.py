@@ -49,6 +49,8 @@ from .config import CompanionConfig
 # ---------------------------------------------------------------------------
 
 _FLEET_BYPASS_FLAG = "--dangerously-skip-permissions"
+_COMPANION_DEFAULT_PERMISSION_MODE = "acceptEdits"
+_COMPANION_SAFE_PERMISSION_MODES = {"acceptEdits", "default", "plan"}
 
 
 def _fleet_mode_enabled() -> bool:
@@ -350,6 +352,14 @@ def _write_settings(config: CompanionConfig) -> str:
 
     # Ensure permissions.allow includes the companion's MCP glob
     permissions = settings.setdefault("permissions", {})
+    permission_mode = os.environ.get(
+        "TOKENPAK_COMPANION_PERMISSION_MODE",
+        _COMPANION_DEFAULT_PERMISSION_MODE,
+    ).strip()
+    if permission_mode not in _COMPANION_SAFE_PERMISSION_MODES:
+        permission_mode = _COMPANION_DEFAULT_PERMISSION_MODE
+    permissions["defaultMode"] = permission_mode
+    settings["skipAutoPermissionPrompt"] = False
     allow = permissions.setdefault("allow", [])
     companion_glob = "mcp__tokenpak-companion__*"
     if companion_glob not in allow:

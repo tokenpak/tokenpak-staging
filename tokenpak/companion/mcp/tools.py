@@ -324,13 +324,28 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 import os as _os
+import time as _time
 import urllib.error as _url_err
 import urllib.parse as _url_parse
 import urllib.request as _url_req
 
+_PROXY_DEFAULT_TIMEOUT_SECONDS = 5.0
+_PROXY_SLOW_STATUS_TIMEOUTS_SECONDS = {
+    "/tpk/v1/session/info": (6.0, 12.0),
+    "/tpk/v1/budget": (6.0, 12.0),
+}
+_PROXY_SLOW_STATUS_BACKOFF_SECONDS = 0.25
+
 
 def _proxy_base_url() -> str:
     return _os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+
+
+def _proxy_timeouts_for(path: str) -> tuple[float, ...]:
+    return _PROXY_SLOW_STATUS_TIMEOUTS_SECONDS.get(
+        path,
+        (_PROXY_DEFAULT_TIMEOUT_SECONDS,),
+    )
 
 
 def _proxy_request(method: str, path: str, params: Optional[dict[str, Any]] = None, body: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
@@ -352,21 +367,38 @@ def _proxy_request(method: str, path: str, params: Optional[dict[str, Any]] = No
     key = _os.environ.get("TOKENPAK_PROXY_KEY", "").strip()
     if key:
         req.add_header("X-TPK-Key", key)
-    try:
-        with _url_req.urlopen(req, timeout=5.0) as resp:
-            raw = resp.read()
-            try:
-                return resp.status, json.loads(raw.decode("utf-8"))
-            except Exception as exc:
-                return resp.status, {"error": "invalid_json", "detail": str(exc)}
-    except _url_err.HTTPError as exc:
+    timeouts = _proxy_timeouts_for(path)
+    attempts = len(timeouts)
+    for attempt, timeout_s in enumerate(timeouts, start=1):
         try:
-            parsed = json.loads(exc.read().decode("utf-8"))
-        except Exception:
-            parsed = {"error": f"http_{exc.code}", "detail": str(exc)}
-        return exc.code, parsed
-    except Exception as exc:
-        return 0, {"error": "proxy_unreachable", "detail": str(exc)}
+            with _url_req.urlopen(req, timeout=timeout_s) as resp:
+                raw = resp.read()
+                try:
+                    return resp.status, json.loads(raw.decode("utf-8"))
+                except Exception as exc:
+                    return resp.status, {"error": "invalid_json", "detail": str(exc)}
+        except _url_err.HTTPError as exc:
+            try:
+                parsed = json.loads(exc.read().decode("utf-8"))
+            except Exception:
+                parsed = {"error": f"http_{exc.code}", "detail": str(exc)}
+            return exc.code, parsed
+        except Exception as exc:
+            if attempt < attempts:
+                _time.sleep(_PROXY_SLOW_STATUS_BACKOFF_SECONDS)
+                continue
+            detail = str(exc)
+            if attempts > 1:
+                detail = (
+                    f"{detail} after {attempts} attempts "
+                    f"(timeouts_seconds={list(timeouts)})"
+                )
+            return 0, {
+                "error": "proxy_unreachable",
+                "detail": detail,
+                "endpoint": path,
+                "attempts": attempt,
+            }
 
 
 def _proxy_get(path: str, params: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:

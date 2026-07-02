@@ -145,6 +145,30 @@ def test_write_settings_has_mcp_permission(tmp_path):
     assert any("tokenpak-companion" in p for p in allow_list)
 
 
+def test_write_settings_defaults_to_accept_edits_permission_mode(tmp_path):
+    """Companion launches avoid Claude auto-mode classifier dependency."""
+    cfg = CompanionConfig(journal_dir=tmp_path / "journal")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
+        path = launcher._write_settings(cfg)
+    settings = json.loads(Path(path).read_text())
+    assert settings["permissions"]["defaultMode"] == "acceptEdits"
+    assert settings["skipAutoPermissionPrompt"] is False
+
+
+def test_write_settings_rejects_unsafe_permission_env_override(tmp_path):
+    """Only prompt-preserving companion permission modes are accepted."""
+    cfg = CompanionConfig(journal_dir=tmp_path / "journal")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    with patch.dict(os.environ, {"TOKENPAK_COMPANION_PERMISSION_MODE": "bypassPermissions"}):
+        with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
+            path = launcher._write_settings(cfg)
+    settings = json.loads(Path(path).read_text())
+    assert settings["permissions"]["defaultMode"] == "acceptEdits"
+
+
 # ---------------------------------------------------------------------------
 # _write_system_prompt
 # ---------------------------------------------------------------------------
