@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add the `PromptPacker`, `PromptPackingService`, and `PromptPackingResult`
+  wrapper surface in `tokenpak.compression` for orchestrating the existing
+  compression pipeline and context-pack compiler into a TIP-conformant `Pak`
+  with compression metadata.
+
 ## [1.10.0] — 2026-06-28
 
 ### Added
