@@ -1747,11 +1747,10 @@ class Colors:
 
 def cmd_requests(args):
     """Live request explorer: tail or show a request by id."""
-    import json as _json
     import time as _time
 
     from tokenpak.cli.request_explorer import (
-        REQUESTS_PATH,
+        _has_request_store,
         age_label,
         cache_pct,
         get_request_by_id,
@@ -1775,7 +1774,7 @@ def cmd_requests(args):
         limit = getattr(args, "limit", 10)
         follow = not getattr(args, "once", False)
 
-        if not REQUESTS_PATH.exists():
+        if not _has_request_store():
             print("No request ledger found yet. Run requests through the proxy first.")
             return
 
@@ -1804,25 +1803,23 @@ def cmd_requests(args):
         if not follow:
             return
 
-        # Follow new entries
-        with REQUESTS_PATH.open("r") as f:
-            f.seek(0, 2)
-            try:
-                while True:
-                    line = f.readline()
-                    if not line:
-                        _time.sleep(0.5)
+        seen = {str(row.get("id", "")) for row in rows if row.get("id")}
+        try:
+            while True:
+                _time.sleep(0.5)
+                next_rows = load_requests(limit=limit)
+                fresh = []
+                for row in next_rows:
+                    request_key = str(row.get("id", ""))
+                    if request_key and request_key in seen:
                         continue
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = _json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    _print_rows([row], with_header=False)
-            except KeyboardInterrupt:
-                return
+                    if request_key:
+                        seen.add(request_key)
+                    fresh.append(row)
+                if fresh:
+                    _print_rows(fresh, with_header=False)
+        except KeyboardInterrupt:
+            return
 
     # default: show single request
     if not request_id:
