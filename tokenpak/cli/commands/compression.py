@@ -1,11 +1,15 @@
-"""compression command — compression pipeline stats and control."""
+"""compression command — compression telemetry stats."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 
 def run(raw: bool = False) -> None:
-    """Print compression pipeline stats."""
-    print("compression: not yet implemented (stub)")
+    """Print compression telemetry stats."""
+    from tokenpak._cli_core import cmd_stats
+
+    cmd_stats(SimpleNamespace(raw=raw))
 
 
 try:

@@ -32,12 +32,12 @@ P0_4_ADDED = {
     "pak", "pakplan", "tip", "creds", "claude", "codex", "prove", "init", "setup",
 }
 
-# The eight phantom commands disposed by DISPATCH-P0-4 (default = REMOVE; none
+# The phantom commands disposed by DISPATCH-P0-4 (default = REMOVE; none
 # confirmed against the Pro catalog, none with near-term OSS roadmap evidence).
 # They must never reappear as advertised commands without becoming invokable.
 P0_4_DISPOSED = {
     "workflow", "handoff", "retain", "metrics",
-    "policy", "sla", "compression", "maintenance",
+    "policy", "sla", "maintenance",
 }
 
 # Snapshot (as of DISPATCH-P0-4, 2026-06-11) of how many invokable verbs are

@@ -8,6 +8,8 @@ This matrix documents which TokenPak versions are compatible with which SDK vers
 2. **Token usage reporting** — the adapter correctly extracts usage metrics from responses
 3. **Error handling** — common error cases are handled correctly
 
+This page lists shipped or actively validated integration surfaces. Potential future adapters are intentionally omitted until implementation and test coverage exist.
+
 **Status Legend:**
 - ✅ **Supported** — tested and working
 - ⚠️ **Beta/Experimental** — working but limited testing
@@ -155,16 +157,6 @@ TokenPak includes proxy-mode support for Google Vertex AI via the generative AI 
 **Integration:** Use OpenAI/Anthropic adapters as custom client
 **Reference:** [AutoGen Documentation](https://microsoft.github.io/autogen/)
 
-### CrewAI
-
-| TokenPak | CrewAI | Python | Status | Notes |
-|----------|--------|--------|--------|-------|
-| v1.0+ | 0.27+ | 3.10+ | 🔲 | Not tested; uses LangChain/LiteLLM underneath |
-
-**Location:** Via LangChain or LiteLLM adapter
-**Integration:** Override LLM provider with TokenPak-wrapped client
-**Reference:** [CrewAI Documentation](https://docs.crewai.com)
-
 ### LlamaIndex
 
 | TokenPak | LlamaIndex | Python | Status | Notes |
@@ -248,7 +240,7 @@ Include:
 
 ## Last Updated
 
-- **Date:** 2026-03-11
+- **Date:** 2026-07-02
 - **TokenPak Version:** 1.0+
 
 For current adapter status, check:

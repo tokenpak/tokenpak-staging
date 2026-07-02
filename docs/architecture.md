@@ -170,7 +170,7 @@ Companies have:
 | Component | Purpose | License | Why this one |
 |---|---|---|---|
 | **QMD** | Text retrieval (BM25 + vectors + reranking) | MIT | Best local hybrid search, local-runtime native |
-| **LLMLingua-2** | Token-level compression | MIT | SOTA 2-20x compression, <5% quality loss |
+| **LLMLingua-2** | Token-level compression | MIT | Upstream ML compression engine with published benchmarks; verify local TokenPak results before citing numbers |
 | **SelectiveContext** | Sentence-level filtering | MIT | Preserves readability |
 | **Whisper** | Audio transcription | MIT | Industry standard, local |
 | **Tesseract** | OCR (primary) | Apache 2.0 | Most mature, widest language support |

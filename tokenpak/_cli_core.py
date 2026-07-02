@@ -283,11 +283,13 @@ _COMMAND_GROUPS = {
         ("doctor", "Run diagnostics"),
         ("diagnose", "Full health check"),
         ("dashboard", "Live dashboard"),
+        ("watch", "Alias for dashboard"),
         ("timeline", "View savings trend"),
         ("attribution", "Savings by source"),
         ("recommendations", "Ranked, telemetry-backed actions"),
         ("models", "Per-model breakdown"),
         ("forecast", "Cost projections"),
+        ("compression", "Compression telemetry stats"),
         ("debug", "Toggle debug logging"),
         ("learn", "View learned patterns"),
         ("vault-health", "Vault index health"),
@@ -334,9 +336,9 @@ _EXTRA_KNOWN_COMMANDS = {
     "setup", "compare", "leaderboard", "report", "check-alerts", "alerts",
     "watch", "integrate", "openclaw", "savings", "recommendations", "usage",
     "preview", "aggregate", "requests", "validate-config", "vault",
-    "vault-health", "compress", "optimize", "last", "prune", "retrieval",
-    "menu", "license", "plan", "activate", "deactivate", "init", "monitor",
-    "tip", "features", "pakplan", "home",
+    "vault-health", "compress", "compression", "optimize", "last", "prune",
+    "retrieval", "menu", "license", "plan", "activate", "deactivate",
+    "init", "monitor", "tip", "features", "pakplan", "home",
 }
 
 
@@ -775,9 +777,9 @@ def cmd_setup(args):
 
     # Ask for profile
     print("\nChoose a compression profile:")
-    print("  [1] minimal    — compression only (safest, ~5% savings)")
-    print("  [2] balanced   — compression + caching + routing (recommended, ~30% savings)")
-    print("  [3] aggressive — all modules enabled (maximum savings, ~40%+)")
+    print("  [1] minimal    — compression only (lowest-risk profile)")
+    print("  [2] balanced   — compression + caching + routing (recommended default)")
+    print("  [3] aggressive — all modules enabled (highest-change profile)")
 
     profile_input = input("\nProfile [2]: ").strip()
     profile_map = {"1": "minimal", "2": "balanced", "3": "aggressive"}
@@ -2576,13 +2578,12 @@ def _build_stub_parsers(sub):
     _STUBS = {
         "audit": "Enterprise audit log management (available in TokenPak Pro)",
         "compliance": "Generate compliance reports (available in TokenPak Pro)",
-        "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
     }
 
     def _make_stub(name, desc):
         def handler(args):
             print(f"tokenpak {name}: {desc}")
-            print("This command is planned but not yet available in this version.")
+            print("This command is not part of the public OSS build.")
         return handler
 
     for name, desc in _STUBS.items():
@@ -3117,6 +3118,36 @@ def build_parser():
 
     p_dashboard.set_defaults(func=cmd_dashboard)
 
+    p_watch = sub.add_parser(
+        "watch",
+        help="Alias for dashboard",
+        description=(
+            "Open the TokenPak dashboard. This is an alias for `tokenpak dashboard`."
+        ),
+    )
+    p_watch.add_argument("--fleet", action="store_true", help="Show fleet-wide summary (TUI)")
+    p_watch.add_argument(
+        "--json",
+        dest="json_export",
+        action="store_true",
+        help="Export dashboard as JSON (non-interactive)",
+    )
+    p_watch.add_argument(
+        "--public",
+        action="store_true",
+        help="Show public URL with token (accessible from any machine)",
+    )
+    p_watch.add_argument(
+        "--show-token",
+        dest="show_token",
+        action="store_true",
+        help="Display current dashboard token",
+    )
+    p_watch.add_argument(
+        "--new-token", dest="new_token", action="store_true", help="Regenerate dashboard token"
+    )
+    p_watch.set_defaults(func=cmd_dashboard)
+
     p_preview = sub.add_parser(
         "preview", help="Preview compression dry-run (show token savings before sending)"
     )
@@ -3191,6 +3222,7 @@ def build_parser():
     _build_uninstall_parser(sub)
     _build_config_mgmt_parser(sub)
     _build_fleet_parser(sub)
+    _build_compression_parser(sub)
     _build_compress_parser(sub)
     _build_optimize_parser(sub)
     _build_last_parser(sub)
@@ -5215,6 +5247,27 @@ def cmd_route_list(args):
         print(f"{r.id:<10} {r.priority:>4} {enabled:<4} {pat_str:<45} {r.target}{desc}")
 
 
+def cmd_route_status(args):
+    """Show manual routing rule store status."""
+    store = _get_route_store(args)
+    rules = store.list()
+    enabled = sum(1 for rule in rules if rule.enabled)
+    disabled = len(rules) - enabled
+    print("TokenPak Routing Status")
+    print("-----------------------")
+    print(f"Rules file: {store.path}")
+    print(f"Total rules: {len(rules)}")
+    print(f"Enabled: {enabled}")
+    print(f"Disabled: {disabled}")
+    if not rules:
+        print(
+            "No routing rules defined. Add one with: "
+            "tokenpak route add --model 'gpt-4*' --target <provider/model>"
+        )
+    else:
+        print("Run `tokenpak route list` to inspect matching order.")
+
+
 def cmd_route_add(args):
     """Add a routing rule."""
     from .routing.rules import parse_pattern_args
@@ -5335,6 +5388,11 @@ def _build_route_parser(sub):
     p_list.add_argument("--routes", default=None, help="Path to routes.yaml")
     p_list.set_defaults(func=cmd_route_list)
 
+    # route status
+    p_status = rsub.add_parser("status", help="Show routing rule store status")
+    p_status.add_argument("--routes", default=None, help="Path to routes.yaml")
+    p_status.set_defaults(func=cmd_route_status)
+
     # route add
     p_add = rsub.add_parser("add", help="Add a routing rule")
     p_add.add_argument(
@@ -5401,7 +5459,7 @@ def _build_route_parser(sub):
     p_dis.set_defaults(func=cmd_route_disable)
     p_route.set_defaults(func=_bare_help(
         "route", "Manage manual model routing rules",
-        ["list", "add", "remove", "test", "enable", "disable"],
+        ["status", "list", "add", "remove", "test", "enable", "disable"],
         exit_nonzero=True,
     ))
 
@@ -8319,6 +8377,36 @@ def cmd_vault_health(args):
 
     subcmd = getattr(args, "vault_health_cmd", None)
 
+    if subcmd in (None, "status"):
+        try:
+            health = VaultHealth()
+            result = health.check()
+            if getattr(args, "json", False):
+                print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+                return
+
+            print("TokenPak Vault Status")
+            print("---------------------")
+            print(f"Index: {result.index_path}")
+            print(f"Status: {result.status}")
+            print(f"Blocks: {result.block_count}")
+            if result.age_seconds is not None:
+                print(f"Age: {result.age_seconds:.0f}s")
+            if result.error:
+                print(f"Error: {result.error}")
+            if result.status == "OK":
+                print("Index is current.")
+            elif result.status == "MISSING":
+                print("Index is missing. Run `tokenpak vault repair` after indexing content.")
+            elif result.status == "STALE":
+                print("Index is stale. Run `tokenpak vault repair` to rebuild it.")
+            elif result.status == "CORRUPT":
+                print("Index is corrupt. Run `tokenpak vault repair` to rebuild it.")
+            return
+        except Exception as e:
+            print(f"Error during vault status check: {e}")
+            sys.exit(2)
+
     if subcmd == "repair":
         try:
             health = VaultHealth()
@@ -8367,7 +8455,7 @@ def cmd_vault_health(args):
             sys.exit(2)
 
     else:
-        print("Unknown vault subcommand. Use 'repair'.")
+        print("Unknown vault subcommand. Use 'status' or 'repair'.")
         sys.exit(1)
 
 
@@ -8496,13 +8584,18 @@ def _build_vault_health_parser(sub):
             "Check the health of your vault index and repair stale or corrupted entries.\n"
             "The vault index stores compressed context blocks and metadata about requests.\n\n"
             "Subcommands:\n"
+            "  status     Show vault index health without mutating anything\n"
             "  repair     Check and rebuild stale vault index entries\n\n"
             "Example:\n"
+            "  tokenpak vault status    # Show current health\n"
             "  tokenpak vault repair    # Auto-fix corrupted entries\n"
             "  tokenpak vault-health repair  # Same via alias"
         ),
     )
     vaultsub = p_vault.add_subparsers(dest="vault_health_cmd", required=False)
+    p_status = vaultsub.add_parser("status", help="Show vault index health")
+    p_status.add_argument("--json", action="store_true", help="Output as machine-readable JSON")
+    p_status.set_defaults(func=cmd_vault_health)
     p_repair = vaultsub.add_parser("repair", help="Check and rebuild stale vault index")
     p_repair.set_defaults(func=cmd_vault_health)
     p_vault.set_defaults(func=cmd_vault_health)
@@ -8524,6 +8617,21 @@ def _build_fleet_parser(sub):
 
     p_fleet.set_defaults(func=cmd_fleet)
     return p_fleet
+
+
+def _build_compression_parser(sub):
+    """Build the compression command parser as a stats alias."""
+    p = sub.add_parser(
+        "compression",
+        help="Show compression telemetry stats",
+        description=(
+            "Show compression telemetry from the local proxy/telemetry store.\n"
+            "This is a reporting command, not a separate compression engine."
+        ),
+    )
+    p.add_argument("--raw", action="store_true", help="Show raw telemetry where available")
+    p.set_defaults(func=cmd_stats)
+    return p
 
 
 def _build_compress_parser(sub):

@@ -1,1 +1,59 @@
-<!DOCTYPE html><html><body>{{ data }}</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TokenPak Audit</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #17202a; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border-bottom: 1px solid #d7dee8; padding: 0.5rem 0.75rem; text-align: left; }
+    th { font-weight: 650; }
+    .summary { display: flex; gap: 2rem; flex-wrap: wrap; margin: 1rem 0; }
+    .metric { border: 1px solid #d7dee8; padding: 0.75rem 1rem; min-width: 10rem; }
+    .label { color: #5f6b7a; font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Audit</h1>
+    <p>{{ query_date }}</p>
+    <section class="summary" aria-label="Audit summary">
+      <div class="metric"><div class="label">Spend</div><div>${{ "%.6f"|format(total_spend) }}</div></div>
+      <div class="metric"><div class="label">Requests</div><div>{{ request_count }}</div></div>
+      <div class="metric"><div class="label">Average Cost</div><div>${{ "%.6f"|format(avg_cost) }}</div></div>
+    </section>
+
+    <h2>Models</h2>
+    <table>
+      <thead><tr><th>Model</th><th>Cost</th><th>Share</th></tr></thead>
+      <tbody>
+        {% for name, model in models.items() %}
+        <tr>
+          <td>{{ name }}</td>
+          <td>${{ "%.6f"|format(model.cost) }}</td>
+          <td>{{ "%.1f"|format(model.percentage) }}%</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">No model spend for this date.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Features</h2>
+    <table>
+      <thead><tr><th>Feature</th><th>Cost</th><th>Share</th></tr></thead>
+      <tbody>
+        {% for name, feature in features.items() %}
+        <tr>
+          <td>{{ name }}</td>
+          <td>${{ "%.6f"|format(feature.cost) }}</td>
+          <td>{{ "%.1f"|format(feature.percentage) }}%</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">No feature spend for this date.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>

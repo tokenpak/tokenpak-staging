@@ -202,14 +202,24 @@
       "related": ["cost", "metrics"]
     },
     {
-      "command": "route",
-      "tier": "pro",
-      "category": "Configuration",
-      "description": "Manage model routing rules",
+      "command": "compression",
+      "tier": "oss",
+      "category": "Visibility",
+      "description": "Show compression telemetry stats",
       "aliases": [],
-      "usage": "/tokenpak route [list|add|remove] [--model MODEL]",
-      "detail": "Define routing rules to automatically select models based on request characteristics (cost, speed, quality).",
-      "related": ["recipe", "template", "optimize"]
+      "usage": "/tokenpak compression [--raw]",
+      "detail": "Shows compression telemetry from the local proxy/telemetry store. This is a reporting command, not a separate compression engine.",
+      "related": ["stats", "savings", "status"]
+    },
+    {
+      "command": "route",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Manage manual model routing rules",
+      "aliases": [],
+      "usage": "/tokenpak route [status|list|add|remove|test|enable|disable]",
+      "detail": "Define and inspect local routing rules. `route status` is a read-only report over the routes file.",
+      "related": ["config", "status", "template"]
     },
     {
       "command": "recipe",
@@ -433,13 +443,13 @@
     },
     {
       "command": "vault",
-      "tier": "enterprise",
-      "category": "Governance",
-      "description": "Vault block management and encryption",
+      "tier": "oss",
+      "category": "Indexing",
+      "description": "Vault index status and repair",
       "aliases": [],
-      "usage": "/tokenpak vault [status|encrypt|rotate-key]",
-      "detail": "Manages encrypted vault storage, key rotation, and block-level access control.",
-      "related": ["index", "audit", "compliance"]
+      "usage": "/tokenpak vault [status|repair]",
+      "detail": "Reports and repairs local vault index health. Encrypted vault storage and key management are not part of this public OSS command.",
+      "related": ["index", "search", "doctor"]
     },
     {
       "command": "models",

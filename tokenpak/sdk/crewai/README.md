@@ -1,25 +1,5 @@
----
-title: "crewai-tokenpak"
-description: "crewai-tokenpak"
-status: active
-maintainer: tokenpak
-created: 2026-03-11
-tags: [project]
----
-# crewai-tokenpak
+# Reserved Adapter Package
 
-TokenPak integration for CrewAI.
+This directory is parked. It is not a supported TokenPak integration, and it should not be advertised, installed, or used as product documentation.
 
-## Installation
-```
-pip install crewai-tokenpak
-```
-
-## Quick Start
-```python
-from crewai_tokenpak import TokenPakCrew, TokenPakContext
-ctx = TokenPakContext(total_budget=8000)
-ctx.register_agent("researcher", budget=4000)
-```
-
-See: https://github.com/tokenpak/tokenpak-spec
+Adapter work should resume only after a current compatibility decision, implementation plan, and release-gate coverage exist.

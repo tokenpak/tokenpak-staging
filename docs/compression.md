@@ -127,7 +127,7 @@ class PipelineResult:
 
 ### Heuristic engine (default)
 
-Rule-based compression. Runs in <5ms, zero ML dependencies. Handles:
+Rule-based compression with zero ML dependencies. Handles:
 
 - Regex-based whitespace normalization
 - Comment stripping (configurable per language)
@@ -136,7 +136,7 @@ Rule-based compression. Runs in <5ms, zero ML dependencies. Handles:
 
 ### LLMLingua engine (optional, Pro/advanced)
 
-ML-powered token-level compression using the [LLMLingua-2](https://github.com/microsoft/LLMLingua) model. Achieves 2–20x compression with <5% quality loss (per Microsoft benchmarks).
+ML-powered token-level compression using the [LLMLingua-2](https://github.com/microsoft/LLMLingua) model. Upstream LLMLingua benchmarks report strong compression/quality tradeoffs; measure local TokenPak results before citing a numeric claim.
 
 Install:
 
@@ -223,10 +223,7 @@ Stages: dedup (0 removed) → segmentize (14 blocks) → directives (applied)
 
 ## Performance
 
-| Optimization | Speedup |
-|---|---|
-| LRU token count cache | 25x faster repeated counting |
-| Pre-compiled regex | 30% faster processing |
-| Batch SQLite WAL writes | 60% faster telemetry |
-
-Compression runs in the request path. On typical payloads it adds **10–50ms**, which is negligible compared to LLM latency (500ms–5s).
+Compression runs in the request path, so latency and savings depend on payload
+shape, route, provider cache behavior, and local hardware. Use
+`tokenpak savings`, `make benchmark-headline`, and the benchmark workflow
+artifacts before publishing a numeric claim.

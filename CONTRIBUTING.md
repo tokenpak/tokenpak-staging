@@ -126,7 +126,6 @@ tokenpak/                     ← repo root
 ├── packages/                 ← Independently-published adapter packages
 │   ├── langchain-tokenpak/   ← LangChain integration
 │   ├── llamaindex-tokenpak/  ← LlamaIndex integration
-│   ├── crewai-tokenpak/      ← CrewAI integration
 │   ├── autogen-tokenpak/     ← AutoGen integration
 │   ├── langfuse-tokenpak/    ← Langfuse observability integration
 │   ├── tokenpak-local/       ← Local OpenAI-compatible SDK wrapper

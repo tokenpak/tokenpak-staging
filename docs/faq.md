@@ -55,7 +55,10 @@ Yes. TokenPak detects the provider from the `Authorization` header format and ro
 
 ### What's the performance overhead?
 
-Minimal. Compression adds 10–50ms to requests that benefit from it (typically those over 4500 tokens). Small requests are passed through with near-zero overhead. Cold start overhead is under 100ms.
+Usually small relative to upstream model latency, but it depends on payload size,
+route, provider cache behavior, and local hardware. Small requests are passed
+through when compression is not useful. Use the benchmark workflow or
+`tokenpak savings` on your own traffic before citing a numeric overhead claim.
 
 ---
 

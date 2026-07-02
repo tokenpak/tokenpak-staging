@@ -17,13 +17,17 @@ The module exposes:
   size at ``LIST_LIMIT_MAX``; supports keyset pagination via opaque
   cursor tokens.
 - ``RecallStore.get_pak(pak_id)`` — single-row metadata fetch, or ``None``.
+- ``tokenpak.companion.recall.ranking.rank_paks(...)`` — deterministic
+  local PakRank Lite over user-controlled recall/Pak rows. It is separate
+  from this storage wrapper and uses only OSS-visible metadata.
 - ``open_recall_store(path)`` — convenience factory that resolves the
   default DB location when ``path`` is ``None``.
 - ``UpsertResult`` / ``PakRow`` / ``PakListFilters`` / ``PakListResult``
   — NamedTuple records describing inputs / outputs.
 
-This module does *not* expose any ranking, scoring, or full-text
-search surface; those are deferred to a later phase.
+Advanced capture, cross-source scoring overlays, anchor hydration, Context
+Package assembly, policy enforcement, and autonomous handoff remain Pro-tier
+surfaces.
 
 Default DB path resolution
 --------------------------

@@ -10,9 +10,11 @@ Subcommands:
 
 Beta 1 OSS scope: ``create`` / ``import`` / ``export`` (file form) /
 ``inspect`` (file + ``pak:`` + ``vault:`` forms) round-trip in plain
-JSON. Vault Paks are served by the OSS adapter. Encrypted Pak archives,
-the capture pipeline, scoring, recall and PAKPlan-driven preview are
-Pro features and route through the ``tokenpak-paid`` daemon.
+JSON. Vault Paks are served by the OSS adapter. Deterministic local PakRank
+Lite is exposed through ``tokenpak pakplan preview``. Encrypted Pak archives,
+the capture pipeline, advanced ranking overlays, hydration, package assembly,
+and autonomous handoff are Pro features and route through the
+``tokenpak-paid`` daemon.
 
 Exit codes:
     0  success

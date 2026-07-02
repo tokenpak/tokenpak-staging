@@ -299,8 +299,9 @@ tokenpak pakplan report
 ```
 
 On a fresh install with no captured Paks, expect a friendly "no
-recall db on disk yet" message. The foundation is OSS; the scorer
-and ranking pipeline are Pro.
+recall db on disk yet" message. The foundation and deterministic local
+PakRank Lite are OSS; capture, hydration, package assembly, policy
+overlays, and autonomous handoff are Pro.
 
 ---
 
@@ -359,10 +360,10 @@ typically resolves it.
 The following features exist in the codebase but are deliberately
 not part of the Beta 1 tester surface:
 
-- The Pro daemon (`tokenpak-paid`) with capture pipeline, ranked
-  recall, encryption-at-rest, and PAKPlan automation. The OSS-side
-  preview / explain / report commands work without it; the Pro
-  daemon ships separately.
+- The Pro daemon (`tokenpak-paid`) with capture pipeline, advanced ranking
+  overlays, encryption-at-rest, and PAKPlan automation. The OSS-side local
+  preview / explain / report commands work without it; the Pro daemon ships
+  separately.
 - Hard-stop Spend Guard enforcement (Beta 1 ships warning-level
   only; hard stops are Pro Local).
 - Continuum continuation-PAK automation (roadmap; not shipped).

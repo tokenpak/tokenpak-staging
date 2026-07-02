@@ -149,6 +149,8 @@ Manage routing rules
 
 **Subcommands:**
 
+- `status`
+  - `--routes` — Path to routes.yaml
 - `list`
   - `--routes` — Path to routes.yaml
 - `add`
@@ -530,14 +532,18 @@ Check the health of your vault index and repair stale or corrupted entries.
 The vault index stores compressed context blocks and metadata about requests.
 
 Subcommands:
+  status     Show vault index health without mutating anything
   repair     Check and rebuild stale vault index entries
 
 Example:
+  tokenpak vault status    # Show current health
   tokenpak vault repair    # Auto-fix corrupted entries
   tokenpak vault-health repair  # Same via alias
 
 **Subcommands:**
 
+- `status`
+  - `--json` — Output as machine-readable JSON
 - `repair`
 
 ### `tokenpak fleet`
@@ -1057,6 +1063,15 @@ Example:
 - `--verbose`, `-v` — Show compression blocks
 - `--json` — Output as machine-readable JSON
 
+### `tokenpak compression`
+
+Show compression telemetry stats from the local proxy/telemetry store. This is
+a reporting command, not a separate compression engine.
+
+**Flags:**
+
+- `--raw` — Show raw telemetry where available
+
 ### `tokenpak deactivate`
 
 ### `tokenpak features`
@@ -1186,7 +1201,7 @@ Example:
 
 ### `tokenpak pakplan`
 
-Read-only consumer surface over the PAKPlan recall foundation. Scoring + capture pipeline are Pro.
+Read-only consumer surface over the PAKPlan recall foundation. OSS preview uses PakRank Lite; capture and advanced scoring overlays are Pro.
 
 **Subcommands:**
 
@@ -1304,17 +1319,30 @@ Check the health of your vault index and repair stale or corrupted entries.
 The vault index stores compressed context blocks and metadata about requests.
 
 Subcommands:
+  status     Show vault index health without mutating anything
   repair     Check and rebuild stale vault index entries
 
 Example:
+  tokenpak vault status    # Show current health
   tokenpak vault repair    # Auto-fix corrupted entries
   tokenpak vault-health repair  # Same via alias
 
 **Subcommands:**
 
+- `status`
+  - `--json` — Output as machine-readable JSON
 - `repair`
 
 ### `tokenpak watch`
 
----
+Alias for `tokenpak dashboard`.
 
+**Flags:**
+
+- `--fleet` — Show fleet-wide summary (TUI)
+- `--json` — Export dashboard as JSON (non-interactive)
+- `--public` — Show public URL with token (accessible from any machine)
+- `--show-token` — Display current dashboard token
+- `--new-token` — Regenerate dashboard token
+
+---

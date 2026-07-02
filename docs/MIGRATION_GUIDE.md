@@ -33,9 +33,9 @@ from tokenpak import (
 - **Replay system** — `tokenpak replay` to diff past requests
 
 ### Performance Improvements
-- 27% average token reduction (production measured)
-- 71.8% cache hit rate
-- 25x tokenization speedup (LRU cache)
+- Measurable token reduction on workloads that benefit from compression
+- Cache-hit improvements on repeated context
+- Faster repeated token counting through the LRU cache
 
 ---
 
@@ -242,7 +242,7 @@ New options are optional — v0.1 configs work without modification.
 **A:** GitHub Issues: https://github.com/tokenpak/tokenpak/issues
 
 ### Q: Where are the full docs?
-**A:** See `/docs/` in the repo or https://tokenpak.dev (coming soon)
+**A:** See `/docs/` in the repo and the links from the project README.
 
 ---
 

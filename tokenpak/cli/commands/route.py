@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 
 def run(action: str = "status", raw: bool = False) -> None:
     """Model routing control."""
-    print(f"route {action}: not yet implemented (stub)")
+    from tokenpak._cli_core import cmd_route_list, cmd_route_status
+
+    args = SimpleNamespace(routes=None)
+    if action == "list":
+        cmd_route_list(args)
+    else:
+        cmd_route_status(args)
 
 
 try:
@@ -22,15 +30,10 @@ try:
         """Show router status."""
         run(action="status", raw=raw)
 
-    @route_cmd.command("on")
-    def route_on():
-        """Enable the deterministic router."""
-        run(action="on")
-
-    @route_cmd.command("off")
-    def route_off():
-        """Disable the deterministic router."""
-        run(action="off")
+    @route_cmd.command("list")
+    def route_list():
+        """List routing rules."""
+        run(action="list")
 
 except ImportError:
     pass

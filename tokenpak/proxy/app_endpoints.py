@@ -1080,13 +1080,17 @@ def _try_handle_pak_post(handler: Any, path: str) -> bool:
         return True
 
     # ── POST /pak/v1/recall ─────────────────────────────────────────────
-    # Pro-only. Always 501 in OSS; the daemon owns ranking, hydration, and
-    # packaging.
+    # Pro-daemon HTTP route. OSS local ranking is available via
+    # `tokenpak pakplan preview`; the daemon owns hydration, package assembly,
+    # policy overlays, and autonomous handoff.
     if path == "/pak/v1/recall":
         _send_pak_not_implemented(
             handler,
             reason="pro_daemon_required",
-            detail="Recall ranking is a Pro-only feature; install tokenpak-paid to enable.",
+            detail=(
+                "HTTP recall/package assembly requires the Pro daemon. "
+                "Use `tokenpak pakplan preview` for OSS local PakRank Lite."
+            ),
         )
         return True
 

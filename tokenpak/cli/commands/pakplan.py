@@ -7,17 +7,17 @@ Context Package ordering hints + advisory vocab lint registry).
 
 Beta 1 OSS scope:
     preview        Static dry-run preview of what a PAKPlan would
-                   surface for the current recall db. No scoring; no
-                   capture-pipeline ingest. Honest about being preview.
+                   surface for the current recall db. Uses deterministic
+                   local PakRank Lite; no capture-pipeline ingest.
     explain        Walk a single Pak's recall metadata + reason/risk
-                   joins; show what the scorer *would* consider.
+                   joins; show the transparent local ranking inputs.
     report         One-shot rollup of the recall db + advisory-vocab
                    linter status (counts of forbidden-vocab matches in
                    Pak metadata, if any).
 
-Scoring + the actual ranking pipeline + autonomous PAKPlan injection
-remain Pro Local. This OSS surface is
-deliberately read-only and never speaks to the Pro daemon.
+Advanced scoring overlays, capture, hydration, Context Package assembly,
+policy enforcement, and autonomous PAKPlan injection remain Pro Local. This
+OSS surface is deliberately read-only and never speaks to the Pro daemon.
 """
 
 from __future__ import annotations
@@ -36,7 +36,8 @@ def build_pakplan_parser(sub: Any) -> None:
         help="Inspect the recall foundation; preview/explain/report (OSS)",
         description=(
             "Read-only consumer surface over the PAKPlan recall "
-            "foundation. Scoring + capture pipeline are Pro."
+            "foundation. OSS preview uses PakRank Lite; capture and "
+            "advanced scoring overlays are Pro."
         ),
     )
     psub = p.add_subparsers(dest="pakplan_action", required=False)
@@ -81,14 +82,18 @@ def build_pakplan_parser(sub: Any) -> None:
 def cmd_pakplan_preview(args: Any) -> int:
     db = _recall_db()
     rows = _query_paks(db, limit=int(getattr(args, "limit", 10)))
-    paks = [_pak_summary(r) for r in rows]
+    paks = _ranked_summaries(
+        rows,
+        limit=int(getattr(args, "limit", 10)),
+    )
 
     payload = {
         "scope": "preview",
-        "scoring": "not-shipped-in-OSS",
+        "ranking": "oss-pakrank-lite",
         "note": (
-            "Beta 1 OSS preview is unscored. Pro Local adds the scorer + "
-            "ranking pipeline."
+            "Deterministic local ranking over user-controlled recall/Pak rows. "
+            "Pro adds capture, advanced overlays, hydration, package assembly, "
+            "policy enforcement, and autonomous handoff."
         ),
         "recall_db": str(db) if db else None,
         "pak_count": len(paks),
@@ -98,8 +103,8 @@ def cmd_pakplan_preview(args: Any) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    print("PAKPlan preview (OSS, unscored)")
-    print("───────────────────────────────")
+    print("PAKPlan preview (OSS PakRank Lite)")
+    print("──────────────────────────────────")
     if not db or not db.exists():
         print(f"ℹ️  No recall db found at {db}")
         print("   The foundation tables ship in Beta 1 OSS; the capture "
@@ -109,13 +114,15 @@ def cmd_pakplan_preview(args: Any) -> int:
         print(f"ℹ️  Recall db exists at {db} but contains no Paks yet.")
         return 0
     for p in paks:
-        print(f"  • {p['pak_id']}  {p.get('title', '')[:40]}")
+        print(f"  {p['rank']:>2}. {p['pak_id']}  score={p['score']:.3f}")
+        if p.get("title"):
+            print(f"      {p.get('title', '')[:70]}")
         if p.get("reason_codes"):
             print(f"      reasons: {', '.join(p['reason_codes'])}")
         if p.get("risk_flags"):
             print(f"      risks  : {', '.join(p['risk_flags'])}")
     print()
-    print("Scoring is Pro — install tokenpak-paid for ranked previews.")
+    print("Advanced capture, hydration, package assembly, and policy overlays are Pro.")
     return 0
 
 
@@ -136,8 +143,8 @@ def cmd_pakplan_explain(args: Any) -> int:
         else:
             print(f"✗ tokenpak pakplan explain — {msg}", file=sys.stderr)
         return 1
-    summary = _pak_summary(row)
-    summary["scoring"] = "not-shipped-in-OSS"
+    summary = _ranked_summaries([row], limit=1)[0]
+    summary["ranking"] = "oss-pakrank-lite"
     if getattr(args, "as_json", False):
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
@@ -253,14 +260,22 @@ def _query_paks(db: Path, *, limit: int) -> list[dict]:
         )
         if pak_table is None:
             return []
-        rows = list(conn.execute(
-            f"SELECT * FROM {pak_table} ORDER BY rowid DESC LIMIT ?", (limit,)
-        ))
+        rows = list(
+            conn.execute(
+                f"SELECT * FROM {pak_table} "
+                "ORDER BY updated_at DESC, pak_id DESC LIMIT ?",
+                (limit,),
+            )
+        )
         out: list[dict] = []
         for r in rows:
             d = dict(r)
-            d["_reason_codes"] = _join_codes(conn, "pak_reason_codes", d.get("pak_id"))
-            d["_risk_flags"] = _join_codes(conn, "pak_risk_flags", d.get("pak_id"))
+            reasons = _join_reason_entries(conn, d.get("pak_id"))
+            risks = _join_risk_entries(conn, d.get("pak_id"))
+            d["_reason_codes"] = [r["reason_code"] for r in reasons]
+            d["_reason_weights"] = {r["reason_code"]: r["weight"] for r in reasons}
+            d["_risk_flags"] = [r["risk_flag"] for r in risks]
+            d["_risk_severities"] = {r["risk_flag"]: r["severity"] for r in risks}
             out.append(d)
         return out
     finally:
@@ -273,6 +288,44 @@ def _query_pak_by_id(db: Path, pak_id: str) -> Optional[dict]:
         if r.get("pak_id") == pak_id:
             return r
     return None
+
+
+def _join_reason_entries(conn: sqlite3.Connection, pak_id: Optional[str]) -> list[dict]:
+    if not pak_id:
+        return []
+    try:
+        rows = list(
+            conn.execute(
+                "SELECT reason_code, weight FROM pak_reason_codes WHERE pak_id = ?",
+                (pak_id,),
+            )
+        )
+    except sqlite3.Error:
+        return []
+    return [
+        {"reason_code": str(r["reason_code"]), "weight": float(r["weight"])}
+        for r in rows
+        if r["reason_code"]
+    ]
+
+
+def _join_risk_entries(conn: sqlite3.Connection, pak_id: Optional[str]) -> list[dict]:
+    if not pak_id:
+        return []
+    try:
+        rows = list(
+            conn.execute(
+                "SELECT risk_flag, severity FROM pak_risk_flags WHERE pak_id = ?",
+                (pak_id,),
+            )
+        )
+    except sqlite3.Error:
+        return []
+    return [
+        {"risk_flag": str(r["risk_flag"]), "severity": str(r["severity"])}
+        for r in rows
+        if r["risk_flag"]
+    ]
 
 
 def _join_codes(conn: sqlite3.Connection, table: str, pak_id: Optional[str]) -> list[str]:
@@ -302,6 +355,24 @@ def _pak_summary(row: dict) -> dict:
         "reason_codes": row.get("_reason_codes", []),
         "risk_flags": row.get("_risk_flags", []),
     }
+
+
+def _ranked_summaries(
+    rows: list[dict],
+    *,
+    query: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> list[dict]:
+    from tokenpak.companion.recall.ranking import rank_paks
+
+    out: list[dict] = []
+    for ranked in rank_paks(rows, query=query, limit=limit):
+        summary = _pak_summary(ranked.pak)
+        summary["rank"] = ranked.rank
+        summary["score"] = ranked.score
+        summary["score_reasons"] = ranked.score_reasons
+        out.append(summary)
+    return out
 
 
 def _advisory_vocab_matches(summaries: list[dict]) -> list[dict]:

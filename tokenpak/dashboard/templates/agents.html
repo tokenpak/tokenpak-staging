@@ -1,1 +1,47 @@
-<!DOCTYPE html><html><body>{{ data }}</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TokenPak Agents</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #17202a; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border-bottom: 1px solid #d7dee8; padding: 0.5rem 0.75rem; text-align: left; }
+    th { font-weight: 650; }
+    .muted { color: #5f6b7a; }
+    .empty { border: 1px solid #d7dee8; padding: 1rem; max-width: 36rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Agent Leaderboard</h1>
+    <p class="muted">{{ query_date }} · sorted by {{ sort }}</p>
+    {% if rows %}
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Requests</th>
+          <th>Total Tokens</th>
+          <th>Avg Compression Ratio</th>
+          <th>Samples</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.agent_id }}</td>
+          <td>{{ row.request_count }}</td>
+          <td>{{ row.total_tokens }}</td>
+          <td>{{ "%.3f"|format(row.avg_compression_ratio) }}</td>
+          <td>{{ row.sample_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No agent telemetry for {{ query_date }}.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

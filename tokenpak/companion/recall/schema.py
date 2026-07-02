@@ -214,9 +214,9 @@ EXPECTED_TRIGGERS_V2: Final[frozenset[str]] = frozenset(
 # flags land in a later Class B amendment.
 #
 # Intentionally NOT added in this migration: any column on ``paks``, any
-# FTS5 index over reason_codes / risk_flags, any /pak/v1/list filtering by
-# reason or flag. Those would be a Pro-tier scoring surface and stay
-# deferred to Pro Phase 2.
+# FTS5 index over reason_codes / risk_flags, or any autonomous /pak/v1 package
+# builder. OSS PakRank Lite may read these tables transparently; Pro retains
+# advanced scoring overlays, capture, hydration, and policy enforcement.
 #
 # Catalogues live in the public ``tokenpak/registry`` repo:
 #     - schemas/tip/pak-reason-codes-v1.schema.json — reason codes.

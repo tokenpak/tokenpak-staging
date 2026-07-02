@@ -1,6 +1,6 @@
 # TokenPak Benchmarks
 
-> ⚠️ **Synthetic placeholder — not a product benchmark.** These figures come
+> ⚠️ **Synthetic microbenchmark — not a product benchmark.** These figures come
 > from a `zlib`-on-repeated-literal microbenchmark, not the real TokenPak
 > compression pipeline, and are host- and run-dependent. Do not cite them as
 > TokenPak performance. Real latency gates live in `tests/benchmarks/`

@@ -1,1 +1,32 @@
-<!DOCTYPE html><html><body>{{ data }}</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TokenPak Time Series</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #17202a; }
+    table { border-collapse: collapse; margin-top: 1rem; min-width: 24rem; }
+    th, td { border-bottom: 1px solid #d7dee8; padding: 0.5rem 0.75rem; text-align: left; }
+    .muted { color: #5f6b7a; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Time Series</h1>
+    <p class="muted">{{ start_date }} to {{ end_date }} · {{ window }} minute window</p>
+    <table>
+      <tbody>
+        <tr><th>Rollup windows</th><td>{{ rollup_count }}</td></tr>
+      </tbody>
+    </table>
+    <script type="application/json" id="tokenpak-time-series-data">
+      {
+        "labels": {{ chart_labels | safe }},
+        "tokens": {{ tokens_data | safe }},
+        "cache": {{ cache_data | safe }},
+        "requests": {{ requests_data | safe }}
+      }
+    </script>
+  </main>
+</body>
+</html>

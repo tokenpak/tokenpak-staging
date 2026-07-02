@@ -179,7 +179,7 @@ TokenPak Compression Report (assistant)
 
 ## Design Notes
 
-- Follows the same integration pattern as `crewai-tokenpak`
+- Follows the same lightweight adapter pattern as the other framework packages
 - Lazy imports for constrained environments
 - Deterministic compression for reproducible results
 - Zero breaking changes to AutoGen API

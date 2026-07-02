@@ -1,6 +1,6 @@
-# MultiPak Pro — Phase 1 OSS surface
+# MultiPak — OSS surface and Pro automation
 
-> **Phase 1 status**: scaffolding for the future Pro daemon. Read-only Vault Pak inspection works without Pro; everything else returns a clear "Pro daemon required" message until you install `tokenpak-paid` (Pro).
+> **OSS status**: read-only Vault Pak inspection and deterministic local PakRank Lite work without Pro. Capture, autonomous promotion, advanced scoring overlays, anchor hydration, Context Package assembly, and target-platform handoff remain Pro.
 
 ## What MultiPak is
 
@@ -8,7 +8,7 @@ MultiPak Pro is the local-first cross-platform AI context-continuity layer for T
 
 > Start anywhere. Continue anywhere. MultiPak brings the right Paks into the current AI session without dumping the full history.
 
-The full feature set is **Pro** (closed-source local Rust daemon, gated by the relevant standard). Phase 1 is what TokenPak ships **today** in OSS — the contracts, the Vault Pak adapter, the read-only inspection surface, and the daemon hooks.
+The full automation layer is **Pro** (closed-source local Rust daemon, gated by the relevant standard). TokenPak OSS ships the contracts, the Vault Pak adapter, the read-only inspection surface, PakRank Lite over user-controlled local Pak rows, and the daemon hooks.
 
 ## Pak taxonomy (the relevant standard)
 
@@ -18,8 +18,8 @@ The full feature set is **Pro** (closed-source local Rust daemon, gated by the r
 |---|---|---|
 | **Vault Pak** | `file_source` | ✅ full (read-only via `tokenpak.vault.pak_adapter`) |
 | **Interaction Pak** | `tool_result` / `llm_generated` | ⚠️ stub-only (promotion needs Pro daemon) |
-| **Decision Pak** | `user_approved` | ❌ Pro-only |
-| **Recall Pak** | derived | ❌ Pro-only (recall ranking is the daemon's job) |
+| **Decision Pak** | `user_approved` | ✅ rankable after explicit local import/promotion |
+| **Recall Pak** | derived | ✅ local PakRank Lite over user-controlled rows; Pro owns automation |
 | **Handoff Pak** | composite | ❌ Pro-only (target-platform packaging) |
 
 ## CLI — `tokenpak pak`
@@ -56,8 +56,9 @@ MultiPak Pro Phase 1 status
 |---|---|---|
 | `tokenpak pak inspect <pak-id-or-file>` | Vault: ✅, others: ❌ | `--json` for machine output |
 | `tokenpak pak export <pak-id> -o <dir>` | Vault: ✅, others: ❌ | Vault Paks export to `pak.json` |
-| `tokenpak pak import <dir> -o <pak>` | ❌ Pro | Capture pipeline is Pro-only |
+| `tokenpak pak import <dir> -o <pak>` | ✅ OSS | Plain local Pak install/copy/verify |
 | `tokenpak pak status` | ✅ always | Diagnostic; never errors |
+| `tokenpak pakplan preview` | ✅ OSS | Deterministic local PakRank Lite |
 
 Exit codes follow the relevant standard: `0` success, `1` user-facing error (missing Pak, Pro required), `2` argparse usage error.
 
@@ -83,7 +84,10 @@ Always works. Same JSON payload as `tokenpak pak status --json`.
 
 ### `POST /pak/v1/recall`
 
-Always 501 in Phase 1 — recall ranking is Pro-only (the relevant standard row 8).
+The loopback HTTP recall route remains Pro-daemon gated because it is the
+package-building handoff path. OSS local ranking is available through
+`tokenpak pakplan preview`, which reads only the local recall/Pak store and
+does not call a daemon.
 
 ### Standardized 501 envelope
 
@@ -148,8 +152,8 @@ Pak content stays local. The license refresh request carries only the license to
 | Phase | Surface | Status |
 |---|---|---|
 | **0** | TIP capability constants + Pak/ContextPackage contracts | ✅ shipped (PR #101 / registry PR #4) |
-| **1** | Vault Pak adapter + Pak-aware journal + `tokenpak pak` CLI + `/pak/v1/*` stubs | ⏳ this PR |
-| 2 | Capture pipeline + recall + ranking + SQLite FTS | gated by the relevant standard |
+| **1** | Vault Pak adapter + Pak-aware journal + `tokenpak pak` CLI + local PakRank Lite + `/pak/v1/*` stubs | ✅ OSS |
+| 2 | Capture pipeline + advanced recall overlays + SQLite FTS consumers | gated by the relevant standard |
 | 3 | Context Package builder + Handoff Pak + VS Code + MCP adapters | gated |
 | 4 | Anchor Hydration + coverage scoring + audit log | gated |
 | 5 | Encrypted store + retention engine + dashboard surfaces | gated |

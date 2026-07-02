@@ -8,7 +8,7 @@ import zlib
 from pathlib import Path
 
 # H5 hardening (L11b release-gate integrity): this report is a SYNTHETIC
-# placeholder microbenchmark. It compresses a repeated literal string with plain
+# microbenchmark. It compresses a repeated literal string with plain
 # ``zlib`` — it does NOT exercise the real ``CompressionPipeline``/proxy path —
 # so its tokens/sec figures must never be cited as product performance. The
 # previous output (1) presented these zlib numbers as product benchmarks and
@@ -16,7 +16,7 @@ from pathlib import Path
 # published ``docs/BENCHMARKS.md`` on the public mirror. We now (a) drop all host
 # fingerprinting and (b) stamp the output with an explicit SYNTHETIC banner.
 SYNTHETIC_BANNER = (
-    "> ⚠️ **Synthetic placeholder — not a product benchmark.** These figures come\n"
+    "> ⚠️ **Synthetic microbenchmark — not a product benchmark.** These figures come\n"
     "> from a `zlib`-on-repeated-literal microbenchmark, not the real TokenPak\n"
     "> compression pipeline, and are host- and run-dependent. Do not cite them as\n"
     "> TokenPak performance. Real latency gates live in `tests/benchmarks/`\n"
@@ -90,7 +90,7 @@ def main() -> None:
 
     results = {
         "synthetic": True,
-        "note": "zlib placeholder microbenchmark — not a product measurement; host fingerprint intentionally omitted",
+        "note": "zlib synthetic microbenchmark — not a product measurement; host fingerprint intentionally omitted",
         "proxy_tokens_per_sec": proxy_tps,
         "sdk_tokens_per_sec": sdk_tps,
         "proxy_vs_sdk_ratio": proxy_tps / sdk_tps,

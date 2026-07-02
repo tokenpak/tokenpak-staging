@@ -1,8 +1,8 @@
 # TokenPak Roadmap
 
-This document outlines the planned development of TokenPak.
+This document outlines the currently visible TokenPak planning surface. It is not a release promise; items move only after implementation, tests, and release-gate evidence exist.
 
-## Current Release: v0.1.0
+## Current shipped surface
 
 **Shipped:**
 - Deterministic compression engine
@@ -18,9 +18,9 @@ This document outlines the planned development of TokenPak.
 
 ---
 
-## Q2 2026: v0.2.0
+## Current priorities
 
-- [ ] Performance optimization (10x faster compression)
+- [ ] Performance optimization for compression hot paths
 - [ ] Plugin system for custom compressors
 - [ ] WebSocket support
 - [ ] OpenTelemetry export
@@ -31,7 +31,7 @@ This document outlines the planned development of TokenPak.
 
 ---
 
-## Q3 2026: v1.0.0
+## Larger candidates
 
 - [ ] Stable API (no breaking changes)
 - [ ] Multi-provider support (Anthropic, OpenAI, Google, Mistral)
@@ -40,27 +40,6 @@ This document outlines the planned development of TokenPak.
 - [ ] Comprehensive test suite
 - [ ] Managed proxy service
 - [ ] API key management
-
----
-
-## Q4 2026
-
-- [ ] Multi-user workspaces
-- [ ] Role-based access control
-- [ ] Shared dashboards
-- [ ] Audit logs
-- [ ] Slack/Discord integrations
-
----
-
-## 2027
-
-- [ ] On-premises deployment
-- [ ] SSO/SAML authentication
-- [ ] Custom integrations
-- [ ] Compliance documentation (SOC2, HIPAA)
-- [ ] Dedicated support
-- [ ] SLA guarantees
 
 ---
 

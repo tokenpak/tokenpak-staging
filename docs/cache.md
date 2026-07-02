@@ -12,9 +12,9 @@ An in-process LRU (Least Recently Used) cache for token counts. When TokenPak me
 
 ### Why it matters
 
-Token counting is the most frequently called operation in the compression pipeline. Without caching, counting the same 10K-token system prompt on every request wastes 50–200ms. With cache, it's a hash lookup: **~0.1ms**.
+Token counting is the most frequently called operation in the compression pipeline. Without caching, counting the same large system prompt on every request repeats avoidable work. With cache, repeated content is served by a hash lookup.
 
-**Benchmark result: 25x speedup on repeated content.**
+Benchmark speedups depend on payload shape, tokenizer, and host. Use the benchmark workflow artifacts before citing a numeric speedup.
 
 ### Implementation
 

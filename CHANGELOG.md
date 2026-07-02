@@ -523,12 +523,11 @@ This release ships no runtime, CLI, or public-API behavior change. It is a packa
 
 - `tests/cli/test_help_surface_consistency.py` asserts every command in `tokenpak --help` exits 0 on `<cmd> --help`.
 
-### Added — framework adapters
+### Added — experimental framework adapter prototypes
 
-- **CrewAI adapter** (`tokenpak/adapters/crewai/`) — `TokenPakContext`, `TokenPakCrewAIHook`, `TokenPakCrew`, `TokenPakHandoff`; install with `pip install tokenpak[crewai]`.
 - **AutoGen adapter** (`tokenpak/adapters/autogen/`) — `TokenPakConversationHook`, `TokenPakAssistant`, `TokenPakGroupChat`, `compress_messages`; install with `pip install tokenpak[autogen]`.
 - **LlamaIndex adapter** (`tokenpak/adapters/llamaindex/`) — `TokenPakSynthesizer`, `TokenPakQueryEngine`, `TokenPakIndex`, `MultiIndexFusion`; install with `pip install tokenpak[llamaindex]`.
-- `pyproject.toml` extras: `[crewai]`, `[autogen]`, `[llamaindex]`.
+- Experimental framework adapter prototypes were later removed from the advertised compatibility surface unless they have current implementation and release-gate coverage. See `docs/adapter-compatibility-matrix.md` for current support.
 
 ### Removed (with replacement)
 

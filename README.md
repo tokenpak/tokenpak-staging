@@ -79,7 +79,7 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 > **Dispatch (v0.1-alpha preview):** turn a request into a scoped, resumable, reviewable workflow from the CLI. It is a source/`main`-branch preview and is not yet part of a released `pip install tokenpak`; see the [Dispatch guide](docs/guides/dispatch.md).
 
 - **Context compression** — deterministic token reduction on real agent
-  workloads, <50ms latency. Savings are route-specific: direct API, CLI, and
+  workloads with local, route-specific overhead. Savings are route-specific: direct API, CLI, and
   uncached repeated-agent loops are the best fit, while Claude Code/TUI routes
   may show lower incremental savings when the provider cache already handled
   repeated context. Measure your own savings with `tokenpak savings`; inspect
@@ -90,7 +90,7 @@ shared secret to require `Authorization: Bearer <token>` on remote requests
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
 - **TIP Spend Guard** — pre-send circuit breaker; blocks runaway requests before provider call. Yes/No release or `[TIP: allow=once max=$X]` directive. Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative tracking. See [docs/spend-guard.md](docs/spend-guard.md).
 - **Vault indexing + semantic search** — index your codebase; search without an LLM call
-- **MultiPak Pro Phase 1 OSS surface** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. Full MultiPak (capture pipeline, recall ranking, Handoff Paks, anchor hydration) requires `tokenpak-paid` (Pro). See [docs/multipak.md](docs/multipak.md).
+- **MultiPak OSS surface** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, OSS PakRank Lite via `tokenpak pakplan preview`, and `/pak/v1/*` proxy stubs. Full MultiPak automation (capture pipeline, advanced ranking overlays, Handoff Paks, anchor hydration, Context Package assembly) requires `tokenpak-paid` (Pro). See [docs/multipak.md](docs/multipak.md).
 - **CLI + proxy server** — `tokenpak serve`, `tokenpak cost`, `tokenpak savings`
 - **A/B testing and replay/debug** — compare compression configs, replay past requests
 - **50 built-in compression recipes** — YAML, customizable

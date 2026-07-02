@@ -59,7 +59,7 @@ Top missing modules by occurrence:
 | `tokenpak.watchdog` | 4 |
 | `tokenpak.handlers` | 3 |
 | `tokenpak.enterprise` | 3 |
-| `crewai_tokenpak` | 3 |
+| legacy optional companion package | 3 |
 | other | 9 |
 
 ### Category 2: Assertion / logic failures (113 failures)

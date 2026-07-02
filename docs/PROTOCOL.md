@@ -9,7 +9,7 @@
 TokenPak is an open, vendor-neutral context packaging format that lets any AI system — agents, LLM pipelines, RAG systems, MCP servers — create and exchange structured context packs. Two completely different systems can exchange TokenPaks without requiring the TokenPak proxy.
 
 **Design goals:**
-- Interoperability: LangChain generates a pack → CrewAI reads it, no glue code
+- Interoperability: one TokenPak-compatible system creates a pack and another reads it without custom glue code
 - Compactness: Budget-aware, compaction policies built in
 - Traceability: Full provenance and chain of custody
 - Extensibility: MCP/skills support, optional embeddings, cryptographic signatures
@@ -452,9 +452,9 @@ When exchanging packs between systems:
 | New block type | Minor (1.x) | Receivers ignore unknown types |
 | Removed field | Major (x.0) | Breaking change |
 
-### Migration Guide (v1.x → v2.0, future)
+### Migration guides
 
-Future migration guides will be published at `https://tokenpak.dev/migration/v2.0` and included in `docs/MIGRATION_GUIDE.md`.
+Migration guides for breaking major versions are published only when a breaking release is scheduled. They live in `docs/MIGRATION_GUIDE.md`.
 
 ---
 
@@ -493,8 +493,8 @@ A pack is interoperable when:
 
 ### Success Scenario
 
-> A LangChain developer creates a TokenPak with MCP skills.
-> A CrewAI developer receives it and can use those skills.
+> One tool creates a TokenPak with MCP skills.
+> Another TokenPak-compatible tool receives it and can use those skills.
 > Neither needs the TokenPak proxy.
 > The pack validates against the schema.
 > Provenance shows the chain of custody.

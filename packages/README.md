@@ -9,12 +9,11 @@ Standalone, publishable packages for TokenPak integration with popular AI framew
 | **[langchain-tokenpak](./langchain-tokenpak/)** | LangChain RAG pipelines | ✅ Published |
 | **[llamaindex-tokenpak](./llamaindex-tokenpak/)** | LlamaIndex query engines | ✅ Published |
 | **[langfuse-tokenpak](./langfuse-tokenpak/)** | Langfuse observability | ✅ Published |
-| **[crewai-tokenpak](./crewai-tokenpak/)** | CrewAI multi-agent systems | ✅ Published |
 | **[autogen-tokenpak](./autogen-tokenpak/)** | AutoGen conversations | ✅ Published |
 
 ## Why Separate Packages?
 
-Each framework has its own conventions, ecosystems, and user bases. Users of LangChain shouldn't need to install CrewAI just to use TokenPak.
+Each framework has its own conventions, ecosystems, and user bases. Users of one framework shouldn't need to install unrelated framework dependencies just to use TokenPak.
 
 ### Discoverability
 
@@ -23,7 +22,6 @@ Each framework has its own conventions, ecosystems, and user bases. Users of Lan
 pip install langchain-tokenpak
 pip install llamaindex-tokenpak
 pip install langfuse-tokenpak
-pip install crewai-tokenpak
 pip install autogen-tokenpak
 ```
 

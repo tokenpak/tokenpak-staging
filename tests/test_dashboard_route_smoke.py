@@ -16,11 +16,8 @@ Routes tested:
 Uses FastAPI TestClient (starlette) — no subprocess, no port binding needed,
 CI-safe.
 
-Note: current dashboard templates are stub placeholders (no <title> tag on
-most routes). The smoke test checks for valid HTML response (200 + DOCTYPE).
-The <title> check applies only to /dashboard/timeline which has a full template.
-This discrepancy is noted in TRIX-03 submission for follow-up (template work
-is out of scope per task constraints).
+The packaged dashboard routes must render real HTML pages, not placeholder
+``{{ data }}`` shells.
 """
 
 from __future__ import annotations
@@ -93,12 +90,13 @@ class TestDashboardRouteSmoke:
             f"Expected HTML body for {path}; got {body[:200]!r}"
         )
 
-    def test_dashboard_overview_has_title(self, client):
-        """/dashboard/timeline has a full template with <title>."""
-        resp = client.get("/dashboard/timeline")
+    @pytest.mark.parametrize("path", DASHBOARD_ROUTES)
+    def test_dashboard_routes_have_title(self, client, path):
+        """Each packaged dashboard route has a real HTML title."""
+        resp = client.get(path)
         assert resp.status_code == 200
         assert "<title>" in resp.text, (
-            f"/dashboard/timeline must contain <title>; got {resp.text[:300]!r}"
+            f"{path} must contain <title>; got {resp.text[:300]!r}"
         )
 
     def test_health_still_works(self, client):

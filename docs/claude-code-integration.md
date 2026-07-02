@@ -24,8 +24,8 @@ claude "summarize this file" < README.md
 
 TokenPak auto-detects your consumption mode and applies the right profile (`claude-code-cli`, `claude-code-tui`, etc.) based on your session headers. No manual profile selection required.
 
-!!! tip "One-command setup (coming soon)"
- `tokenpak install --claude-code` will automate proxy startup, shell-rc injection, and profile selection.
+!!! tip "Setup status"
+ Manual proxy startup plus `ANTHROPIC_BASE_URL` is the supported public setup path in this build.
 
 ---
 
@@ -332,7 +332,7 @@ TokenPak detects IDE mode via the `User-Agent` header set by IDE extensions (e.g
 ```
 
 !!! note "IDE mode recording"
- asciinema captures terminal output only. The IDE savings header and status-bar display require a screen recording. [▶ View IDE mode recording](demo/claude-code/ide.cast) · [recording script](demo/claude-code/ide.sh) — Kevin will replace the placeholder with a screen recording if available.
+ asciinema captures terminal output only. The IDE savings header and status-bar display require a screen recording. [▶ View IDE mode recording](demo/claude-code/ide.cast) · [recording script](demo/claude-code/ide.sh) — use the terminal recording as the current public artifact.
 
 ### Troubleshooting
 
@@ -437,15 +437,15 @@ Vault injection is disabled for the `claude-code-sdk` profile.
 
 ### Cache Invalidation Alerts
 
-**Status: coming soon**
+**Status: deferred**
 
-When a vault document changes and invalidates a cached context block, tokenpak will surface a warning. Currently, cache evictions are silent.
+Cache evictions are currently silent. Warning surfaces for changed vault documents are not part of this public build.
 
 ### Cost Forecasting
 
-**Status: coming soon**
+**Status: deferred**
 
-The `/forecast` endpoint will estimate cost for a pending request before it is sent. Currently, cost reporting is post-hoc only.
+Cost reporting is currently post-hoc only. Pending-request cost estimation is not part of this public build.
 
 ### Compliance Routing (Bedrock)
 
@@ -505,19 +505,17 @@ Unknown model IDs pass through unchanged (forward-compatible).
 
 ### Multi-Provider Failover
 
-**Status: coming soon**
+**Status: deferred**
 
-Automatic failover to AWS Bedrock or local Ollama when Anthropic's API is unavailable or rate-limited. Currently, tokenpak routes all traffic to the single upstream configured in `ANTHROPIC_BASE_URL`.
+Automatic failover to AWS Bedrock or local Ollama is not part of this public build. Configure one upstream route explicitly through `ANTHROPIC_BASE_URL`.
 
 ---
 
 ## Settings UI
 
-**Status: coming soon**
+**Status: shipped for supported settings**
 
-A web UI at `http://localhost:8766/settings/claude-code` will provide point-and-click control over per-mode profiles, vault injection depth, budget caps, and provider routing.
-
-Until it ships, use environment variables or `tokenpak config set`:
+A web UI at `http://localhost:8766/settings/claude-code` provides point-and-click control for supported Claude Code settings. Use environment variables or `tokenpak config set` for settings not exposed there:
 
 ```bash
 tokenpak config set claude-code.vault.top_k 3
@@ -529,11 +527,11 @@ tokenpak config get claude-code
 
 ## Doctor Command
 
-**Status: coming soon**
+**Status: shipped**
 
-`tokenpak doctor --claude-code` will run a health check specific to Claude Code integration: verify the proxy is reachable at `ANTHROPIC_BASE_URL`, confirm profile auto-detection is working, and flag misconfigured vault paths.
+`tokenpak doctor --claude-code` runs a health check specific to Claude Code integration: it verifies the proxy is reachable at `ANTHROPIC_BASE_URL`, confirms profile auto-detection is working, and flags misconfigured vault paths.
 
-Until it ships, run the general doctor:
+For broader proxy diagnostics, run the general doctor:
 
 ```bash
 tokenpak doctor

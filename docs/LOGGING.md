@@ -309,7 +309,7 @@ jq -s 'group_by(.endpoint) | map({endpoint: .[0].endpoint, count: length})' ~/.t
 
 ## Performance
 
-- **Latency Overhead**: <5ms per request (target met)
+- **Latency Overhead**: measure in the current environment before publishing a numeric claim
 - **Log Size**: ~500 bytes per request
 - **Async I/O**: Non-blocking with 1000-record buffer
 - **Throughput**: Handles 1000+ requests/sec

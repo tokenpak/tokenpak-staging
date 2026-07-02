@@ -1,9 +1,9 @@
 """
-tests/benchmarks/test_headline_claim.py — Headline token-reduction benchmark.
+tests/benchmarks/test_headline_claim.py — Headline corpus token-reduction benchmark.
 
-Pins the 30-50% compression claim from README line 1 and line 70.
-Standard 21 §9.8 — process-enforced blocking job.
-Do NOT merge a PR to main if this test is red.
+Runs the deterministic headline corpus as a local benchmark receipt. Public
+README/release claims must not cite a fixed percentage unless the current
+release has a matching benchmark receipt.
 
 Fixture: tests/fixtures/headline_corpus.txt
   A deterministic 9-message DevOps agent conversation (~8 kB) designed to
@@ -26,9 +26,7 @@ from tokenpak.compression.pipeline import CompressionPipeline  # noqa: E402
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "headline_corpus.txt"
 
-# Inclusive band matching the README claim; standard 07 carries the ±2pp tolerance.
-REDUCTION_MIN = 30.0
-REDUCTION_MAX = 50.0
+FORBIDDEN_PUBLIC_BANDS = ("30-50", "30–50")
 
 _ROLES = {"system", "user", "assistant"}
 
@@ -68,8 +66,8 @@ def _load_messages() -> list[dict]:
     return messages
 
 
-def test_headline_claim(tmp_path: Path) -> None:
-    """Compression on the headline corpus must land in [30, 50]%.
+def test_headline_corpus_benchmark_receipt(tmp_path: Path) -> None:
+    """Compression on the headline corpus must produce a sane local receipt.
 
     Uses a per-invocation instruction table (tmp_path) so results are
     identical on every run regardless of prior test history.
@@ -92,9 +90,13 @@ def test_headline_claim(tmp_path: Path) -> None:
         f"({result.tokens_raw}→{result.tokens_after} tokens)"
     )
 
-    assert REDUCTION_MIN <= reduction_pct <= REDUCTION_MAX, (
-        f"Headline claim failure: {reduction_pct:.1f}% not in "
-        f"[{REDUCTION_MIN}, {REDUCTION_MAX}]. "
-        f"README promises 30–50%. "
-        f"If the pipeline changed, update the fixture or escalate to revise the claim."
+    assert 0.0 <= reduction_pct <= 100.0, (
+        f"Headline corpus benchmark produced invalid reduction: {reduction_pct:.1f}%"
     )
+
+
+def test_readme_does_not_publish_unreceipted_default_percentage_band() -> None:
+    """README should avoid fixed default savings bands without current receipts."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    for band in FORBIDDEN_PUBLIC_BANDS:
+        assert band not in readme

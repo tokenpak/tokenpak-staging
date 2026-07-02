@@ -136,7 +136,7 @@ def test_h5_synthetic_banner_is_honest():
 
 def test_h5_docs_benchmarks_labeled_synthetic_and_no_host_fingerprint():
     doc = (_REPO_ROOT / "docs" / "BENCHMARKS.md").read_text(encoding="utf-8")
-    assert "Synthetic placeholder" in doc, "BENCHMARKS.md must carry the synthetic banner"
+    assert "Synthetic microbenchmark" in doc, "BENCHMARKS.md must carry the synthetic banner"
     # Mutate-to-red: the previous doc embedded a build-host kernel string like
     # 'Linux 6.17.0-14-generic'. No host fingerprint may be published.
     assert not re.search(r"Linux \d+\.\d+", doc), "build-host kernel string leaked into BENCHMARKS.md"

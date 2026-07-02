@@ -67,13 +67,8 @@ LiteLLM × TokenPak integration tests:
 - `test_litellm_concurrent_requests` — Concurrency support
 - `test_litellm_cache_consistency_under_load` — Cache thread-safety
 
-### 4. `tests/integration/test_other_frameworks.py` (16 tests)
-Integration tests for Crewai, Langfuse, LlamaIndex:
-
-**Crewai:** 3 tests
-- ✅ `test_crewai_import` — Import verification
-- `test_crewai_agent_with_tokenpak` — Agent integration
-- `test_crewai_tool_execution_tracking` — Tool tracking
+### 4. `tests/integration/test_other_frameworks.py`
+Optional framework smoke tests. These validate adapter seams where installed, but they are not public compatibility commitments until an adapter is implemented, documented, and covered by release-gate tests.
 
 **Langfuse:** 4 tests
 - ✅ `test_langfuse_import` — Import verification
@@ -88,9 +83,9 @@ Integration tests for Crewai, Langfuse, LlamaIndex:
 - `test_llamaindex_cache_integration` — Cache support
 - `test_llamaindex_query_with_tokenpak` — Query optimization
 
-**Framework Combinations:** 3 tests
+**Framework combinations:**
 - `test_langchain_and_langfuse_together` — Multi-adapter usage
-- `test_crewai_with_langfuse_tracing` — Combined frameworks
+- Optional framework telemetry combination
 - `test_llamaindex_with_litellm_routing` — Multi-framework setup
 
 ### 5. `tests/integration/test_caching.py` (12 tests)
@@ -171,7 +166,7 @@ Concurrent request handling:
 **Load Scenarios:** 3 tests
 - `test_burst_requests` — Burst handling
 - `test_sustained_load` — Sustained load
-- (placeholder for memory/thread safety)
+- Reserved memory/thread safety scenario
 
 **Memory Safety:** 2 tests
 - `test_no_memory_leaks_on_concurrent_requests` — Memory leaks
@@ -229,7 +224,6 @@ python3 -m pytest tests/integration/ --cov=tokenpak --cov-report=html
 - ✅ **Adapter Compatibility Tests**
  - LangChain adapter tests
  - LiteLLM adapter tests
- - Crewai adapter tests
  - Langfuse adapter tests
  - LlamaIndex adapter tests
 

@@ -3,13 +3,14 @@
 
 This package owns the local-first SQLite schema and migration runner
 that the recall surface — both the OSS read paths and the Pro-tier
-resolver / scoring engine in a later phase — will read from and write
-to.
+advanced resolver in a later phase — will read from and write to.
 
-PR-1 scope is the storage shape only: tables, the FTS5 virtual table,
-and the forward-only migration runner. No capture, no recall behavior,
-no ranking, no CLI. See ``schema.py`` for the DDL and ``migrations.py``
-for the runner contract.
+The OSS surface is local storage plus PakRank Lite only: tables, the FTS5
+virtual table, the forward-only migration runner, and transparent
+deterministic ranking over user-controlled Pak rows. No capture pipeline,
+daemon, anchor hydration, Context Package builder, policy enforcement, or
+autonomous handoff. See ``schema.py`` for the DDL, ``migrations.py`` for the
+runner contract, and ``ranking.py`` for the local scorer.
 
 Notes:
     - Recall storage foundation is OSS Phase 1 (MultiPak Pro architecture).

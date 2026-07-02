@@ -4,6 +4,10 @@
 **Date:** 2026-03-06
 **Environment:** <dev-host> (4GB RAM, Python 3.12)
 
+> Historical local sample, not a current public performance claim. Use current
+> CI benchmark artifacts or rerun the benchmark workflow before citing numeric
+> savings, latency, cache-hit, or throughput figures.
+
 ## Summary
 
 | Metric | Value | Target | Status |
@@ -33,17 +37,11 @@ Duration: 93.13s
 | Workflow engine | 63 | ✅ |
 | Cost/budget tracking | 50 | ✅ |
 
-## Production Metrics (7-day rolling)
+## Local Metrics
 
-From `~/.tokenpak/monitor.db`:
-
-| Metric | Value |
-|--------|-------|
-| Total Requests | 4,032 |
-| Cache Hit Rate | 71.8% |
-| Tokens Processed | 43.1M |
-| Tokens Saved | 606K (this session) |
-| Cost Saved | $11.74 (this session) |
+Runtime savings, cache-hit, token, and cost figures come from each user's local
+`~/.tokenpak/monitor.db`. They are useful for local validation, but they are not
+portable release claims without an exported benchmark receipt.
 
 ## Compression Performance
 
@@ -76,7 +74,8 @@ Average request latency (from proxy logs):
 | P95 | ~1200ms |
 | P99 | ~2500ms |
 
-Note: Latency includes upstream API time. TokenPak overhead is <50ms.
+Note: Latency includes upstream API time. Measure TokenPak overhead in the
+current environment before publishing a numeric claim.
 
 ## Memory Usage
 
