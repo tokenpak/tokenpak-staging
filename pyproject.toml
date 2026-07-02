@@ -136,6 +136,7 @@ dev = [
     "pytest-mock>=3.12.0",
     "black>=24.0.0",
     "ruff>=0.2.0",
+    "build>=1.2.0",
     # Subsystem test deps: the dispatch test suite imports pydantic/jsonschema.
     # Pulled via the [dispatch] extra so the standard `.[dev]` CI job collects
     # and runs those tests instead of erroring at import time.
