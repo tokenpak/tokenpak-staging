@@ -124,12 +124,8 @@ def test_status_json_emits_canonical_payload():
         assert key in payload
 
 
-def test_status_daemon_state_unavailable_by_default(monkeypatch):
-    """The unavailable payload is independent of the host daemon state."""
-    monkeypatch.setattr(
-        "tokenpak.licensing.daemon_probe.detect_daemon_state",
-        lambda: "unavailable",
-    )
+def test_status_daemon_state_unavailable_by_default():
+    """No daemon installed on this host."""
     args = SimpleNamespace(json=True)
     rc, out = _capture_stdout(cmd_pak_status, args)
     payload = json.loads(out)

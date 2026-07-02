@@ -43,7 +43,7 @@ def _make_codex_body(messages: list, stream: bool = False) -> bytes:
 def _make_ctx(
     body: bytes,
     route: str = "status_check",
-    session_id: str | None = "sess-test-001",
+    session_id: str = "sess-test-001",
     has_semantic_cap: bool = True,
 ) -> OptimizationContext:
     """Build a minimal OptimizationContext for cache stage tests."""
@@ -66,9 +66,10 @@ def _make_ctx(
     canonical.messages = messages  # type: ignore[attr-defined]
 
     trace = OptimizationTrace(request_id="req-001", mode="observe")
-    headers = {"content-type": "application/json"}
-    if session_id is not None:
-        headers["x-session-id"] = session_id
+    headers = {
+        "x-session-id": session_id,
+        "content-type": "application/json",
+    }
     return OptimizationContext(
         request_id="req-001",
         raw_body=body,
@@ -209,48 +210,6 @@ def test_no_cached_response_on_miss():
     ctx = _make_ctx(_make_responses_body("What is the proxy status?"), route="status_check")
     ctx = stage.apply(ctx)
     assert get_cached_response(ctx) is None
-
-
-def test_no_stable_scope_skips_lookup_record_and_scope_growth():
-    """No session-style scope must not create per-request cache buckets."""
-    stage = _stage_with_flag()
-    query = "What is the proxy status?"
-
-    ctx1 = _make_ctx(_make_responses_body(query), route="status_check", session_id=None)
-    stage.apply(ctx1)
-    stage.record(ctx1, {"output": [{"text": "OK"}]})
-
-    result = _get_cache_result(ctx1)
-    assert result is not None
-    assert not result.hit
-    assert result.miss_reason == "no-stable-scope"
-    assert result.recorded is False
-    assert stage._caches == {}
-
-    ctx2 = _make_ctx(_make_responses_body(query), route="status_check", session_id=None)
-    stage.apply(ctx2)
-    stage.record(ctx2, {"output": [{"text": "OK"}]})
-
-    assert _get_cache_result(ctx2).miss_reason == "no-stable-scope"
-    assert stage._caches == {}
-
-
-def test_scope_cache_count_is_bounded_lru():
-    stage = SemanticCacheStage(
-        env={"TOKENPAK_SEMANTIC_CACHE_STAGE": "1"},
-        max_scope_caches=2,
-    )
-
-    for session in ("sess-A", "sess-B", "sess-C"):
-        ctx = _make_ctx(
-            _make_responses_body(f"What is the proxy status for {session}?"),
-            route="status_check",
-            session_id=session,
-        )
-        stage.apply(ctx)
-        stage.record(ctx, {"output": [{"text": session}]})
-
-    assert list(stage._caches.keys()) == ["sess-B", "sess-C"]
 
 
 # ---------------------------------------------------------------------------

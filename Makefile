@@ -18,7 +18,7 @@ MKDOCS      := $(VENV_BIN)/mkdocs
 UNAME := $(shell uname -s)
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
-.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline audit release-readiness integrate-detect
+.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:  ## Show this help message
@@ -64,18 +64,6 @@ test-chaos:  ## Run chaos & resilience tests (fault injection / failure-recovery
 
 benchmark-headline:  ## Run headline 30-50% claim benchmark (standard 21 §9.8 blocking)
 	$(PYTEST) tests/benchmarks/test_headline_claim.py -v -s
-
-# ── Audit / Release Readiness (proposal 2026-04-29 §S1.2 / §S3.2) ─────────────
-# Both targets are deterministic, local-only, and never publish anything.
-# Std 10 §B5 references `make audit` — it must exist.
-audit:  ## Run local audit bundle (quick tests + CLI smoke + inventories + leakage)
-	@PYTHON=$(PYTHON) PYTEST=$(PYTEST) bash scripts/audit.sh
-
-release-readiness:  ## Generate advisory release-readiness report (no publish action)
-	@$(PYTHON) scripts/release_readiness.py
-
-integrate-detect:  ## Detect local LLM client signals and print next-step commands
-	@$(PYTHON) scripts/integration_detector.py
 
 # ── Linting & formatting ───────────────────────────────────────────────────────
 lint:  ## Run ruff linter
@@ -133,7 +121,7 @@ clean-all: clean  ## Remove everything including venv
 .PHONY: api-snapshot api-snapshot-check api-snapshot-diff workflow-steps-snapshot \
         workflow-steps-check telemetry-snapshot telemetry-check taxonomy-check \
         deps-audit migration-multihop release-gate-snapshots release-gate-check \
-        trust-conformance
+        release-leak-check
 
 api-snapshot:  ## Std 30 §7 (R7) — regenerate tokenpak/_snapshots/public-api.json
 	$(PYTHON) scripts/release_gate/gen_api_snapshot.py
@@ -159,9 +147,6 @@ telemetry-check:  ## Std 30 §7 — fail if telemetry-schema.json drifts
 taxonomy-check:  ## Std 02 §13 + Std 30 §5 (R5) — every test has exactly one taxonomy marker
 	$(PYTHON) scripts/release_gate/taxonomy_check.py
 
-trust-conformance:  ## NOTICE / LICENSE / security-contact / DCO / public-claim conformance (advisory by default)
-	$(PYTHON) -m scripts.release_gate.trust_conformance --mode advisory
-
 deps-audit:  ## Std 02 §14 + Std 30 §13.2 (R17) — uv lock --check + pip-audit + yanked-package scan
 	@command -v uv >/dev/null && uv lock --check || echo "uv not installed; skipping uv lock --check (install uv to enable)"
 	$(PYTHON) -m pip install --quiet pip-audit
@@ -176,6 +161,7 @@ release-gate-snapshots: api-snapshot workflow-steps-snapshot telemetry-snapshot 
 release-gate-check: api-snapshot-check workflow-steps-check telemetry-check taxonomy-check  ## Validate ALL release-gate snapshots
 	@echo "✅  All release-gate checks passed"
 
-.PHONY: release-check
-release-check:  ## Tier-1 baseline — run the always-on deterministic release gates
-	$(PYTHON) scripts/release_check/release_check.py
+release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (release gate)
+	$(PYTHON) -m pip install --quiet build
+	$(PYTHON) -m build
+	$(PYTHON) scripts/release_gate/check_release_leaks.py --dist dist/

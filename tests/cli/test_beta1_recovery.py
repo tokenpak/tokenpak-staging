@@ -127,31 +127,6 @@ def test_tip_conformance_passes_on_clean_install():
     assert exit_code_for(summary) == 0
 
 
-def test_tip_conformance_fails_when_adapter_contract_metadata_missing():
-    from tokenpak.cli.commands.tip import exit_code_for, run_conformance_checks, summarize
-    from tokenpak.proxy.adapters.passthrough_adapter import PassthroughAdapter
-    from tokenpak.proxy.adapters.registry import AdapterRegistry
-
-    class MissingTipMetadataAdapter(PassthroughAdapter):
-        source_format = "missing-tip-metadata"
-        tip_min_version = None
-
-    def build_registry() -> AdapterRegistry:
-        registry = AdapterRegistry()
-        registry.register(MissingTipMetadataAdapter())
-        return registry
-
-    results = run_conformance_checks(registry_factory=build_registry)
-    summary = summarize(results)
-    failures = [r for r in results if r.name == "adapters.contract_metadata"]
-
-    assert summary["counts"]["FAIL"] > 0
-    assert exit_code_for(summary) == 1
-    assert failures
-    assert failures[0].status == "FAIL"
-    assert "tip_min_version" in failures[0].details
-
-
 def test_tip_inspect_emits_capability_labels(capsys):
     from tokenpak.cli.commands.tip import cmd_tip_inspect
 
@@ -285,10 +260,6 @@ def test_activate_accepts_plausible_key(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(_lic, "_license_path", lambda: tmp_path / "license.json")
-    monkeypatch.setattr(
-        "tokenpak.licensing.daemon_probe.detect_daemon_state",
-        lambda: "unavailable",
-    )
     # Plausible base64url-ish token
     result = _lic.activate("ABCD-1234-EFGH-5678-IJKL")
     assert result.ok is True

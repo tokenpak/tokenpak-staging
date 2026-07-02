@@ -50,7 +50,7 @@ classifiers = [
     "Topic :: Utilities",
     "Typing :: Typed",
 ]
-# Slim core dependencies — Standard 02 §9 / Constitution 00 compliance.
+# Slim core dependencies — keep the runtime footprint minimal.
 # Anything that drags in torch / nvidia-* / scipy / pandas / a multi-hundred-MB
 # transitive belongs in [project.optional-dependencies] below, not here.
 # See proposals/2026-05-01-tokenpak-install-footprint-extras-split.md.
@@ -66,6 +66,9 @@ dependencies = [
     "watchdog>=3.0.0",
     "cryptography>=41.0.0",
     "urllib3>=2.0.0",
+    # TOML reader for permission-tier / creds config on Python < 3.11
+    # (stdlib `tomllib` lands in 3.11; `tomli` is the tiny backport).
+    "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 [project.license]
@@ -90,7 +93,7 @@ intelligence = [
     # scipy is the only intelligence-tier dep currently imported (guarded in
     # tokenpak/intelligence/ab_optimizer.py). scikit-learn / sympy were
     # candidates in the proposal but no source file imports them today, so
-    # adding them would violate Standard 02 §9 ("New runtime deps require a
+    # adding them would violate the slim-core-deps policy ("New runtime deps require a
     # PR note explaining what they do, why stdlib won't work, and what
     # happens when they're missing"). Add them here when a real consumer
     # lands.
@@ -165,8 +168,6 @@ serve = [
     "starlette>=0.36.0",
     "pydantic>=2.0.0",
     "fastapi>=0.100.0",
-    "python-multipart>=0.0.9",
-    "jinja2>=3.1.0",
     # Optional WebSocket proxy endpoint (tokenpak/proxy/websocket.py). The
     # import is guarded (try/except ImportError) and the WS server is simply
     # disabled when absent, so this is serve-only, not a core dependency.
@@ -211,13 +212,9 @@ tokenpak = [
     "routing/model_tiers.json",
     "config/schema.json",
     "state_schema.json",
-    "core/registry/*.json",
     "models/data/*.json",
     "telemetry/data/*.json",
     "tip/schemas/*.json",
-    "dashboard/*.html",
-    "dashboard/*.js",
-    "dashboard/*.css",
     "dashboard/templates/**/*",
     "telemetry/dashboard/static/**/*",
     "telemetry/dashboard/templates/**/*",

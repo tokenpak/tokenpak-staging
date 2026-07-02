@@ -1,13 +1,11 @@
 /**
  * TokenPak CacheManager
- * Wraps experimental /cache/* HTTP endpoints when a custom server provides them.
+ * Wraps the /cache/* HTTP endpoints.
  */
 import { CacheStats, TokenPakConfig } from './types';
 export declare class CacheManager {
     private readonly client;
-    private readonly experimentalEndpoints;
     constructor(config?: TokenPakConfig);
-    private requireExperimentalEndpoint;
     /**
      * Get a cached value by key.
      * Returns null if the key is not found or has expired.

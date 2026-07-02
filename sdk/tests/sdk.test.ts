@@ -4,15 +4,6 @@
  * Does NOT require a live server.
  */
 
-jest.mock('axios', () => ({
-  __esModule: true,
-  default: {
-    create: jest.fn(),
-    isAxiosError: jest.fn(() => false),
-  },
-}));
-
-import axios from 'axios';
 import {
   CompressionEngine,
   CacheManager,
@@ -22,23 +13,8 @@ import {
   TokenPakError,
   TokenPakConnectionError,
   TokenPakTimeoutError,
-  TokenPakUnsupportedEndpointError,
   VERSION,
 } from '../src/index';
-
-const axiosMock = axios as unknown as {
-  create: jest.Mock;
-};
-
-let mockGet: jest.Mock;
-let mockPost: jest.Mock;
-
-beforeEach(() => {
-  jest.clearAllMocks();
-  mockGet = jest.fn();
-  mockPost = jest.fn();
-  axiosMock.create.mockReturnValue({ get: mockGet, post: mockPost });
-});
 
 // ---------------------------------------------------------------------------
 // Exports
@@ -61,7 +37,6 @@ describe('SDK exports', () => {
     expect(TokenPakError).toBeDefined();
     expect(TokenPakConnectionError).toBeDefined();
     expect(TokenPakTimeoutError).toBeDefined();
-    expect(TokenPakUnsupportedEndpointError).toBeDefined();
   });
 });
 
@@ -93,14 +68,6 @@ describe('Error classes', () => {
     expect(err).toBeInstanceOf(TokenPakTimeoutError);
     expect(err.message).toContain('5000');
     expect(err.name).toBe('TokenPakTimeoutError');
-  });
-
-  test('TokenPakUnsupportedEndpointError names the feature and endpoint', () => {
-    const err = new TokenPakUnsupportedEndpointError('CacheManager', '/cache');
-    expect(err).toBeInstanceOf(TokenPakError);
-    expect(err.message).toContain('CacheManager');
-    expect(err.message).toContain('/cache');
-    expect(err.name).toBe('TokenPakUnsupportedEndpointError');
   });
 });
 
@@ -154,90 +121,5 @@ describe('Class instantiation', () => {
       headers: { 'X-Custom': 'value' },
     });
     expect(client).toBeDefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Shipped app API contract
-// ---------------------------------------------------------------------------
-describe('Shipped app API endpoints', () => {
-  test('TokenPakHttpClient defaults to the proxy app API and X-TPK-Key auth', () => {
-    new TokenPakHttpClient({ apiKey: 'test-key' });
-
-    expect(axiosMock.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseURL: 'http://127.0.0.1:8766',
-        headers: expect.objectContaining({
-          'Content-Type': 'application/json',
-          'X-TPK-Key': 'test-key',
-        }),
-      })
-    );
-  });
-
-  test('health uses the shipped /tpk/v1/health route', async () => {
-    mockGet.mockResolvedValue({ data: { version: '1.2.3', uptime_s: 42 } });
-    const client = new TokenPakHttpClient();
-
-    const health = await client.health();
-
-    expect(mockGet).toHaveBeenCalledWith('/tpk/v1/health');
-    expect(health.version).toBe('1.2.3');
-    expect(health.uptimeSeconds).toBe(42);
-  });
-
-  test('CompressionEngine.compress posts to /tpk/v1/compress and maps app response fields', async () => {
-    mockPost.mockResolvedValue({
-      data: {
-        pruned_text: 'short text',
-        original_tokens: 100,
-        pruned_tokens: 25,
-        tokens_avoided: 75,
-        reduction_pct: 75,
-      },
-    });
-    const engine = new CompressionEngine();
-
-    const result = await engine.compress('long text', { targetTokens: 25 });
-
-    expect(mockPost).toHaveBeenCalledWith(
-      '/tpk/v1/compress',
-      expect.objectContaining({ text: 'long text', max_tokens: 25 })
-    );
-    expect(result).toMatchObject({
-      originalText: 'long text',
-      compressedText: 'short text',
-      originalTokens: 100,
-      compressedTokens: 25,
-      savingsPct: 75,
-      cacheHit: false,
-      elapsedMs: 0,
-    });
-  });
-
-  test('legacy resource endpoints are disabled unless explicitly enabled', async () => {
-    await expect(new CacheManager().set('key', 'value')).rejects.toBeInstanceOf(
-      TokenPakUnsupportedEndpointError
-    );
-    await expect(new BlockRegistry().list()).rejects.toBeInstanceOf(
-      TokenPakUnsupportedEndpointError
-    );
-    await expect(new TelemetryCollector().stats()).rejects.toBeInstanceOf(
-      TokenPakUnsupportedEndpointError
-    );
-    await expect(new CompressionEngine().compressConversation([])).rejects.toBeInstanceOf(
-      TokenPakUnsupportedEndpointError
-    );
-    expect(mockGet).not.toHaveBeenCalled();
-    expect(mockPost).not.toHaveBeenCalled();
-  });
-
-  test('experimentalEndpoints opt-in preserves legacy endpoint calls', async () => {
-    mockPost.mockResolvedValue({ data: undefined });
-    const cache = new CacheManager({ experimentalEndpoints: true });
-
-    await cache.set('key', 'value', 60);
-
-    expect(mockPost).toHaveBeenCalledWith('/cache', { key: 'key', value: 'value', ttl: 60 });
   });
 });

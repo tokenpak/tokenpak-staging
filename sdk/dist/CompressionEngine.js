@@ -1,16 +1,14 @@
 "use strict";
 /**
  * TokenPak CompressionEngine
- * Wraps the shipped /tpk/v1/compress HTTP endpoint.
+ * Wraps the /compress and /compress/conversation HTTP endpoints.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CompressionEngine = void 0;
 const client_1 = require("./client");
-const types_1 = require("./types");
 class CompressionEngine {
     constructor(config) {
         this.client = new client_1.TokenPakHttpClient(config);
-        this.experimentalEndpoints = config?.experimentalEndpoints ?? false;
     }
     /**
      * Compress a single text string.
@@ -24,21 +22,21 @@ class CompressionEngine {
     async compress(text, options = {}) {
         const body = {
             text,
-            max_tokens: options.targetTokens,
+            target_tokens: options.targetTokens,
             strategy: options.strategy ?? 'heuristic',
             cache: options.cache ?? true,
             preserve_code: options.preserveCode ?? true,
             preserve_structure: options.preserveStructure ?? true,
         };
-        const raw = await this.client.post('/tpk/v1/compress', body);
+        const raw = await this.client.post('/compress', body);
         return {
-            originalText: raw.original_text ?? text,
-            compressedText: raw.compressed_text ?? raw.pruned_text ?? text,
+            originalText: raw.original_text,
+            compressedText: raw.compressed_text,
             originalTokens: raw.original_tokens,
-            compressedTokens: raw.compressed_tokens ?? raw.pruned_tokens ?? raw.original_tokens,
-            savingsPct: raw.savings_pct ?? raw.reduction_pct ?? 0,
-            cacheHit: raw.cache_hit ?? false,
-            elapsedMs: raw.elapsed_ms ?? 0,
+            compressedTokens: raw.compressed_tokens,
+            savingsPct: raw.savings_pct,
+            cacheHit: raw.cache_hit,
+            elapsedMs: raw.elapsed_ms,
         };
     }
     /**
@@ -57,9 +55,6 @@ class CompressionEngine {
      * });
      */
     async compressConversation(messages, options = {}) {
-        if (!this.experimentalEndpoints) {
-            throw new types_1.TokenPakUnsupportedEndpointError('CompressionEngine.compressConversation', '/compress/conversation');
-        }
         const body = {
             messages,
             keep_recent: options.keepRecent ?? 3,

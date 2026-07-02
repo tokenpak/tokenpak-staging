@@ -5,7 +5,3 @@
 # this prune brings the sdist in line with that intent
 # ([tool.pytest.ini_options] markers note "excluded from OSS sdist").
 prune tests
-recursive-exclude tokenpak/tests *
-recursive-exclude tokenpak/sdk/*/tests *
-global-exclude *.py[cod]
-global-exclude __pycache__

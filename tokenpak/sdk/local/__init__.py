@@ -1,5 +1,5 @@
 """
-tokenpak.sdk.local
+tokenpak-local
 
 TokenPak integration for local LLMs — Ollama, LM Studio, and OpenAI-compatible endpoints.
 
@@ -7,7 +7,7 @@ Provides automatic context compression sized for the target model's context wind
 making TokenPak especially useful where context is limited.
 
 Quick Start (Ollama):
-    from tokenpak.sdk.local import TokenPakOllama, Block
+    from tokenpak_local import TokenPakOllama, Block
 
     client = TokenPakOllama()
 
@@ -19,14 +19,14 @@ Quick Start (Ollama):
     print(response["message"]["content"])
 
 Quick Start (LM Studio / OpenAI-compatible):
-    from tokenpak.sdk.local import TokenPakOpenAICompat, TokenPak
+    from tokenpak_local import TokenPakOpenAICompat, TokenPak
 
     client = TokenPakOpenAICompat(base_url="http://localhost:1234/v1")
     response = client.complete(model="lmstudio-community/Meta-Llama-3-8B", tokenpak=pack)
 
 Local RAG Pipeline:
-    from tokenpak.sdk.local import TokenPakOllama, auto_budget
-    from tokenpak.sdk.local.utils import blocks_from_texts
+    from tokenpak_local import TokenPakOllama, auto_budget
+    from tokenpak_local.utils import blocks_from_texts
 
     budget = auto_budget("llama3")               # 6144 tokens (75% of 8192)
     blocks = blocks_from_texts(retrieved_docs)   # convert docs → blocks

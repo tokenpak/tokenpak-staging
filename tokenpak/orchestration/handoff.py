@@ -6,8 +6,8 @@ to each other. Handoffs are stored as JSON in ~/.tokenpak/handoffs/.
 Public API:
     manager = HandoffManager()
     handoff = manager.create_handoff(
-        from_agent="agent-a",
-        to_agent="agent-b",
+        from_agent="cali",
+        to_agent="sue",
         context_refs=[ContextRef(type="file", path="/path/to/file")],
         what_was_done="Implemented X",
         whats_next="Review Y",
@@ -15,7 +15,7 @@ Public API:
     handoff = manager.receive_handoff(handoff.id)   # validate refs
     handoff = manager.apply_handoff(handoff.id)     # load context, mark applied
     manager.expire_stale()                          # auto-expire past TTL
-    handoffs = manager.list_handoffs(to_agent="agent-b")
+    handoffs = manager.list_handoffs(to_agent="sue")
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_HANDOFF_DIR = Path.home() / ".tokenpak" / "handoffs"
 DEFAULT_TTL_HOURS = 24
-REGISTERED_AGENTS = {"agent-a", "agent-b", "agent-c", "operator"}
+REGISTERED_AGENTS = {"cali", "sue", "trix", "kevin"}
 
 
 class HandoffStatus(str, Enum):

@@ -176,20 +176,6 @@ class TestI5StripUpstream:
         assert "Authorization" not in out
         assert out["x-api-key"] == "sk-ant-real-key"
 
-    def test_strips_normalized_value_for_all_authorization_key_casings(self) -> None:
-        client_auth = f"Bearer {_TEST_TOKEN}"
-        fwd = {
-            "Authorization": f"  bearer   {_TEST_TOKEN}  ",
-            "AUTHORIZATION": client_auth,
-            "AuthOrization": f"Bearer    {_TEST_TOKEN}",
-            "x-api-key": "sk-ant-real-key",
-        }
-        out = strip_proxy_auth_for_upstream(fwd, client_auth)
-        assert "Authorization" not in out
-        assert "AUTHORIZATION" not in out
-        assert "AuthOrization" not in out
-        assert out["x-api-key"] == "sk-ant-real-key"
-
     def test_does_not_strip_replacement_credential(self) -> None:
         """When a creds-router has overwritten Authorization with an upstream
         token before the strip runs, the original client value isn't there

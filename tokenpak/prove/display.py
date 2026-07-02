@@ -18,32 +18,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from tokenpak.platform import process
-
 
 def _ensure_tmux() -> None:
-    """Install tmux if not present (POSIX package managers only)."""
+    """Install tmux if not present."""
     if shutil.which("tmux"):
         return
 
-    # tmux and these package managers are POSIX-only; native Windows has no
-    # equivalent here, so don't attempt Linux/macOS installs there.
-    if process.is_windows():
-        return
-
-    # Linux uses apt/dnf/pacman; macOS uses brew. Only attempt the managers that
-    # match the current platform so we don't shell out to the wrong tool.
-    if process.is_macos():
-        install_cmds = [["brew", "install", "-q", "tmux"]]
-    else:
-        install_cmds = [
-            ["sudo", "apt-get", "install", "-y", "-qq", "tmux"],
-            ["sudo", "dnf", "install", "-y", "-q", "tmux"],
-            ["sudo", "pacman", "-S", "--noconfirm", "--quiet", "tmux"],
-        ]
-
     print("  Installing tmux...", file=sys.stderr, end=" ", flush=True)
-    for cmd in install_cmds:
+    for cmd in [
+        ["sudo", "apt-get", "install", "-y", "-qq", "tmux"],
+        ["sudo", "dnf", "install", "-y", "-q", "tmux"],
+        ["sudo", "pacman", "-S", "--noconfirm", "--quiet", "tmux"],
+        ["brew", "install", "-q", "tmux"],
+    ]:
         pkg_mgr = cmd[1] if cmd[0] == "sudo" else cmd[0]
         if not shutil.which(pkg_mgr):
             continue
@@ -77,12 +64,6 @@ class LiveDisplay:
         self.arm_b_log.parent.mkdir(parents=True, exist_ok=True)
         self.arm_a_log.touch()
         self.arm_b_log.touch()
-
-        # Live display relies on tmux / POSIX terminal emulators. On native
-        # Windows none of these apply — skip cleanly; inline progress is enough.
-        if process.is_windows():
-            self._method = None
-            return None
 
         if not shutil.which("tmux"):
             _ensure_tmux()

@@ -274,4 +274,4 @@ class TestGetPrice:
         assert get_price("claude-haiku-4-5", "input") == 0.80
 
     def test_opus_input_price(self):
-        assert get_price("claude-opus-4-5", "input") == 5.0
+        assert get_price("claude-opus-4-5", "input") == 15.0

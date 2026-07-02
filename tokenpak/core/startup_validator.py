@@ -5,7 +5,7 @@ Runs validation on proxy startup and logs warnings for any config issues.
 Does NOT block startup (warning mode only) to allow graceful degradation.
 
 Usage:
-    from tokenpak.core.startup_validator import validate_on_startup
+    from tokenpak.startup_validator import validate_on_startup
 
     # Call once on proxy initialization
     validate_on_startup()  # Logs warnings, never raises exceptions
@@ -33,7 +33,7 @@ def validate_on_startup(
     Returns:
         True if valid, False if errors (but True if warn_only=True and errors exist)
     """
-    from tokenpak.cli.cli_validate_config import format_errors, validate_config_file
+    from tokenpak.cli_validate_config import format_errors, validate_config_file
 
     expanded_path = str(Path(config_path).expanduser())
 

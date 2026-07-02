@@ -17,9 +17,9 @@ Hooks must be enabled via the ``hooks`` feature flag.
 The event set is held in :data:`_TOKENPAK_HOOK_EVENTS` — a declarative
 module-level table keyed by Codex event name. Adding a new event means
 appending an entry (and shipping a matching script); install / merge /
-uninstall flow through it without further code changes.  Discovery
-stays dynamic — no hardcoded enumeration of events lives inside a
-function body.
+uninstall flow through it without further code changes.  Per
+``feedback_always_dynamic.md``, no hardcoded enumeration of events lives
+inside a function body.
 """
 
 from __future__ import annotations
@@ -29,35 +29,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .guidance import _codex_cli_missing_message
-
 _HOOKS_DIR = Path(__file__).parent
-
-# Python-native hook scripts — the default installed command path. These
-# run under the companion's own interpreter (``sys.executable``) with
-# stdlib only, so native Windows PowerShell/cmd users need no Git Bash,
-# WSL, jq, sqlite3, bc, or sed on PATH (audit findings CP-01 + CP-06).
-_SESSION_START_HOOK_PY = _HOOKS_DIR / "hooks_session_start.py"
-_PRE_SEND_HOOK_PY = _HOOKS_DIR / "hooks_pre_send.py"
-_PRE_TOOL_USE_HOOK_PY = _HOOKS_DIR / "hooks_pre_tool_use.py"
-_POST_TOOL_USE_HOOK_PY = _HOOKS_DIR / "hooks_post_tool_use.py"
-_STOP_HOOK_PY = _HOOKS_DIR / "hooks_stop.py"
-
-# Legacy POSIX hook scripts — retained as a compatibility path for
-# already-installed hooks.json entries that reference ``bash <script>.sh``.
-# They are NOT the installed default; reinstalling migrates an existing
-# config to the Python-native commands above (see _merge_hooks).
 _SESSION_START_HOOK = _HOOKS_DIR / "hooks_session_start.sh"
 _PRE_SEND_HOOK = _HOOKS_DIR / "hooks_pre_send.sh"
 _PRE_TOOL_USE_HOOK = _HOOKS_DIR / "hooks_pre_tool_use.sh"
 _POST_TOOL_USE_HOOK = _HOOKS_DIR / "hooks_post_tool_use.sh"
 _STOP_HOOK = _HOOKS_DIR / "hooks_stop.sh"
-
-# Interpreter used to launch hook scripts. ``sys.executable`` is the
-# companion's own interpreter (the one with tokenpak installed); fall back
-# to a bare ``python3`` only in the rare case it is unset (e.g. a frozen
-# embedding). Never ``bash`` or a hardcoded ``python3`` path.
-_PY_INTERP = sys.executable or "python3"
 
 # Substring used to identify tokenpak-owned hook commands across merges.
 TOKENPAK_HOOK_MARKER = "tokenpak"
@@ -69,7 +46,7 @@ _TOKENPAK_HOOK_EVENTS: dict[str, dict] = {
         "hooks": [
             {
                 "type": "command",
-                "command": f"{_PY_INTERP} {_SESSION_START_HOOK_PY}",
+                "command": f"bash {_SESSION_START_HOOK}",
                 "timeout": 5,
                 "statusMessage": "tokenpak: loading capsule...",
             }
@@ -79,7 +56,7 @@ _TOKENPAK_HOOK_EVENTS: dict[str, dict] = {
         "hooks": [
             {
                 "type": "command",
-                "command": f"{_PY_INTERP} {_PRE_SEND_HOOK_PY}",
+                "command": f"bash {_PRE_SEND_HOOK}",
                 "timeout": 10,
                 "statusMessage": "tokenpak: estimating cost...",
             }
@@ -89,7 +66,7 @@ _TOKENPAK_HOOK_EVENTS: dict[str, dict] = {
         "hooks": [
             {
                 "type": "command",
-                "command": f"{_PY_INTERP} {_PRE_TOOL_USE_HOOK_PY}",
+                "command": f"bash {_PRE_TOOL_USE_HOOK}",
                 "timeout": 5,
                 "statusMessage": "tokenpak: checking budget...",
             }
@@ -99,7 +76,7 @@ _TOKENPAK_HOOK_EVENTS: dict[str, dict] = {
         "hooks": [
             {
                 "type": "command",
-                "command": f"{_PY_INTERP} {_POST_TOOL_USE_HOOK_PY}",
+                "command": f"bash {_POST_TOOL_USE_HOOK}",
                 "timeout": 5,
             }
         ]
@@ -108,7 +85,7 @@ _TOKENPAK_HOOK_EVENTS: dict[str, dict] = {
         "hooks": [
             {
                 "type": "command",
-                "command": f"{_PY_INTERP} {_STOP_HOOK_PY}",
+                "command": f"bash {_STOP_HOOK}",
                 "timeout": 15,
                 "statusMessage": "tokenpak: closing session...",
             }
@@ -236,17 +213,8 @@ def ensure_hooks_feature_enabled() -> bool:
             text=True,
             timeout=10,
         )
-    except FileNotFoundError:
-        print(
-            f"tokenpak: {_codex_cli_missing_message('Hooks feature setup skipped')}",
-            file=sys.stderr,
-        )
-        return False
-    except subprocess.TimeoutExpired:
-        print(
-            "tokenpak: hooks feature setup skipped: codex features enable timed out",
-            file=sys.stderr,
-        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        print(f"tokenpak: codex not available: {exc}", file=sys.stderr)
         return False
     if result.returncode != 0:
         print(

@@ -52,12 +52,6 @@ DEFAULT_OUT = REPO_ROOT / "tokenpak" / "_snapshots" / "public-api.json"
 # snapshot deterministically reflects the TokenPak-owned released surface.
 _THIRD_PARTY_REEXPORTS: set[tuple[str, str]] = {
     ("tokenpak.vault.retrieval.vector_local", "faiss"),
-    # ``SentenceTransformer`` is a lazily-bound module global (``= None`` until
-    # first use, then assigned ``sentence_transformers.SentenceTransformer``).
-    # It is a third-party re-export kept for back-compat attribute access, NOT
-    # TokenPak public API — the same class as the ``faiss`` re-export in this
-    # very module. Exclude it so the snapshot reflects the TokenPak-owned surface.
-    ("tokenpak.vault.retrieval.vector_local", "SentenceTransformer"),
     ("tokenpak.proxy.server_extra.websocket_proxy", "WebSocketServerProtocol"),
 }
 
@@ -220,21 +214,15 @@ def collect_symbols(package_name: str = "tokenpak") -> list[dict[str, str]]:
             continue
         if "tests" in parts:
             continue
-        # Preview / internal orchestration subsystems are excluded from the
-        # public-API snapshot. The snapshot records the RELEASED public surface,
-        # so it must not record preview/source-only code as public released API:
-        #   * ``orchestration.dispatch*`` + ``cli.commands.dispatch_cmd`` —
-        #     the Dispatch subsystem (preview / main-only).
-        #   * ``orchestration.deliberation*`` — the Deliberation Engine, the
-        #     internal layer of Deliberation Dispatch (Std 69 Adaptive
-        #     Deliberation Policy: advisory-first, draft, "future product code",
-        #     publishes nothing / no new public claim). It is a sibling of the
-        #     dispatch subsystem and must be treated identically: its symbols are
-        #     NOT released public API.
-        if (
-            name == "tokenpak.cli.commands.dispatch_cmd"
-            or name.startswith("tokenpak.orchestration.dispatch")
-            or name.startswith("tokenpak.orchestration.deliberation")
+        # Dispatch is excluded from the released wheel (preview / main-only),
+        # mirroring pyproject ``packages.find`` exclude of
+        # ``tokenpak.orchestration.dispatch*``. The public-API snapshot records
+        # the RELEASED package surface, so it likewise excludes the dispatch
+        # subsystem (``orchestration.dispatch*``) and its CLI module
+        # (``cli.commands.dispatch_cmd``) — it must not record preview/source-only
+        # dispatch code as public released API.
+        if name == "tokenpak.cli.commands.dispatch_cmd" or name.startswith(
+            "tokenpak.orchestration.dispatch"
         ):
             continue
         try:

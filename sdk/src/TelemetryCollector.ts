@@ -1,11 +1,11 @@
 /**
  * TokenPak TelemetryCollector
- * Wraps experimental /telemetry/* HTTP endpoints when a custom server provides them.
+ * Wraps the /telemetry/* HTTP endpoints.
  * Tracks LLM usage, costs, and latency across your application.
  */
 
 import { TokenPakHttpClient } from './client';
-import { TelemetryEvent, TelemetryStats, TokenPakConfig, TokenPakUnsupportedEndpointError } from './types';
+import { TelemetryEvent, TelemetryStats, TokenPakConfig } from './types';
 
 interface RawTelemetryEvent {
   event_type: string;
@@ -41,17 +41,9 @@ function fromRaw(raw: RawTelemetryEvent): TelemetryEvent {
 
 export class TelemetryCollector {
   private readonly client: TokenPakHttpClient;
-  private readonly experimentalEndpoints: boolean;
 
   constructor(config?: TokenPakConfig) {
     this.client = new TokenPakHttpClient(config);
-    this.experimentalEndpoints = config?.experimentalEndpoints ?? false;
-  }
-
-  private requireExperimentalEndpoint(path: string): void {
-    if (!this.experimentalEndpoints) {
-      throw new TokenPakUnsupportedEndpointError('TelemetryCollector', path);
-    }
   }
 
   /**
@@ -66,7 +58,6 @@ export class TelemetryCollector {
    * });
    */
   async record(event: Omit<TelemetryEvent, 'timestamp'> & { timestamp?: Date }): Promise<void> {
-    this.requireExperimentalEndpoint('/telemetry');
     await this.client.post('/telemetry', {
       event_type: event.eventType,
       timestamp: (event.timestamp ?? new Date()).toISOString(),
@@ -85,7 +76,6 @@ export class TelemetryCollector {
   async list(limit = 100, model?: string): Promise<TelemetryEvent[]> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (model) params.set('model', model);
-    this.requireExperimentalEndpoint('/telemetry');
     const raws = await this.client.get<RawTelemetryEvent[]>(`/telemetry?${params}`);
     return raws.map(fromRaw);
   }
@@ -94,7 +84,6 @@ export class TelemetryCollector {
    * Get aggregated statistics (total cost, token usage, latency, model breakdown).
    */
   async stats(): Promise<TelemetryStats> {
-    this.requireExperimentalEndpoint('/telemetry/stats');
     const raw = await this.client.get<RawTelemetryStats>('/telemetry/stats');
     return {
       totalEvents: raw.total_events,
@@ -120,7 +109,6 @@ export class TelemetryCollector {
    * Reset all telemetry data (use with caution).
    */
   async reset(): Promise<void> {
-    this.requireExperimentalEndpoint('/telemetry/reset');
     await this.client.post('/telemetry/reset', {});
   }
 }

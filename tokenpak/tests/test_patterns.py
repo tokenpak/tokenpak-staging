@@ -26,7 +26,7 @@ class TestFilePathRE:
         assert m.group("path") == "/home/user/file.txt"
 
     def test_home_relative_path(self):
-        m = FILE_PATH_RE.search("~/notes/data.md")
+        m = FILE_PATH_RE.search("~/vault/data.md")
         assert m is not None
         assert m.group("path").startswith("~/")
 

@@ -43,7 +43,7 @@ The proxy is a transparent passthrough — it only reads/modifies the request bo
 
 ### Does TokenPak send my data anywhere?
 
-Nothing leaves by default. Your prompts, responses, and API keys never leave your machine to any TokenPak service — the proxy compresses requests locally and forwards them straight to your provider, with no TokenPak cloud service in the path. The one exception is opt-in: if you set `TOKENPAK_METRICS_ENABLED=1`, TokenPak sends anonymous usage metrics such as TokenPak, OS, and Python versions, model names, and compression-ratio distributions — never prompt or response content. It's off unless you enable it; see `telemetry.md` for the full list and opt-out details.
+No. TokenPak runs entirely locally. Your prompts, responses, API keys, and metadata never leave your machine. The proxy intercepts requests between your client and the provider, compresses them locally, and forwards them. There's no TokenPak cloud service involved.
 
 ### How does TokenPak affect my API key?
 
@@ -147,10 +147,10 @@ tokenpak config set compression.mode strict
 Your API key isn't reaching the provider. Debug:
 
 ```bash
-tokenpak debug on
+tokenpak debug on --requests 1
 # Make a request...
 tokenpak debug off
-tokenpak debug list
+tokenpak trace --last
 # Check that Authorization header is present and unchanged
 ```
 
@@ -161,7 +161,7 @@ The cost calculation is based on a built-in pricing catalog (`tokenpak/telemetry
 Check which model is being detected:
 
 ```bash
-tokenpak debug list
+tokenpak trace --last
 # Look for "model" field in the output
 ```
 
@@ -204,11 +204,17 @@ tokenpak config set compression.threshold_tokens 2000
 Check which recipe is firing:
 
 ```bash
-tokenpak debug list
+tokenpak trace --last
 # Shows: recipe: python-strip-comments, stages: [...]
 ```
 
-If you're seeing unwanted changes, disable compression for specific request patterns:
+If you're seeing unwanted changes, you can disable specific recipes:
+
+```bash
+tokenpak recipe remove python-strip-comments
+```
+
+Or disable compression for specific request patterns:
 
 ```json
 {
@@ -264,8 +270,8 @@ rm ~/.tokenpak/stats.db # nuclear option
 Run calibration first:
 
 ```bash
-tokenpak calibrate ~/notes --max-workers 8 --rounds 2
-tokenpak index ~/notes --auto-workers
+tokenpak calibrate ~/vault --max-workers 8 --rounds 2
+tokenpak index ~/vault --auto-workers
 ```
 
 ### Vault search returns irrelevant results
@@ -273,13 +279,13 @@ tokenpak index ~/notes --auto-workers
 Re-index your vault:
 
 ```bash
-tokenpak index ~/notes --force
+tokenpak index ~/vault --force
 ```
 
 ### Index is using too much disk space
 
 ```bash
-tokenpak vault repair
+tokenpak vault blocks --stale
 tokenpak prune --older-than 30d
 ```
 
@@ -288,7 +294,7 @@ tokenpak prune --older-than 30d
 ```bash
 # Rebuild from scratch
 rm -f ~/.tokenpak/registry.db
-tokenpak index ~/notes
+tokenpak index ~/vault
 ```
 
 ---

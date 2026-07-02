@@ -28,11 +28,6 @@ import logging
 import re
 from typing import Any, Dict, List, Tuple
 
-# Public surface of this module. ``skeleton_runtime_status`` is an internal
-# diagnostic helper with no consumers anywhere in the package — never an
-# intended public entrypoint — and is scoped out of the API snapshot.
-__all__ = ["CHUNK_SHAPES", "apply_shape", "get_shape_for_intent", "reshape_chunks"]
-
 _log = logging.getLogger("tokenpak.skeleton")
 
 # Diagnostic state: flipped True the first time skeleton extraction is requested
@@ -413,8 +408,7 @@ def reshape_chunks(
 
 # ---------------------------------------------------------------------------
 # Skeleton extraction — strips function bodies from code blocks before injection
-# (signatures + docstrings + structure preserved; bodies elided). Savings are
-# measured, not asserted — see tests/test_skeleton_extractor.py benchmark.
+# Reduces code-heavy vault blocks by 70-90% (signatures + docstrings only)
 # (A2b transfer from monolith)
 # ---------------------------------------------------------------------------
 
@@ -442,7 +436,7 @@ def _skeletonize_block(content: str, file_ext: str) -> str:
     except Exception as exc:
         # Fail-safe: return the block unchanged (no corruption), but emit a
         # diagnostic signal so a missing/broken extractor is never swallowed
-        # silently and the feature is not reported as active. See truth-patch.
+        # silently and the feature is not reported as active.
         _mark_skeleton_extractor_missing(exc)
         return content
 
@@ -469,14 +463,6 @@ def _inject_skeleton_into_blocks(blocks_text: str) -> str:
         ext = ext_map.get(lang_hint, "")
         code = m.group(2)
         skeletonized = _skeletonize_block(code, ext) if ext else code
-        if skeletonized == code:
-            # No-op extraction (unsupported language, fail-safe fallback, or
-            # nothing to elide): pass the fence through byte-identical instead
-            # of re-assembling it (the historical re-assembly added a stray
-            # trailing newline before the closing fence).
-            return m.group(0)
-        if not skeletonized.endswith("\n"):
-            skeletonized += "\n"
-        return f"```{m.group(1)}\n{skeletonized}```"
+        return f"```{m.group(1)}\n{skeletonized}\n```"
 
     return re.sub(r"```([^\n]*)\n(.*?)```", _replace_fence, blocks_text, flags=re.DOTALL)
