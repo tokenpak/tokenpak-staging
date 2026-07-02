@@ -15,7 +15,6 @@ Usage:
 
 import argparse
 import sys
-from pathlib import Path
 
 try:
     from tokenpak import HeuristicEngine
