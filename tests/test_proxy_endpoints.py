@@ -674,6 +674,58 @@ class TestCORSContentRoutes(unittest.TestCase):
         self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
 
 
+class TestAppSessionInfoEndpoint(unittest.TestCase):
+    """Regression tests for the real /tpk/v1/session/info app endpoint."""
+
+    def _call_session_info(self):
+        from tokenpak.proxy import app_endpoints
+
+        handler = MockRequestHandler("/tpk/v1/session/info")
+        app_endpoints._handle_session_info_get(handler)
+        self.assertEqual(handler.sent_response_code, 200)
+        return json.loads(handler.wfile.getvalue().decode("utf-8"))
+
+    def test_session_info_does_not_initialize_vault_index(self):
+        """Status must not call get_vault_index(), which can block the companion."""
+        from tokenpak.proxy import vault_bridge
+
+        with (
+            patch.object(vault_bridge, "_VAULT_INDEX", None),
+            patch.object(vault_bridge, "_SINGLETONS_INITIALIZED", False),
+            patch.object(
+                vault_bridge,
+                "get_vault_index",
+                side_effect=AssertionError("unexpected lazy load"),
+            ),
+        ):
+            data = self._call_session_info()
+
+        self.assertIn("vault", data)
+        self.assertEqual(data["vault"]["available"], False)
+        self.assertEqual(data["vault"]["blocks"], 0)
+        self.assertEqual(data["vault"]["status"], "not_loaded")
+
+    def test_session_info_reports_loaded_vault_without_accessor(self):
+        """Loaded vault state can be reported from already-initialized globals."""
+        from tokenpak.proxy import vault_bridge
+
+        loaded_index = Mock(available=True, blocks={"a": {}, "b": {}})
+        with (
+            patch.object(vault_bridge, "_VAULT_INDEX", loaded_index),
+            patch.object(vault_bridge, "_SINGLETONS_INITIALIZED", True),
+            patch.object(
+                vault_bridge,
+                "get_vault_index",
+                side_effect=AssertionError("unexpected lazy load"),
+            ),
+        ):
+            data = self._call_session_info()
+
+        self.assertEqual(data["vault"]["available"], True)
+        self.assertEqual(data["vault"]["blocks"], 2)
+        self.assertEqual(data["vault"]["status"], "loaded")
+
+
 if __name__ == "__main__":
     # Run all tests with verbose output
     unittest.main(verbosity=2)

@@ -903,7 +903,7 @@ def _handle_models_list(handler: Any, qs: dict[str, list[str]]) -> None:
 def _handle_session_info_get(handler: Any) -> None:
     """Proxy-side snapshot of process state + vault + active session counters."""
     from tokenpak import __version__ as _version
-    proxy_server = getattr(handler.server, "proxy_server", None)
+    proxy_server = getattr(getattr(handler, "server", None), "proxy_server", None)
     uptime = 0.0
     session_stats: dict[str, Any] = {}
     if proxy_server is not None:
@@ -919,17 +919,7 @@ def _handle_session_info_get(handler: Any) -> None:
             "cost_saved_usd": round(float(sess.get("cost_saved", 0.0) or 0.0), 6),
             "errors": int(sess.get("errors", 0) or 0),
         }
-    vault_info: dict[str, Any] = {"available": False, "blocks": 0}
-    try:
-        from tokenpak.proxy.vault_bridge import get_vault_index
-        vi = get_vault_index()
-        if vi is not None and getattr(vi, "available", False):
-            vault_info = {
-                "available": True,
-                "blocks": len(getattr(vi, "blocks", {}) or {}),
-            }
-    except Exception:
-        pass
+    vault_info = _loaded_vault_status()
     compilation_mode = os.environ.get("TOKENPAK_MODE", "hybrid")
     profile = os.environ.get("TOKENPAK_PROFILE", "balanced")
     cache_ttl = os.environ.get("TOKENPAK_CACHE_TTL", "5m").strip() or "5m"
@@ -942,6 +932,30 @@ def _handle_session_info_get(handler: Any) -> None:
         "session": session_stats,
         "vault": vault_info,
     })
+
+
+def _loaded_vault_status() -> dict[str, Any]:
+    """Return vault state without triggering lazy VaultIndex initialization."""
+    vault_info: dict[str, Any] = {
+        "available": False,
+        "blocks": 0,
+        "status": "not_loaded",
+    }
+    try:
+        from tokenpak.proxy import vault_bridge
+
+        vi = getattr(vault_bridge, "_VAULT_INDEX", None)
+        if vi is not None and getattr(vi, "available", False):
+            return {
+                "available": True,
+                "blocks": len(getattr(vi, "blocks", {}) or {}),
+                "status": "loaded",
+            }
+        if bool(getattr(vault_bridge, "_SINGLETONS_INITIALIZED", False)):
+            vault_info["status"] = "initialized_unavailable"
+    except Exception:
+        vault_info["status"] = "unknown"
+    return vault_info
 
 
 def _handle_tokens_estimate(handler: Any, body: dict[str, Any]) -> None:
