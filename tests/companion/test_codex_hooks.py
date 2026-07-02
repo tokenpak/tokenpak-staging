@@ -284,6 +284,13 @@ def test_session_start_hook_emits_banner_on_resume(tmp_path):
     assert "resume" in result.stderr.lower()
 
 
+def test_session_start_hook_is_quiet_on_clear(tmp_path):
+    result = _run_script(_SESSION_START_HOOK, "hook_session_start_clear.json", tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+    assert result.stderr.strip() == ""
+
+
 @_requires_sqlite3
 def test_session_start_hook_surfaces_prior_capsule(tmp_path):
     """If a prior session for this cwd has capsule_path, emit it via JSON."""
@@ -301,6 +308,24 @@ def test_session_start_hook_surfaces_prior_capsule(tmp_path):
     payload = json.loads(result.stdout.strip())
     assert "/tmp/cap.json" in payload["systemMessage"]
     assert payload["continue"] is True
+
+
+@_requires_sqlite3
+def test_session_start_hook_does_not_surface_prior_capsule_on_clear(tmp_path):
+    """`/clear` must not inject hook output that can disrupt the TUI redraw."""
+    db = _seed_journal_db(tmp_path)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO sessions (session_id, started_at, project_dir, capsule_path) "
+        "VALUES (?, ?, ?, ?)",
+        ("prior-session", 1.0, "/tmp/tp-l2a-fixture", "/tmp/cap.json"),
+    )
+    conn.commit()
+    conn.close()
+    result = _run_script(_SESSION_START_HOOK, "hook_session_start_clear.json", tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+    assert result.stderr.strip() == ""
 
 
 @_requires_sqlite3
