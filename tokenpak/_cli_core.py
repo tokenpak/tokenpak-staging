@@ -1848,6 +1848,106 @@ def cmd_requests(args):
     print(f"  Saved:   ${view.saved_cost:.4f}")
 
 
+def cmd_last(args):
+    """Show the latest request ledger rows with failure diagnostics."""
+    from tokenpak.cli.request_explorer import (
+        _failure_diagnostic,
+        _route_class,
+        age_label,
+        format_tokens,
+        load_requests,
+        status_label,
+        to_view,
+    )
+
+    try:
+        raw_limit = getattr(args, "limit", 1)
+        limit = 1 if raw_limit is None else int(raw_limit)
+    except (TypeError, ValueError):
+        print("Limit must be a positive integer.", file=sys.stderr)
+        return 2
+    if limit < 1:
+        print("Limit must be at least 1.", file=sys.stderr)
+        return 2
+
+    rows = load_requests(limit=limit)
+    if not rows:
+        print("No recent requests found. Run requests through the proxy first.")
+        return 0
+
+    views = [to_view(row) for row in rows]
+    as_json = getattr(args, "json", False)
+    verbose = getattr(args, "verbose", False)
+
+    def _status_text(view):
+        if view.status_code:
+            return f"HTTP {view.status_code}"
+        return status_label(view)
+
+    def _json_row(view):
+        diagnostic = _failure_diagnostic(view)
+        return {
+            "id": view.request_id,
+            "timestamp": view.timestamp,
+            "model": view.model,
+            "endpoint": view.endpoint,
+            "request_type": view.request_type,
+            "status": status_label(view),
+            "status_code": view.status_code or None,
+            "input_tokens": view.input_tokens,
+            "output_tokens": view.output_tokens,
+            "cache_read_tokens": view.cache_read,
+            "saved_cost": view.saved_cost,
+            "session_id": view.session_id,
+            "route_class": _route_class(view),
+            "diagnostic": diagnostic or None,
+        }
+
+    if as_json:
+        payload = {
+            "schema_version": "tokenpak-last/v1",
+            "limit": limit,
+            "count": len(views),
+            "requests": [_json_row(view) for view in views],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    title = "TOKENPAK | Last Request" if limit == 1 else f"TOKENPAK | Last {len(views)} Requests"
+    print(title)
+    print("-" * len(title))
+
+    header = "ID        Status    Route      Model             In     Out    Age  Endpoint"
+    print(header)
+    print("-" * len(header))
+
+    for view in views:
+        request_id = view.request_id[:8] or "-"
+        model = (view.model or "-")[:16]
+        endpoint = view.endpoint or "-"
+        route = _route_class(view)
+        print(
+            f"{request_id:<9} {_status_text(view):<9} {route:<9} "
+            f"{model:<16} {format_tokens(view.input_tokens):>6} "
+            f"{format_tokens(view.output_tokens):>6} {age_label(view.timestamp):>4}  {endpoint}"
+        )
+
+        diagnostic = _failure_diagnostic(view)
+        if diagnostic:
+            print(f"  Diagnostic: {diagnostic}")
+        if verbose:
+            details = []
+            if view.request_type:
+                details.append(f"type={view.request_type}")
+            if view.session_id:
+                details.append(f"session={view.session_id}")
+            details.append(f"cache_read={view.cache_read}")
+            details.append(f"saved=${view.saved_cost:.4f}")
+            print(f"  Details: {', '.join(details)}")
+
+    return 0
+
+
 def cmd_aggregate(args):
     """Aggregate request ledger across machines."""
     import json as _json
@@ -8637,10 +8737,7 @@ def _build_last_parser(sub):
     p_last.add_argument(
         "--verbose", "-v", action="store_true", help="Show full request/response bodies"
     )
-    p_last.set_defaults(func=lambda args: print(
-        "Use: tokenpak status to check proxy health and recent requests.\n"
-        "Or: tokenpak dashboard for interactive monitoring."
-    ))
+    p_last.set_defaults(func=cmd_last)
     return p_last
 
 
