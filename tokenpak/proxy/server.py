@@ -3061,15 +3061,19 @@ class ProxyServer:
         Writes a shutdown summary entry to the compression events JSONL file
         so stats from the current session are preserved across restarts.
         """
+        # Snapshot under the session lock — requests may still be mutating
+        # these counters while the drain window is open.
+        with self._session_lock:
+            session = dict(self.session)
         shutdown_record = {
             "event": "shutdown",
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-            "session_requests": self.session.get("requests", 0),
-            "session_tokens_saved": self.session.get("saved_tokens", 0),
-            "session_cost_saved": round(self.session.get("cost_saved", 0.0), 6),
-            "session_cost_total": round(self.session.get("cost", 0.0), 6),
-            "session_errors": self.session.get("errors", 0),
-            "uptime_seconds": round(time.time() - self.session.get("start_time", time.time())),
+            "session_requests": session.get("requests", 0),
+            "session_tokens_saved": session.get("saved_tokens", 0),
+            "session_cost_saved": round(session.get("cost_saved", 0.0), 6),
+            "session_cost_total": round(session.get("cost", 0.0), 6),
+            "session_errors": session.get("errors", 0),
+            "uptime_seconds": round(time.time() - session.get("start_time", time.time())),
         }
         # Delegate to the compression_stats recorder (writes to ~/.tokenpak/compression_events.jsonl)
         self.compression_stats.flush_shutdown_record(shutdown_record)
@@ -3197,7 +3201,11 @@ class ProxyServer:
         }
 
     def stats(self) -> dict:
-        s = self.session
+        # Copy under the session lock: handler threads mutate these counters
+        # concurrently, and returning the live dict let JSON serialization
+        # race with (and observe torn) mid-request updates.
+        with self._session_lock:
+            s = dict(self.session)
         return {
             "session": s,
             "compilation_mode": self.compilation_mode,
@@ -3209,7 +3217,8 @@ class ProxyServer:
         }
 
     def session_stats(self) -> dict:
-        s = self.session
+        with self._session_lock:
+            s = dict(self.session)
         uptime = round((time.time() - s["start_time"]) / 3600, 2)
         return {
             "session_requests": s["requests"],
