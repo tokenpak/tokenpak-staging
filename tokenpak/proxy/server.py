@@ -2894,15 +2894,19 @@ class ProxyServer:
           4. Close the HTTP connection pool
           5. Stop the HTTP server
         """
-        # Always close the pool, even if server wasn't started
-        if self._connection_pool is not None:
-            try:
-                self._connection_pool.close()
-            except Exception:
-                pass
-
+        # Never started (or already stopped): nothing is in flight, so just
+        # release pool resources and return. For a RUNNING server the pool
+        # must NOT be closed here — closing it before the drain below kills
+        # every in-flight request's upstream connection, turning a graceful
+        # SIGTERM into a mid-stream connection reset for every active
+        # request. The pool is closed at step 4, after the drain completes.
         if self._server is None:
-            return  # already stopped
+            if self._connection_pool is not None:
+                try:
+                    self._connection_pool.close()
+                except Exception:
+                    pass
+            return
 
         # ── Step 1: Stop accepting new proxy requests ─────────────────────
         self.shutdown.begin()
