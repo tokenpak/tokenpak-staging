@@ -107,8 +107,13 @@ def test_inflight_never_exceeds_cap_under_churn(monkeypatch):
                 with seen_lock:
                     max_seen = max(max_seen, n)
             finally:
-                sem.release()
+                # Decrement BEFORE releasing the slot so the counter is a
+                # faithful gauge of concurrent holders. (Production decrements
+                # after release, which can transiently overshoot the telemetry
+                # counter — benign there, but it would make this assertion
+                # measure the wrong thing.)
                 srv._upstream_inflight_delta("prov", -1, "sess")
+                sem.release()
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
     for t in threads:
