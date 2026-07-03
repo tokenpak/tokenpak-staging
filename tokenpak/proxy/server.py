@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
 from tokenpak import __version__ as _tokenpak_version
+from tokenpak import _paths  # scoped-home path resolver (honors TOKENPAK_HOME)
 from tokenpak.cache.telemetry import CacheMetrics
 from tokenpak.cache.telemetry import get_collector as _get_cache_collector
 from tokenpak.core.config import get_stats_footer_enabled
@@ -2521,14 +2522,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         by request count. Each entry contains the columns documented in
         Spec Component 11.
         """
-        import os
         import sqlite3 as _sqlite3
 
         ps = self.server.proxy_server
         db_path = (
             ps.monitor.db_path
             if getattr(ps, "monitor", None) is not None
-            else os.path.expanduser("~/.tokenpak/monitor.db")
+            else str(_paths.under("monitor.db"))
         )
 
         sessions: list = []
@@ -3178,6 +3178,19 @@ ForwardProxyHandler = _ProxyHandler
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def _write_proxy_pid_file() -> Path:
+    """Resolve the proxy PID path under TOKENPAK_HOME and write the current PID.
+
+    Extracted so scoped-home isolation is unit-testable without launching the
+    server. Honors TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a
+    scoped-home proxy writes its own pid instead of clobbering the default home.
+    """
+    pid_path = _paths.under("proxy.pid")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    return pid_path
+
+
 def main() -> None:
     """
     Entry point for ``python -m tokenpak.proxy.server``.
@@ -3199,7 +3212,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config", default=None, metavar="PATH",
-        help="Path to config YAML (env: TOKENPAK_CONFIG, default: ~/.tokenpak/config.yaml)",
+        help="Path to config YAML (env: TOKENPAK_CONFIG, default: <TOKENPAK_HOME>/config.yaml, i.e. ~/.tokenpak/config.yaml)",
     )
     parser.add_argument(
         "--log-level", default=None,
@@ -3223,6 +3236,12 @@ def main() -> None:
         os.environ["TOKENPAK_PROFILE"] = args.profile
     if args.config is not None:
         os.environ["TOKENPAK_CONFIG"] = args.config
+    elif "TOKENPAK_CONFIG" not in os.environ:
+        # Default config path honors TOKENPAK_HOME so a scoped-home proxy resolves
+        # its own config; unchanged (~/.tokenpak/config.yaml) when TOKENPAK_HOME is
+        # unset. NOTE: config.py's import-time loader may resolve the config file
+        # independently of this — full config scoping is a config.py residual.
+        os.environ["TOKENPAK_CONFIG"] = str(_paths.under("config.yaml"))
 
     _log_level = (args.log_level or os.environ.get("TOKENPAK_LOG_LEVEL", "warning")).upper()
     logging.basicConfig(level=_log_level, format="%(levelname)s %(name)s: %(message)s")
@@ -3238,10 +3257,10 @@ def main() -> None:
         "aggressive": "everything except protected gets compressed",
     }
 
-    # Write PID file on startup; remove on clean shutdown.
-    _pid_path = Path.home() / ".tokenpak" / "proxy.pid"
-    _pid_path.parent.mkdir(parents=True, exist_ok=True)
-    _pid_path.write_text(str(os.getpid()))
+    # Write PID file on startup; remove on clean shutdown. Path resolves under
+    # TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a scoped-home
+    # proxy writes its own pid instead of clobbering the default home.
+    _pid_path = _write_proxy_pid_file()
 
     from tokenpak.proxy.config import PROVIDER_DISPLAY as _provider_display
     print(f"""

@@ -89,8 +89,9 @@ class TestProxyLifecycle:
         config_dir.mkdir()
         (config_dir / "config.yaml").write_text("{invalid yaml: [unclosed bracket")
 
-        # Startup checks should complete without raising
-        with patch("tokenpak.proxy.startup.Path.home", return_value=tmp_path):
+        # Startup checks should complete without raising. Startup resolves its
+        # home via tokenpak._paths, so point TOKENPAK_HOME at the corrupt config dir.
+        with patch.dict(os.environ, {"TOKENPAK_HOME": str(config_dir)}):
             ok, warnings = run_startup_checks(port=_next_port())
             # Should return structured result, not crash
             assert isinstance(ok, bool)
