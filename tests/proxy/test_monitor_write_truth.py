@@ -23,7 +23,6 @@ import pytest
 import tokenpak.proxy.monitor as monitor_module
 from tokenpak.proxy.monitor import Monitor
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
