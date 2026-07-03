@@ -41,6 +41,7 @@ _CODEX_BASH_HOOK = str(_CODEX_DIR / "hooks_pre_send.sh")
 _SESSION_START_HOOK = str(_CODEX_DIR / "hooks_session_start.sh")
 _PRE_TOOL_USE_HOOK = str(_CODEX_DIR / "hooks_pre_tool_use.sh")
 _POST_TOOL_USE_HOOK = str(_CODEX_DIR / "hooks_post_tool_use.sh")
+_STOP_HOOK = str(_CODEX_DIR / "hooks_stop.sh")
 _FIXTURES = _REPO_ROOT / "tests" / "fixtures" / "codex"
 
 _SIX_FIELD_INPUT = {
@@ -432,6 +433,35 @@ def test_post_tool_use_hook_hardcap_emits_additional_context(tmp_path):
     spec = payload["hookSpecificOutput"]
     assert spec["hookEventName"] == "PostToolUse"
     assert "hard cap" in spec["additionalContext"].lower()
+
+
+# ──────────────────────────────────────────────────────────────
+# Stop hook timeout regression.
+# ──────────────────────────────────────────────────────────────
+
+
+def test_stop_hook_bounds_slow_sqlite(tmp_path):
+    """Stop must exit 0 even when sqlite is slow or wedged."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sqlite = fake_bin / "sqlite3"
+    fake_sqlite.write_text("#!/usr/bin/env bash\nsleep 20\n")
+    fake_sqlite.chmod(0o755)
+    (tmp_path / "journal.db").touch()
+    (tmp_path / "budget.db").touch()
+
+    result = _run_script(
+        _STOP_HOOK,
+        "hook_stop_basic.json",
+        tmp_path,
+        extra_env={
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "TOKENPAK_COMPANION_SQLITE_TIMEOUT_SECONDS": "1",
+        },
+    )
+
+    assert result.returncode == 0
+    assert "session closeout" in result.stderr
 
 
 # ──────────────────────────────────────────────────────────────
