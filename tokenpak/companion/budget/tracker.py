@@ -20,6 +20,8 @@ from pathlib import Path
 
 from tokenpak.models import get_rates as _registry_get_rates
 
+from .. import _sqlite as _db
+
 
 @dataclass
 class CostEstimate:
@@ -51,19 +53,9 @@ class BudgetTracker:
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._connect(ensure_wal=True)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS companion_costs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                date TEXT NOT NULL,
-                session_id TEXT NOT NULL DEFAULT '',
-                model TEXT NOT NULL DEFAULT '',
-                input_tokens INTEGER NOT NULL DEFAULT 0,
-                cached_tokens INTEGER NOT NULL DEFAULT 0,
-                output_tokens INTEGER NOT NULL DEFAULT 0,
-                estimated_cost REAL NOT NULL DEFAULT 0.0
-            )
-        """)
+        # Canonical schema lives in companion._sqlite — shared with the
+        # pre-send hook so there is exactly one DDL for companion_costs.
+        _db.ensure_costs_schema(conn)
         conn.commit()
         conn.close()
 
@@ -141,28 +133,34 @@ class BudgetTracker:
             self._session_cost += cost
             self._session_requests += 1
             conn = self._writer()
+            # kind='actual': this plane reports completed-request usage. The
+            # daily gate prefers these rows over the pre-send 'estimate' rows
+            # for the same session so a message is never counted twice.
             conn.execute(
                 """INSERT INTO companion_costs
                    (timestamp, date, session_id, model, input_tokens, cached_tokens,
-                    output_tokens, estimated_cost)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    output_tokens, estimated_cost, kind)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'actual')""",
                 (now, date_str, session_id, model, input_tokens, cached_tokens,
                  output_tokens, round(cost, 6)),
             )
             conn.commit()
 
     def _get_daily_total(self) -> float:
-        """Query today's total from the DB (excludes current session in-memory cost)."""
+        """Query today's truthful total from the DB.
+
+        Per (session, day): sums actual rows when present, otherwise takes
+        the latest estimate — each message is counted exactly once instead
+        of summing estimate + actual, or summing a cumulative pre-send
+        estimate series (see companion._sqlite.DAILY_SPEND_SQL).
+        """
         import datetime
         today = datetime.date.today().isoformat()
         try:
             conn = self._connect()
-            row = conn.execute(
-                "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = ?",
-                (today,),
-            ).fetchone()
+            row = conn.execute(_db.DAILY_SPEND_SQL, (today,)).fetchone()
             conn.close()
-            return row[0] if row else 0.0
+            return float(row[0] or 0.0) if row else 0.0
         except Exception:
             return 0.0
 
