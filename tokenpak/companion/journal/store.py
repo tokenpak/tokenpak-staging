@@ -60,25 +60,18 @@ class JournalStore:
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = self._connect(ensure_wal=True)
+        conn = self._connect()
         # Canonical schema lives in companion._sqlite — shared with the
         # pre-send hook so there is exactly one DDL for these tables.
         _db.ensure_journal_schema(conn)
         conn.commit()
         conn.close()
 
-    def _connect(self, *, ensure_wal: bool = False) -> sqlite3.Connection:
-        """Open the journal DB with hook/MCP-safe SQLite pragmas."""
-        conn = sqlite3.connect(
-            str(self._db_path),
-            timeout=5.0,
-            check_same_thread=False,
-        )
-        if ensure_wal:
-            conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+    def _connect(self) -> sqlite3.Connection:
+        """Open the journal DB via the shared companion connection factory
+        (busy_timeout is applied before the WAL switch there, so concurrent
+        first-openers wait for the conversion instead of failing)."""
+        return _db.connect(self._db_path, check_same_thread=False)
 
     def _writer(self) -> sqlite3.Connection:
         if self._write_conn is None:

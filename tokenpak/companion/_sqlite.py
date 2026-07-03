@@ -165,19 +165,31 @@ DAILY_SPEND_SQL = """
 # Connection factory
 # ---------------------------------------------------------------------------
 
-def connect(db_path: Path | str, *, timeout: float = 5.0) -> sqlite3.Connection:
+def connect(
+    db_path: Path | str,
+    *,
+    timeout: float = 5.0,
+    check_same_thread: bool = True,
+    foreign_keys: bool = False,
+) -> sqlite3.Connection:
     """Open a companion database with concurrency-safe pragmas.
 
     ``busy_timeout`` is applied first so even the WAL switch itself waits
     for a lock instead of failing. Pragma application is best-effort: on
     surfaces where WAL is impossible (read-only mounts) the connection
-    still works with the rollback journal.
+    still works with the rollback journal — and a WAL switch that loses a
+    cross-process race is harmless because whichever opener succeeds
+    converts the file persistently for everyone.
     """
-    conn = sqlite3.connect(str(db_path), timeout=timeout)
+    conn = sqlite3.connect(
+        str(db_path), timeout=timeout, check_same_thread=check_same_thread
+    )
     try:
         conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        if foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
     except sqlite3.Error:
         pass
     return conn
