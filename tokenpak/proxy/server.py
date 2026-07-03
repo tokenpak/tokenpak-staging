@@ -123,6 +123,23 @@ import threading as _threading
 _upstream_semaphores: Dict[tuple, _threading.BoundedSemaphore] = {}
 _upstream_sem_lock = _threading.Lock()
 _upstream_inflight: Dict[tuple, int] = {}
+# Last touch (fetch or counter change) per key — drives idle eviction below.
+_upstream_sem_last_activity: Dict[tuple, float] = {}
+
+# How long a (provider, session) entry must sit at zero in-flight with no
+# activity before its semaphore object may be evicted. Evicting at the moment
+# the counter hits zero is racy: acquisition is fetch-semaphore → acquire →
+# increment (not atomic), so a release-to-zero eviction between another
+# thread's fetch and acquire leaves that thread gating on the orphaned
+# semaphore while the next request mints a fresh one for the same key —
+# allowing up to 2x the per-(provider, session) concurrency cap. Deferring
+# eviction until the entry has been idle far longer than any fetch→acquire
+# window (bounded by the acquire timeout) removes the race in practice while
+# still bounding memory growth from high-churn ip:port-derived session keys.
+_UPSTREAM_SEM_IDLE_EVICT_SECONDS: float = max(
+    float(os.environ.get("TOKENPAK_UPSTREAM_SEM_IDLE_EVICT_SECS", "600")),
+    2.0 * _UPSTREAM_ACQUIRE_TIMEOUT,
+)
 
 
 def _get_upstream_semaphore(
@@ -140,8 +157,25 @@ def _get_upstream_semaphore(
         if sem is None:
             sem = _threading.BoundedSemaphore(_UPSTREAM_CONCURRENCY)
             _upstream_semaphores[key] = sem
-            _upstream_inflight[key] = 0
+            _upstream_inflight.setdefault(key, 0)
+        _upstream_sem_last_activity[key] = time.monotonic()
     return sem
+
+
+def _evict_idle_upstream_entries_locked(now: float) -> None:
+    """Evict zero-in-flight entries idle past the eviction window.
+
+    Caller must hold ``_upstream_sem_lock``.
+    """
+    cutoff = now - _UPSTREAM_SEM_IDLE_EVICT_SECONDS
+    for key in [
+        k
+        for k, last in _upstream_sem_last_activity.items()
+        if last < cutoff and _upstream_inflight.get(k, 0) <= 0
+    ]:
+        _upstream_sem_last_activity.pop(key, None)
+        _upstream_inflight.pop(key, None)
+        _upstream_semaphores.pop(key, None)
 
 
 def _upstream_inflight_delta(
@@ -149,21 +183,22 @@ def _upstream_inflight_delta(
 ) -> int:
     """Adjust and return the in-flight counter for (provider, session).
 
-    When a release (delta < 0) drives the counter to zero, the key is evicted
-    from both _upstream_inflight and _upstream_semaphores. session_key falls
-    back to the per-connection client "ip:port", so without eviction every
-    distinct key mints a permanent entry in both dicts that is never reclaimed
-    — they accumulate even with zero active connections, which is the RSS heap
-    leak. Entries are recreated lazily on the next request for the same key.
+    The semaphore object is deliberately NOT evicted the moment its counter
+    returns to zero — that raced with acquisition (see the eviction-window
+    comment above) and allowed 2x the concurrency cap. Instead, zero-count
+    entries are swept only after _UPSTREAM_SEM_IDLE_EVICT_SECONDS without
+    activity, which still reclaims the memory that high-churn ip:port session
+    keys would otherwise leak (entries are recreated lazily on the next
+    request for the same key).
     """
     key = (provider or "_unknown", session_key or "_shared")
+    now = time.monotonic()
     with _upstream_sem_lock:
         count = max(0, _upstream_inflight.get(key, 0) + delta)
+        _upstream_inflight[key] = count
+        _upstream_sem_last_activity[key] = now
         if delta < 0 and count == 0:
-            _upstream_inflight.pop(key, None)
-            _upstream_semaphores.pop(key, None)
-        else:
-            _upstream_inflight[key] = count
+            _evict_idle_upstream_entries_locked(now)
         return count
 
 
@@ -171,10 +206,16 @@ def get_upstream_inflight_snapshot() -> Dict[str, int]:
     """Return a snapshot of current in-flight counts, for /health exposure.
 
     Keyed as ``"<provider>::<session>"`` for JSON-friendliness. The
-    legacy shared path appears under ``"<provider>::_shared"``.
+    legacy shared path appears under ``"<provider>::_shared"``. Zero-count
+    entries (kept alive briefly for the eviction-window guarantee above)
+    are omitted — the snapshot reports actual in-flight work.
     """
     with _upstream_sem_lock:
-        return {f"{prov}::{sess}": n for (prov, sess), n in _upstream_inflight.items()}
+        return {
+            f"{prov}::{sess}": n
+            for (prov, sess), n in _upstream_inflight.items()
+            if n > 0
+        }
 
 
 # ---------------------------------------------------------------------------
