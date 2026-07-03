@@ -178,6 +178,35 @@ def get_upstream_inflight_snapshot() -> Dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# Circuit-breaker outcome classification
+# ---------------------------------------------------------------------------
+
+# Upstream statuses that count as provider failures for the provider circuit
+# breaker: the retryable gateway statuses (502/503/504) plus 500 and 529
+# (provider "overloaded") — all provider-side failure signals even when the
+# HTTP exchange itself completes without an exception. 429 is deliberately
+# EXCLUDED: rate limiting feeds the separate rate-limit circuit breaker.
+_CB_FAILURE_STATUSES = frozenset({500, 502, 503, 504, 529})
+
+
+def _cb_status_is_provider_failure(status_code: Optional[int]) -> bool:
+    """True when a completed exchange's final status is a provider failure."""
+    return status_code in _CB_FAILURE_STATUSES
+
+
+def _is_client_disconnect_error(exc: BaseException) -> bool:
+    """True for socket errors from OUR downstream client, not the provider.
+
+    Upstream I/O failures surface wrapped in httpx exception types, so a raw
+    ``BrokenPipeError``/``ConnectionResetError`` escaping the handler comes
+    from writing to ``self.wfile`` — i.e. the CLI/client vanished
+    mid-response. The provider did nothing wrong; these must not count
+    against the provider circuit breaker.
+    """
+    return isinstance(exc, (BrokenPipeError, ConnectionResetError))
+
+
+# ---------------------------------------------------------------------------
 # Codex OAuth credentials — read from ~/.codex/auth.json (cached, file-mtime-based)
 # ---------------------------------------------------------------------------
 
@@ -1705,7 +1734,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             latency_ms = int((time.time() - t0) * 1000)
             with _forecast_latency_lock:
                 _forecast_latencies.append(latency_ms)
-            _cb_success = True  # reached here without exception → request succeeded
+            # "No exception escaped" is NOT "provider healthy": a retryable
+            # 5xx that exhausted its retries still flows through the normal
+            # send path above. Gate breaker success on the FINAL upstream
+            # status so provider 5xx storms trip the breaker instead of
+            # recording an unbroken success streak (and keeping /status
+            # green while every request fails).
+            _final_upstream_status = resp.status_code if "resp" in dir() else None  # type: ignore
+            _cb_success = not _cb_status_is_provider_failure(_final_upstream_status)
 
             # ── Request logging ───────────────────────────────────────────
             try:
@@ -2005,11 +2041,23 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _cb_registry is not None and _cb_provider is not None:
                 if _cb_success:
                     _cb_registry.record_success(_cb_provider)
-                # failure is recorded in except block
+                else:
+                    # Provider-side 5xx that exhausted retries: the exchange
+                    # completed, but it is a provider failure for breaker
+                    # accounting.
+                    _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
             # ── Circuit breaker: record failure ───────────────────────────
-            if _cb_registry is not None and _cb_provider is not None:
+            # ...unless OUR client's socket died (BrokenPipeError /
+            # ConnectionResetError writing to self.wfile). That says nothing
+            # about provider health — counting it opened the breaker for a
+            # healthy provider whenever CLIs were killed mid-response.
+            if (
+                _cb_registry is not None
+                and _cb_provider is not None
+                and not _is_client_disconnect_error(exc)
+            ):
                 _cb_registry.record_failure(_cb_provider)
 
             with ps._session_lock:
