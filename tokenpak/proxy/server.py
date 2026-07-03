@@ -946,6 +946,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # See tokenpak/proxy/spend_guard/ + standards/29-spend-guard-agent-contract.md
         # Disabled with: spend_guard.enabled=false in config.yaml
         #            or: TOKENPAK_SPEND_GUARD_ENABLED=0
+        _sg_admission_ticket = None  # rolling-cap in-flight spend ticket
         if should_log and is_messages and body:
             try:
                 from tokenpak.proxy.request_pipeline import _resolve_session_id
@@ -958,13 +959,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _sg_model = str(_sg_body_json.get("model") or "")
                 except Exception:
                     pass
-                _sg_session = _resolve_session_id(self.headers, _sg_model or "unknown")
+                # Empty-string fallback: the monitor.db row for this request
+                # is written with the same resolver and an empty model
+                # fallback, so the guard-side check and the recorded row
+                # MUST agree on the session key for header-less traffic.
+                # (A model-name pseudo-session summed zero recorded rows
+                # forever, silently disabling session-cumulative caps.)
+                _sg_session = _resolve_session_id(self.headers, "")
                 _sg_outcome = _sg_evaluate(
                     body,
                     _sg_model or "claude-sonnet-4-6",  # safe default rate
                     _sg_session,
                     dict(self.headers),
                 )
+                _sg_admission_ticket = getattr(_sg_outcome, "admission_ticket", None)
                 # Forwarded outcomes update body for downstream pipeline.
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
@@ -994,21 +1002,39 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
                 else:
-                    # block / hard_block / cancel / reprompt / estimate
+                    # block / hard_block / cancel / reprompt / estimate.
+                    # Once the guard decided NOT to forward, a failure while
+                    # writing the response to the client must never fall
+                    # through to the forward path — hence the inner
+                    # try/except with an unconditional return.
                     _sg_resp = _sg_outcome.response_body or b"{}"
-                    self.send_response(_sg_outcome.http_status or 402)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(_sg_resp)))
-                    self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
-                    self.end_headers()
-                    self.wfile.write(_sg_resp)
+                    try:
+                        self.send_response(_sg_outcome.http_status or 402)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(_sg_resp)))
+                        self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
+                        self.end_headers()
+                        self.wfile.write(_sg_resp)
+                    except Exception as _sg_wexc:
+                        import logging as _sg_log
+                        _sg_log.getLogger(__name__).warning(
+                            "tokenpak.spend_guard: failed writing %s response "
+                            "to client (%s: %s) — request stays blocked",
+                            _sg_outcome.kind, type(_sg_wexc).__name__, _sg_wexc,
+                        )
                     return
             except ImportError:
                 pass  # spend guard not installed
             except Exception as _sg_exc:
+                # The guard's own evaluate() converts internal evaluator
+                # errors into fail-closed 402s, so an exception here is a
+                # proxy-hook defect (header/session resolution, outcome
+                # handling). Forwarding without the guard is deliberate for
+                # that narrow case — but it must be LOUD, not a debug line.
                 import logging as _sg_log
-                _sg_log.getLogger(__name__).debug(
-                    "tokenpak.spend_guard: error (passthrough): %s: %s",
+                _sg_log.getLogger(__name__).warning(
+                    "tokenpak.spend_guard: unexpected proxy-hook error — "
+                    "forwarding WITHOUT spend-guard evaluation: %s: %s",
                     type(_sg_exc).__name__, _sg_exc,
                 )
 
@@ -1709,6 +1735,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                                  cache_read_tokens, cache_creation_tokens)
                 saved = max(0, input_tokens - sent_input_tokens)
                 cost_saved = max(0.0, cost_without - cost)
+
+                # Settle the spend-guard in-flight admission now that this
+                # request's actual cost is known (the monitor row below makes
+                # it visible to DB-derived usage). Requests that die before
+                # reaching this point are reclaimed by the counter's TTL.
+                if _sg_admission_ticket:
+                    try:
+                        from tokenpak.proxy.spend_guard.rolling_caps import (
+                            settle_pending_spend as _sg_settle,
+                        )
+                        _sg_settle(_sg_admission_ticket)
+                    except Exception:
+                        pass
+                    _sg_admission_ticket = None
 
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
