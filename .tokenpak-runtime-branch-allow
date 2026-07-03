@@ -1,8 +1,0 @@
-v1.10.1-public-surface-trust-cleanup-2026-07-02:Kevin-sanctioned active v1.10.1 lane (exec-order R-1 2026-07-02); REMOVE when lane closes
-# --- Std 70 §2 metadata (guard parses line 1 only; legacy format — full-format parsing lands with packet A/B) ---
-# owner: Kevin (grant) / Sue (executor, TUI session 2026-07-02)
-# reason: restore Suki governor preflight while the sanctioned v1.10.1 public-surface lane holds the workbench
-# branch: v1.10.1-public-surface-trust-cleanup-2026-07-02
-# created: 2026-07-02
-# ttl: expires at lane close OR 2026-07-09, whichever comes first
-# removal-condition: delete this file when the v1.10.1 lane merges/closes or the branch switches; packet p1-worker-preflight-runtime-decoupling-2026-07-02 supersedes it structurally
