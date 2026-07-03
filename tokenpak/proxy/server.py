@@ -390,6 +390,12 @@ from tokenpak.proxy.forecast_endpoint import (  # noqa: E402
     _forecast_latency_lock,
 )
 
+
+def _is_app_endpoint_path(path: str) -> bool:
+    """True for proxy-owned app API namespaces that must never fall through."""
+    return path.startswith("/tpk/v1/") or path.startswith("/pak/v1/")
+
+
 # ---------------------------------------------------------------------------
 # Threaded HTTP server
 # ---------------------------------------------------------------------------
@@ -564,9 +570,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _tp_try_get(self):
                 return
         except Exception as _exc:
-            # App endpoint dispatch must never break the LLM passthrough.
             import sys as _sys
-            print(f"[tokenpak] /tpk/v1 dispatch error: {_exc}", file=_sys.stderr)
+            print(f"[tokenpak] app endpoint dispatch error: {_exc}", file=_sys.stderr)
+            if _is_app_endpoint_path(path):
+                self._send_app_endpoint_dispatch_error(_exc)
+                return
 
         # Always allow /health during shutdown (needed for health-check polling)
         if path == "/health" or path.startswith("/health?"):
@@ -749,7 +757,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 return
         except Exception as _exc:
             import sys as _sys
-            print(f"[tokenpak] /tpk/v1 POST dispatch error: {_exc}", file=_sys.stderr)
+            print(f"[tokenpak] app endpoint POST dispatch error: {_exc}", file=_sys.stderr)
+            if _is_app_endpoint_path(self.path):
+                self._send_app_endpoint_dispatch_error(_exc)
+                return
 
         if ps.shutdown.is_shutting_down and (
             self.path.startswith("http") or self.path.startswith("/v1/")
@@ -2370,6 +2381,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_app_endpoint_dispatch_error(self, exc: Exception) -> None:
+        body = json.dumps({
+            "error": "app_endpoint_dispatch_failed",
+            "detail": type(exc).__name__,
+        }).encode()
+        try:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
 
     def _handle_metrics_dashboard(self) -> None:
         """GET /metrics/dashboard — dashboard JSON with top-20 sessions panel.
