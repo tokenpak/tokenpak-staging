@@ -73,11 +73,11 @@ from tokenpak.orchestration.dispatch.resume import (  # noqa: E402
     reconcile_run,
 )
 from tokenpak.orchestration.dispatch.runner import (  # noqa: E402
+    TERMINAL_RUN_STATUSES,
     FulfillmentLine,
     LineStatus,
     RunAlreadyTerminalError,
     RunLeaseHeldError,
-    TERMINAL_RUN_STATUSES,
 )
 from tokenpak.orchestration.dispatch.station_runner import (  # noqa: E402
     WorkerToolRequest,
