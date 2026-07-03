@@ -46,6 +46,59 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_user_home(tmp_path_factory):
+    """Point HOME at a session-scoped tmp dir so tests never write real user state.
+
+    Without this, any code path that resolves ``Path.home()`` /
+    ``os.path.expanduser("~")`` at *runtime* (monitor.db, retry_events.jsonl,
+    companion journal.db, lock registries, ...) silently pollutes the real
+    ``~/.tokenpak`` / ``~/.tpk`` of whoever runs the suite.
+
+    Scope and limits:
+      - HOME only. ``TOKENPAK_HOME`` is deliberately NOT set here: several
+        suites monkeypatch ``Path.home()`` and rely on the documented
+        env-var-absent resolution order; a session-wide override would
+        shadow their per-test isolation.
+      - Constants resolved from ``Path.home()`` at *import* time (e.g.
+        ``tokenpak.orchestration.retry.RETRY_EVENT_LOG``) are baked before
+        this fixture runs; suites touching those must monkeypatch the module
+        attribute directly (see tests/test_retry.py).
+      - Tests that monkeypatch HOME / ``Path.home()`` themselves still win:
+        function-scoped patches override this session-scoped value.
+    """
+    import os
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    real_home = Path(os.path.expanduser("~"))
+    # Prefer tmpfs (/dev/shm) for the fake home when available: SQLite state
+    # files created there (monitor.db schema migration alone issues ~20
+    # ALTER TABLE fsyncs) stay in memory, so a loaded host disk cannot push
+    # per-test setup past the global 30s timeout. Fall back to pytest's tmp.
+    _shm = Path("/dev/shm")
+    if _shm.is_dir() and os.access(_shm, os.W_OK):
+        fake_home = Path(tempfile.mkdtemp(prefix="tokenpak-test-home-", dir=_shm))
+        _cleanup_fake_home = True
+    else:
+        fake_home = tmp_path_factory.mktemp("isolated-user-home")
+        _cleanup_fake_home = False
+    mp = pytest.MonkeyPatch()
+    mp.setenv("HOME", str(fake_home))
+    # Windows equivalent — harmless elsewhere.
+    mp.setenv("USERPROFILE", str(fake_home))
+    # Keep read-mostly tool/model caches warm: libraries honouring XDG
+    # (huggingface, torch, ...) would otherwise re-download into the fake
+    # home. Only set when the runner has not chosen its own location.
+    if "XDG_CACHE_HOME" not in os.environ and (real_home / ".cache").is_dir():
+        mp.setenv("XDG_CACHE_HOME", str(real_home / ".cache"))
+    yield fake_home
+    mp.undo()
+    if _cleanup_fake_home:
+        shutil.rmtree(fake_home, ignore_errors=True)
+
+
 def _taxonomy_marker_for_path(nodeid: str) -> str:
     """Return the expected taxonomy marker name for a given test nodeid path."""
     for prefix, marker in TAXONOMY_DIR_RULES:
