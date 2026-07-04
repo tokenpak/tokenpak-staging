@@ -134,6 +134,23 @@ import threading as _threading
 _upstream_semaphores: Dict[tuple, _threading.BoundedSemaphore] = {}
 _upstream_sem_lock = _threading.Lock()
 _upstream_inflight: Dict[tuple, int] = {}
+# Last touch (fetch or counter change) per key — drives idle eviction below.
+_upstream_sem_last_activity: Dict[tuple, float] = {}
+
+# How long a (provider, session) entry must sit at zero in-flight with no
+# activity before its semaphore object may be evicted. Evicting at the moment
+# the counter hits zero is racy: acquisition is fetch-semaphore → acquire →
+# increment (not atomic), so a release-to-zero eviction between another
+# thread's fetch and acquire leaves that thread gating on the orphaned
+# semaphore while the next request mints a fresh one for the same key —
+# allowing up to 2x the per-(provider, session) concurrency cap. Deferring
+# eviction until the entry has been idle far longer than any fetch→acquire
+# window (bounded by the acquire timeout) removes the race in practice while
+# still bounding memory growth from high-churn ip:port-derived session keys.
+_UPSTREAM_SEM_IDLE_EVICT_SECONDS: float = max(
+    float(os.environ.get("TOKENPAK_UPSTREAM_SEM_IDLE_EVICT_SECS", "600")),
+    2.0 * _UPSTREAM_ACQUIRE_TIMEOUT,
+)
 
 
 def _get_upstream_semaphore(
@@ -151,8 +168,25 @@ def _get_upstream_semaphore(
         if sem is None:
             sem = _threading.BoundedSemaphore(_UPSTREAM_CONCURRENCY)
             _upstream_semaphores[key] = sem
-            _upstream_inflight[key] = 0
+            _upstream_inflight.setdefault(key, 0)
+        _upstream_sem_last_activity[key] = time.monotonic()
     return sem
+
+
+def _evict_idle_upstream_entries_locked(now: float) -> None:
+    """Evict zero-in-flight entries idle past the eviction window.
+
+    Caller must hold ``_upstream_sem_lock``.
+    """
+    cutoff = now - _UPSTREAM_SEM_IDLE_EVICT_SECONDS
+    for key in [
+        k
+        for k, last in _upstream_sem_last_activity.items()
+        if last < cutoff and _upstream_inflight.get(k, 0) <= 0
+    ]:
+        _upstream_sem_last_activity.pop(key, None)
+        _upstream_inflight.pop(key, None)
+        _upstream_semaphores.pop(key, None)
 
 
 def _upstream_inflight_delta(
@@ -160,21 +194,22 @@ def _upstream_inflight_delta(
 ) -> int:
     """Adjust and return the in-flight counter for (provider, session).
 
-    When a release (delta < 0) drives the counter to zero, the key is evicted
-    from both _upstream_inflight and _upstream_semaphores. session_key falls
-    back to the per-connection client "ip:port", so without eviction every
-    distinct key mints a permanent entry in both dicts that is never reclaimed
-    — they accumulate even with zero active connections, which is the RSS heap
-    leak. Entries are recreated lazily on the next request for the same key.
+    The semaphore object is deliberately NOT evicted the moment its counter
+    returns to zero — that raced with acquisition (see the eviction-window
+    comment above) and allowed 2x the concurrency cap. Instead, zero-count
+    entries are swept only after _UPSTREAM_SEM_IDLE_EVICT_SECONDS without
+    activity, which still reclaims the memory that high-churn ip:port session
+    keys would otherwise leak (entries are recreated lazily on the next
+    request for the same key).
     """
     key = (provider or "_unknown", session_key or "_shared")
+    now = time.monotonic()
     with _upstream_sem_lock:
         count = max(0, _upstream_inflight.get(key, 0) + delta)
+        _upstream_inflight[key] = count
+        _upstream_sem_last_activity[key] = now
         if delta < 0 and count == 0:
-            _upstream_inflight.pop(key, None)
-            _upstream_semaphores.pop(key, None)
-        else:
-            _upstream_inflight[key] = count
+            _evict_idle_upstream_entries_locked(now)
         return count
 
 
@@ -182,10 +217,45 @@ def get_upstream_inflight_snapshot() -> Dict[str, int]:
     """Return a snapshot of current in-flight counts, for /health exposure.
 
     Keyed as ``"<provider>::<session>"`` for JSON-friendliness. The
-    legacy shared path appears under ``"<provider>::_shared"``.
+    legacy shared path appears under ``"<provider>::_shared"``. Zero-count
+    entries (kept alive briefly for the eviction-window guarantee above)
+    are omitted — the snapshot reports actual in-flight work.
     """
     with _upstream_sem_lock:
-        return {f"{prov}::{sess}": n for (prov, sess), n in _upstream_inflight.items()}
+        return {
+            f"{prov}::{sess}": n
+            for (prov, sess), n in _upstream_inflight.items()
+            if n > 0
+        }
+
+
+# ---------------------------------------------------------------------------
+# Circuit-breaker outcome classification
+# ---------------------------------------------------------------------------
+
+# Upstream statuses that count as provider failures for the provider circuit
+# breaker: the retryable gateway statuses (502/503/504) plus 500 and 529
+# (provider "overloaded") — all provider-side failure signals even when the
+# HTTP exchange itself completes without an exception. 429 is deliberately
+# EXCLUDED: rate limiting feeds the separate rate-limit circuit breaker.
+_CB_FAILURE_STATUSES = frozenset({500, 502, 503, 504, 529})
+
+
+def _cb_status_is_provider_failure(status_code: Optional[int]) -> bool:
+    """True when a completed exchange's final status is a provider failure."""
+    return status_code in _CB_FAILURE_STATUSES
+
+
+def _is_client_disconnect_error(exc: BaseException) -> bool:
+    """True for socket errors from OUR downstream client, not the provider.
+
+    Upstream I/O failures surface wrapped in httpx exception types, so a raw
+    ``BrokenPipeError``/``ConnectionResetError`` escaping the handler comes
+    from writing to ``self.wfile`` — i.e. the CLI/client vanished
+    mid-response. The provider did nothing wrong; these must not count
+    against the provider circuit breaker.
+    """
+    return isinstance(exc, (BrokenPipeError, ConnectionResetError))
 
 
 # ---------------------------------------------------------------------------
@@ -1716,7 +1786,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             latency_ms = int((time.time() - t0) * 1000)
             with _forecast_latency_lock:
                 _forecast_latencies.append(latency_ms)
-            _cb_success = True  # reached here without exception → request succeeded
+            # "No exception escaped" is NOT "provider healthy": a retryable
+            # 5xx that exhausted its retries still flows through the normal
+            # send path above. Gate breaker success on the FINAL upstream
+            # status so provider 5xx storms trip the breaker instead of
+            # recording an unbroken success streak (and keeping /status
+            # green while every request fails).
+            _final_upstream_status = resp.status_code if "resp" in dir() else None  # type: ignore
+            _cb_success = not _cb_status_is_provider_failure(_final_upstream_status)
 
             # ── Request logging ───────────────────────────────────────────
             try:
@@ -2016,11 +2093,23 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _cb_registry is not None and _cb_provider is not None:
                 if _cb_success:
                     _cb_registry.record_success(_cb_provider)
-                # failure is recorded in except block
+                else:
+                    # Provider-side 5xx that exhausted retries: the exchange
+                    # completed, but it is a provider failure for breaker
+                    # accounting.
+                    _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
             # ── Circuit breaker: record failure ───────────────────────────
-            if _cb_registry is not None and _cb_provider is not None:
+            # ...unless OUR client's socket died (BrokenPipeError /
+            # ConnectionResetError writing to self.wfile). That says nothing
+            # about provider health — counting it opened the breaker for a
+            # healthy provider whenever CLIs were killed mid-response.
+            if (
+                _cb_registry is not None
+                and _cb_provider is not None
+                and not _is_client_disconnect_error(exc)
+            ):
                 _cb_registry.record_failure(_cb_provider)
 
             with ps._session_lock:
@@ -2904,15 +2993,19 @@ class ProxyServer:
           4. Close the HTTP connection pool
           5. Stop the HTTP server
         """
-        # Always close the pool, even if server wasn't started
-        if self._connection_pool is not None:
-            try:
-                self._connection_pool.close()
-            except Exception:
-                pass
-
+        # Never started (or already stopped): nothing is in flight, so just
+        # release pool resources and return. For a RUNNING server the pool
+        # must NOT be closed here — closing it before the drain below kills
+        # every in-flight request's upstream connection, turning a graceful
+        # SIGTERM into a mid-stream connection reset for every active
+        # request. The pool is closed at step 4, after the drain completes.
         if self._server is None:
-            return  # already stopped
+            if self._connection_pool is not None:
+                try:
+                    self._connection_pool.close()
+                except Exception:
+                    pass
+            return
 
         # ── Step 1: Stop accepting new proxy requests ─────────────────────
         self.shutdown.begin()
@@ -2978,15 +3071,19 @@ class ProxyServer:
         Writes a shutdown summary entry to the compression events JSONL file
         so stats from the current session are preserved across restarts.
         """
+        # Snapshot under the session lock — requests may still be mutating
+        # these counters while the drain window is open.
+        with self._session_lock:
+            session = dict(self.session)
         shutdown_record = {
             "event": "shutdown",
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-            "session_requests": self.session.get("requests", 0),
-            "session_tokens_saved": self.session.get("saved_tokens", 0),
-            "session_cost_saved": round(self.session.get("cost_saved", 0.0), 6),
-            "session_cost_total": round(self.session.get("cost", 0.0), 6),
-            "session_errors": self.session.get("errors", 0),
-            "uptime_seconds": round(time.time() - self.session.get("start_time", time.time())),
+            "session_requests": session.get("requests", 0),
+            "session_tokens_saved": session.get("saved_tokens", 0),
+            "session_cost_saved": round(session.get("cost_saved", 0.0), 6),
+            "session_cost_total": round(session.get("cost", 0.0), 6),
+            "session_errors": session.get("errors", 0),
+            "uptime_seconds": round(time.time() - session.get("start_time", time.time())),
         }
         # Delegate to the compression_stats recorder (writes to ~/.tokenpak/compression_events.jsonl)
         self.compression_stats.flush_shutdown_record(shutdown_record)
@@ -3114,7 +3211,11 @@ class ProxyServer:
         }
 
     def stats(self) -> dict:
-        s = self.session
+        # Copy under the session lock: handler threads mutate these counters
+        # concurrently, and returning the live dict let JSON serialization
+        # race with (and observe torn) mid-request updates.
+        with self._session_lock:
+            s = dict(self.session)
         return {
             "session": s,
             "compilation_mode": self.compilation_mode,
@@ -3126,7 +3227,8 @@ class ProxyServer:
         }
 
     def session_stats(self) -> dict:
-        s = self.session
+        with self._session_lock:
+            s = dict(self.session)
         uptime = round((time.time() - s["start_time"]) / 3600, 2)
         return {
             "session_requests": s["requests"],
