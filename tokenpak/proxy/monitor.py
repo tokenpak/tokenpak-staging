@@ -608,7 +608,12 @@ class Monitor:
         try:
             # Rows are stamped with LOCAL time (datetime.now().isoformat()),
             # so the window cutoff must be local too: bare datetime('now') is
-            # UTC and would mis-window the report by the UTC offset.
+            # UTC and would mis-window the report by the UTC offset. The stored
+            # timestamp is 'T'-separated ISO (isoformat) while datetime(...)
+            # yields a space-separated string — wrap the column in datetime() so
+            # both sides normalize to the same form. A raw string compare would
+            # count every same-date row as in-window because 'T' > ' ' lexically
+            # (get_stats(hours=1) would behave like a whole-day window).
             row = conn.execute(
                 """
                 SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
@@ -617,7 +622,7 @@ class Monitor:
                        COALESCE(SUM(injected_tokens),0),
                        COALESCE(SUM(cache_read_tokens),0),
                        COALESCE(SUM(cache_creation_tokens),0)
-                FROM requests WHERE timestamp >= datetime('now', 'localtime', ?)
+                FROM requests WHERE datetime(timestamp) >= datetime('now', 'localtime', ?)
             """,
                 (f"-{hours} hours",),
             ).fetchone()

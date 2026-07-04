@@ -444,12 +444,43 @@ def test_get_stats_windows_on_localtime(tmp_path, monkeypatch, _restore_tz):
     conn = sqlite3.connect(str(db))
     try:
         old_basis = conn.execute(
-            "SELECT COUNT(*) FROM requests WHERE timestamp >= datetime('now', ?)",
+            "SELECT COUNT(*) FROM requests WHERE datetime(timestamp) >= datetime('now', ?)",
             ("-24 hours",),
         ).fetchone()[0]
     finally:
         conn.close()
     assert old_basis == 0
+
+
+def test_get_stats_hours_window_excludes_same_date_older_row(
+    tmp_path, monkeypatch, _restore_tz
+):
+    # Regression for the mixed-separator windowing bug: rows are stamped
+    # 'T'-separated (datetime.now().isoformat()) but the cutoff is space-
+    # separated (datetime('now','localtime',?)). A RAW string compare made
+    # 'T' > ' ' true, so every SAME-DATE row counted and get_stats(hours=1)
+    # behaved like a whole-day window. Force local time to mid-afternoon so a
+    # 2h-old row is the same local date, then assert it is correctly excluded
+    # from a 1h window by the datetime(timestamp) normalization.
+    utc_hour = datetime.now(timezone.utc).hour
+    offset = 14 - utc_hour  # local = utc + offset  ->  ~14:00, safely mid-day
+    if offset == 0:
+        _set_tz(monkeypatch, "UTC")
+    elif offset > 0:
+        _set_tz(monkeypatch, f"Etc/GMT-{offset}")  # Etc/GMT-N == UTC+N
+    else:
+        _set_tz(monkeypatch, f"Etc/GMT+{-offset}")  # Etc/GMT+N == UTC-N
+
+    db = tmp_path / "monitor.db"
+    mon = Monitor(db_path=str(db))
+    two_hours_ago = datetime.fromtimestamp(_time.time() - 2 * 3600).isoformat()
+    thirty_min_ago = datetime.fromtimestamp(_time.time() - 30 * 60).isoformat()
+    _insert_request(db, timestamp=two_hours_ago, estimated_cost=5.0)
+    _insert_request(db, timestamp=thirty_min_ago, estimated_cost=3.0)
+
+    stats = mon.get_stats(hours=1)
+    assert stats["requests"] == 1  # only the 30-min-old row is in-window
+    assert stats["total_cost"] == 3.0  # the 2h-old row's 5.0 is excluded
 
 
 def test_budget_alert_uses_local_day_for_spend_and_dedupe(tmp_path, monkeypatch, _restore_tz):
