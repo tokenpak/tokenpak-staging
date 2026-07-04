@@ -33,6 +33,8 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -434,9 +436,47 @@ def _get_budget_tracker() -> Any:
     return BudgetTracker(db_path=_companion_dir() / "budget.db", daily_budget=daily)
 
 
+# A JournalStore reconstructed per request re-runs _init_db() every call —
+# the WAL-mode switch plus schema DDL each take a brief write lock, and a
+# second connection is opened for the write itself. Under a burst of
+# concurrent journal POSTs (each in its own handler thread) those per-request
+# connections contend on the SQLite write lock and busy-wait up to
+# BUSY_TIMEOUT_MS (5s), which is exactly the companion MCP client timeout —
+# so a contended journal_write times out. Memoizing the store per db_path
+# runs the schema/WAL setup once and funnels writes through the store's single
+# lock-guarded persistent connection, so writes serialize cheaply in-process
+# instead of racing on the file lock.
+_JOURNAL_STORE_CACHE: dict[str, Any] = {}
+_JOURNAL_STORE_LOCK = threading.Lock()
+
+
 def _get_journal_store() -> Any:
     from tokenpak.companion.journal.store import JournalStore
-    return JournalStore(db_path=_companion_dir() / "journal.db")
+
+    key = str(_companion_dir() / "journal.db")
+    store = _JOURNAL_STORE_CACHE.get(key)
+    if store is None:
+        with _JOURNAL_STORE_LOCK:
+            store = _JOURNAL_STORE_CACHE.get(key)
+            if store is None:
+                store = JournalStore(db_path=Path(key))
+                _JOURNAL_STORE_CACHE[key] = store
+    return store
+
+
+def _reset_journal_store_cache() -> None:
+    """Test hook: drop cached JournalStore instances so the next call opens a
+    fresh store. Closes each persistent writer connection first to avoid
+    leaking file handles across tests. Not part of the request path."""
+    with _JOURNAL_STORE_LOCK:
+        for store in _JOURNAL_STORE_CACHE.values():
+            conn = getattr(store, "_write_conn", None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        _JOURNAL_STORE_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -639,6 +679,16 @@ def _handle_journal_post(handler: Any, session_id: str, body: dict[str, Any]) ->
             entry_type=entry_type,
             content=content,
         )
+    except sqlite3.OperationalError as exc:
+        # Journal store contention (write lock / busy_timeout) is transient and
+        # retryable — surface it as a distinct terminal error so the caller can
+        # tell a slow/contended journal apart from a hard write failure.
+        detail = str(exc)
+        if "lock" in detail.lower() or "busy" in detail.lower():
+            _send_error(handler, 503, "journal_contended", detail)
+        else:
+            _send_error(handler, 500, "journal_write_failed", detail)
+        return
     except Exception as exc:
         _send_error(handler, 500, "journal_write_failed", str(exc))
         return
