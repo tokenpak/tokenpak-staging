@@ -15,7 +15,11 @@ File format (TOML)::
     key = "sk-ant-..."
 
 ``tokenpak creds add`` / ``tokenpak creds remove`` write this file;
-this module only reads (shared by discovery + doctor).
+this module only reads (shared by discovery + doctor). The path is
+resolved through :mod:`tokenpak._paths` (canonical ``~/.tpk/`` with
+legacy ``~/.tokenpak/`` fallback, honouring ``TOKENPAK_HOME``) — the
+same resolution the writer uses, so reads and writes never split across
+paths.
 
 Perms are expected to be 0600; ``creds doctor`` flags looser perms.
 """
@@ -32,15 +36,29 @@ except ModuleNotFoundError:  # pragma: no cover
 from ..model import REFRESH_NONE, REFRESH_TOKENPAK, Credential
 
 PROVIDER_NAME = "user-config"
-CONFIG_PATH = Path.home() / ".tokenpak" / "credentials.toml"
+
+
+def _config_path() -> Path:
+    """Resolve ``credentials.toml`` under the canonical TokenPak home.
+
+    Routes through :mod:`tokenpak._paths` so this runtime reader and the
+    writer (``creds.store``) always resolve the *same* file — canonical
+    ``~/.tpk/`` with legacy ``~/.tokenpak/`` fallback, honouring
+    ``TOKENPAK_HOME``. Resolved at call time (not import) so the
+    resolver's dynamic fallback and sandbox overrides take effect.
+    """
+    from tokenpak import _paths
+
+    return _paths.under("credentials.toml")
 
 
 def discover() -> list[Credential]:
-    if not CONFIG_PATH.exists():
+    path = _config_path()
+    if not path.exists():
         return []
 
     try:
-        raw = CONFIG_PATH.read_bytes()
+        raw = path.read_bytes()
         data = tomllib.loads(raw.decode())
     except (OSError, UnicodeDecodeError, Exception):
         return []
@@ -69,7 +87,7 @@ def discover() -> list[Credential]:
                 id=str(cred_id),
                 platform=platform,
                 kind=kind,
-                source=f"{CONFIG_PATH}#creds.{cred_id}",
+                source=f"{path}#creds.{cred_id}",
                 provider=PROVIDER_NAME,
                 refresh_owner=refresh_owner,
                 expires_at=body.get("expires_at"),
@@ -89,10 +107,11 @@ def resolve(cred: Credential) -> "str | None":
     :class:`Credential` without the value, and resolution happens on
     demand. That way a ``creds remove`` is effective immediately.
     """
-    if not CONFIG_PATH.exists():
+    path = _config_path()
+    if not path.exists():
         return None
     try:
-        data = tomllib.loads(CONFIG_PATH.read_text())
+        data = tomllib.loads(path.read_text())
     except Exception:
         return None
     entries = data.get("creds") or {}
@@ -113,10 +132,11 @@ def config_perms_ok() -> bool:
     Used by :mod:`creds.doctor` to surface over-permissive file modes
     without prescribing a fix here.
     """
-    if not CONFIG_PATH.exists():
+    path = _config_path()
+    if not path.exists():
         return True
     try:
-        mode = CONFIG_PATH.stat().st_mode & 0o777
+        mode = path.stat().st_mode & 0o777
     except OSError:
         return True
     return mode == 0o600

@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Read/write helpers for ``~/.tokenpak/credentials.toml``.
+"""Read/write helpers for the TokenPak ``credentials.toml`` store.
+
+The file lives under the canonical TokenPak home resolved by
+:mod:`tokenpak._paths` (canonical ``~/.tpk/`` with legacy ``~/.tokenpak/``
+fallback, honouring ``TOKENPAK_HOME``). The runtime reader
+(``tokenpak.creds.providers.user_config``) resolves the same path, so a
+write and a subsequent read never land on different files.
 
 Writing TOML is narrow enough here that we hand-serialise rather than
 pull in a new dep (``tomli_w`` isn't in pyproject). If the schema ever
@@ -23,7 +29,19 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[no-redef]
 
 
-CONFIG_PATH = Path.home() / ".tokenpak" / "credentials.toml"
+def _config_path() -> Path:
+    """Resolve ``credentials.toml`` under the canonical TokenPak home.
+
+    Routes through :mod:`tokenpak._paths` so this writer and the runtime
+    reader (``creds.providers.user_config``) always resolve the *same*
+    file — canonical ``~/.tpk/`` with legacy ``~/.tokenpak/`` fallback,
+    honouring ``TOKENPAK_HOME``. Resolved at call time (not import) so the
+    resolver's dynamic fallback and sandbox overrides take effect.
+    """
+    from tokenpak import _paths
+
+    return _paths.under("credentials.toml")
+
 
 # Ids are slugs we embed in TOML table headers + use as CLI args, so
 # restrict to a safe character set. Matches what the CLI's add step
@@ -33,10 +51,11 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 def load() -> dict:
     """Return the parsed creds table (``{id: {fields...}}``) or ``{}``."""
-    if not CONFIG_PATH.exists():
+    path = _config_path()
+    if not path.exists():
         return {}
     try:
-        data = tomllib.loads(CONFIG_PATH.read_text())
+        data = tomllib.loads(path.read_text())
     except Exception:
         return {}
     creds = data.get("creds") or {}
@@ -45,16 +64,17 @@ def load() -> dict:
 
 def save(creds: dict) -> Path:
     """Write ``creds`` to the config file with 0600 perms atomically."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     body = _serialise(creds)
-    tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(body)
     os.chmod(tmp, 0o600)
-    os.replace(tmp, CONFIG_PATH)
+    os.replace(tmp, path)
     # os.replace preserves perms of the src, but belt-and-braces:
-    os.chmod(CONFIG_PATH, 0o600)
-    return CONFIG_PATH
+    os.chmod(path, 0o600)
+    return path
 
 
 def add(cred_id: str, entry: dict) -> None:
