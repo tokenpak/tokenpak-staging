@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .. import _sqlite as _db
+
 
 @dataclass
 class JournalEntry:
@@ -58,49 +60,18 @@ class JournalStore:
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = self._connect(ensure_wal=True)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                started_at REAL NOT NULL,
-                ended_at REAL,
-                project_dir TEXT NOT NULL DEFAULT '',
-                model TEXT NOT NULL DEFAULT '',
-                total_requests INTEGER NOT NULL DEFAULT 0,
-                total_cost_usd REAL NOT NULL DEFAULT 0.0,
-                total_input_tokens INTEGER NOT NULL DEFAULT 0,
-                total_output_tokens INTEGER NOT NULL DEFAULT 0,
-                capsule_path TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                entry_type TEXT NOT NULL,
-                content TEXT NOT NULL DEFAULT '',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_ts ON entries(timestamp)")
+        conn = self._connect()
+        # Canonical schema lives in companion._sqlite — shared with the
+        # pre-send hook so there is exactly one DDL for these tables.
+        _db.ensure_journal_schema(conn)
         conn.commit()
         conn.close()
 
-    def _connect(self, *, ensure_wal: bool = False) -> sqlite3.Connection:
-        """Open the journal DB with hook/MCP-safe SQLite pragmas."""
-        conn = sqlite3.connect(
-            str(self._db_path),
-            timeout=5.0,
-            check_same_thread=False,
-        )
-        if ensure_wal:
-            conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+    def _connect(self) -> sqlite3.Connection:
+        """Open the journal DB via the shared companion connection factory
+        (busy_timeout is applied before the WAL switch there, so concurrent
+        first-openers wait for the conversion instead of failing)."""
+        return _db.connect(self._db_path, check_same_thread=False)
 
     def _writer(self) -> sqlite3.Connection:
         if self._write_conn is None:
@@ -113,14 +84,27 @@ class JournalStore:
         project_dir: str = "",
         model: str = "",
     ) -> None:
-        """Record a new session start."""
+        """Record a new session start.
+
+        Re-entry safe: a duplicate start event (resume, retried hook) must
+        not wipe accumulated totals, so this is INSERT-or-keep rather than
+        INSERT OR REPLACE. Only the descriptive fields refresh, and only
+        when the caller actually provided them.
+        """
         with self._write_lock:
             conn = self._writer()
             conn.execute(
-                """INSERT OR REPLACE INTO sessions
+                """INSERT OR IGNORE INTO sessions
                    (session_id, started_at, project_dir, model)
                    VALUES (?, ?, ?, ?)""",
                 (session_id, time.time(), project_dir, model),
+            )
+            conn.execute(
+                """UPDATE sessions
+                   SET project_dir = COALESCE(NULLIF(?, ''), project_dir),
+                       model = COALESCE(NULLIF(?, ''), model)
+                   WHERE session_id = ?""",
+                (project_dir, model, session_id),
             )
             conn.commit()
 
@@ -141,15 +125,22 @@ class JournalStore:
         content: str,
         metadata: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Append a journal entry to a session."""
+        """Append a journal entry to a session.
+
+        Idempotent per event: rows carry a content hash under a UNIQUE
+        index, so a duplicate delivery of the same (type, content,
+        metadata) event within a session collapses to one row.
+        """
         import json
+        metadata_json = json.dumps(metadata or {}, default=str)
         with self._write_lock:
             conn = self._writer()
             conn.execute(
-                """INSERT INTO entries (session_id, timestamp, entry_type, content, metadata_json)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (session_id, time.time(), entry_type, content,
-                 json.dumps(metadata or {}, default=str)),
+                """INSERT OR IGNORE INTO entries
+                   (session_id, timestamp, entry_type, content, metadata_json, content_hash)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (session_id, time.time(), entry_type, content, metadata_json,
+                 _db.entry_content_hash(entry_type, content, metadata_json)),
             )
             conn.commit()
 

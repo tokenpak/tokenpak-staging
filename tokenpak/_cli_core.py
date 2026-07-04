@@ -3634,11 +3634,10 @@ def cmd_savings(args):
     try:
         from .services.optimization.attribution_stage import is_attribution_v2_enabled
         if is_attribution_v2_enabled():
-            import pathlib
-
+            from .core.paths import get_db_path as _get_db_path
             from .telemetry.savings import format_savings_by_source
             from .telemetry.storage import TelemetryDB
-            _db_path = pathlib.Path.home() / ".tokenpak" / "telemetry.db"
+            _db_path = _get_db_path("telemetry.db")
             if _db_path.exists():
                 _db = TelemetryDB(_db_path)
                 _rows = _db.query_savings_by_source(days=days)
