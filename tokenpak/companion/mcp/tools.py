@@ -107,7 +107,7 @@ def _handle_estimate_tokens(state: CompanionState, args: dict[str, Any]) -> str:
 
     status, resp = _proxy_post("/tpk/v1/tokens/estimate", body)
     if status == 0:
-        return json.dumps({"error": "proxy_unreachable", "detail": resp.get("detail", "")})
+        return _degraded(resp)
     if status >= 400:
         return json.dumps(resp)
     return json.dumps(resp)
@@ -152,10 +152,7 @@ def _handle_check_budget(state: CompanionState, args: dict[str, Any]) -> str:
     """Check remaining budget via proxy /tpk/v1/budget."""
     status, body = _proxy_get("/tpk/v1/budget")
     if status == 0:
-        return json.dumps({
-            "error": "proxy_unreachable",
-            "detail": body.get("detail", "is the tokenpak proxy running?"),
-        })
+        return _degraded(body, "is the tokenpak proxy running?")
     if status >= 400:
         return json.dumps(body)
     # Honest-reporting (split-brain trust fix): the proxy only accounts for
@@ -181,7 +178,7 @@ def _handle_load_capsule(state: CompanionState, args: dict[str, Any]) -> str:
     if not session_id:
         status, body = _proxy_get("/tpk/v1/capsules", {"limit": 10})
         if status == 0:
-            return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
+            return _degraded(body)
         if status >= 400:
             return json.dumps(body)
         return json.dumps(body, indent=2)
@@ -196,7 +193,7 @@ def _handle_load_capsule(state: CompanionState, args: dict[str, Any]) -> str:
         params,
     )
     if status == 0:
-        return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
+        return _degraded(body)
     if status >= 400:
         return json.dumps(body)
     # Preserve the old behavior of returning the capsule CONTENT as a bare
@@ -219,7 +216,7 @@ def _handle_prune_context(state: CompanionState, args: dict[str, Any]) -> str:
         body["session_id"] = state.session_id  # proxy records savings to journal
     status, resp = _proxy_post("/tpk/v1/compress", body)
     if status == 0:
-        return json.dumps({"error": "proxy_unreachable", "detail": resp.get("detail", "")})
+        return _degraded(resp)
     if status >= 400:
         return json.dumps(resp)
     return json.dumps(resp)
@@ -244,10 +241,7 @@ def _handle_journal_read(state: CompanionState, args: dict[str, Any]) -> str:
         )
 
     if status == 0:
-        return json.dumps({
-            "error": "proxy_unreachable",
-            "detail": body.get("detail", ""),
-        })
+        return _degraded(body)
     if status >= 400:
         return json.dumps(body)
     return json.dumps(body, indent=2)
@@ -268,10 +262,7 @@ def _handle_journal_write(state: CompanionState, args: dict[str, Any]) -> str:
         {"content": content, "entry_type": "user"},
     )
     if status == 0:
-        return json.dumps({
-            "error": "proxy_unreachable",
-            "detail": body.get("detail", ""),
-        })
+        return _degraded(body)
     if status >= 400:
         return json.dumps(body)
     return json.dumps(body)
@@ -311,7 +302,7 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
     if status == 200:
         local["proxy"] = proxy_info
     elif status == 0:
-        local["proxy"] = {"error": "proxy_unreachable",
+        local["proxy"] = {"error": proxy_info.get("error") or "proxy_unreachable",
                           "detail": proxy_info.get("detail", "")}
     else:
         local["proxy"] = proxy_info
@@ -324,6 +315,8 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 import os as _os
+import socket as _socket
+import time as _time
 import urllib.error as _url_err
 import urllib.parse as _url_parse
 import urllib.request as _url_req
@@ -333,12 +326,85 @@ def _proxy_base_url() -> str:
     return _os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
 
 
+# Transport tunables. Defaults preserve the historical single-shot 5s connect/
+# read behaviour; the one bounded GET retry is what smooths a *transient* local
+# proxy stall — the proxy is alive but momentarily busy behind a long in-flight
+# /v1/messages forward (the process is threaded per-request, so app-API calls
+# are not hard-serialized, but GIL/CPU saturation can still push a lightweight
+# /tpk/v1/* call past a fixed 5s deadline). See task
+# p2-companion-mcp-proxy-timeout-under-load. All are env-overridable so an
+# operator can tune without a code change.
+_PROXY_TIMEOUT_DEFAULT = 5.0
+_PROXY_RETRIES_DEFAULT = 1
+_PROXY_RETRY_BACKOFF_DEFAULT = 0.25
+
+
+def _proxy_timeout() -> float:
+    """Per-attempt connect/read timeout in seconds (TOKENPAK_PROXY_TIMEOUT)."""
+    raw = _os.environ.get("TOKENPAK_PROXY_TIMEOUT", "").strip()
+    try:
+        val = float(raw) if raw else _PROXY_TIMEOUT_DEFAULT
+    except ValueError:
+        return _PROXY_TIMEOUT_DEFAULT
+    return val if val > 0 else _PROXY_TIMEOUT_DEFAULT
+
+
+def _proxy_retries() -> int:
+    """Extra retry attempts for idempotent GETs (TOKENPAK_PROXY_RETRIES).
+
+    Clamped to [0, 5]. POSTs are never retried regardless of this value.
+    """
+    raw = _os.environ.get("TOKENPAK_PROXY_RETRIES", "").strip()
+    try:
+        val = int(raw) if raw else _PROXY_RETRIES_DEFAULT
+    except ValueError:
+        return _PROXY_RETRIES_DEFAULT
+    return max(0, min(val, 5))
+
+
+def _proxy_retry_backoff() -> float:
+    """Seconds slept between GET attempts (TOKENPAK_PROXY_RETRY_BACKOFF)."""
+    raw = _os.environ.get("TOKENPAK_PROXY_RETRY_BACKOFF", "").strip()
+    try:
+        val = float(raw) if raw else _PROXY_RETRY_BACKOFF_DEFAULT
+    except ValueError:
+        return _PROXY_RETRY_BACKOFF_DEFAULT
+    return val if val >= 0 else _PROXY_RETRY_BACKOFF_DEFAULT
+
+
+def _classify_transport_error(exc: BaseException) -> dict[str, Any]:
+    """Map a low-level transport exception to a stable error class.
+
+    ``proxy_timeout``     — the proxy did not answer within the timeout. The
+                            listener is (probably) alive but busy; e.g. a local
+                            proxy queued behind a long in-flight /v1/messages
+                            forward. Distinct from being *down*.
+    ``proxy_unreachable`` — no listener / connection refused / other network
+                            error: the proxy is (probably) not running.
+
+    Both keep status 0 so handlers still fail closed; only the label changes so
+    callers can tell an alive-but-slow proxy from a truly-down one.
+    """
+    detail = str(exc) or exc.__class__.__name__
+    reason = getattr(exc, "reason", None)
+    timeout_types = (_socket.timeout, TimeoutError)
+    if isinstance(exc, timeout_types) or isinstance(reason, timeout_types):
+        return {"error": "proxy_timeout", "detail": detail}
+    if "timed out" in detail.lower():
+        return {"error": "proxy_timeout", "detail": detail}
+    return {"error": "proxy_unreachable", "detail": detail}
+
+
 def _proxy_request(method: str, path: str, params: Optional[dict[str, Any]] = None, body: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
     """HTTP call against the local proxy's /tpk/v1/* app API.
 
     Returns (status_code, json_body). Never raises — network/parse errors
-    become (0, {"error": ..., "detail": ...}) so tool handlers can
-    degrade gracefully.
+    become (0, {"error": ..., "detail": ...}) so tool handlers can degrade
+    gracefully. A transient failure classifies as ``proxy_timeout`` (alive but
+    slow) vs ``proxy_unreachable`` (down); idempotent GETs get a bounded retry
+    so a momentary local-proxy stall does not surface as a hard failure. POSTs
+    are NOT retried — a write that timed out on read may have already landed
+    server-side, so a blind retry could duplicate it.
     """
     url = _proxy_base_url().rstrip("/") + path
     if params:
@@ -352,21 +418,34 @@ def _proxy_request(method: str, path: str, params: Optional[dict[str, Any]] = No
     key = _os.environ.get("TOKENPAK_PROXY_KEY", "").strip()
     if key:
         req.add_header("X-TPK-Key", key)
-    try:
-        with _url_req.urlopen(req, timeout=5.0) as resp:
-            raw = resp.read()
-            try:
-                return resp.status, json.loads(raw.decode("utf-8"))
-            except Exception as exc:
-                return resp.status, {"error": "invalid_json", "detail": str(exc)}
-    except _url_err.HTTPError as exc:
+
+    timeout = _proxy_timeout()
+    # Only idempotent GETs are retried; POSTs run exactly once.
+    max_attempts = 1 + (_proxy_retries() if method.upper() == "GET" else 0)
+    last_err: dict[str, Any] = {"error": "proxy_unreachable", "detail": ""}
+    for attempt in range(max_attempts):
         try:
-            parsed = json.loads(exc.read().decode("utf-8"))
-        except Exception:
-            parsed = {"error": f"http_{exc.code}", "detail": str(exc)}
-        return exc.code, parsed
-    except Exception as exc:
-        return 0, {"error": "proxy_unreachable", "detail": str(exc)}
+            with _url_req.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+                try:
+                    return resp.status, json.loads(raw.decode("utf-8"))
+                except Exception as exc:
+                    return resp.status, {"error": "invalid_json", "detail": str(exc)}
+        except _url_err.HTTPError as exc:
+            # A definitive HTTP status is an answer, not a transient failure:
+            # never retry it.
+            try:
+                parsed = json.loads(exc.read().decode("utf-8"))
+            except Exception:
+                parsed = {"error": f"http_{exc.code}", "detail": str(exc)}
+            return exc.code, parsed
+        except Exception as exc:
+            last_err = _classify_transport_error(exc)
+            if attempt + 1 < max_attempts:
+                _time.sleep(_proxy_retry_backoff())
+                continue
+            return 0, last_err
+    return 0, last_err
 
 
 def _proxy_get(path: str, params: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
@@ -375,6 +454,19 @@ def _proxy_get(path: str, params: Optional[dict[str, Any]] = None) -> tuple[int,
 
 def _proxy_post(path: str, body: Optional[dict[str, Any]] = None, params: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
     return _proxy_request("POST", path, params=params, body=body)
+
+
+def _degraded(body: dict[str, Any], hint: str = "") -> str:
+    """Render a status==0 transport failure as a tool JSON response, preserving
+    the transport's error class (``proxy_timeout`` vs ``proxy_unreachable``) so
+    the caller can tell an alive-but-slow proxy from a down one. ``hint`` is a
+    fallback detail used only when the transport supplied none."""
+    if not isinstance(body, dict):
+        body = {}
+    return json.dumps({
+        "error": body.get("error") or "proxy_unreachable",
+        "detail": body.get("detail") or hint,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -397,10 +489,7 @@ def _handle_vault_search(state: CompanionState, args: dict[str, Any]) -> str:
 
     status, body = _proxy_get("/tpk/v1/vault/search", {"q": query, "limit": limit})
     if status == 0:
-        return json.dumps({
-            "error": "proxy_unreachable",
-            "detail": body.get("detail", "is the tokenpak proxy running? try `tokenpak start`"),
-        })
+        return _degraded(body, "is the tokenpak proxy running? try `tokenpak start`")
     if status >= 400:
         return json.dumps(body)
     # Pass through the proxy's response shape as-is; it already matches our contract.
@@ -418,7 +507,7 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
     if not block_id and path_hint:
         status, body = _proxy_get("/tpk/v1/vault/search", {"q": path_hint, "limit": 1})
         if status == 0:
-            return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
+            return _degraded(body)
         results = body.get("results") or []
         if not results:
             return json.dumps({"error": "block_not_found", "path": path_hint})
@@ -426,7 +515,7 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
 
     status, body = _proxy_get(f"/tpk/v1/vault/block/{_url_parse.quote(block_id, safe='')}")
     if status == 0:
-        return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
+        return _degraded(body)
     if status >= 400:
         return json.dumps(body)
     return json.dumps(body, indent=2)
