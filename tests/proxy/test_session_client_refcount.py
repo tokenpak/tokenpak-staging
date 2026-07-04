@@ -225,3 +225,31 @@ def test_close_clears_leases_and_overflow():
     assert overflow.is_closed is True
     assert pool._session_client_refs == {}
     assert pool._overflow_clients == set()
+
+
+def test_stream_construction_failure_releases_lease_exactly_once(monkeypatch):
+    # Regression for a double-release: stream()'s except-path used to call
+    # on_release() a second time even though _StreamingContext.__init__ already
+    # releases the lease (idempotently) when the client.stream() construction
+    # fails. The extra release decremented the session-client refcount past
+    # baseline and closed a client another concurrent lease still held.
+    pool = _pool(_ok_transport())
+    # A concurrent holder keeps a lease on the SAME session client (ref == 1).
+    held = pool._get_session_client(NETLOC, "sess-1", checkout=True)
+    assert _refs(pool, held) == 1
+
+    def _boom(*args, **kwargs):
+        raise httpx.ConnectError("stream construction failed")
+
+    # Make the reused client's stream() construction fail.
+    monkeypatch.setattr(held, "stream", _boom)
+
+    with pytest.raises(httpx.ConnectError):
+        pool.stream("POST", URL, content=b"{}", session_key="sess-1")
+
+    # Exactly ONE release for the failed stream: the concurrent holder's lease
+    # is intact (baseline, not double-decremented) and its client was not
+    # prematurely closed.
+    assert _refs(pool, held) == 1
+    assert held.is_closed is False
+    pool.close()

@@ -632,10 +632,11 @@ class ConnectionPool:
                 on_release=on_release,
             )
         except Exception:
-            # Constructing the context failed before the caller could enter
-            # it — the lease would otherwise never be released.
-            if on_release is not None:
-                on_release()
+            # Do NOT release here: _StreamingContext.__init__ already releases
+            # the lease (idempotently, via _release()) on its only raising path —
+            # the client.stream() construction — before re-raising. A second
+            # on_release() would double-decrement the session-client refcount and
+            # could close a client another concurrent stream still holds.
             raise
 
     # ------------------------------------------------------------------
