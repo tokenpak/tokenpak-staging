@@ -3085,6 +3085,17 @@ class ProxyServer:
             "session_errors": session.get("errors", 0),
             "uptime_seconds": round(time.time() - session.get("start_time", time.time())),
         }
+        # Drain the monitor's async write queue so queued request rows are
+        # persisted before exit. The monitor DB writer is a daemon thread that
+        # is killed abruptly at process exit; without this drain, up to a
+        # queue's worth of already-recorded request rows are lost on a clean
+        # shutdown (recorded spend < real spend, under-firing rolling caps).
+        # Ordered before the compression-stats flush so a failure in that sink
+        # cannot skip the monitor drain — recorded request rows are the
+        # critical data.
+        if self.monitor is not None:
+            self.monitor.flush(timeout=5.0)
+
         # Delegate to the compression_stats recorder (writes to ~/.tokenpak/compression_events.jsonl)
         self.compression_stats.flush_shutdown_record(shutdown_record)
 
