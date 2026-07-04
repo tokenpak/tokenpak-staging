@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
 from tokenpak import __version__ as _tokenpak_version
+from tokenpak import _paths  # scoped-home path resolver (honors TOKENPAK_HOME)
 from tokenpak.cache.telemetry import CacheMetrics
 from tokenpak.cache.telemetry import get_collector as _get_cache_collector
 from tokenpak.core.config import get_stats_footer_enabled
@@ -101,6 +102,16 @@ from .upstream_retry import (
 # non-streaming paths share the same transient-error, deterministic-mode, and
 # Retry-After rules.
 # ---------------------------------------------------------------------------
+
+# Deprecated compatibility alias — import compatibility only. Retry behavior
+# is governed by UpstreamRetryPolicy, which reads TOKENPAK_UPSTREAM_RETRIES
+# itself (the supported operator control); mutating this constant has no
+# effect. It mirrors the policy's parse of TOKENPAK_UPSTREAM_RETRIES at
+# import time and will be removed in a future minor release.
+try:
+    MAX_UPSTREAM_RETRIES: int = max(1, int(os.environ.get("TOKENPAK_UPSTREAM_RETRIES", "3")))
+except ValueError:
+    MAX_UPSTREAM_RETRIES = 3
 
 # ---------------------------------------------------------------------------
 # Per-(provider, session) outbound concurrency limiter.
@@ -939,6 +950,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # See tokenpak/proxy/spend_guard/ + standards/29-spend-guard-agent-contract.md
         # Disabled with: spend_guard.enabled=false in config.yaml
         #            or: TOKENPAK_SPEND_GUARD_ENABLED=0
+        _sg_admission_ticket = None  # rolling-cap in-flight spend ticket
         if should_log and is_messages and body:
             try:
                 from tokenpak.proxy.request_pipeline import _resolve_session_id
@@ -951,13 +963,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _sg_model = str(_sg_body_json.get("model") or "")
                 except Exception:
                     pass
-                _sg_session = _resolve_session_id(self.headers, _sg_model or "unknown")
+                # Empty-string fallback: the monitor.db row for this request
+                # is written with the same resolver and an empty model
+                # fallback, so the guard-side check and the recorded row
+                # MUST agree on the session key for header-less traffic.
+                # (A model-name pseudo-session summed zero recorded rows
+                # forever, silently disabling session-cumulative caps.)
+                _sg_session = _resolve_session_id(self.headers, "")
                 _sg_outcome = _sg_evaluate(
                     body,
                     _sg_model or "claude-sonnet-4-6",  # safe default rate
                     _sg_session,
                     dict(self.headers),
                 )
+                _sg_admission_ticket = getattr(_sg_outcome, "admission_ticket", None)
                 # Forwarded outcomes update body for downstream pipeline.
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
@@ -987,21 +1006,39 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
                 else:
-                    # block / hard_block / cancel / reprompt / estimate
+                    # block / hard_block / cancel / reprompt / estimate.
+                    # Once the guard decided NOT to forward, a failure while
+                    # writing the response to the client must never fall
+                    # through to the forward path — hence the inner
+                    # try/except with an unconditional return.
                     _sg_resp = _sg_outcome.response_body or b"{}"
-                    self.send_response(_sg_outcome.http_status or 402)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(_sg_resp)))
-                    self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
-                    self.end_headers()
-                    self.wfile.write(_sg_resp)
+                    try:
+                        self.send_response(_sg_outcome.http_status or 402)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(_sg_resp)))
+                        self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
+                        self.end_headers()
+                        self.wfile.write(_sg_resp)
+                    except Exception as _sg_wexc:
+                        import logging as _sg_log
+                        _sg_log.getLogger(__name__).warning(
+                            "tokenpak.spend_guard: failed writing %s response "
+                            "to client (%s: %s) — request stays blocked",
+                            _sg_outcome.kind, type(_sg_wexc).__name__, _sg_wexc,
+                        )
                     return
             except ImportError:
                 pass  # spend guard not installed
             except Exception as _sg_exc:
+                # The guard's own evaluate() converts internal evaluator
+                # errors into fail-closed 402s, so an exception here is a
+                # proxy-hook defect (header/session resolution, outcome
+                # handling). Forwarding without the guard is deliberate for
+                # that narrow case — but it must be LOUD, not a debug line.
                 import logging as _sg_log
-                _sg_log.getLogger(__name__).debug(
-                    "tokenpak.spend_guard: error (passthrough): %s: %s",
+                _sg_log.getLogger(__name__).warning(
+                    "tokenpak.spend_guard: unexpected proxy-hook error — "
+                    "forwarding WITHOUT spend-guard evaluation: %s: %s",
                     type(_sg_exc).__name__, _sg_exc,
                 )
 
@@ -1734,6 +1771,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                                  cache_read_tokens, cache_creation_tokens)
                 saved = max(0, input_tokens - sent_input_tokens)
                 cost_saved = max(0.0, cost_without - cost)
+
+                # Settle the spend-guard in-flight admission now that this
+                # request's actual cost is known (the monitor row below makes
+                # it visible to DB-derived usage). Requests that die before
+                # reaching this point are reclaimed by the counter's TTL.
+                if _sg_admission_ticket:
+                    try:
+                        from tokenpak.proxy.spend_guard.rolling_caps import (
+                            settle_pending_spend as _sg_settle,
+                        )
+                        _sg_settle(_sg_admission_ticket)
+                    except Exception:
+                        pass
+                    _sg_admission_ticket = None
 
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
@@ -2481,14 +2532,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         by request count. Each entry contains the columns documented in
         Spec Component 11.
         """
-        import os
         import sqlite3 as _sqlite3
 
         ps = self.server.proxy_server
         db_path = (
             ps.monitor.db_path
             if getattr(ps, "monitor", None) is not None
-            else os.path.expanduser("~/.tokenpak/monitor.db")
+            else str(_paths.under("monitor.db"))
         )
 
         sessions: list = []
@@ -3138,6 +3188,19 @@ ForwardProxyHandler = _ProxyHandler
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def _write_proxy_pid_file() -> Path:
+    """Resolve the proxy PID path under TOKENPAK_HOME and write the current PID.
+
+    Extracted so scoped-home isolation is unit-testable without launching the
+    server. Honors TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a
+    scoped-home proxy writes its own pid instead of clobbering the default home.
+    """
+    pid_path = _paths.under("proxy.pid")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    return pid_path
+
+
 def main() -> None:
     """
     Entry point for ``python -m tokenpak.proxy.server``.
@@ -3159,7 +3222,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config", default=None, metavar="PATH",
-        help="Path to config YAML (env: TOKENPAK_CONFIG, default: ~/.tokenpak/config.yaml)",
+        help="Path to config YAML (env: TOKENPAK_CONFIG, default: <TOKENPAK_HOME>/config.yaml, i.e. ~/.tokenpak/config.yaml)",
     )
     parser.add_argument(
         "--log-level", default=None,
@@ -3183,6 +3246,12 @@ def main() -> None:
         os.environ["TOKENPAK_PROFILE"] = args.profile
     if args.config is not None:
         os.environ["TOKENPAK_CONFIG"] = args.config
+    elif "TOKENPAK_CONFIG" not in os.environ:
+        # Default config path honors TOKENPAK_HOME so a scoped-home proxy resolves
+        # its own config; unchanged (~/.tokenpak/config.yaml) when TOKENPAK_HOME is
+        # unset. NOTE: config.py's import-time loader may resolve the config file
+        # independently of this — full config scoping is a config.py residual.
+        os.environ["TOKENPAK_CONFIG"] = str(_paths.under("config.yaml"))
 
     _log_level = (args.log_level or os.environ.get("TOKENPAK_LOG_LEVEL", "warning")).upper()
     logging.basicConfig(level=_log_level, format="%(levelname)s %(name)s: %(message)s")
@@ -3198,10 +3267,10 @@ def main() -> None:
         "aggressive": "everything except protected gets compressed",
     }
 
-    # Write PID file on startup; remove on clean shutdown.
-    _pid_path = Path.home() / ".tokenpak" / "proxy.pid"
-    _pid_path.parent.mkdir(parents=True, exist_ok=True)
-    _pid_path.write_text(str(os.getpid()))
+    # Write PID file on startup; remove on clean shutdown. Path resolves under
+    # TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a scoped-home
+    # proxy writes its own pid instead of clobbering the default home.
+    _pid_path = _write_proxy_pid_file()
 
     from tokenpak.proxy.config import PROVIDER_DISPLAY as _provider_display
     print(f"""

@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-07-03T04:06:11Z",
-  "package_version": "1.9.2",
+  "generated_at": "2026-07-04T18:10:20Z",
+  "package_version": "1.10.2",
   "symbols": [
     {
       "module": "tokenpak",
@@ -814,6 +814,10 @@
     {
       "module": "tokenpak.cli.commands.doctor",
       "name": "build_lifecycle_summary"
+    },
+    {
+      "module": "tokenpak.cli.commands.doctor",
+      "name": "companion_hook_integrity"
     },
     {
       "module": "tokenpak.cli.commands.doctor",
@@ -9957,7 +9961,19 @@
     },
     {
       "module": "tokenpak.proxy.server",
+      "name": "UpstreamRetryPolicy"
+    },
+    {
+      "module": "tokenpak.proxy.server",
+      "name": "UpstreamTruncatedJSONError"
+    },
+    {
+      "module": "tokenpak.proxy.server",
       "name": "auto_detect_upstream"
+    },
+    {
+      "module": "tokenpak.proxy.server",
+      "name": "build_terminal_recovery_payload"
     },
     {
       "module": "tokenpak.proxy.server",
@@ -9970,6 +9986,10 @@
     {
       "module": "tokenpak.proxy.server",
       "name": "extract_sse_tokens"
+    },
+    {
+      "module": "tokenpak.proxy.server",
+      "name": "extract_tip_plan_id"
     },
     {
       "module": "tokenpak.proxy.server",
@@ -10017,11 +10037,19 @@
     },
     {
       "module": "tokenpak.proxy.server",
+      "name": "persist_failed_request_metadata"
+    },
+    {
+      "module": "tokenpak.proxy.server",
       "name": "provider_from_url"
     },
     {
       "module": "tokenpak.proxy.server",
       "name": "render_footer_oneline"
+    },
+    {
+      "module": "tokenpak.proxy.server",
+      "name": "response_has_truncated_json"
     },
     {
       "module": "tokenpak.proxy.server",
@@ -10034,6 +10062,14 @@
     {
       "module": "tokenpak.proxy.server",
       "name": "validate_auth"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "ASYNC_UPSTREAM_ACQUIRE_TIMEOUT"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "ASYNC_UPSTREAM_CONCURRENCY"
     },
     {
       "module": "tokenpak.proxy.server_async",
@@ -10061,7 +10097,23 @@
     },
     {
       "module": "tokenpak.proxy.server_async",
+      "name": "UpstreamRetryPolicy"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "UpstreamTruncatedJSONError"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "build_terminal_recovery_payload"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
       "name": "create_async_app"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "extract_tip_plan_id"
     },
     {
       "module": "tokenpak.proxy.server_async",
@@ -10122,6 +10174,18 @@
     {
       "module": "tokenpak.proxy.server_async",
       "name": "lifespan"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "persist_failed_request_metadata"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "provider_from_url"
+    },
+    {
+      "module": "tokenpak.proxy.server_async",
+      "name": "response_has_truncated_json"
     },
     {
       "module": "tokenpak.proxy.server_async",
@@ -10373,6 +10437,10 @@
     },
     {
       "module": "tokenpak.proxy.spend_guard.block_response",
+      "name": "block_store_unavailable"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.block_response",
       "name": "build_rolling_cap_block"
     },
     {
@@ -10453,6 +10521,10 @@
     },
     {
       "module": "tokenpak.proxy.spend_guard.orchestrator",
+      "name": "build_block_store_unavailable"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.orchestrator",
       "name": "build_cancelled"
     },
     {
@@ -10508,6 +10580,10 @@
       "name": "redact_headers"
     },
     {
+      "module": "tokenpak.proxy.spend_guard.pending",
+      "name": "reset_schema_cache_for_testing"
+    },
+    {
       "module": "tokenpak.proxy.spend_guard.policy",
       "name": "DEFAULT_BASIS_CONTEXT_WINDOW_PERCENT"
     },
@@ -10553,6 +10629,10 @@
     },
     {
       "module": "tokenpak.proxy.spend_guard.rolling_caps",
+      "name": "CAP_DIMENSION_UNMEASURABLE"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.rolling_caps",
       "name": "CapBreach"
     },
     {
@@ -10561,7 +10641,15 @@
     },
     {
       "module": "tokenpak.proxy.spend_guard.rolling_caps",
+      "name": "admit_pending_spend"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.rolling_caps",
       "name": "check_rolling_caps"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.rolling_caps",
+      "name": "check_rolling_caps_and_admit"
     },
     {
       "module": "tokenpak.proxy.spend_guard.rolling_caps",
@@ -10574,6 +10662,10 @@
     {
       "module": "tokenpak.proxy.spend_guard.rolling_caps",
       "name": "reset_caches_for_testing"
+    },
+    {
+      "module": "tokenpak.proxy.spend_guard.rolling_caps",
+      "name": "settle_pending_spend"
     },
     {
       "module": "tokenpak.proxy.spend_guard.session_state",
@@ -10714,6 +10806,58 @@
     {
       "module": "tokenpak.proxy.tracing",
       "name": "TraceStorage"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "NON_RETRYABLE_UPSTREAM_STATUSES"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "RETRYABLE_UPSTREAM_EXCEPTIONS"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "RETRYABLE_UPSTREAM_STATUSES"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "RateLimitBackoff"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "RetryDecision"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "UpstreamRetryPolicy"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "UpstreamTruncatedJSONError"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "build_terminal_recovery_payload"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "extract_tip_plan_id"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "local_json_body_is_valid"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "persist_failed_request_metadata"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "request_is_deterministic"
+    },
+    {
+      "module": "tokenpak.proxy.upstream_retry",
+      "name": "response_has_truncated_json"
     },
     {
       "module": "tokenpak.proxy.vault_bridge",
@@ -16418,26 +16562,6 @@
     {
       "module": "tokenpak.vault.doctor_check",
       "name": "summarize"
-    },
-    {
-      "module": "tokenpak.vault.health",
-      "name": "DEFAULT_STALE_SECONDS"
-    },
-    {
-      "module": "tokenpak.vault.health",
-      "name": "HealthCheckResult"
-    },
-    {
-      "module": "tokenpak.vault.health",
-      "name": "IndexStatus"
-    },
-    {
-      "module": "tokenpak.vault.health",
-      "name": "RepairResult"
-    },
-    {
-      "module": "tokenpak.vault.health",
-      "name": "VaultHealth"
     },
     {
       "module": "tokenpak.vault.indexer",
