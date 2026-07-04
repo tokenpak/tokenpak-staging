@@ -31,7 +31,22 @@ except ImportError:
             return _json.load(f)
 
 
-CONFIG_PATH = Path(os.environ.get("TOKENPAK_CONFIG", str(Path.home() / ".tokenpak" / "config.yaml")))
+def _default_config_path() -> str:
+    """Default ``config.yaml`` location, resolved via the canonical home resolver.
+
+    Routes through :mod:`tokenpak._paths` so the unset-``TOKENPAK_CONFIG`` default
+    honors ``TOKENPAK_HOME`` and the ``~/.tpk`` / ``~/.tokenpak`` resolution shared by
+    all other TokenPak state (previously this default hardcoded ``~/.tokenpak``, the
+    last split-brain holdout). ``TOKENPAK_CONFIG`` still overrides. Lazy import matches
+    the repo idiom (registry, _cli_core, core/paths) and avoids import-order coupling
+    during package init.
+    """
+    from tokenpak import _paths
+
+    return str(_paths.under("config.yaml"))
+
+
+CONFIG_PATH = Path(os.environ.get("TOKENPAK_CONFIG", _default_config_path()))
 
 
 def _maybe_migrate_json_to_yaml() -> None:

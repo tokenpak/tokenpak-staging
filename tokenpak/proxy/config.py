@@ -430,7 +430,9 @@ def _load_tokenpak_upstream_overrides() -> Dict[str, str]:
     the loaded config.yaml (post-migration).
     Supports current shape at `models.providers` and legacy root `providers`.
     """
-    cfg_path = Path.home() / ".tokenpak" / "config.json"
+    from tokenpak._paths import under as _under
+
+    cfg_path = _under("config.json")
     if cfg_path.exists():
         try:
             cfg = json.loads(cfg_path.read_text())
