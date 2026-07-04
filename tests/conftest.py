@@ -96,6 +96,15 @@ _os.environ["USERPROFILE"] = str(_FAKE_HOME)
 if "XDG_CACHE_HOME" not in _os.environ and (_REAL_HOME / ".cache").is_dir():
     _os.environ["XDG_CACHE_HOME"] = str(_REAL_HOME / ".cache")
 
+# Preserve user-site packages for subprocess children. Redirecting HOME hides
+# the real ``~/.local``, so a ``pip install --user``-installed dependency (e.g.
+# watchdog) becomes unimportable in HOME-redirected subprocesses — which can
+# hang hook/CLI subprocess tests. Point PYTHONUSERBASE at the real home's
+# ``.local`` (mirrors the XDG_CACHE_HOME carve-out above) so user-site stays on
+# ``sys.path`` for children while ~/.tokenpak state remains isolated.
+if "PYTHONUSERBASE" not in _os.environ and (_REAL_HOME / ".local").is_dir():
+    _os.environ["PYTHONUSERBASE"] = str(_REAL_HOME / ".local")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_user_home():

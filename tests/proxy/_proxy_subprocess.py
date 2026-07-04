@@ -193,6 +193,11 @@ class ProxyProc:
 def assert_no_exceptions_in_stderr(proxy: ProxyProc) -> None:
     """Fail if the proxy subprocess logged tracebacks or handler errors."""
     err = proxy.stderr()
-    markers = ("Traceback (most recent call last)", "Proxy error", "DB write error")
+    markers = (
+        "Traceback (most recent call last)",
+        "Proxy error",
+        "DB write error",
+        "DB write dropped",  # post-#470 monitor drop marker — keep deliberate drops visible
+    )
     hits = [m for m in markers if m in err]
     assert not hits, f"proxy stderr contains error marker(s) {hits}:\n{err}"
