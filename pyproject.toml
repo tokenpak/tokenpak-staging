@@ -227,6 +227,19 @@ tokenpak = [
     "orchestration/dispatch/registry/overlays/*.yaml",
     "orchestration/dispatch/schemas/*.json",
 ]
+# Companion shell hooks + codex skills live inside subpackages, so they must be
+# declared against their owning package — a glob under the parent ``tokenpak``
+# key does not match files that belong to a nested package.
+"tokenpak.companion" = [
+    "GUIDE.md",
+]
+"tokenpak.companion.codex" = [
+    "*.sh",
+    "skills/*/SKILL.md",
+]
+"tokenpak.companion.hooks" = [
+    "*.sh",
+]
 
 [tool.setuptools.dynamic]
 version = {attr = "tokenpak.__version__"}

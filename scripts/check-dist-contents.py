@@ -35,6 +35,39 @@ REQUIRED_DISPATCH_DATA_GLOBS = (
     "tokenpak/orchestration/dispatch/registry/overlays/*.yaml",
     "tokenpak/orchestration/dispatch/schemas/*.json",
 )
+# Companion packaged-data contract (Std 30 §13.1 R9 content-completeness):
+# tokenpak/companion/codex/hooks.py resolves its shell scripts next to itself
+# at runtime (_HOOKS_DIR = Path(__file__).parent), so a wheel that omits them
+# yields hooks.json entries pointing at nonexistent files — every hook then
+# fails with bash exit 127 on a clean pip install. The five basenames below are
+# the hooks.py contract and act as a hard floor even if the source tree
+# changes; everything else is discovered dynamically from the repo so newly
+# added companion data files are guarded automatically.
+REQUIRED_CODEX_HOOK_BASENAMES = (
+    "hooks_session_start.sh",
+    "hooks_pre_send.sh",
+    "hooks_pre_tool_use.sh",
+    "hooks_post_tool_use.sh",
+    "hooks_stop.sh",
+)
+
+
+def _required_companion_data() -> set[str]:
+    companion = REPO_ROOT / "tokenpak" / "companion"
+    required = {"tokenpak/companion/GUIDE.md"}
+    required.update(
+        f"tokenpak/companion/codex/{name}" for name in REQUIRED_CODEX_HOOK_BASENAMES
+    )
+    required.update(
+        p.relative_to(REPO_ROOT).as_posix() for p in companion.rglob("*.sh")
+    )
+    required.update(
+        p.relative_to(REPO_ROOT).as_posix()
+        for p in (companion / "codex" / "skills").rglob("SKILL.md")
+    )
+    return required
+
+
 PACKAGE_TEST_PATH_RE = re.compile(r"^tokenpak/(?:tests/|.+/tests/)")
 BYTECODE_PATH_RE = re.compile(r"(^|/)__pycache__/|\.py[cod]$")
 
@@ -122,6 +155,15 @@ def _assert_required_dispatch_data(names: set[str], artifact_label: str) -> None
         )
 
 
+def _assert_required_companion_data(names: set[str], artifact_label: str) -> None:
+    missing = sorted(_required_companion_data() - names)
+    if missing:
+        raise AssertionError(
+            f"{artifact_label} is missing required companion package data "
+            f"(hooks/skills would fail at runtime): {', '.join(missing)}"
+        )
+
+
 def _assert_no_development_artifacts(names: set[str], artifact_label: str) -> None:
     offenders = sorted(
         name
@@ -154,6 +196,8 @@ def main() -> int:
     _assert_required_data(sdist_names, "sdist")
     _assert_required_dispatch_data(wheel_names, "wheel")
     _assert_required_dispatch_data(sdist_names, "sdist")
+    _assert_required_companion_data(wheel_names, "wheel")
+    _assert_required_companion_data(sdist_names, "sdist")
     _assert_no_development_artifacts(wheel_names, "wheel")
     _assert_no_development_artifacts(sdist_names, "sdist")
     print("distribution contents are clean")

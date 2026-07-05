@@ -116,3 +116,36 @@ def test_required_generic_data_still_enforced():
     cdc._assert_required_data(SHIPPED_NAMES, "wheel")
     with pytest.raises(AssertionError):
         cdc._assert_required_data(SHIPPED_NAMES - {"tokenpak/term_cards.json"}, "wheel")
+
+
+# --- companion packaged-data assertion (Std 30 §13.1 R9) --------------------
+# The codex companion resolves its hook scripts next to hooks.py at runtime,
+# so the gate must FAIL when any companion shell hook, codex skill, or the
+# companion guide drops out of a built artifact.
+
+
+def test_required_companion_data_covers_hook_contract():
+    required = cdc._required_companion_data()
+    for basename in cdc.REQUIRED_CODEX_HOOK_BASENAMES:
+        assert f"tokenpak/companion/codex/{basename}" in required
+    assert "tokenpak/companion/GUIDE.md" in required
+    # Repo-derived entries: claude-code companion hooks + at least one skill.
+    assert "tokenpak/companion/hooks/pre_send.sh" in required
+    assert any(
+        n.startswith("tokenpak/companion/codex/skills/") and n.endswith("/SKILL.md")
+        for n in required
+    )
+
+
+def test_companion_data_present_passes():
+    cdc._assert_required_companion_data(cdc._required_companion_data(), "wheel")
+
+
+@pytest.mark.parametrize("basename", cdc.REQUIRED_CODEX_HOOK_BASENAMES)
+def test_missing_codex_hook_script_fails(basename):
+    names = cdc._required_companion_data() - {f"tokenpak/companion/codex/{basename}"}
+    with pytest.raises(AssertionError) as excinfo:
+        cdc._assert_required_companion_data(names, "wheel")
+    msg = str(excinfo.value)
+    assert "companion package data" in msg
+    assert basename in msg
