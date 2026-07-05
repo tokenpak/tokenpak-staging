@@ -29,11 +29,28 @@ from tokenpak.proxy.spend_guard._context_window import known_models
 class TestKnownContextWindows:
     """The published frontier models we ship lookups for."""
 
-    def test_claude_opus_4_7_is_200k(self):
-        assert get_model_max_context("claude-opus-4-7") == 200_000
+    def test_claude_opus_4_7_is_1m(self):
+        # Provider-published max_input_tokens — the 1M-window Opus line.
+        assert get_model_max_context("claude-opus-4-7") == 1_000_000
 
-    def test_claude_sonnet_4_6_is_200k(self):
-        assert get_model_max_context("claude-sonnet-4-6") == 200_000
+    def test_claude_opus_4_8_is_1m(self):
+        assert get_model_max_context("claude-opus-4-8") == 1_000_000
+
+    def test_claude_fable_5_is_1m(self):
+        assert get_model_max_context("claude-fable-5") == 1_000_000
+
+    def test_claude_mythos_5_is_1m(self):
+        assert get_model_max_context("claude-mythos-5") == 1_000_000
+
+    def test_claude_sonnet_5_is_1m(self):
+        assert get_model_max_context("claude-sonnet-5") == 1_000_000
+
+    def test_claude_sonnet_4_6_is_1m(self):
+        assert get_model_max_context("claude-sonnet-4-6") == 1_000_000
+
+    def test_claude_opus_4_5_is_200k(self):
+        # Legacy line stays at 200K.
+        assert get_model_max_context("claude-opus-4-5") == 200_000
 
     def test_claude_haiku_4_5_is_200k(self):
         assert get_model_max_context("claude-haiku-4-5") == 200_000
@@ -59,19 +76,19 @@ class TestModelIdNormalization:
     matches the same way the proxy sees model ids."""
 
     def test_uppercase_input(self):
-        assert get_model_max_context("Claude-Opus-4-7") == 200_000
+        assert get_model_max_context("Claude-Opus-4-7") == 1_000_000
 
     def test_provider_prefix_is_stripped(self):
-        assert get_model_max_context("anthropic/claude-opus-4-7") == 200_000
+        assert get_model_max_context("anthropic/claude-opus-4-7") == 1_000_000
         assert get_model_max_context("openai/gpt-4o") == 128_000
 
     def test_date_suffix_is_stripped(self):
-        assert get_model_max_context("claude-opus-4-7-20261015") == 200_000
+        assert get_model_max_context("claude-opus-4-7-20261015") == 1_000_000
 
     def test_longest_prefix_match(self):
         # A future variant like "claude-opus-4-7-canary" should still
-        # resolve to the base family's 200K window.
-        assert get_model_max_context("claude-opus-4-7-canary") == 200_000
+        # resolve to the base family's window.
+        assert get_model_max_context("claude-opus-4-7-canary") == 1_000_000
 
     def test_whitespace_is_trimmed(self):
         assert get_model_max_context("  gpt-4o  ") == 128_000
@@ -108,6 +125,29 @@ class TestKnownModelsList:
         assert len(models) > 0
         assert models == sorted(models)
         assert "claude-opus-4-7" in models
+
+
+class TestRegistrySingleSource:
+    """The spend-guard lookup delegates to the tokenpak.models registry —
+    the seed catalog's ``context_windows`` section is the single source."""
+
+    def test_shim_matches_registry(self):
+        from tokenpak.models import get_model_max_context as registry_lookup
+        for mid in ("claude-fable-5", "claude-opus-4-8", "claude-haiku-4-5",
+                    "gpt-4.1", "gemini-2.5-pro", "unknown-frontier-model"):
+            assert get_model_max_context(mid) == registry_lookup(mid)
+
+    def test_catalog_section_is_loaded(self):
+        import json
+        from pathlib import Path
+        import tokenpak.models as models_pkg
+        catalog = json.loads(
+            (Path(models_pkg.__file__).parent / "data" / "seed_catalog.json")
+            .read_text(encoding="utf-8")
+        )
+        section = catalog["context_windows"]
+        entries = {k for k in section if not k.startswith("_")}
+        assert entries == set(known_models())
 
 
 class TestDeriveBlockThreshold:
@@ -175,8 +215,9 @@ class TestSelectedModelChangesThreshold:
     """Switching the selected model changes the derived block threshold."""
 
     @pytest.mark.parametrize("model_id, expected_ctx, expected_block", [
-        ("claude-opus-4-7", 200_000, 160_000),
-        ("claude-sonnet-4-6", 200_000, 160_000),
+        ("claude-opus-4-7", 1_000_000, 800_000),
+        ("claude-sonnet-4-6", 1_000_000, 800_000),
+        ("claude-haiku-4-5", 200_000, 160_000),
         ("gpt-4o", 128_000, 102_400),
         ("gpt-4.1", 1_047_576, 838_060),
         ("o1", 200_000, 160_000),

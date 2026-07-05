@@ -38,6 +38,7 @@ __all__ = [
     "get_default_routes",
     "get_all_tiers",
     "known_models",
+    "get_model_max_context",
     "start_discovery",
     "stop_discovery",
 ]
@@ -124,6 +125,11 @@ def get_all_tiers() -> dict[str, int]:
 def known_models() -> list[str]:
     """Return all registered model IDs."""
     return [m.model_id for m in get_registry().all_models()]
+
+
+def get_model_max_context(model_id: str | None) -> int | None:
+    """Max context window (max_input_tokens) for a model id, or None if unknown."""
+    return get_registry().get_model_max_context(model_id)
 
 
 def start_discovery() -> None:

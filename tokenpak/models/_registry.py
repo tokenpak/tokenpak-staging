@@ -64,6 +64,7 @@ class ModelRegistry:
         self._families: list[FamilyRule] = get_sorted_families()
         self._shadow_targets: dict[str, dict[str, str]] = {}
         self._provider_cache_multipliers: dict[str, dict[str, float]] = {}
+        self._context_windows: dict[str, int] = {}
         self._lock = threading.RLock()
         self._loaded = False
 
@@ -88,6 +89,15 @@ class ModelRegistry:
 
         # Shadow targets
         self._shadow_targets = raw.get("shadow_targets", {})
+
+        # Context windows (max_input_tokens per model). Values verify against
+        # the provider's published Models API metadata; unknown models resolve
+        # to None so spend-guard callers fall back to their static threshold.
+        self._context_windows = {
+            key.lower(): value
+            for key, value in raw.get("context_windows", {}).items()
+            if not key.startswith("_") and isinstance(value, int)
+        }
 
         # Models
         models_raw = raw.get("models", {})
@@ -290,6 +300,52 @@ class ModelRegistry:
         with self._lock:
             return list(self._models.values())
 
+    def get_model_max_context(self, model_id: str | None) -> int | None:
+        """Resolve the max context window (max_input_tokens) for a model id.
+
+        Returns ``None`` when the model is unknown — the caller is
+        responsible for falling back to its configured static threshold
+        (spend-guard audits ``threshold_hit=block_tokens_fallback``) rather
+        than silently assuming a default.
+
+        Matching strategy (case-insensitive): exact match; strip provider
+        prefix (``anthropic/…``); strip trailing 8-digit date suffix; then
+        longest-prefix match against the catalog keys.
+        """
+        if not model_id:
+            return None
+        m = model_id.lower().strip()
+        if not m:
+            return None
+        self._ensure_loaded()
+        with self._lock:
+            windows = self._context_windows
+            if m in windows:
+                return windows[m]
+            if "/" in m:
+                suffix = m.split("/", 1)[1]
+                if suffix in windows:
+                    return windows[suffix]
+                m = suffix
+            stripped = _DATE_SUFFIX_RE.sub("", m)
+            if stripped != m and stripped in windows:
+                return windows[stripped]
+            best_key: str | None = None
+            best_len = 0
+            for key in windows:
+                if (m.startswith(key) or stripped.startswith(key)) and len(key) > best_len:
+                    best_key = key
+                    best_len = len(key)
+            if best_key is not None:
+                return windows[best_key]
+            return None
+
+    def known_context_window_models(self) -> list[str]:
+        """Return the context-window catalog's model-id keys (sorted)."""
+        self._ensure_loaded()
+        with self._lock:
+            return sorted(self._context_windows)
+
     def register(self, info: ModelInfo) -> None:
         """Register or update a model at runtime (e.g. from discovery)."""
         with self._lock:
@@ -304,6 +360,7 @@ class ModelRegistry:
             self._aliases.clear()
             self._shadow_targets.clear()
             self._provider_cache_multipliers.clear()
+            self._context_windows.clear()
             self._load_seed_catalog(path)
 
     @property
