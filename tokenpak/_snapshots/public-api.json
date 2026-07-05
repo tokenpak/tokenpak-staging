@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-07-04T18:10:20Z",
-  "package_version": "1.10.2",
+  "generated_at": "2026-07-05T07:40:47Z",
+  "package_version": "1.10.3",
   "symbols": [
     {
       "module": "tokenpak",
@@ -9406,6 +9406,10 @@
     {
       "module": "tokenpak.proxy.monitor",
       "name": "get_current_schema_version"
+    },
+    {
+      "module": "tokenpak.proxy.monitor",
+      "name": "get_dropped_row_count"
     },
     {
       "module": "tokenpak.proxy.network_utils",
