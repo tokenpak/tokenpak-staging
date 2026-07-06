@@ -35,13 +35,12 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
-import httpx
-
 from tokenpak import __version__ as _tokenpak_version
-from tokenpak import _paths
+from tokenpak import _paths  # scoped-home path resolver (honors TOKENPAK_HOME)
 from tokenpak.cache.telemetry import CacheMetrics
 from tokenpak.cache.telemetry import get_collector as _get_cache_collector
 from tokenpak.core.config import get_stats_footer_enabled
@@ -86,200 +85,33 @@ from .route_policy import get_policy
 from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost
 from .startup import format_startup_report, run_startup_checks
 from .stats import CompressionStats
-from .streaming import extract_sse_tokens
-
-# ---------------------------------------------------------------------------
-# Upstream retry configuration — transparent retry on transient 5xx and
-# protocol errors so the Claude CLI never sees the mid-stream disconnects
-# Anthropic currently produces at ~15% on large requests.
-# ---------------------------------------------------------------------------
-MAX_UPSTREAM_RETRIES: int = int(os.environ.get("TOKENPAK_UPSTREAM_RETRIES", "3"))
-
-_RETRYABLE_UPSTREAM_EXCEPTIONS: tuple = (
-    httpx.RemoteProtocolError,
-    httpx.LocalProtocolError,
-    httpx.ReadError,
-    httpx.WriteError,
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
+from .streaming import _extract_sse_stop_reason, extract_sse_tokens
+from .upstream_retry import (
+    UpstreamRetryPolicy,
+    UpstreamTruncatedJSONError,
+    build_terminal_recovery_payload,
+    extract_tip_plan_id,
+    persist_failed_request_metadata,
+    response_has_truncated_json,
 )
 
-
-def _is_retryable_upstream_status(status_code: int) -> bool:
-    return status_code in (502, 503, 504)
-
-
-def _upstream_retry_backoff(attempt: int) -> float:
-    # 0.2s, 0.6s, 1.8s — bounded
-    return min(2.5, 0.2 * (3 ** attempt))
-
-
 # ---------------------------------------------------------------------------
-# [TIP: deterministic=on] — reproducible eval mode (TIP versioning standard)
+# Upstream retry configuration.
 #
-# Deterministic contour in this hot path:
-#   - transparent upstream retries forced to a single attempt (fail loud);
-#   - prompt-mutating stages (vault injection, compression request hook)
-#     disabled; DLP redaction stays active (security control) but is
-#     explicitly RECORDED as a transform;
-#   - semantic response substitution disabled (tokenpak.cache.semantic_cache
-#     honors deterministic=True at the API level);
-#   - no cross-provider fallback exists in this request path — the route is
-#     locked to the client-addressed provider/model;
-#   - reproducibility metadata emitted as X-TokenPak-Deterministic-* headers,
-#     including a SHA-256 request fingerprint (strip-list documented in
-#     tokenpak/proxy/spend_guard/tip_header.py and docs/evals.md);
-#   - precedence vs other TIP directives enforced BEFORE the spend guard
-#     (see spend_guard.policy.deterministic_precedence): estimate=on is
-#     compatible; allow=*/bypass=on are rejected with a structured 400.
-#     Unsupported deterministic values fail loudly (400), never silent-strip.
-#   - NOT a spend bypass: spend-guard bands fire exactly as without it.
+# Retry behavior is factored into UpstreamRetryPolicy so the streaming and
+# non-streaming paths share the same transient-error, deterministic-mode, and
+# Retry-After rules.
 # ---------------------------------------------------------------------------
 
-# Generation-control fields echoed in the metadata headers when present in
-# the request body. Never injected — absence upstream is preserved (do not
-# assume any provider supports seed).
-_DETERMINISTIC_GENERATION_PARAMS: tuple = (
-    "temperature", "top_p", "top_k", "stop", "stop_sequences", "max_tokens",
-)
-
-
-def _deterministic_preflight(body: Optional[bytes]):
-    """Peek-parse a leading ``[TIP: ...]`` header for deterministic mode.
-
-    Returns ``(state, error)``:
-
-    - ``state`` — dict with the deterministic request context when
-      ``deterministic=on`` is present and the directive combination is valid,
-      else ``None``.
-    - ``error`` — ``(http_status, error_type, message)`` when the request
-      must be REJECTED (fail-loud contract: invalid deterministic value or an
-      incompatible directive combination), else ``None``.
-
-    Read-only peek: the body forwarded upstream is stripped later by the
-    spend-guard layer (with a fixup if that layer is disabled).
-    """
-    if not body:
-        return None, None
-    from tokenpak.proxy.spend_guard.policy import deterministic_precedence
-    from tokenpak.proxy.spend_guard.tip_header import parse_and_strip_tip_header
-
-    directive, stripped = parse_and_strip_tip_header(body)
-    if directive is None:
-        return None, None
-    invalid = getattr(directive, "deterministic_invalid_value", None)
-    if invalid is not None:
-        return None, (
-            400,
-            "tokenpak_deterministic_invalid_value",
-            f"[TIP: deterministic={invalid}] is not supported. "
-            "Allowed values: on/true/1/yes (enable), off/false/0/no (disable). "
-            "Unsupported deterministic fields fail loudly and are never "
-            "silently stripped.",
-        )
-    if not getattr(directive, "deterministic", False):
-        return None, None
-    conflict = deterministic_precedence(directive)
-    if conflict:
-        return None, (
-            400,
-            "tokenpak_deterministic_directive_conflict",
-            f"[TIP: deterministic=on] is incompatible with the supplied "
-            f"directive ({conflict}). allow/bypass release-or-replay semantics "
-            "conflict with the deterministic no-retry/no-substitution "
-            "guarantees. Re-send without the conflicting directive "
-            "([TIP: estimate=on] remains compatible).",
-        )
-
-    state: Dict[str, Any] = {
-        "active": True,
-        "stripped_body": stripped,
-        "transforms": ["tip_header_strip"],
-        "prompt_mutation_delta_tokens": 0,
-        "fingerprint": "",
-        "provider": "",
-        "model": "",
-        "seed": None,
-        "params": {},
-    }
-    try:
-        parsed = json.loads(stripped.decode("utf-8", errors="replace"))
-        if isinstance(parsed, dict):
-            state["model"] = str(parsed.get("model") or "")
-            if "seed" in parsed:
-                state["seed"] = parsed.get("seed")
-            for key in _DETERMINISTIC_GENERATION_PARAMS:
-                if key in parsed:
-                    state["params"][key] = parsed.get(key)
-    except Exception:
-        pass
-    return state, None
-
-
-def _deterministic_finalize(state: dict, final_body: Optional[bytes], provider: str) -> None:
-    """Compute the fingerprint + mutation delta over the FINAL forwarded bytes.
-
-    Called once after every body-mutating stage has run (or been skipped).
-    ``prompt_mutation_delta_tokens`` is the estimated token delta between the
-    TIP-stripped request as received and the bytes actually forwarded — 0
-    unless a recorded transform (e.g. DLP redaction) mutated the prompt.
-    """
-    from tokenpak.proxy.spend_guard.tip_header import compute_request_fingerprint
-
-    state["provider"] = provider or ""
-    body = final_body if final_body is not None else b""
-    state["fingerprint"] = compute_request_fingerprint(body)
-    baseline = state.get("stripped_body") or b""
-    if body != baseline:
-        try:
-            state["prompt_mutation_delta_tokens"] = (
-                _estimate_tokens_from_body(body) - _estimate_tokens_from_body(baseline)
-            )
-        except Exception:
-            state["prompt_mutation_delta_tokens"] = 0
-
-
-def _deterministic_response_headers(state: dict) -> list:
-    """Build the ``X-TokenPak-Deterministic-*`` metadata header list.
-
-    Required metadata per the reproducible-eval contract: deterministic_mode,
-    request_fingerprint, provider, model, model_version (when available —
-    omitted here: providers on this path do not expose a distinct version
-    surface), seed (only when the CLIENT supplied one), generation params,
-    fallback_used=false, retry_used=false, cache_substitution_used=false,
-    prompt_mutation_delta_tokens, adapter_required_transform.
-    """
-    headers = [("X-TokenPak-Deterministic", "on")]
-    if state.get("fingerprint"):
-        headers.append(("X-TokenPak-Deterministic-Fingerprint", state["fingerprint"]))
-    if state.get("provider"):
-        headers.append(("X-TokenPak-Deterministic-Provider", state["provider"]))
-    if state.get("model"):
-        headers.append(("X-TokenPak-Deterministic-Model", state["model"]))
-    if state.get("seed") is not None:
-        headers.append(("X-TokenPak-Deterministic-Seed", str(state["seed"])))
-    if state.get("params"):
-        headers.append((
-            "X-TokenPak-Deterministic-Params",
-            json.dumps(state["params"], sort_keys=True, separators=(",", ":")),
-        ))
-    headers.extend([
-        # Honest by construction: the mechanisms are disabled in this mode.
-        ("X-TokenPak-Deterministic-Fallback-Used", "false"),
-        ("X-TokenPak-Deterministic-Retry-Used", "false"),
-        ("X-TokenPak-Deterministic-Cache-Substitution-Used", "false"),
-        (
-            "X-TokenPak-Deterministic-Prompt-Mutation-Delta-Tokens",
-            str(int(state.get("prompt_mutation_delta_tokens") or 0)),
-        ),
-        (
-            "X-TokenPak-Deterministic-Adapter-Required-Transform",
-            ",".join(state.get("transforms") or []) or "none",
-        ),
-    ])
-    return headers
-
+# Deprecated compatibility alias — import compatibility only. Retry behavior
+# is governed by UpstreamRetryPolicy, which reads TOKENPAK_UPSTREAM_RETRIES
+# itself (the supported operator control); mutating this constant has no
+# effect. It mirrors the policy's parse of TOKENPAK_UPSTREAM_RETRIES at
+# import time and will be removed in a future minor release.
+try:
+    MAX_UPSTREAM_RETRIES: int = max(1, int(os.environ.get("TOKENPAK_UPSTREAM_RETRIES", "3")))
+except ValueError:
+    MAX_UPSTREAM_RETRIES = 3
 
 # ---------------------------------------------------------------------------
 # Per-(provider, session) outbound concurrency limiter.
@@ -302,6 +134,23 @@ import threading as _threading
 _upstream_semaphores: Dict[tuple, _threading.BoundedSemaphore] = {}
 _upstream_sem_lock = _threading.Lock()
 _upstream_inflight: Dict[tuple, int] = {}
+# Last touch (fetch or counter change) per key — drives idle eviction below.
+_upstream_sem_last_activity: Dict[tuple, float] = {}
+
+# How long a (provider, session) entry must sit at zero in-flight with no
+# activity before its semaphore object may be evicted. Evicting at the moment
+# the counter hits zero is racy: acquisition is fetch-semaphore → acquire →
+# increment (not atomic), so a release-to-zero eviction between another
+# thread's fetch and acquire leaves that thread gating on the orphaned
+# semaphore while the next request mints a fresh one for the same key —
+# allowing up to 2x the per-(provider, session) concurrency cap. Deferring
+# eviction until the entry has been idle far longer than any fetch→acquire
+# window (bounded by the acquire timeout) removes the race in practice while
+# still bounding memory growth from high-churn ip:port-derived session keys.
+_UPSTREAM_SEM_IDLE_EVICT_SECONDS: float = max(
+    float(os.environ.get("TOKENPAK_UPSTREAM_SEM_IDLE_EVICT_SECS", "600")),
+    2.0 * _UPSTREAM_ACQUIRE_TIMEOUT,
+)
 
 
 def _get_upstream_semaphore(
@@ -319,8 +168,25 @@ def _get_upstream_semaphore(
         if sem is None:
             sem = _threading.BoundedSemaphore(_UPSTREAM_CONCURRENCY)
             _upstream_semaphores[key] = sem
-            _upstream_inflight[key] = 0
+            _upstream_inflight.setdefault(key, 0)
+        _upstream_sem_last_activity[key] = time.monotonic()
     return sem
+
+
+def _evict_idle_upstream_entries_locked(now: float) -> None:
+    """Evict zero-in-flight entries idle past the eviction window.
+
+    Caller must hold ``_upstream_sem_lock``.
+    """
+    cutoff = now - _UPSTREAM_SEM_IDLE_EVICT_SECONDS
+    for key in [
+        k
+        for k, last in _upstream_sem_last_activity.items()
+        if last < cutoff and _upstream_inflight.get(k, 0) <= 0
+    ]:
+        _upstream_sem_last_activity.pop(key, None)
+        _upstream_inflight.pop(key, None)
+        _upstream_semaphores.pop(key, None)
 
 
 def _upstream_inflight_delta(
@@ -328,21 +194,22 @@ def _upstream_inflight_delta(
 ) -> int:
     """Adjust and return the in-flight counter for (provider, session).
 
-    When a release (delta < 0) drives the counter to zero, the key is evicted
-    from both _upstream_inflight and _upstream_semaphores. session_key falls
-    back to the per-connection client "ip:port", so without eviction every
-    distinct key mints a permanent entry in both dicts that is never reclaimed
-    — they accumulate even with zero active connections, which is the RSS heap
-    leak. Entries are recreated lazily on the next request for the same key.
+    The semaphore object is deliberately NOT evicted the moment its counter
+    returns to zero — that raced with acquisition (see the eviction-window
+    comment above) and allowed 2x the concurrency cap. Instead, zero-count
+    entries are swept only after _UPSTREAM_SEM_IDLE_EVICT_SECONDS without
+    activity, which still reclaims the memory that high-churn ip:port session
+    keys would otherwise leak (entries are recreated lazily on the next
+    request for the same key).
     """
     key = (provider or "_unknown", session_key or "_shared")
+    now = time.monotonic()
     with _upstream_sem_lock:
         count = max(0, _upstream_inflight.get(key, 0) + delta)
+        _upstream_inflight[key] = count
+        _upstream_sem_last_activity[key] = now
         if delta < 0 and count == 0:
-            _upstream_inflight.pop(key, None)
-            _upstream_semaphores.pop(key, None)
-        else:
-            _upstream_inflight[key] = count
+            _evict_idle_upstream_entries_locked(now)
         return count
 
 
@@ -350,10 +217,45 @@ def get_upstream_inflight_snapshot() -> Dict[str, int]:
     """Return a snapshot of current in-flight counts, for /health exposure.
 
     Keyed as ``"<provider>::<session>"`` for JSON-friendliness. The
-    legacy shared path appears under ``"<provider>::_shared"``.
+    legacy shared path appears under ``"<provider>::_shared"``. Zero-count
+    entries (kept alive briefly for the eviction-window guarantee above)
+    are omitted — the snapshot reports actual in-flight work.
     """
     with _upstream_sem_lock:
-        return {f"{prov}::{sess}": n for (prov, sess), n in _upstream_inflight.items()}
+        return {
+            f"{prov}::{sess}": n
+            for (prov, sess), n in _upstream_inflight.items()
+            if n > 0
+        }
+
+
+# ---------------------------------------------------------------------------
+# Circuit-breaker outcome classification
+# ---------------------------------------------------------------------------
+
+# Upstream statuses that count as provider failures for the provider circuit
+# breaker: the retryable gateway statuses (502/503/504) plus 500 and 529
+# (provider "overloaded") — all provider-side failure signals even when the
+# HTTP exchange itself completes without an exception. 429 is deliberately
+# EXCLUDED: rate limiting feeds the separate rate-limit circuit breaker.
+_CB_FAILURE_STATUSES = frozenset({500, 502, 503, 504, 529})
+
+
+def _cb_status_is_provider_failure(status_code: Optional[int]) -> bool:
+    """True when a completed exchange's final status is a provider failure."""
+    return status_code in _CB_FAILURE_STATUSES
+
+
+def _is_client_disconnect_error(exc: BaseException) -> bool:
+    """True for socket errors from OUR downstream client, not the provider.
+
+    Upstream I/O failures surface wrapped in httpx exception types, so a raw
+    ``BrokenPipeError``/``ConnectionResetError`` escaping the handler comes
+    from writing to ``self.wfile`` — i.e. the CLI/client vanished
+    mid-response. The provider did nothing wrong; these must not count
+    against the provider circuit breaker.
+    """
+    return isinstance(exc, (BrokenPipeError, ConnectionResetError))
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +458,12 @@ from tokenpak.proxy.forecast_endpoint import (  # noqa: E402
     _forecast_latency_lock,
 )
 
+
+def _is_app_endpoint_path(path: str) -> bool:
+    """True for proxy-owned app API namespaces that must never fall through."""
+    return path.startswith("/tpk/v1/") or path.startswith("/pak/v1/")
+
+
 # ---------------------------------------------------------------------------
 # Threaded HTTP server
 # ---------------------------------------------------------------------------
@@ -730,9 +638,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _tp_try_get(self):
                 return
         except Exception as _exc:
-            # App endpoint dispatch must never break the LLM passthrough.
             import sys as _sys
-            print(f"[tokenpak] /tpk/v1 dispatch error: {_exc}", file=_sys.stderr)
+            print(f"[tokenpak] app endpoint dispatch error: {_exc}", file=_sys.stderr)
+            if _is_app_endpoint_path(path):
+                self._send_app_endpoint_dispatch_error(_exc)
+                return
 
         # Always allow /health during shutdown (needed for health-check polling)
         if path == "/health" or path.startswith("/health?"):
@@ -746,20 +656,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         if path == "/status":
             self._send_json(ps.status())
-            return
-
-        # Additive Codex model-list probe. Codex CLI issues
-        # `GET /v1/models?client_version=...` on startup; without this it 404s
-        # and prints an error. Return a minimal OpenAI-shaped list. Does not
-        # affect any other GET path (Anthropic/OpenAI passthrough is via `http`
-        # absolute-URL GETs, never bare `/v1/models`).
-        if path.split("?")[0] == "/v1/models":
-            self._send_json({
-                "object": "list",
-                "data": [
-                    {"id": "gpt-5.5", "object": "model", "owned_by": "openai"},
-                ],
-            })
             return
 
         # Reject new proxied requests while shutting down
@@ -916,32 +812,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def _is_codex_v1_responses_request(self) -> bool:
-        """True iff this is `/v1/responses` carrying a ChatGPT OAuth JWT.
-
-        Additive Codex detection: only the exact `/v1/responses` path (query
-        string stripped) with an `Authorization: Bearer eyJ...` JWT matches.
-        API-key (`sk-...`) callers return False and fall through to the standard
-        `/v1/` routing, so existing OpenAI-API behaviour is unchanged.
-        """
-        if self.path.split("?")[0] != "/v1/responses":
-            return False
-        try:
-            from .adapters.openai_codex_responses_adapter import (
-                _is_chatgpt_oauth_token,
-            )
-        except Exception:
-            return False
-        auth = self.headers.get("Authorization") or self.headers.get("authorization") or ""
-        return _is_chatgpt_oauth_token(auth)
-
     def do_POST(self):
         if not self._enforce_proxy_auth():
             return
-        # Reset the per-request Codex /v1/responses routing flag so it is never
-        # stale across keep-alive-reused handler instances. Set True only by the
-        # additive ChatGPT-OAuth /v1/responses branch below.
-        self._codex_v1_responses = False
         ps = self.server.proxy_server
 
         # App-level /tpk/v1/* POST endpoints — reserved for future compress,
@@ -952,7 +825,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 return
         except Exception as _exc:
             import sys as _sys
-            print(f"[tokenpak] /tpk/v1 POST dispatch error: {_exc}", file=_sys.stderr)
+            print(f"[tokenpak] app endpoint POST dispatch error: {_exc}", file=_sys.stderr)
+            if _is_app_endpoint_path(self.path):
+                self._send_app_endpoint_dispatch_error(_exc)
+                return
 
         if ps.shutdown.is_shutting_down and (
             self.path.startswith("http") or self.path.startswith("/v1/")
@@ -1004,18 +880,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             ps = self.server.proxy_server
             route = ps.router.route(self.path, dict(self.headers))
             self._proxy_to(route.full_url, "POST")
-        elif self._is_codex_v1_responses_request():
-            # Additive ChatGPT-OAuth route for `GET/POST /v1/responses`.
-            # Codex CLI configured against the proxy posts to /v1/responses with
-            # a ChatGPT OAuth JWT (eyJ...) bearer. Detected here and forwarded to
-            # the ChatGPT backend (same upstream as the existing /codex/ route);
-            # _proxy_to_inner injects the real JWT from ~/.codex/auth.json.
-            #
-            # API-key (sk-...) /v1/responses traffic returns False from
-            # _is_chatgpt_oauth_token and falls through UNCHANGED to the generic
-            # /v1/ branch below — so Claude and API-key OpenAI are unaffected.
-            self._codex_v1_responses = True
-            self._proxy_to("https://chatgpt.com/backend-api/codex/responses", "POST")
         elif self.path.startswith("/v1/"):
             ps = self.server.proxy_server
             route = ps.router.route(self.path, dict(self.headers))
@@ -1086,37 +950,19 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Request ID: honour X-Request-ID from client, else generate UUID
         _req_id = _new_request_id(dict(self.headers))
         ps = self.server.proxy_server  # type: ignore[attr-defined]
-        # Per-request reset of the concurrent-reservation carrier:
-        # a hold created at this request's admission (only when reservations are
-        # enabled) is settled/released on the response path below. Reset here so
-        # a reused keep-alive handler never settles a stale id from a prior
-        # request.
-        self._tokenpak_reservation_id: Optional[str] = None
         parsed = urlparse(target_url)
 
         should_log = any(h in target_url for h in INTERCEPT_HOSTS)
         is_messages = "/messages" in target_url or "/chat/completions" in target_url
-        # Additive Codex /v1/responses → ChatGPT-backend route (gated by the
-        # do_POST flag). Used only to emit ONE monitor.db row after the upstream
-        # response completes; it never alters the is_messages logging path.
-        is_codex_responses = getattr(self, "_codex_v1_responses", False)
 
         content_length = int(self.headers.get("Content-Length", 0))
         body: Optional[bytes] = self.rfile.read(content_length) if content_length > 0 else None
-
-        # Codex /v1/responses → ChatGPT backend payload fixup. GATED on the
-        # per-request flag set ONLY by the additive ChatGPT-OAuth /v1/responses
-        # branch in do_POST, so the pre-existing /codex/ (OpenClaw) route and all
-        # other traffic are untouched. See codex_responses_payload_fixup for the
-        # exact (and only) transformations applied.
-        if body and getattr(self, "_codex_v1_responses", False):
-            try:
-                from .adapters.openai_codex_responses_adapter import (
-                    codex_responses_payload_fixup,
-                )
-                body = codex_responses_payload_fixup(body)
-            except Exception:
-                pass  # fail-open: fixup must never break the request
+        _original_body = body
+        _retry_policy = UpstreamRetryPolicy.from_env(
+            body=body,
+            headers=dict(self.headers),
+        )
+        _tip_plan_id = extract_tip_plan_id(dict(self.headers), body, _req_id)
 
         model = "unknown"
         input_tokens = 0
@@ -1125,12 +971,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         is_streaming = False
         cache_read_tokens = 0
         cache_creation_tokens = 0
-        # [TIP: deterministic=on] request context (None → normal mode).
-        _det_state: Optional[dict] = None
         # Per-TTL prompt-cache attribution (additive telemetry; populated only
         # when the upstream response includes ``usage.cache_creation`` breakdown).
         cache_creation_1h_tokens = 0
         cache_creation_5m_tokens = 0
+        # Provider stop_reason observed on the response path (read-only parse of
+        # a response copy; forwarded bytes are never modified). '' = not observed.
+        stop_reason = ""
 
         trace: Optional[PipelineTrace] = None
         if should_log and is_messages:
@@ -1169,58 +1016,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 target_url[:60],
             )
 
-        # ── [TIP: deterministic=on] preflight (TIP versioning standard) ──────
-        # Peek-parse the directive BEFORE the spend guard so (a) invalid
-        # values and incompatible combinations fail loudly with a structured
-        # 400 before any provider send, and (b) deterministic metadata can be
-        # attached to spend-guard early returns (e.g. the compatible
-        # estimate=on path). Gated on a cheap substring check so the
-        # no-directive hot path pays one memchr scan, nothing more.
-        _det_original_body = body
-        if should_log and is_messages and body and b"[TIP:" in body:
-            try:
-                _det_state, _det_error = _deterministic_preflight(body)
-                if _det_error is not None:
-                    _det_status, _det_type, _det_msg = _det_error
-                    _det_resp = json.dumps({
-                        "error": {"type": _det_type, "message": _det_msg}
-                    }).encode()
-                    self.send_response(_det_status)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(_det_resp)))
-                    self.send_header("X-TokenPak-Deterministic", "rejected")
-                    self.end_headers()
-                    self.wfile.write(_det_resp)
-                    return
-            except Exception as _det_exc:
-                import re as _det_re
-                if _det_re.search(rb"\[TIP:[^\]]*deterministic", body):
-                    # Fail LOUD: a request asking for deterministic mode must
-                    # never silently proceed without its guarantees.
-                    _det_resp = json.dumps({
-                        "error": {
-                            "type": "tokenpak_deterministic_mode_error",
-                            "message": (
-                                "Deterministic-mode preflight failed "
-                                f"({type(_det_exc).__name__}); refusing to "
-                                "forward without deterministic guarantees."
-                            ),
-                        }
-                    }).encode()
-                    self.send_response(500)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(_det_resp)))
-                    self.send_header("X-TokenPak-Deterministic", "error")
-                    self.end_headers()
-                    self.wfile.write(_det_resp)
-                    return
-                import logging as _det_log
-                _det_log.getLogger(__name__).debug(
-                    "tokenpak.deterministic: preflight error (passthrough, "
-                    "no deterministic directive in body): %s: %s",
-                    type(_det_exc).__name__, _det_exc,
-                )
-
         # ── TIP Spend Guard: pre-send circuit breaker ─────────────────────────
         # Blocks risky requests BEFORE provider send. Returns structured
         # error.type=tokenpak_spend_guard_blocked (HTTP 402) when the policy
@@ -1228,6 +1023,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # See tokenpak/proxy/spend_guard/ + standards/29-spend-guard-agent-contract.md
         # Disabled with: spend_guard.enabled=false in config.yaml
         #            or: TOKENPAK_SPEND_GUARD_ENABLED=0
+        _sg_admission_ticket = None  # rolling-cap in-flight spend ticket
         if should_log and is_messages and body:
             try:
                 from tokenpak.proxy.request_pipeline import _resolve_session_id
@@ -1240,21 +1036,29 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _sg_model = str(_sg_body_json.get("model") or "")
                 except Exception:
                     pass
-                _sg_session = _resolve_session_id(self.headers, _sg_model or "unknown")
+                # Empty-string fallback: the monitor.db row for this request
+                # is written with the same resolver and an empty model
+                # fallback, so the guard-side check and the recorded row
+                # MUST agree on the session key for header-less traffic.
+                # (A model-name pseudo-session summed zero recorded rows
+                # forever, silently disabling session-cumulative caps.)
+                _sg_session = _resolve_session_id(self.headers, "")
                 _sg_outcome = _sg_evaluate(
                     body,
-                    _sg_model or "claude-sonnet-4-6",  # safe default rate
+                    # Empty when the body carries no model. Pricing falls
+                    # back to default-class rates (tokenpak.models.get_rates)
+                    # without inventing a model id, and the context-window
+                    # lookup falls back to cfg.block_tokens — so guard rows
+                    # never record a fabricated model name.
+                    _sg_model,
                     _sg_session,
                     dict(self.headers),
                 )
+                _sg_admission_ticket = getattr(_sg_outcome, "admission_ticket", None)
                 # Forwarded outcomes update body for downstream pipeline.
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
                         body = _sg_outcome.body
-                    # Carry any concurrent-reservation hold to the
-                    # response path so it is settled on success / released on
-                    # failure. None unless reservations are enabled at admission.
-                    self._tokenpak_reservation_id = _sg_outcome.reservation_id
                 elif _sg_outcome.kind == "replay":
                     # Held request is being replayed — substitute body
                     # and headers, then continue down the normal forward path.
@@ -1280,89 +1084,40 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
                 else:
-                    # block / hard_block / cancel / reprompt / estimate
+                    # block / hard_block / cancel / reprompt / estimate.
+                    # Once the guard decided NOT to forward, a failure while
+                    # writing the response to the client must never fall
+                    # through to the forward path — hence the inner
+                    # try/except with an unconditional return.
                     _sg_resp = _sg_outcome.response_body or b"{}"
-                    self.send_response(_sg_outcome.http_status or 402)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(_sg_resp)))
-                    self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
-                    # Deterministic + estimate=on is the documented COMPATIBLE
-                    # combination (estimate is side-effect-free); deterministic
-                    # + block/hard_block means the spend guard outranks the
-                    # directive (deterministic is not a spend bypass). Either
-                    # way, mark the mode and emit the fingerprint of the
-                    # TIP-stripped request so eval harnesses can correlate.
-                    if _det_state is not None:
-                        try:
-                            from tokenpak.proxy.spend_guard.tip_header import (
-                                compute_request_fingerprint as _det_fp,
-                            )
-                            self.send_header("X-TokenPak-Deterministic", "on")
-                            self.send_header(
-                                "X-TokenPak-Deterministic-Fingerprint",
-                                _det_fp(_det_state.get("stripped_body") or b""),
-                            )
-                        except Exception:
-                            pass
-                    self.end_headers()
-                    self.wfile.write(_sg_resp)
+                    try:
+                        self.send_response(_sg_outcome.http_status or 402)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(_sg_resp)))
+                        self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
+                        self.end_headers()
+                        self.wfile.write(_sg_resp)
+                    except Exception as _sg_wexc:
+                        import logging as _sg_log
+                        _sg_log.getLogger(__name__).warning(
+                            "tokenpak.spend_guard: failed writing %s response "
+                            "to client (%s: %s) — request stays blocked",
+                            _sg_outcome.kind, type(_sg_wexc).__name__, _sg_wexc,
+                        )
                     return
             except ImportError:
                 pass  # spend guard not installed
             except Exception as _sg_exc:
+                # The guard's own evaluate() converts internal evaluator
+                # errors into fail-closed 402s, so an exception here is a
+                # proxy-hook defect (header/session resolution, outcome
+                # handling). Forwarding without the guard is deliberate for
+                # that narrow case — but it must be LOUD, not a debug line.
                 import logging as _sg_log
-                _sg_log.getLogger(__name__).debug(
-                    "tokenpak.spend_guard: error (passthrough): %s: %s",
+                _sg_log.getLogger(__name__).warning(
+                    "tokenpak.spend_guard: unexpected proxy-hook error — "
+                    "forwarding WITHOUT spend-guard evaluation: %s: %s",
                     type(_sg_exc).__name__, _sg_exc,
-                )
-
-        # Deterministic fixup: the spend-guard layer normally strips the TIP
-        # header from the forwarded body. If that layer was disabled or
-        # errored (body still the original object), the directive text must
-        # STILL never reach the provider — substitute the preflight's
-        # stripped bytes.
-        if _det_state is not None and body is _det_original_body:
-            body = _det_state["stripped_body"]
-
-        # ── SSRM Phase 1 — Session Swap Relevance Management ───────────────────
-        # Instrumentation-only.  Computes 11 signals + an advisory action per
-        # request; logs them to monitor.db's ssrm_* columns and to
-        # ssrm_audit.db.ssrm_decisions.  Phase 1 does NOT branch on the
-        # decision — every request that passed spend_guard is forwarded
-        # exactly as it would have been without SSRM.
-        # Disabled by default (ssrm.enabled=false in config.yaml).
-        # Enable with: ssrm.enabled=true or TOKENPAK_SSRM_ENABLED=1.
-        if should_log and is_messages and body:
-            try:
-                from tokenpak.proxy.ssrm import decide as _ssrm_decide
-                _ssrm_model = ""
-                try:
-                    import json as _json_for_ssrm
-                    _ssrm_body_json = _json_for_ssrm.loads(body.decode("utf-8", errors="replace"))
-                    _ssrm_model = str(_ssrm_body_json.get("model") or "")
-                except Exception:
-                    pass
-                _ssrm_session = getattr(self, "_tokenpak_session_id", "") or ""
-                _ssrm_decision = _ssrm_decide(
-                    body,
-                    _ssrm_model or "claude-sonnet-4-6",
-                    _ssrm_session,
-                    dict(self.headers),
-                )
-                # Stash on self so Monitor.log() (later in this request flow)
-                # can attach the decision to the request row. When SSRM is
-                # disabled, _ssrm_decide() returns None — don't stash, so
-                # Monitor.log writes empty/NULL ssrm_* columns (matches the
-                # pre-SSRM-Phase-1 baseline behavior).
-                if _ssrm_decision is not None:
-                    self._tokenpak_ssrm_decision = _ssrm_decision
-            except ImportError:
-                pass  # SSRM module not installed
-            except Exception as _ssrm_exc:
-                import logging as _ssrm_log
-                _ssrm_log.getLogger(__name__).debug(
-                    "tokenpak.ssrm: error (passthrough): %s: %s",
-                    type(_ssrm_exc).__name__, _ssrm_exc,
                 )
 
         # ── DLP outbound secret scan ──────────────────────────────────────────
@@ -1389,11 +1144,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _dlp_redacted = _dlp.redact(_dlp_text)
                     if _dlp_redacted != _dlp_text:
                         body = _dlp_redacted.encode("utf-8")
-                        # Deterministic mode: DLP redaction stays ACTIVE
-                        # (security control, operator-configured) but the
-                        # mutation is explicitly recorded — never hidden.
-                        if _det_state is not None:
-                            _det_state["transforms"].append("dlp_redact")
                 elif _dlp.mode == "block":
                     if not _dlp.block_check(_dlp_text):
                         _dlp_findings = _dlp.scan(_dlp_text)
@@ -1439,9 +1189,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             input_tokens = _estimate_tokens_from_body(body)
 
             # Observe-only optimization pipeline.
-            # Pipeline composition lives in services/optimization/ per
-            # 01-architecture-standard.md §1.3 invariant 1 (services/ owns
-            # all pipeline composition). proxy/server.py only invokes it
+            # Pipeline composition lives in services/optimization/, which
+            # owns all pipeline composition (a design invariant).
+            # proxy/server.py only invokes it
             # over the byte-preserved request. Gated on
             # TOKENPAK_OPTIMIZATION_PIPELINE (default off); runs before
             # any body-mutating stage and never returns a different body
@@ -1511,26 +1261,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # Use the modular pipeline for vault injection (byte splice)
                 # but skip compression entirely to preserve Anthropic billing routing.
                 is_streaming = b'"stream":true' in body or b'"stream": true' in body
-                # Deterministic mode: vault injection is a hidden prompt
-                # mutation — disabled (TIP versioning standard). The request
-                # is forwarded exactly as the client sent it (post TIP strip).
-                if _det_state is None:
-                    try:
-                        from tokenpak.proxy.pipeline import process_request as _pipeline_run
-                        from tokenpak.proxy.request import ProxyRequest as _PReq
-                        from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
-                        _pr = _PReq(
-                            method="POST",
-                            url=target_url,
-                            headers=dict(self.headers),
-                            body=body,
-                            source_platform=_source_platform,
-                            session_id=_rsi(self.headers, model),
-                        )
-                        _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
-                        body = _result.request.body
-                    except Exception:
-                        pass  # fail-open: vault injection failure must never break a request
+                try:
+                    from tokenpak.proxy.pipeline import process_request as _pipeline_run
+                    from tokenpak.proxy.request import ProxyRequest as _PReq
+                    from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
+                    _pr = _PReq(
+                        method="POST",
+                        url=target_url,
+                        headers=dict(self.headers),
+                        body=body,
+                        source_platform=_source_platform,
+                        session_id=_rsi(self.headers, model),
+                    )
+                    _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
+                    body = _result.request.body
+                except Exception:
+                    pass  # fail-open: vault injection failure must never break a request
             else:
                 # READ-ONLY parse — body bytes must NOT be reconstructed from this dict
                 try:
@@ -1547,9 +1293,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             ):
                 is_streaming = True
 
-            # Deterministic mode: the compression request hook is a hidden
-            # prompt mutation — disabled (TIP versioning standard).
-            if ps.request_hook and not _is_byte_preserved and _det_state is None:
+            if ps.request_hook and not _is_byte_preserved:
                 try:
                     body, sent_input_tokens, input_tokens, protected_tokens = ps.request_hook(
                         body, model, trace
@@ -1570,33 +1314,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                     get_degradation_tracker().record_compression_failure(hook_err)
                     sent_input_tokens = input_tokens
-                    # Mark this request as forwarded-unchanged so the monitor.db
-                    # row carries an honest skip_reason (rendered by
-                    # `tokenpak status --explain`). Best-effort; never raises.
-                    try:
-                        self._tokenpak_skip_reason = "compression-failed"
-                    except Exception:
-                        pass
                     # body is unchanged (assignment failed, original value retained)
 
         if sent_input_tokens == 0:
             sent_input_tokens = input_tokens
-
-        # ── Deterministic finalize ─────────────────────────────────────────
-        # All body-mutating stages have run (or been skipped). Compute the
-        # request fingerprint + prompt-mutation delta over the bytes that
-        # will actually be forwarded upstream.
-        if _det_state is not None:
-            try:
-                _deterministic_finalize(
-                    _det_state, body, provider_from_url(target_url)
-                )
-            except Exception as _det_fin_exc:
-                import logging as _det_log
-                _det_log.getLogger(__name__).warning(
-                    "tokenpak.deterministic: finalize failed: %s: %s",
-                    type(_det_fin_exc).__name__, _det_fin_exc,
-                )
 
         # ── Circuit breaker check ──────────────────────────────────────────
         # Fast-fail immediately if the target provider's circuit is OPEN.
@@ -1855,10 +1576,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _cb_success = False  # track whether request succeeded for circuit breaker
 
             output_tokens = 0
-            # Deterministic mode: transparent upstream retries DISABLED —
-            # exactly one attempt; transient failures surface to the client
-            # (fail loud) instead of being retried (TIP versioning standard).
-            _max_upstream_attempts = 1 if _det_state is not None else MAX_UPSTREAM_RETRIES
             if is_streaming:
                 # ── Streaming (SSE) path ──────────────────────────────────
                 # Use pool.stream() so the connection is kept alive after SSE ends.
@@ -1867,20 +1584,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # CLI it's no longer safe to retry (would cause `Unterminated
                 # string` JSON parse errors in the client's SSE reader).
                 sse_buffer = b""
-                # Bounded tail buffer for the Codex /v1/responses route so we can
-                # extract integer token counts from the final
-                # `response.completed` SSE event WITHOUT persisting any content.
-                _codex_sse_tail = b""
                 _stream_wrote_to_client = False
-                for _ustream_attempt in range(_max_upstream_attempts):
+                for _ustream_attempt in range(_retry_policy.max_attempts):
                     _stream_retry = False
                     try:
                         with pool.stream(method, target_url, content=body, headers=fwd_headers, session_key=_session_key) as resp:
-                            if (
-                                _is_retryable_upstream_status(resp.status_code)
-                                and not _stream_wrote_to_client
-                                and _ustream_attempt < _max_upstream_attempts - 1
-                            ):
+                            _retry_decision = _retry_policy.retry_for_response(
+                                resp.status_code,
+                                resp.headers,
+                                _ustream_attempt,
+                                stream_started=_stream_wrote_to_client,
+                            )
+                            if _retry_decision.should_retry:
                                 # Drain body to release the pooled connection, then retry
                                 for _ in resp.iter_bytes(chunk_size=4096):
                                     pass
@@ -1897,9 +1612,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.send_header("Content-Type", "application/json")
                                 self.send_header("Content-Length", str(len(_norm_err_body)))
                                 self.send_header("X-Request-ID", _req_id)
-                                if _det_state is not None:
-                                    for _dk, _dv in _deterministic_response_headers(_det_state):
-                                        self.send_header(_dk, _dv)
                                 self.end_headers()
                                 self.wfile.write(_norm_err_body)
                             else:
@@ -1926,10 +1638,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.send_header("X-Accel-Buffering", "no")
                                 # Propagate request ID to client for correlation
                                 self.send_header("X-Request-ID", _req_id)
-                                # Deterministic reproducibility metadata
-                                if _det_state is not None:
-                                    for _dk, _dv in _deterministic_response_headers(_det_state):
-                                        self.send_header(_dk, _dv)
                                 self.end_headers()
 
                                 for chunk in resp.iter_bytes(chunk_size=4096):
@@ -1942,26 +1650,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         break
                                     if should_log and is_messages:
                                         sse_buffer += chunk
-                                    elif is_codex_responses:
-                                        # Keep only a bounded tail — the usage is
-                                        # in the final response.completed event.
-                                        _codex_sse_tail = (_codex_sse_tail + chunk)[-65536:]
-                    except _RETRYABLE_UPSTREAM_EXCEPTIONS:
+                    except _retry_policy.retryable_exceptions as _stream_exc:
                         # Once we've committed to writing to the client, can't retry —
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
-                        if _stream_wrote_to_client:
-                            raise
-                        if _ustream_attempt >= _max_upstream_attempts - 1:
+                        _retry_decision = _retry_policy.retry_for_exception(
+                            _stream_exc,
+                            _ustream_attempt,
+                            stream_started=_stream_wrote_to_client,
+                        )
+                        if not _retry_decision.should_retry:
                             raise
                         _stream_retry = True
 
                     if _stream_retry:
-                        time.sleep(_upstream_retry_backoff(_ustream_attempt))
+                        time.sleep(_retry_decision.delay_seconds)
                         continue
                     break
 
                 if should_log and is_messages and sse_buffer:
                     sse_usage = extract_sse_tokens(sse_buffer)
+                    # stop_reason from message_delta (read-only on the buffered
+                    # copy - forwarded stream bytes already went out unmodified).
+                    stop_reason = _extract_sse_stop_reason(sse_buffer)
                     output_tokens = sse_usage.get("output_tokens", 0)
                     cache_read_tokens = sse_usage.get("cache_read_input_tokens", 0)
                     cache_creation_tokens = sse_usage.get("cache_creation_input_tokens", 0)
@@ -1974,24 +1684,51 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # Server disconnected, 502/503/504). Safe because the client
                 # has not yet received any bytes at this point.
                 resp = None
-                for _ustream_attempt in range(_max_upstream_attempts):
+                for _ustream_attempt in range(_retry_policy.max_attempts):
                     try:
                         resp = pool.request(method, target_url, content=body, headers=fwd_headers, session_key=_session_key)
-                        if (
-                            _is_retryable_upstream_status(resp.status_code)
-                            and _ustream_attempt < _max_upstream_attempts - 1
-                        ):
+                        _retry_decision = _retry_policy.retry_for_response(
+                            resp.status_code,
+                            resp.headers,
+                            _ustream_attempt,
+                            stream_started=False,
+                        )
+                        if _retry_decision.should_retry:
                             try:
                                 resp.close()
                             except Exception:
                                 pass
-                            time.sleep(_upstream_retry_backoff(_ustream_attempt))
+                            time.sleep(_retry_decision.delay_seconds)
                             continue
+                        if response_has_truncated_json(
+                            resp.status_code,
+                            resp.headers,
+                            resp.content,
+                        ):
+                            _retry_decision = _retry_policy.retry_for_truncated_json(
+                                _ustream_attempt,
+                                stream_started=False,
+                            )
+                            if _retry_decision.should_retry:
+                                try:
+                                    resp.close()
+                                except Exception:
+                                    pass
+                                time.sleep(_retry_decision.delay_seconds)
+                                continue
+                            raise UpstreamTruncatedJSONError(
+                                "Upstream returned truncated JSON before response bytes were sent"
+                            )
                         break
-                    except _RETRYABLE_UPSTREAM_EXCEPTIONS:
-                        if _ustream_attempt >= _max_upstream_attempts - 1:
+                    except _retry_policy.retryable_exceptions as _nonstream_exc:
+                        _retry_decision = _retry_policy.retry_for_exception(
+                            _nonstream_exc,
+                            _ustream_attempt,
+                            stream_started=False,
+                        )
+                        if not _retry_decision.should_retry:
                             raise
-                        time.sleep(_upstream_retry_backoff(_ustream_attempt))
+                        time.sleep(_retry_decision.delay_seconds)
                         continue
                 assert resp is not None
 
@@ -2033,10 +1770,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         self.send_header("X-Tokenpak-Cache-Prefix-Hash", _ph)
                 # Propagate request ID to client for correlation
                 self.send_header("X-Request-ID", _req_id)
-                # Deterministic reproducibility metadata
-                if _det_state is not None:
-                    for _dk, _dv in _deterministic_response_headers(_det_state):
-                        self.send_header(_dk, _dv)
                 self.end_headers()
 
                 self.wfile.write(resp_body)
@@ -2050,6 +1783,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     output_tokens = _extract_response_tokens(body_for_metrics)
+                    # stop_reason from the response JSON copy (read-only -
+                    # the client already received the original bytes above).
+                    stop_reason = _extract_response_stop_reason(body_for_metrics)
                     try:
                         usage = json.loads(body_for_metrics).get("usage", {})
                         cache_read_tokens = usage.get("cache_read_input_tokens", 0)
@@ -2064,7 +1800,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             latency_ms = int((time.time() - t0) * 1000)
             with _forecast_latency_lock:
                 _forecast_latencies.append(latency_ms)
-            _cb_success = True  # reached here without exception → request succeeded
+            # "No exception escaped" is NOT "provider healthy": a retryable
+            # 5xx that exhausted its retries still flows through the normal
+            # send path above. Gate breaker success on the FINAL upstream
+            # status so provider 5xx storms trip the breaker instead of
+            # recording an unbroken success streak (and keeping /status
+            # green while every request fails).
+            _final_upstream_status = resp.status_code if "resp" in dir() else None  # type: ignore
+            _cb_success = not _cb_status_is_provider_failure(_final_upstream_status)
 
             # ── Request logging ───────────────────────────────────────────
             try:
@@ -2102,15 +1845,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
 
-            if should_log and is_messages and _resp_status == 429 and _cb_provider:
-                get_rate_limit_registry().record_429(_cb_provider)
-
             if should_log and is_messages and input_tokens > 0:
                 if _resp_status != 200:
                     # Non-200 responses generate no tokens; log cost=0 to avoid
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
                     cost = 0.0
                     cost_without = 0.0
+                    # Record 429 in the rate-limit circuit breaker so repeated
+                    # rate-limit bursts trip the circuit and stop upstream hammering.
+                    if _resp_status == 429 and _cb_provider:
+                        get_rate_limit_registry().record_429(_cb_provider)
                 else:
                     cost = estimate_cost(model, sent_input_tokens, output_tokens,
                                          cache_read_tokens, cache_creation_tokens)
@@ -2118,6 +1862,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                                  cache_read_tokens, cache_creation_tokens)
                 saved = max(0, input_tokens - sent_input_tokens)
                 cost_saved = max(0.0, cost_without - cost)
+
+                # Settle the spend-guard in-flight admission now that this
+                # request's actual cost is known (the monitor row below makes
+                # it visible to DB-derived usage). Requests that die before
+                # reaching this point are reclaimed by the counter's TTL.
+                if _sg_admission_ticket:
+                    try:
+                        from tokenpak.proxy.spend_guard.rolling_caps import (
+                            settle_pending_spend as _sg_settle,
+                        )
+                        _sg_settle(_sg_admission_ticket)
+                    except Exception:
+                        pass
+                    _sg_admission_ticket = None
 
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
@@ -2162,52 +1920,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _mon_session_id = ""
                     _mon_agent_id = ""
                     _mon_cycle_id = ""
-                # Dispatch correlation headers (P-TELEMETRY-01). '' when absent
-                # or when self.headers is None; never fabricated.
-                _hdrs = self.headers
-                _mon_dispatch_job_id = (
-                    (_hdrs.get("x-tokenpak-dispatch-job-id", "") or "") if _hdrs else ""
-                )
-                _mon_dispatch_station_id = (
-                    (_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _hdrs else ""
-                )
+                # Honest platform-origin attribution (Path C): non-empty ONLY when
+                # the origin is genuinely known (a recognized active-session file
+                # or platform User-Agent). '' sentinel otherwise — never
+                # fabricated, never attributed to the proxy itself. Read-only.
+                try:
+                    from tokenpak.services.routing_service.platform_bridge import (
+                        _openclaw_extract as _oce_mon,
+                    )
+                    _mon_origin = _oce_mon(self.headers, b"")
+                    _mon_attribution_source = (
+                        _mon_origin.attribution_source if _mon_origin is not None else ""
+                    ) or ""
+                except Exception:
+                    _mon_attribution_source = ""
                 if ps.monitor is not None:
-                    # SSRM Phase 1: pull the advisory decision computed earlier
-                    # in the request flow (see the SSRM hook above the DLP scan)
-                    # and pass it as monitor.requests.ssrm_* columns.
-                    _ssrm_d = getattr(self, "_tokenpak_ssrm_decision", None)
-                    _ssrm_kwargs: dict = {}
-                    if _ssrm_d is not None:
-                        try:
-                            _ssrm_kwargs = {
-                                "ssrm_decision": _ssrm_d.action,
-                                "ssrm_effective_context_tokens": _ssrm_d.signals.effective_context_tokens,
-                                "ssrm_effective_context_pct": _ssrm_d.signals.effective_context_pct,
-                                "ssrm_cache_read_ratio": _ssrm_d.signals.cache_read_ratio,
-                                "ssrm_projected_next_context_pct": _ssrm_d.signals.context_pct_projected_next,
-                                "ssrm_fingerprint_repeat_count": _ssrm_d.signals.prompt_fingerprint_repeat_count,
-                                "ssrm_session_age_turns": _ssrm_d.signals.session_age_turns,
-                                "ssrm_progress_signal": _ssrm_d.signals.progress_signal,
-                                "ssrm_signals_json": _ssrm_d.signals.to_json(),
-                            }
-                        except Exception:
-                            _ssrm_kwargs = {}
-                    # Per-request skip_reason: an honest, human-readable note for
-                    # why optimization was NOT applied to this request, surfaced
-                    # by `tokenpak status --explain <id>` (renders the recorded
-                    # value instead of the "unknown" fallback). Derived from
-                    # state already in scope on this request path — no new
-                    # decision logic, no behavior change. Fail-open: any error
-                    # yields "" (the non-skip default), never raises.
-                    try:
-                        _skip_reason = _derive_skip_reason(
-                            explicit_reason=getattr(self, "_tokenpak_skip_reason", "") or "",
-                            is_byte_preserved=_is_byte_preserved,
-                            compilation_mode=ps.compilation_mode,
-                            compressed_tokens=max(0, input_tokens - sent_input_tokens),
-                        )
-                    except Exception:
-                        _skip_reason = ""
                     try:
                         ps.monitor.log(
                             model=model,
@@ -2239,54 +1966,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             session_id=_mon_session_id,
                             agent_id=_mon_agent_id,
                             cycle_id=_mon_cycle_id,
-                            skip_reason=_skip_reason,
-                            dispatch_job_id=_mon_dispatch_job_id,
-                            dispatch_station_id=_mon_dispatch_station_id,
-                            **_ssrm_kwargs,
+                            attribution_source=_mon_attribution_source,
+                            stop_reason=stop_reason,
                         )
                     except Exception:
                         pass  # DB errors must never break the request
-
-                # ── Reservation settlement (completion) ──────────────────────
-                # A forward that carried a concurrent-budget reservation (only
-                # when reservations are enabled at admission) converts its hold
-                # HERE — after the settled-usage row above is written — so there
-                # is never a window in which the request is uncounted. On a 2xx
-                # settle with the actual usage: the hold stops counting as
-                # "reserved" and the monitor.db row becomes the single
-                # settled-truth record (no double count). On a non-2xx release:
-                # a failed forward never burns budget and a retry can re-admit.
-                # Best-effort and idempotent — a settle/release after TTL expiry
-                # is a harmless no-op and must never raise on the response path.
-                _resv_id = getattr(self, "_tokenpak_reservation_id", None)
-                if _resv_id:
-                    self._tokenpak_reservation_id = None  # settle/release once
-                    try:
-                        from tokenpak.proxy.spend_guard.policy import (
-                            load_config as _resv_cfg,
-                        )
-                        _resv_db = _resv_cfg().audit_db_path
-                        if _resp_status == 200:
-                            from tokenpak.proxy.spend_guard.reservation import (
-                                settle_reservation as _resv_settle,
-                            )
-                            _resv_settle(
-                                _resv_db, _resv_id,
-                                actual_cost_usd=cost,
-                                actual_tokens=input_tokens + output_tokens,
-                            )
-                        else:
-                            from tokenpak.proxy.spend_guard.reservation import (
-                                ReservationStore as _resv_store,
-                            )
-                            _resv_store(_resv_db).release(_resv_id)
-                    except Exception as _resv_exc:
-                        import logging as _resv_log
-                        _resv_log.getLogger(__name__).debug(
-                            "spend_guard: reservation settle/release skipped "
-                            "(passthrough): %s: %s",
-                            type(_resv_exc).__name__, _resv_exc,
-                        )
 
                 # Record cache telemetry
                 try:
@@ -2420,117 +2104,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                     print(render_footer_oneline(req_stats), file=sys.stderr)
 
-            # ── Codex /v1/responses monitor row ───────────────────────────
-            # Emit ONE monitor.db row for the additive Codex route so
-            # `tokenpak status`/queries see ChatGPT-backend traffic. Kept fully
-            # separate from the is_messages logging path above. Persists integer
-            # token counts + metadata only — never any prompt/response content.
-            if is_codex_responses and ps.monitor is not None:
-                try:
-                    _cx_status = resp.status_code if "resp" in dir() else 0  # type: ignore
-                    # Model from the request body JSON (best-effort), fallback gpt-5.5.
-                    _cx_model = "gpt-5.5"
-                    try:
-                        if body:
-                            _cx_bd = json.loads(body)
-                            if isinstance(_cx_bd, dict) and _cx_bd.get("model"):
-                                _cx_model = str(_cx_bd["model"])
-                    except Exception:
-                        pass
-                    # Best-effort integer token counts from the final
-                    # `response.completed` SSE event's `response.usage`. Never
-                    # persists raw content; on any failure logs zeros.
-                    _cx_in = 0
-                    _cx_out = 0
-                    _cx_cache_read = 0
-                    try:
-                        _tail = _codex_sse_tail if "_codex_sse_tail" in dir() else b""
-                        if _tail:
-                            from .adapters.openai_codex_responses_adapter import (
-                                _extract_codex_responses_usage_from_sse_tail,
-                            )
-                            _cx_usage = _extract_codex_responses_usage_from_sse_tail(_tail)
-                            _cx_in = int(_cx_usage.get("input_tokens") or 0)
-                            _cx_out = int(_cx_usage.get("output_tokens") or 0)
-                            _cx_cache_read = int(_cx_usage.get("cache_read_tokens") or 0)
-                    except Exception:
-                        _cx_in = 0
-                        _cx_out = 0
-                        _cx_cache_read = 0
-                    try:
-                        from tokenpak.proxy.request_pipeline import (
-                            _resolve_agent_id as _rai_cx,
-                        )
-                        from tokenpak.proxy.request_pipeline import (
-                            _resolve_cycle_id as _rci_cx,
-                        )
-                        from tokenpak.proxy.request_pipeline import (
-                            _resolve_session_id as _rsi_cx,
-                        )
-                        _cx_session_id = _rsi_cx(self.headers, "")
-                        _cx_agent_id = _rai_cx(self.headers)
-                        _cx_cycle_id = _rci_cx(self.headers)
-                    except Exception:
-                        _cx_session_id = ""
-                        _cx_agent_id = ""
-                        _cx_cycle_id = ""
-                    # Dispatch correlation headers (P-TELEMETRY-01). '' when
-                    # absent or when self.headers is None; never fabricated.
-                    _cx_hdrs = self.headers
-                    _cx_dispatch_job_id = (
-                        (_cx_hdrs.get("x-tokenpak-dispatch-job-id", "") or "") if _cx_hdrs else ""
-                    )
-                    _cx_dispatch_station_id = (
-                        (_cx_hdrs.get("x-tokenpak-dispatch-station-id", "") or "") if _cx_hdrs else ""
-                    )
-                    ps.monitor.log(
-                        model=_cx_model,
-                        input_tokens=_cx_in,
-                        output_tokens=_cx_out,
-                        cost=0.0,
-                        latency_ms=latency_ms,
-                        status_code=_cx_status,
-                        endpoint=target_url or "/v1/responses",
-                        cache_read_tokens=_cx_cache_read,
-                        cache_origin="upstream",
-                        user_id=getattr(self, "_tokenpak_user_id", "") or "",
-                        session_id=_cx_session_id,
-                        agent_id=_cx_agent_id,
-                        cycle_id=_cx_cycle_id,
-                        dispatch_job_id=_cx_dispatch_job_id,
-                        dispatch_station_id=_cx_dispatch_station_id,
-                    )
-                except Exception:
-                    pass  # DB errors must never break the request
-
             # ── Circuit breaker: record outcome ───────────────────────────
             if _cb_registry is not None and _cb_provider is not None:
                 if _cb_success:
                     _cb_registry.record_success(_cb_provider)
-                # failure is recorded in except block
+                else:
+                    # Provider-side 5xx that exhausted retries: the exchange
+                    # completed, but it is a provider failure for breaker
+                    # accounting.
+                    _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
             # ── Circuit breaker: record failure ───────────────────────────
-            if _cb_registry is not None and _cb_provider is not None:
+            # ...unless OUR client's socket died (BrokenPipeError /
+            # ConnectionResetError writing to self.wfile). That says nothing
+            # about provider health — counting it opened the breaker for a
+            # healthy provider whenever CLIs were killed mid-response.
+            if (
+                _cb_registry is not None
+                and _cb_provider is not None
+                and not _is_client_disconnect_error(exc)
+            ):
                 _cb_registry.record_failure(_cb_provider)
-
-            # Reservation release on forward failure: a hold from an
-            # enabled admission must not survive a provider connect/timeout/
-            # protocol error — free it so a retry can admit. Best-effort,
-            # idempotent, never re-raises on the error path.
-            _resv_id = getattr(self, "_tokenpak_reservation_id", None)
-            if _resv_id:
-                self._tokenpak_reservation_id = None
-                try:
-                    from tokenpak.proxy.spend_guard.policy import (
-                        load_config as _resv_cfg,
-                    )
-                    from tokenpak.proxy.spend_guard.reservation import (
-                        ReservationStore as _resv_store,
-                    )
-                    _resv_store(_resv_cfg().audit_db_path).release(_resv_id)
-                except Exception:
-                    pass
 
             with ps._session_lock:
                 ps.session["errors"] += 1
@@ -2567,6 +2162,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
             # Build an actionable error message depending on the exception type
+            _is_retry_boundary_error = (
+                _retry_policy.is_retryable_exception(exc)
+                or isinstance(exc, UpstreamTruncatedJSONError)
+                or (_client_headers_sent and is_streaming)
+            )
+            _recovery_record_path = None
+            if _is_retry_boundary_error:
+                _recovery_record_path = persist_failed_request_metadata(
+                    request_id=_req_id,
+                    tip_plan_id=_tip_plan_id,
+                    target_url=target_url,
+                    method=method,
+                    headers=fwd_headers if "fwd_headers" in locals() else dict(self.headers),
+                    body=body if body is not None else _original_body,
+                    stream_started=bool(_client_headers_sent),
+                    recovery_status="terminally_failed",
+                    error_type=exc_type,
+                    error_message=exc_msg,
+                )
             if "timeout" in exc_type.lower() or isinstance(exc, TimeoutError):
                 user_detail = (
                     "The upstream LLM provider did not respond in time. "
@@ -2610,18 +2224,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             # parser surfaces it as "Unterminated string". Extra
                             # blank lines between frames are legal per the SSE spec
                             # and harmless when the upstream cut off cleanly.
+                            _terminal_payload = build_terminal_recovery_payload(
+                                request_id=_req_id,
+                                tip_plan_id=_tip_plan_id,
+                                error_type="upstream_stream_terminal_failure",
+                                message=(
+                                    "Upstream connection dropped mid-stream "
+                                    f"({exc_type}). The stream was not replayed "
+                                    "because client-visible output had already started."
+                                ),
+                                stream_started=True,
+                                recovery_record=(
+                                    str(_recovery_record_path)
+                                    if _recovery_record_path is not None
+                                    else None
+                                ),
+                            )
                             _sse_err = (
                                 "\n\n"
                                 "event: error\n"
                                 "data: " + json.dumps({
                                     "type": "error",
-                                    "error": {
-                                        "type": "overloaded_error",
-                                        "message": (
-                                            f"Upstream connection dropped mid-stream "
-                                            f"({exc_type}). Retry the request."
-                                        ),
-                                    },
+                                    **_terminal_payload,
                                 }) + "\n\n"
                             ).encode("utf-8")
                             self.wfile.write(_sse_err)
@@ -2631,14 +2255,37 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # Non-streaming: headers+partial body already flushed; nothing
                     # safe to append. Just let the connection close.
                 else:
-                    err = json.dumps({
-                        "error": {
-                            "type": "proxy_error",
-                            "message": user_detail,
-                            "detail": exc_msg,
-                            "hint": "Run `tokenpak doctor` for diagnostics or `tokenpak status` for recent errors.",
+                    if _is_retry_boundary_error:
+                        err_payload = build_terminal_recovery_payload(
+                            request_id=_req_id,
+                            tip_plan_id=_tip_plan_id,
+                            error_type="upstream_terminal_failure",
+                            message=user_detail,
+                            stream_started=False,
+                            recovery_record=(
+                                str(_recovery_record_path)
+                                if _recovery_record_path is not None
+                                else None
+                            ),
+                        )
+                        err_payload["error"]["detail"] = exc_msg
+                        err_payload["error"]["hint"] = (
+                            "Retry later or use a future explicit recovery command; "
+                            "TokenPak did not hide a replay."
+                        )
+                    else:
+                        err_payload = {
+                            "error": {
+                                "type": "proxy_error",
+                                "message": user_detail,
+                                "detail": exc_msg,
+                                "hint": (
+                                    "Run `tokenpak doctor` for diagnostics or "
+                                    "`tokenpak status` for recent errors."
+                                ),
+                            }
                         }
-                    }).encode()
+                    err = json.dumps(err_payload).encode()
                     self.send_response(502)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(err)))
@@ -2836,7 +2483,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             result = execute_via_claude_code(
                 openclaw_session=oc_session,
                 messages=body_data.get("messages", []),
-                model=body_data.get("model", "claude-sonnet-4-6"),
+                # Empty when the request carries no model: the CLI backend
+                # then runs with its own configured default, and the
+                # response/receipt reports the model as unknown rather
+                # than a fabricated id.
+                model=body_data.get("model") or "",
                 system=body_data.get("system", ""),
                 max_tokens=body_data.get("max_tokens", 4096),
                 workspace=oc_workspace,
@@ -2877,7 +2528,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
           3. message_delta — contains stop_reason + usage.output_tokens
         """
         msg_id = result.get("id", "msg_unknown")
-        model = result.get("model", "claude-sonnet-4-6")
+        # Never invent a model id — echo whatever the backend reported,
+        # empty if unknown, so downstream logging/cost attribution cannot
+        # key on a fabricated model name.
+        model = result.get("model") or ""
         usage = result.get("usage", {})
         content = result.get("content", [])
         text = ""
@@ -2967,6 +2621,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_app_endpoint_dispatch_error(self, exc: Exception) -> None:
+        body = json.dumps({
+            "error": "app_endpoint_dispatch_failed",
+            "detail": type(exc).__name__,
+        }).encode()
+        try:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
+
     def _handle_metrics_dashboard(self) -> None:
         """GET /metrics/dashboard — dashboard JSON with top-20 sessions panel.
 
@@ -2974,14 +2643,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         by request count. Each entry contains the columns documented in
         Spec Component 11.
         """
-        import os
         import sqlite3 as _sqlite3
 
         ps = self.server.proxy_server
         db_path = (
             ps.monitor.db_path
             if getattr(ps, "monitor", None) is not None
-            else os.path.expanduser("~/.tokenpak/monitor.db")
+            else str(_paths.under("monitor.db"))
         )
 
         sessions: list = []
@@ -3102,44 +2770,6 @@ def _estimate_tokens_from_body(body: bytes) -> int:
         return len(body) // 4
 
 
-def _derive_skip_reason(
-    *,
-    explicit_reason: str = "",
-    is_byte_preserved: bool = False,
-    compilation_mode: str = "",
-    compressed_tokens: int = 0,
-) -> str:
-    """Derive an honest per-request optimization ``skip_reason``.
-
-    Surfaced by ``tokenpak status --explain <id>`` (renders the recorded value
-    instead of the ``unknown`` fallback). Derived entirely from state already
-    known on the request path — no new decision logic, no behavior change.
-
-    Returns the empty string when the request WAS optimized (the non-skip
-    default), so the monitor.db column stays empty for optimized traffic.
-    Fail-open: callers should still default to "" on any unexpected error,
-    but this function itself never raises for well-typed inputs.
-
-    Precedence (most specific first):
-      * ``explicit_reason`` — a concrete reason recorded upstream
-        (e.g. ``compression-failed`` when the request was forwarded unchanged).
-      * ``byte-preserved`` — byte-preserved traffic skips compression by design
-        to preserve upstream billing routing.
-      * ``transparent-mode`` — transparent mode is side-effect-free by contract.
-      * ``no-compression-applied`` — compression ran but reduced nothing.
-      * ``""`` — compression reduced tokens; the request was optimized.
-    """
-    if explicit_reason:
-        return explicit_reason
-    if is_byte_preserved:
-        return "byte-preserved"
-    if compilation_mode == "transparent":
-        return "transparent-mode"
-    if compressed_tokens <= 0:
-        return "no-compression-applied"
-    return ""
-
-
 def _extract_response_tokens(body: bytes) -> int:
     try:
         data = json.loads(body)
@@ -3151,6 +2781,21 @@ def _extract_response_tokens(body: bytes) -> int:
         )
     except Exception:
         return 0
+
+
+def _extract_response_stop_reason(body: bytes) -> str:
+    """Read ``stop_reason`` from a non-streaming response JSON copy.
+
+    Read-only observation for telemetry (the original response bytes are
+    forwarded unmodified). Returns '' when absent or unparseable - never
+    fabricated. Distinguishes refusals returned as HTTP 200 (e.g.
+    ``stop_reason: "refusal"``) from successful completions on receipt rows.
+    """
+    try:
+        value = json.loads(body).get("stop_reason")
+        return str(value) if value else ""
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -3323,16 +2968,6 @@ class ProxyServer:
         except Exception:
             self.monitor = None
 
-        # SSRM Phase 1 prewarm — eagerly resolve config + create sqlite
-        # handles so the first live request doesn't slip through with
-        # empty ssrm_* columns from a lazy-init race. No-op when SSRM
-        # is disabled; never raises.
-        try:
-            from tokenpak.proxy.ssrm import prewarm as _ssrm_prewarm
-            _ssrm_prewarm()
-        except Exception:
-            pass
-
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -3395,15 +3030,19 @@ class ProxyServer:
           4. Close the HTTP connection pool
           5. Stop the HTTP server
         """
-        # Always close the pool, even if server wasn't started
-        if self._connection_pool is not None:
-            try:
-                self._connection_pool.close()
-            except Exception:
-                pass
-
+        # Never started (or already stopped): nothing is in flight, so just
+        # release pool resources and return. For a RUNNING server the pool
+        # must NOT be closed here — closing it before the drain below kills
+        # every in-flight request's upstream connection, turning a graceful
+        # SIGTERM into a mid-stream connection reset for every active
+        # request. The pool is closed at step 4, after the drain completes.
         if self._server is None:
-            return  # already stopped
+            if self._connection_pool is not None:
+                try:
+                    self._connection_pool.close()
+                except Exception:
+                    pass
+            return
 
         # ── Step 1: Stop accepting new proxy requests ─────────────────────
         self.shutdown.begin()
@@ -3469,16 +3108,31 @@ class ProxyServer:
         Writes a shutdown summary entry to the compression events JSONL file
         so stats from the current session are preserved across restarts.
         """
+        # Snapshot under the session lock — requests may still be mutating
+        # these counters while the drain window is open.
+        with self._session_lock:
+            session = dict(self.session)
         shutdown_record = {
             "event": "shutdown",
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-            "session_requests": self.session.get("requests", 0),
-            "session_tokens_saved": self.session.get("saved_tokens", 0),
-            "session_cost_saved": round(self.session.get("cost_saved", 0.0), 6),
-            "session_cost_total": round(self.session.get("cost", 0.0), 6),
-            "session_errors": self.session.get("errors", 0),
-            "uptime_seconds": round(time.time() - self.session.get("start_time", time.time())),
+            "session_requests": session.get("requests", 0),
+            "session_tokens_saved": session.get("saved_tokens", 0),
+            "session_cost_saved": round(session.get("cost_saved", 0.0), 6),
+            "session_cost_total": round(session.get("cost", 0.0), 6),
+            "session_errors": session.get("errors", 0),
+            "uptime_seconds": round(time.time() - session.get("start_time", time.time())),
         }
+        # Drain the monitor's async write queue so queued request rows are
+        # persisted before exit. The monitor DB writer is a daemon thread that
+        # is killed abruptly at process exit; without this drain, up to a
+        # queue's worth of already-recorded request rows are lost on a clean
+        # shutdown (recorded spend < real spend, under-firing rolling caps).
+        # Ordered before the compression-stats flush so a failure in that sink
+        # cannot skip the monitor drain — recorded request rows are the
+        # critical data.
+        if self.monitor is not None:
+            self.monitor.flush(timeout=5.0)
+
         # Delegate to the compression_stats recorder (writes to ~/.tokenpak/compression_events.jsonl)
         self.compression_stats.flush_shutdown_record(shutdown_record)
 
@@ -3533,24 +3187,18 @@ class ProxyServer:
         if deep:
             import shutil
 
-            try:
-                import psutil  # type: ignore[import-not-found]
-            except ImportError:
-                psutil = None
+            import psutil  # optional; fall back gracefully
             # providers: list active providers with their circuit-breaker status
             providers = [
                 {"name": name, "status": info.get("state", "unknown")}
                 for name, info in cb_statuses.items()
             ]
             # memory usage in MB
-            if psutil is None:
+            try:
+                proc = psutil.Process()
+                mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+            except Exception:
                 mem_mb = None
-            else:
-                try:
-                    proc = psutil.Process()
-                    mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
-                except Exception:
-                    mem_mb = None
             # disk available in GB
             try:
                 disk = shutil.disk_usage("/")
@@ -3611,7 +3259,11 @@ class ProxyServer:
         }
 
     def stats(self) -> dict:
-        s = self.session
+        # Copy under the session lock: handler threads mutate these counters
+        # concurrently, and returning the live dict let JSON serialization
+        # race with (and observe torn) mid-request updates.
+        with self._session_lock:
+            s = dict(self.session)
         return {
             "session": s,
             "compilation_mode": self.compilation_mode,
@@ -3623,7 +3275,8 @@ class ProxyServer:
         }
 
     def session_stats(self) -> dict:
-        s = self.session
+        with self._session_lock:
+            s = dict(self.session)
         uptime = round((time.time() - s["start_time"]) / 3600, 2)
         return {
             "session_requests": s["requests"],
@@ -3685,6 +3338,19 @@ ForwardProxyHandler = _ProxyHandler
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def _write_proxy_pid_file() -> Path:
+    """Resolve the proxy PID path under TOKENPAK_HOME and write the current PID.
+
+    Extracted so scoped-home isolation is unit-testable without launching the
+    server. Honors TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a
+    scoped-home proxy writes its own pid instead of clobbering the default home.
+    """
+    pid_path = _paths.under("proxy.pid")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    return pid_path
+
+
 def main() -> None:
     """
     Entry point for ``python -m tokenpak.proxy.server``.
@@ -3706,7 +3372,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config", default=None, metavar="PATH",
-        help="Path to config YAML (env: TOKENPAK_CONFIG, default: ~/.tokenpak/config.yaml)",
+        help="Path to config YAML (env: TOKENPAK_CONFIG, default: <TOKENPAK_HOME>/config.yaml, i.e. ~/.tokenpak/config.yaml)",
     )
     parser.add_argument(
         "--log-level", default=None,
@@ -3730,6 +3396,12 @@ def main() -> None:
         os.environ["TOKENPAK_PROFILE"] = args.profile
     if args.config is not None:
         os.environ["TOKENPAK_CONFIG"] = args.config
+    elif "TOKENPAK_CONFIG" not in os.environ:
+        # Default config path honors TOKENPAK_HOME so a scoped-home proxy resolves
+        # its own config; unchanged (~/.tokenpak/config.yaml) when TOKENPAK_HOME is
+        # unset. NOTE: config.py's import-time loader may resolve the config file
+        # independently of this — full config scoping is a config.py residual.
+        os.environ["TOKENPAK_CONFIG"] = str(_paths.under("config.yaml"))
 
     _log_level = (args.log_level or os.environ.get("TOKENPAK_LOG_LEVEL", "warning")).upper()
     logging.basicConfig(level=_log_level, format="%(levelname)s %(name)s: %(message)s")
@@ -3745,10 +3417,10 @@ def main() -> None:
         "aggressive": "everything except protected gets compressed",
     }
 
-    # Write PID file on startup; remove on clean shutdown.
-    _pid_path = _paths.under("proxy.pid")
-    _pid_path.parent.mkdir(parents=True, exist_ok=True)
-    _pid_path.write_text(str(os.getpid()))
+    # Write PID file on startup; remove on clean shutdown. Path resolves under
+    # TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a scoped-home
+    # proxy writes its own pid instead of clobbering the default home.
+    _pid_path = _write_proxy_pid_file()
 
     from tokenpak.proxy.config import PROVIDER_DISPLAY as _provider_display
     print(f"""

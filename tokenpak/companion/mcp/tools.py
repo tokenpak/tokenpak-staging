@@ -60,10 +60,6 @@ class CompanionState:
     _budget_tracker: Any = None
     _journal_store: Any = None
 
-    def __post_init__(self) -> None:
-        if not self.session_id:
-            self.session_id = self.config.session_id
-
     @property
     def budget_tracker(self) -> Any:
         if self._budget_tracker is None:
@@ -307,8 +303,9 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
     # fresh user knows why ingestion may be empty and how to point it at notes.
     if not local["config"]["memory_dirs"]:
         local["config"]["memory_source_hint"] = (
-            "no memory dirs configured — set TOKENPAK_COMPANION_MEMORY_DIRS "
-            "or pass --memory-dir to ingest your own Markdown notes"
+            "no memory dirs configured — set TOKENPAK_COMPANION_MEMORY_DIRS to "
+            "directories of your own Markdown notes, then ingest them with the "
+            "companion memory-source API (ingest_from_dir / ingest_sources)"
         )
     status, proxy_info = _proxy_get("/tpk/v1/session/info")
     if status == 200:
@@ -417,13 +414,15 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
     if not block_id and not path_hint:
         return json.dumps({"error": "provide block_id or path"})
 
+    # If only a path hint is given, resolve via search first to get an exact id.
     if not block_id and path_hint:
-        status, body = _proxy_get("/tpk/v1/vault/block/", {"path": path_hint})
+        status, body = _proxy_get("/tpk/v1/vault/search", {"q": path_hint, "limit": 1})
         if status == 0:
             return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
-        if status >= 400:
-            return json.dumps(body)
-        return json.dumps(body, indent=2)
+        results = body.get("results") or []
+        if not results:
+            return json.dumps({"error": "block_not_found", "path": path_hint})
+        block_id = results[0].get("block_id") or ""
 
     status, body = _proxy_get(f"/tpk/v1/vault/block/{_url_parse.quote(block_id, safe='')}")
     if status == 0:

@@ -6,7 +6,7 @@ import copy
 import json
 from typing import Any, Dict, Mapping, Optional
 
-from .base import FormatAdapter, cacheable_fill_trace
+from .base import FormatAdapter
 from .canonical import CanonicalRequest
 
 
@@ -58,116 +58,49 @@ class AnthropicAdapter(FormatAdapter):
         payload.update(copy.deepcopy(canonical.raw_extra))
         return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
-    def inject_system_context(
-        self,
-        body: bytes,
-        injection_text: Optional[str] = None,
-        *,
-        stable_text: Optional[str] = None,
-        volatile_text: Optional[str] = None,
-        trace_out: Optional[Dict[str, Any]] = None,
-    ) -> bytes:
+    def inject_system_context(self, body: bytes, injection_text: str) -> bytes:
         """
-        Inject context into the system prompt with correct cache boundaries.
+        Inject volatile content into the system prompt with correct cache boundary.
 
-        Two modes:
+        Cache boundary strategy (Anthropic prompt caching):
+          - STABLE prefix (original system blocks) → gets cache_control: ephemeral
+          - VOLATILE injection (retrieval/vault content) → NO cache_control
 
-        - **Legacy** (positional ``injection_text``): the injected text is treated
-          as a single VOLATILE block appended after the (cache_control-marked)
-          original system. Behavior is byte-for-byte unchanged from before.
-
-        - **two-layer cacheable-injection** (``stable_text`` / ``volatile_text`` keywords):
-          a cacheable STABLE layer plus an uncached VOLATILE layer. Block order:
-              [ original system… (cache_control) ,
-                stable injection  (cache_control) ,
-                volatile injection (NO cache_control) ]
-          Caching is cumulative up to a breakpoint, so the original system + stable
-          injection form a cacheable prefix that survives per-turn volatile churn
-          (AC #5/#6). Volatile retrieval sits strictly after the breakpoint.
-
-        When the request already carries cache_control with an explicit TTL (e.g.
-        Claude Code CLI byte-preserved traffic), NO new cache_control markers are
-        added — the client manages cache ordering and TokenPak must not claim its
-        cache as proxy-attributable. ``trace_out`` (if provided) is populated with
-        the stable/volatile layer hashes and the ``cache_origin`` attribution.
+        When the request already has cache_control blocks with explicit TTL values
+        (e.g., Claude Code CLI), we skip adding any new cache_control markers to
+        avoid breaking the TTL ordering that the client set up.
         """
         canonical = self.normalize(body)
+        # Volatile injection block — intentionally NO cache_control
+        volatile_block: dict = {"type": "text", "text": injection_text}
+
+        # Check if the request already has cache_control with explicit TTL anywhere.
+        # If so, don't add new cache_control markers — the client manages ordering.
         has_explicit_ttl = self._body_has_explicit_ttl(canonical)
-        two_layer = stable_text is not None or volatile_text is not None
-
-        if not two_layer:
-            injection_text = injection_text or ""
-            # Volatile injection block — intentionally NO cache_control
-            volatile_block: dict = {"type": "text", "text": injection_text}
-            cached = False
-            if isinstance(canonical.system, str):
-                if canonical.system:
-                    stable_block: dict = {"type": "text", "text": canonical.system}
-                    if not has_explicit_ttl:
-                        stable_block["cache_control"] = {"type": "ephemeral"}
-                        cached = True
-                    canonical.system = [stable_block, volatile_block]
-                else:
-                    canonical.system = injection_text
-            elif isinstance(canonical.system, list):
-                if canonical.system and not has_explicit_ttl:
-                    marked = list(canonical.system)
-                    for i in range(len(marked) - 1, -1, -1):
-                        blk = marked[i]
-                        if isinstance(blk, dict) and blk.get("type") == "text":
-                            if not blk.get("cache_control"):
-                                marked[i] = dict(blk, cache_control={"type": "ephemeral"})
-                            cached = True
-                            break
-                    canonical.system = marked
-                elif canonical.system:
-                    canonical.system = list(canonical.system)
-                canonical.system.append(volatile_block)
-            else:
-                canonical.system = injection_text
-            if trace_out is not None:
-                origin = "client" if has_explicit_ttl else ("proxy" if cached else "unknown")
-                cacheable_fill_trace(trace_out, "", injection_text, cache_origin=origin)
-            return self.denormalize(canonical)
-
-        # ---- two-layer cacheable-injection path ----
-        stable_text = stable_text or ""
-        volatile_text = volatile_text or ""
 
         if isinstance(canonical.system, str):
-            blocks: list = [{"type": "text", "text": canonical.system}] if canonical.system else []
+            if canonical.system:
+                stable_block: dict = {"type": "text", "text": canonical.system}
+                if not has_explicit_ttl:
+                    stable_block["cache_control"] = {"type": "ephemeral"}
+                canonical.system = [stable_block, volatile_block]
+            else:
+                canonical.system = injection_text
         elif isinstance(canonical.system, list):
-            blocks = list(canonical.system)
+            if canonical.system and not has_explicit_ttl:
+                marked = list(canonical.system)
+                for i in range(len(marked) - 1, -1, -1):
+                    blk = marked[i]
+                    if isinstance(blk, dict) and blk.get("type") == "text":
+                        if not blk.get("cache_control"):
+                            marked[i] = dict(blk, cache_control={"type": "ephemeral"})
+                        break
+                canonical.system = marked
+            elif canonical.system:
+                canonical.system = list(canonical.system)
+            canonical.system.append(volatile_block)
         else:
-            blocks = []
-
-        proxy_cached = False
-        if not has_explicit_ttl:
-            # Breakpoint 1 — cache the original system prefix (durable across turns).
-            for i in range(len(blocks) - 1, -1, -1):
-                blk = blocks[i]
-                if isinstance(blk, dict) and blk.get("type") == "text":
-                    if not blk.get("cache_control"):
-                        blocks[i] = dict(blk, cache_control={"type": "ephemeral"})
-                    proxy_cached = True
-                    break
-
-        if stable_text:
-            stable_block = {"type": "text", "text": stable_text}
-            if not has_explicit_ttl:
-                # Breakpoint 2 — extend the cacheable prefix over the stable layer.
-                stable_block["cache_control"] = {"type": "ephemeral"}
-                proxy_cached = True
-            blocks.append(stable_block)
-
-        if volatile_text:
-            # Volatile retrieval — strictly after the breakpoint, never cached.
-            blocks.append({"type": "text", "text": volatile_text})
-
-        canonical.system = blocks
-        if trace_out is not None:
-            origin = "client" if has_explicit_ttl else ("proxy" if proxy_cached else "unknown")
-            cacheable_fill_trace(trace_out, stable_text, volatile_text, cache_origin=origin)
+            canonical.system = injection_text
         return self.denormalize(canonical)
 
     @staticmethod

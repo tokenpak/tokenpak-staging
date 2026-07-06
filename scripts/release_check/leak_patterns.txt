@@ -1,9 +1,0 @@
-# Deprecated compatibility note.
-#
-# The release-check leak gate now delegates to
-# scripts/release_gate/public_safety_scan.py so the public repository carries
-# only structural public-safety pattern classes. Exact private identifiers stay
-# in the internal standards/vault register and are not mirrored here.
-#
-# Runtime source of truth:
-#   scripts/release_gate/public_safety_scan.py

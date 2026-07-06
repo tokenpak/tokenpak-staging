@@ -2,8 +2,8 @@
 tokenpak.proxy.request_pipeline — Router wiring, route engine singletons,
 intent classification, and style contract (protected content detection).
 
-Extracted from runtime/proxy.py (L1589-2144) as part of TPK-RESTRUCTURE-005.
-Extended in TPK-CONSOLIDATION-A2c with: _resolve_session_id,
+Extracted from runtime/proxy.py (L1589-2144) during the proxy restructure.
+Later extended with: _resolve_session_id (session-id resolution),
 _apply_budget, _shadow_validate.
 """
 
@@ -622,7 +622,7 @@ def _partition_stable_volatile(body: bytes) -> tuple:
 
 # ---------------------------------------------------------------------------
 # Session ID resolution
-# Transferred from monolith (TPK-CONSOLIDATION-A2c, lines 1189–1212)
+# Transferred from monolith (lines 1189–1212)
 # ---------------------------------------------------------------------------
 
 def _resolve_session_id(headers: Any, model: str) -> str:
@@ -657,7 +657,7 @@ def _resolve_agent_id(headers: Any) -> str:
     Case-insensitive lookup, lower-cased value — matches the spend_guard
     rolling-caps attribution convention (``spend_guard/orchestrator.py``) so
     the persisted monitor.db ``agent_id`` and the live cap accounting agree.
-    Returns ``""`` (the empty-string sentinel, classified ``unknown``
+    Returns ``""`` (the unknown-attribution sentinel, classified ``unknown``
     downstream) when no caller set the header. Never fabricated.
     """
     try:
@@ -672,7 +672,7 @@ def _resolve_agent_id(headers: Any) -> str:
 def _resolve_cycle_id(headers: Any) -> str:
     """Resolve the cycle id from the ``X-Tokenpak-Cycle`` header.
 
-    No caller stamps this header in the current deployment; it is resolved here so
+    No caller stamps this header today; it is resolved here so
     a future worker that sets it is captured with no code change. Until then
     the ``""`` sentinel is written and classified ``unknown`` —
     never fabricated.

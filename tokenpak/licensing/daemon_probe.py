@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Pro-daemon presence probe for the local fallback contract.
+"""Pro-daemon presence probe (fallback contract, Phase 1).
 
 Cheap local check for whether the closed-source ``tokenpak-paid-daemon``
 is running on this host. The daemon publishes its loopback port to
-``~/.tokenpak/pro/daemon.sock-info`` (mode 0600) at startup. Phase 1
-only distinguishes:
+``~/.tokenpak/pro/daemon.sock-info`` (mode 0600) at startup. Phase 1 only
+distinguishes:
 
 - ``"active"`` — sock-info file present + readable + reachable on its
   declared port.
@@ -23,7 +23,7 @@ overwhelming case (Pro daemon is opt-in install).
 The OSS code never extends TIP capabilities in private or assumes daemon
 presence; this module is the canonical way to ask "is Pro available right
 now?" rather than scattering ``Path.exists()`` checks across call sites
-(discovery stays dynamic).
+(per ``feedback_always_dynamic.md``).
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ from typing import Literal, Optional
 
 DaemonState = Literal["active", "unavailable", "tip_mismatch"]
 
-# Canonical sock-info file path. Constant rather than parameter so callers
-# agree on the daemon's advertised location. If the daemon version rolls
-# forward and changes, the constant moves in lockstep.
+# Canonical sock-info file path. Constant rather than parameter — this is
+# the single agreed location. If the daemon version rolls forward and
+# changes, the constant moves in lockstep.
 _SOCK_INFO_PATH = Path.home() / ".tokenpak" / "pro" / "daemon.sock-info"
 
 # Connect timeout for the daemon probe. Short enough that a stale

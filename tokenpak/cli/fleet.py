@@ -334,7 +334,7 @@ def interactive_add_machine(machines: List[FleetMachine]) -> Optional[FleetMachi
     """Prompt user to add a new machine to the fleet."""
     print("\n📋 Add machine to fleet")
 
-    name = input("Machine name (e.g., 'agent-a', 'agent-b'): ").strip()
+    name = input("Machine name (e.g., 'sue', 'trix'): ").strip()
     if not name:
         print("Cancelled (no name provided)")
         return None

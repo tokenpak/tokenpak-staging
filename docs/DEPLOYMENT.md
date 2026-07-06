@@ -19,7 +19,7 @@ This guide covers production deployment of the TokenPak LLM proxy — from a sin
 | Python | 3.10+ | 3.11+ |
 | OS | Linux / macOS / Windows | Linux (Ubuntu 22.04 LTS+) |
 
-RAM is low because TokenPak runs a lightweight threaded HTTP proxy by default. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
+RAM is low because TokenPak is a lightweight async proxy. The main consumer is the optional vault index — budget ~100 MB per 10,000 indexed files.
 
 ### Network Requirements
 
@@ -54,8 +54,8 @@ sudo ufw allow out 443/tcp
 pip install tokenpak
 
 # With optional extras
-pip install tokenpak[tiktoken] # accurate token counting (recommended)
-pip install tokenpak[ml] # ML-powered compression via LLMLingua
+pip install tokenpak tiktoken # accurate OpenAI-compatible token counting
+pip install tokenpak[compression] # LLMLingua compression engine
 ```
 
 ### Option 2: From Source
@@ -90,7 +90,7 @@ docker run -d \
  -p 127.0.0.1:8766:8766 \
  -e ANTHROPIC_API_KEY="sk-ant-..." \
  -e OPENAI_API_KEY="sk-..." \
- -v tokenpak-data:/var/lib/tokenpak/.tokenpak \
+ -v tokenpak-data:/home/tokenpak/.tokenpak \
  tokenpak/tokenpak:latest
 ```
 
@@ -293,7 +293,7 @@ services:
  env_file:
  - .env.secrets # ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
  volumes:
- - tokenpak-data:/var/lib/tokenpak/.tokenpak
+ - tokenpak-data:/home/tokenpak/.tokenpak
  healthcheck:
  test: ["CMD", "tokenpak", "status"]
  interval: 30s
@@ -361,13 +361,15 @@ tokenpak savings --lifetime
 
 ### Single Instance (default)
 
-TokenPak's default proxy uses a threaded HTTP server and handles concurrent local requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
+TokenPak is async (uvicorn + starlette) and handles concurrent requests well on a single machine. For most teams (<50 developers, <10K req/day), a single instance is sufficient.
 
-For high-concurrency proxy deployments, run multiple TokenPak instances behind a trusted local or private load balancer. The `--workers` flag is for the ASGI ingest/telemetry surfaces and is not the default proxy scaling knob.
+Tune uvicorn workers:
 
 ```bash
-tokenpak serve --port 8766
+tokenpak serve --port 8766 --workers 4
 ```
+
+Rule of thumb: `workers = (2 × CPU cores) + 1`.
 
 ### Multi-Instance (load-balanced)
 
@@ -532,7 +534,7 @@ Best for: Solo developer, personal use, testing.
 
 ```bash
 # Install
-pip install tokenpak[tiktoken]
+pip install tokenpak tiktoken
 
 # Set API keys in shell profile
 echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> ~/.bashrc

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -189,7 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_rollup_provider_date
 CREATE INDEX IF NOT EXISTS idx_rollup_agent_date
     ON tp_rollup_daily_agent (date);
 
--- TIP-06: Savings attribution by source (NEVER overclaims TokenPak savings)
+-- Savings attribution by source (NEVER overclaims TokenPak savings)
 CREATE TABLE IF NOT EXISTS tp_savings_attribution (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     request_id          TEXT NOT NULL DEFAULT '',
@@ -213,7 +214,7 @@ CREATE INDEX IF NOT EXISTS idx_savings_attr_source
 CREATE INDEX IF NOT EXISTS idx_savings_attr_ts
     ON tp_savings_attribution (timestamp);
 
--- TIP-06: Cache miss reasons for observability
+-- Cache miss reasons for observability
 CREATE TABLE IF NOT EXISTS tp_cache_miss_reasons (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     request_id  TEXT NOT NULL DEFAULT '',
@@ -263,13 +264,59 @@ class TelemetryDB:
 
     def __init__(self, path: Union[str, Path] = ":memory:") -> None:
         self._path = str(path)
-        self._conn: sqlite3.Connection = sqlite3.connect(self._path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        # Thread-safety: a single sqlite3 connection shared across a thread
+        # pool has one implicit transaction, so concurrent writers interleave
+        # half-written batches into each other's commits. Instead each thread
+        # gets its own connection via a thread-local factory (the ``_conn``
+        # property). Plain ``:memory:`` paths are mapped to a named
+        # shared-cache URI so every per-thread connection sees the same
+        # database; ``_keeper`` holds that database alive for the object's
+        # lifetime.
+        self._local = threading.local()
+        self._all_conns: list[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
+        self._mem_uri: Optional[str] = (
+            f"file:tokenpak_telemetry_{id(self)}?mode=memory&cache=shared"
+            if self._path == ":memory:"
+            else None
+        )
+        self._keeper = self._connect()
+        self._local.conn = self._keeper
         self._apply_ddl()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a new connection to the underlying database.
+
+        ``check_same_thread=False`` is set only so :meth:`close` can close
+        every thread's connection; each connection is otherwise used by a
+        single thread via the thread-local ``_conn`` property.
+        """
+        if self._mem_uri is not None:
+            conn = sqlite3.connect(self._mem_uri, uri=True, check_same_thread=False)
+        else:
+            conn = sqlite3.connect(self._path, check_same_thread=False, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        # Generous busy timeout + NORMAL sync (safe under WAL): concurrent
+        # writers queue instead of failing, and commits avoid a full fsync
+        # per transaction. Mirrors the hardened registry connection setup.
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        with self._conns_lock:
+            self._all_conns.append(conn)
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Return the calling thread's connection, creating it on demand."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+            self._local.conn = conn
+        return conn
 
     def _apply_ddl(self) -> None:
         """Create tables and indexes if they don't already exist."""
@@ -371,21 +418,16 @@ class TelemetryDB:
             _add_col(_tbl, "avg_final_tokens", "REAL NOT NULL DEFAULT 0")
             _add_col(_tbl, "avg_cost", "REAL NOT NULL DEFAULT 0")
 
-        # ----------------------------------------------------------------
-        # tp_events — flat event columns (token pipeline, retry, cost fields).
-        # These back the integrity/operational readers (anomaly detection,
-        # health checks, pruning, reconciliation). Wire in the canonical
-        # event-schema migration so the flat column list has a single source
-        # of truth instead of being duplicated here. Idempotent: ALTER TABLE
-        # adds are guarded by PRAGMA table_info inside migrate_tp_events().
-        # ----------------------------------------------------------------
-        from tokenpak.telemetry.event_schema import migrate_tp_events
-
-        migrate_tp_events(self._conn)
-
     def close(self) -> None:
-        """Close the underlying database connection."""
-        self._conn.close()
+        """Close every connection this store has opened (all threads)."""
+        with self._conns_lock:
+            conns, self._all_conns = self._all_conns, []
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local.conn = None
 
     def __enter__(self) -> "TelemetryDB":
         return self
@@ -405,7 +447,7 @@ class TelemetryDB:
         """Batch-insert a list of :class:`TelemetryEvent` records."""
         self._insert_events(events)
 
-    def _insert_events(self, events: list[TelemetryEvent]) -> None:
+    def _insert_events(self, events: list[TelemetryEvent], commit: bool = True) -> None:
         sql = """
         INSERT OR REPLACE INTO tp_events
             (trace_id, request_id, event_type, ts, provider, model,
@@ -436,7 +478,8 @@ class TelemetryDB:
             for e in events
         ]
         self._conn.executemany(sql, rows)
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def insert_usage(self, usage: Usage) -> None:
         """Persist a single :class:`Usage` record."""
@@ -446,7 +489,7 @@ class TelemetryDB:
         """Batch-insert a list of :class:`Usage` records."""
         self._insert_usages(usages)
 
-    def _insert_usages(self, usages: list[Usage]) -> None:
+    def _insert_usages(self, usages: list[Usage], commit: bool = True) -> None:
         sql = """
         INSERT OR REPLACE INTO tp_usage
             (trace_id, usage_source, confidence, input_billed, output_billed,
@@ -473,7 +516,8 @@ class TelemetryDB:
             for u in usages
         ]
         self._conn.executemany(sql, rows)
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def insert_cost(self, cost: Cost) -> None:
         """Persist a single :class:`Cost` record."""
@@ -483,7 +527,7 @@ class TelemetryDB:
         """Batch-insert a list of :class:`Cost` records."""
         self._insert_costs(costs)
 
-    def _insert_costs(self, costs: list[Cost]) -> None:
+    def _insert_costs(self, costs: list[Cost], commit: bool = True) -> None:
         sql = """
         INSERT OR REPLACE INTO tp_costs
             (trace_id, cost_input, cost_output, cost_cache_read,
@@ -514,7 +558,8 @@ class TelemetryDB:
             for c in costs
         ]
         self._conn.executemany(sql, rows)
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def insert_segment(self, segment: Segment) -> None:
         """Persist a single :class:`Segment` record."""
@@ -524,7 +569,7 @@ class TelemetryDB:
         """Batch-insert a list of :class:`Segment` records."""
         self._insert_segments(segments)
 
-    def _insert_segments(self, segments: list[Segment]) -> None:
+    def _insert_segments(self, segments: list[Segment], commit: bool = True) -> None:
         sql = """
         INSERT OR REPLACE INTO tp_segments
             (trace_id, segment_id, ord, segment_type, raw_hash, final_hash,
@@ -560,7 +605,8 @@ class TelemetryDB:
             for s in segments
         ]
         self._conn.executemany(sql, rows)
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Compound insert_trace (convenience)
@@ -576,7 +622,8 @@ class TelemetryDB:
         """Insert all data for a single trace in one call.
 
         This is the preferred entry point for recording a completed LLM
-        request/response cycle.  All four tables are updated atomically.
+        request/response cycle.  All four tables are updated atomically
+        (single transaction on the calling thread's connection).
 
         Parameters
         ----------
@@ -588,14 +635,26 @@ class TelemetryDB:
             Optional cost computation result.
         segments:
             Optional list of classified message segments.
+
+        The rows are written in ONE transaction: either the whole trace
+        lands or none of it does. A failed usage/cost/segment insert rolls
+        back the event insert as well and re-raises, so a trace can never
+        be half-written across the tables (and callers can never treat a
+        partially-persisted trace as success).
         """
-        self.insert_event(event)
-        if usage is not None:
-            self.insert_usage(usage)
-        if cost is not None:
-            self.insert_cost(cost)
-        if segments:
-            self.insert_segments(segments)
+        conn = self._conn
+        try:
+            self._insert_events([event], commit=False)
+            if usage is not None:
+                self._insert_usages([usage], commit=False)
+            if cost is not None:
+                self._insert_costs([cost], commit=False)
+            if segments:
+                self._insert_segments(segments, commit=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     # ------------------------------------------------------------------
     # Query helpers
@@ -1372,7 +1431,7 @@ class TelemetryDB:
         return [_row_to_dict(cur, r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
-    # TIP-06: Savings attribution
+    # Savings attribution
     # ------------------------------------------------------------------
 
     def insert_savings_attribution(self, row: dict) -> None:
@@ -1437,7 +1496,7 @@ class TelemetryDB:
         return [_row_to_dict(cur, r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
-    # TIP-06: Cache miss reasons
+    # Cache miss reasons
     # ------------------------------------------------------------------
 
     def insert_cache_miss(self, row: dict) -> None:

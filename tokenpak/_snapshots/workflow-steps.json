@@ -1,6 +1,6 @@
 {
   "version": "1.1",
-  "generated_at": "2026-06-28T17:50:51Z",
+  "generated_at": "2026-06-27T07:06:26Z",
   "guarded_globs": [
     "release*.yml",
     "release-rehearsal.yml"
@@ -152,6 +152,54 @@
     },
     {
       "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": ""
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": ""
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": ""
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": ""
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Build sdist + wheel for scanning"
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Build sdist + wheel for scanning"
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Scan shipped artifact for public-leak patterns"
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "leak-scan",
+      "id": "",
+      "name": "Scan shipped artifact for public-leak patterns"
+    },
+    {
+      "workflow": "release-rehearsal.yml",
       "job": "preflight",
       "id": "tag",
       "name": "Compute rehearsal tag"
@@ -202,13 +250,13 @@
       "workflow": "release-rehearsal.yml",
       "job": "release-gate-snapshots",
       "id": "",
-      "name": "Install (all extras for canonical snapshot reproduction)"
+      "name": "Install (dev shape)"
     },
     {
       "workflow": "release-rehearsal.yml",
       "job": "release-gate-snapshots",
       "id": "",
-      "name": "Install (all extras for canonical snapshot reproduction)"
+      "name": "Install (dev shape)"
     },
     {
       "workflow": "release-rehearsal.yml",

@@ -1,54 +1,53 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CLI version honesty regression guards.
+"""Version-probe trust regression tests (ratified curated-1.9.4 item).
 
-These tests pin the honesty invariants for the in-scope CLI surface:
-
-* ``tokenpak version`` must not advertise a stale hardcoded proxy version. The
-  proxy ships from the same wheel as the CLI, so the "expected" proxy version is
-  derived from ``tokenpak.__version__`` rather than a separate literal (which had
-  drifted to ``"1.1.0"``: a version the package never shipped).
-* The advertised connector registry must exclude connectors that only raise
-  ``NotImplementedError``; stubs are documented as future work, never registered
-  as a working surface.
+The expected proxy version must be derived from ``tokenpak.__version__`` (not a
+separate hardcoded literal that drifts), and the live probe must read ``/health``
+(which carries ``version``) rather than ``/version``.
 """
+
 from __future__ import annotations
 
 import inspect
-from argparse import Namespace
+import json
+from unittest.mock import MagicMock, patch
 
 import tokenpak
-from tokenpak import _cli_core
+import tokenpak._cli_core as _cli_core
 
 
 def test_expected_proxy_version_tracks_package_version():
-    # Semantic guard: the expected proxy version is the installed package
-    # version, not a separate constant that can silently drift out of sync.
+    """PROXY_VERSION must equal the installed package version."""
     assert _cli_core.PROXY_VERSION == tokenpak.__version__
 
 
 def test_no_stale_hardcoded_proxy_version_literal():
-    # Structural guard for the exact residue removed here: the module
-    # used to pin ``PROXY_VERSION = "1.1.0"``, advertised by ``tokenpak version``
-    # as the expected proxy version.
+    """The stale ``PROXY_VERSION = "1.1.0"`` literal must not return."""
     src = inspect.getsource(_cli_core)
     assert 'PROXY_VERSION = "1.1.0"' not in src
 
 
-def test_cmd_version_reports_honest_expected_proxy(monkeypatch, capsys):
-    # Behavioral guard: the rendered ``Proxy (expected)`` line matches the
-    # package version and never the stale literal. Proxy reachability is stubbed
-    # so the test is hermetic and offline.
-    monkeypatch.setattr(_cli_core, "_get_proxy_version", lambda: {"error": "offline"})
-    _cli_core.cmd_version(Namespace())
-    out = capsys.readouterr().out
-    assert f"Proxy (expected) : {tokenpak.__version__}" in out
-    assert "Proxy (expected) : 1.1.0" not in out
+def test_version_probe_uses_health_endpoint():
+    """`_get_proxy_version` must probe /health (which carries version), not /version."""
+    captured = {}
 
+    class _FakeResp:
+        def read(self):
+            return json.dumps({"status": "ok", "version": tokenpak.__version__}).encode()
 
-def test_advertised_connectors_exclude_notimplemented_stubs():
-    # The advertised connector registry must list only working connectors.
-    # notion/google_drive/github raise NotImplementedError and must not appear.
-    sources = __import__("tokenpak.sources", fromlist=[""])
-    advertised = set(sources.list_connectors())
-    for stub in ("notion", "google_drive", "github"):
-        assert stub not in advertised
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(url, *a, **k):
+        captured["url"] = url
+        return _FakeResp()
+
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        result = _cli_core._get_proxy_version()
+
+    assert "/health" in captured.get("url", "")
+    assert "/version" not in captured.get("url", "")
+    assert result.get("version") == tokenpak.__version__

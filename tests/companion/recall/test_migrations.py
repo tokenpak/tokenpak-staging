@@ -177,9 +177,9 @@ def test_v2_applies_on_top_of_v1_only(tmp_path: Path, require_fts5: None) -> Non
         conn.close()
     assert "paks_ai_fts" not in trig_before
 
-    # Now open via RecallStore: the runner should apply all pending migrations.
+    # Now open via RecallStore: the runner should apply v2 only.
     with RecallStore.open(db_path) as store:
-        assert store.schema_version == SCHEMA_VERSION
+        assert store.schema_version == SCHEMA_VERSION  # i.e. 2
         trig_after = {
             r[0]
             for r in store.conn.execute(
@@ -189,8 +189,8 @@ def test_v2_applies_on_top_of_v1_only(tmp_path: Path, require_fts5: None) -> Non
     assert {"paks_ai_fts", "paks_au_fts", "paks_ad_fts"}.issubset(trig_after)
 
 
-def test_reopen_latest_db_keeps_v2_triggers(tmp_path: Path, require_fts5: None) -> None:
-    """Re-opening a current DB keeps the v2 triggers present."""
+def test_v2_is_idempotent_on_already_v2_db(tmp_path: Path, require_fts5: None) -> None:
+    """Re-opening a v2 DB does not re-run v2 (and does not error)."""
     db_path = tmp_path / "recall.db"
     with RecallStore.open(db_path) as first:
         assert first.schema_version == SCHEMA_VERSION
@@ -205,18 +205,24 @@ def test_reopen_latest_db_keeps_v2_triggers(tmp_path: Path, require_fts5: None) 
     assert {"paks_ai_fts", "paks_au_fts", "paks_ad_fts"}.issubset(trig)
 
 
-def test_schema_version_constant_is_v4() -> None:
-    """``SCHEMA_VERSION`` should track the v4 migration head."""
-    assert SCHEMA_VERSION == 4
-    assert MIGRATIONS[-1].version == 4
-    assert MIGRATIONS[-1].name == "paks_status_lifecycle"
+def test_schema_version_constant_is_v3() -> None:
+    """``SCHEMA_VERSION`` should track the v3 migration head."""
+    assert SCHEMA_VERSION == 3
+    assert MIGRATIONS[-1].version == 3
+    assert MIGRATIONS[-1].name == "pak_reason_codes_and_risk_flags"
 
 
 # ----- v2 → v3 upgrade coverage --------------------------------------------
 
 
 def test_v3_applies_on_top_of_v2_only(tmp_path: Path, require_fts5: None) -> None:
-    """A DB seeded at v2 advances through the current migration head."""
+    """A DB seeded at v2 advances to v3 without re-running v1/v2 DDL.
+
+    Verifies the Std 32 §5.4 / §5.5 addendum: the v3 migration adds two
+    join tables (``pak_reason_codes`` + ``pak_risk_flags``) and three
+    indexes; nothing else changes. Critically, no column is added to
+    ``paks`` — that boundary is enforced by PR 2's no-Pro-leakage rule.
+    """
     db_path = tmp_path / "recall.db"
 
     # Hand-roll a v2 database by applying v1 + v2 only.
@@ -234,6 +240,8 @@ def test_v3_applies_on_top_of_v2_only(tmp_path: Path, require_fts5: None) -> Non
             ("2026-05-11T00:00:00Z",),
         )
         conn.execute("COMMIT")
+        # Snapshot the v2-era ``paks`` schema to assert it is byte-stable
+        # across the v3 migration.
         paks_columns_before = [
             r[1]
             for r in conn.execute("PRAGMA table_info(paks)").fetchall()
@@ -250,9 +258,9 @@ def test_v3_applies_on_top_of_v2_only(tmp_path: Path, require_fts5: None) -> Non
     assert "pak_reason_codes" not in tables_before
     assert "pak_risk_flags" not in tables_before
 
-    # Open via RecallStore: the runner applies v3 and later migrations.
+    # Open via RecallStore: the runner applies v3 only.
     with RecallStore.open(db_path) as store:
-        assert store.schema_version == SCHEMA_VERSION
+        assert store.schema_version == SCHEMA_VERSION  # i.e. 3
         tables_after = {
             r[0]
             for r in store.conn.execute(
@@ -274,14 +282,13 @@ def test_v3_applies_on_top_of_v2_only(tmp_path: Path, require_fts5: None) -> Non
         "idx_pak_reason_codes_code",
         "idx_pak_risk_flags_flag",
         "idx_pak_risk_flags_severity",
-        "idx_paks_status",
     }.issubset(indexes_after)
-    assert "status" not in paks_columns_before
-    assert "status" in paks_columns_after
+    # ``paks`` is unchanged — addendum's no-new-column rule.
+    assert paks_columns_after == paks_columns_before
 
 
-def test_current_migration_head_is_idempotent(tmp_path: Path, require_fts5: None) -> None:
-    """Re-opening a current DB does not re-run migrations or error."""
+def test_v3_is_idempotent_on_already_v3_db(tmp_path: Path, require_fts5: None) -> None:
+    """Re-opening a v3 DB does not re-run v3 (and does not error)."""
     db_path = tmp_path / "recall.db"
     with RecallStore.open(db_path) as first:
         assert first.schema_version == SCHEMA_VERSION
@@ -294,84 +301,3 @@ def test_current_migration_head_is_idempotent(tmp_path: Path, require_fts5: None
             ).fetchall()
         }
     assert {"pak_reason_codes", "pak_risk_flags"}.issubset(tables)
-
-
-# ----- v3 -> v4 upgrade coverage --------------------------------------------
-
-
-def test_v4_backfills_status_from_superseded_by(
-    tmp_path: Path, require_fts5: None
-) -> None:
-    """v4 backfills only rows with an existing supersession projection."""
-    db_path = tmp_path / "recall.db"
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("BEGIN")
-        for mig in MIGRATIONS:
-            if mig.version > 3:
-                break
-            for stmt in mig.statements:
-                conn.execute(stmt)
-        conn.execute(
-            "INSERT OR REPLACE INTO schema_version (id, version, applied_at) "
-            "VALUES (1, 3, ?)",
-            ("2026-05-11T00:00:00Z",),
-        )
-        rows = [
-            (
-                "vault://new",
-                "vault",
-                "doc",
-                "llm_generated",
-                "New",
-                "hash-new",
-                "2026-05-11T00:00:00Z",
-                "2026-05-11T00:00:00Z",
-                None,
-            ),
-            (
-                "vault://old",
-                "vault",
-                "doc",
-                "llm_generated",
-                "Old",
-                "hash-old",
-                "2026-05-11T00:00:00Z",
-                "2026-05-11T00:00:00Z",
-                "vault://new",
-            ),
-            (
-                "vault://plain",
-                "vault",
-                "doc",
-                "llm_generated",
-                "Plain",
-                "hash-plain",
-                "2026-05-11T00:00:00Z",
-                "2026-05-11T00:00:00Z",
-                None,
-            ),
-        ]
-        conn.executemany(
-            "INSERT INTO paks (pak_id, pak_type, source_type, authority, "
-            "title, content_hash, created_at, updated_at, superseded_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
-        )
-        conn.execute("COMMIT")
-    finally:
-        conn.close()
-
-    with RecallStore.open(db_path) as store:
-        got = dict(
-            store.conn.execute(
-                "SELECT pak_id, status FROM paks ORDER BY pak_id"
-            ).fetchall()
-        )
-    assert got == {
-        "vault://new": None,
-        "vault://old": "superseded",
-        "vault://plain": None,
-    }

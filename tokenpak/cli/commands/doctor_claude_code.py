@@ -28,8 +28,6 @@ import urllib.request
 from pathlib import Path
 from typing import TypedDict
 
-from tokenpak.platform import service
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -60,10 +58,7 @@ def _proxy_pid_path() -> Path:
 
 
 def _monitor_db_path() -> Path:
-    # Canonical resolver — same candidate chain as every other reader/writer.
-    from tokenpak.core.paths import get_db_path
-
-    return get_db_path("monitor.db")
+    return Path.home() / ".tokenpak" / "monitor.db"
 
 
 class CheckResult(TypedDict):
@@ -536,7 +531,7 @@ def _check_pythonpath_drift() -> CheckResult:
                 f"pid={pid} proc_pythonpath={proc_pythonpath!r} "
                 f"canonical={canonical_pythonpath!r} — mismatch"
             ),
-            remediation=service.restart_remediation(SYSTEMD_UNIT_NAME),
+            remediation="Restart proxy via: systemctl --user restart tokenpak-proxy.service",
         )
 
     # No systemd unit — fall back to home-directory heuristic
@@ -544,11 +539,7 @@ def _check_pythonpath_drift() -> CheckResult:
     # instead of the current user's home, causing imports to silently load
     # the wrong codebase. This check guards against that recurrence.
     if proc_pythonpath and home_str not in proc_pythonpath:
-        # Cross-platform user-home root: /home/<u>/ (Linux), /Users/<u>/ (macOS),
-        # or \Users\<u>\ (Windows). The drift check itself (home_str not in
-        # proc_pythonpath) is already platform-agnostic; this just extracts a
-        # friendly name for the message.
-        wrong_user = re.search(r"(?:/home/|/Users/|\\Users\\)(\w+)[/\\]", proc_pythonpath)
+        wrong_user = re.search(r"/home/(\w+)/", proc_pythonpath)
         wrong_name = wrong_user.group(1) if wrong_user else "unknown"
         return CheckResult(
             check="pythonpath_drift",
@@ -562,7 +553,7 @@ def _check_pythonpath_drift() -> CheckResult:
                 f"pid={pid} proc_pythonpath={proc_pythonpath!r} "
                 f"current_home={home_str} — wrong user in path"
             ),
-            remediation=service.restart_remediation(SYSTEMD_UNIT_NAME),
+            remediation="Restart proxy via: systemctl --user restart tokenpak-proxy.service",
         )
 
     if not proc_pythonpath:

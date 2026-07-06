@@ -153,11 +153,8 @@ _BUILTIN_PROVIDERS: dict[str, dict[str, Any]] = {
         "api_key_env": "ANTHROPIC_API_KEY",
         "cli_command": "claude -p",
         "models": {
-            "claude-fable-5":    {"input": 10.0, "output": 50.0, "cached": 1.00},
-            "claude-opus-4-8":   {"input": 5.0,  "output": 25.0, "cached": 0.50},
-            "claude-opus-4-7":   {"input": 5.0,  "output": 25.0, "cached": 0.50},
-            "claude-opus-4-6":   {"input": 5.0,  "output": 25.0, "cached": 0.50},
-            "claude-opus-4-5":   {"input": 5.0,  "output": 25.0, "cached": 0.50},
+            "claude-opus-4-6":   {"input": 15.0, "output": 75.0, "cached": 1.50},
+            "claude-opus-4-5":   {"input": 15.0, "output": 75.0, "cached": 1.50},
             "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0, "cached": 0.30},
             "claude-sonnet-4-5": {"input": 3.0,  "output": 15.0, "cached": 0.30},
             "claude-haiku-4-5":  {"input": 0.80, "output": 4.0,  "cached": 0.08},

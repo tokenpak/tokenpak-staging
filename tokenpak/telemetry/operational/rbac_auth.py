@@ -25,23 +25,6 @@ from flask import g, jsonify, request
 
 from .rbac_core import Permission, Role, User
 
-# Public surface of this module. ``SNAPSHOT_GEN_ENV`` is an internal env-var
-# constant (read by release-gate snapshot generators) — never an intended
-# public entrypoint — and is scoped out of the API snapshot.
-__all__ = [
-    "ADMIN_BOOTSTRAP_ENV",
-    "API_KEY_PREFIX",
-    "Permission",
-    "RBACStore",
-    "Role",
-    "SESSION_TTL_HOURS",
-    "User",
-    "init_rbac",
-    "load_user_from_request",
-    "require_auth",
-    "require_permission",
-]
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

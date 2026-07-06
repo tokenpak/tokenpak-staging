@@ -21,10 +21,10 @@ pnpm add tokenpak
 
 Works with any LLM client (OpenAI SDK, Anthropic SDK, LangChain, etc.) — no proxy required.
 
-**Optional:** Run a local [TokenPak proxy](https://github.com/tokenpak/tokenpak) for app-API compression:
+**Optional:** Run a local [TokenPak server](https://github.com/tokenpak/tokenpak) for advanced caching and analytics:
 ```bash
 pip install tokenpak
-tokenpak serve
+tokenpak serve --port 8000
 ```
 
 ---
@@ -51,7 +51,7 @@ npm test
 ```typescript
 import { CompressionEngine } from 'tokenpak';
 
-const engine = new CompressionEngine(); // connects to http://127.0.0.1:8766
+const engine = new CompressionEngine(); // connects to http://localhost:8000
 
 const result = await engine.compress(`
   Here is a very long document that needs to be summarized...
@@ -74,7 +74,7 @@ const response = await openai.chat.completions.create({
 ```typescript
 import { CompressionEngine } from 'tokenpak';
 
-const engine = new CompressionEngine({ experimentalEndpoints: true });
+const engine = new CompressionEngine();
 
 const messages = [
   { role: 'system', content: 'You are a helpful assistant.' },
@@ -93,10 +93,6 @@ const response = await openai.chat.completions.create({
   messages: compressed,
 });
 ```
-
-`compressConversation` is available only for custom servers that implement the legacy
-`/compress/conversation` endpoint. The shipped TokenPak proxy currently exposes
-`POST /tpk/v1/compress` for text compression.
 
 ---
 
@@ -143,11 +139,8 @@ const result = await engine.compressConversation(
 
 ### `CacheManager`
 
-`CacheManager` targets experimental `/cache/*` endpoints. Pass
-`experimentalEndpoints: true` only when your server implements that surface.
-
 ```typescript
-const cache = new CacheManager({ experimentalEndpoints: true });
+const cache = new CacheManager(config?: TokenPakConfig);
 
 await cache.set('my-key', 'my-value', ttl: 300); // 5 min TTL
 const value = await cache.get('my-key');          // string | null
@@ -160,11 +153,8 @@ const stats = await cache.stats(); // CacheStats
 
 ### `BlockRegistry`
 
-`BlockRegistry` targets experimental `/blocks/*` endpoints. Pass
-`experimentalEndpoints: true` only when your server implements that surface.
-
 ```typescript
-const registry = new BlockRegistry({ experimentalEndpoints: true });
+const registry = new BlockRegistry(config?: TokenPakConfig);
 
 // Register a named content block
 await registry.register({
@@ -184,11 +174,8 @@ const stats = await registry.stats();
 
 ### `TelemetryCollector`
 
-`TelemetryCollector` targets experimental `/telemetry/*` endpoints. Pass
-`experimentalEndpoints: true` only when your server implements that surface.
-
 ```typescript
-const telemetry = new TelemetryCollector({ experimentalEndpoints: true });
+const telemetry = new TelemetryCollector(config?: TokenPakConfig);
 
 // Record an event
 await telemetry.record({
@@ -208,11 +195,10 @@ await telemetry.reset();
 
 ```typescript
 const config: TokenPakConfig = {
-  baseUrl: 'http://127.0.0.1:8766',  // TokenPak proxy app API
+  baseUrl: 'http://localhost:8000',  // TokenPak server URL
   timeout: 30_000,                   // Request timeout (ms)
-  apiKey: 'your-proxy-key',          // Optional X-TPK-Key auth
+  apiKey: 'your-api-key',            // Optional auth
   headers: { 'X-Custom': 'value' }, // Extra headers
-  experimentalEndpoints: false,      // Legacy resource endpoints are off by default
 };
 
 const engine = new CompressionEngine(config);

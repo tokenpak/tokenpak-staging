@@ -13,10 +13,10 @@ Your goal today: install TokenPak, start the proxy, send one request, and confir
 ### Install
 
 ```bash
-pip install tokenpak
+pip install "tokenpak[serve]"
 ```
 
-Plain `pip install tokenpak` includes the local HTTP proxy used by `tokenpak serve`. Install `tokenpak[serve]` only when you also need the FastAPI dashboard, telemetry, or ingest ASGI surfaces.
+The `[serve]` extra installs FastAPI, required for the proxy server. If you only want the compression SDK (no proxy), use plain `pip install tokenpak`.
 
 Confirm it installed:
 
@@ -77,10 +77,11 @@ Then check your first savings:
 
 ```bash
 tokenpak cost
-# Cost today: $0.002 | Tokens saved: 1,847 (38%)
+# Requests today: 1 | Cost today: <your measured total>
+# Run tokenpak savings after real traffic for receipt-backed savings.
 ```
 
-If you see token savings above zero, compression is working.
+If receipt-backed savings appear above zero, compression is working for that workload.
 
 ### Day 1 Checklist
 
@@ -116,7 +117,7 @@ A healthy setup measurably reduces tokens on typical mixed workloads — check y
 
 - Is compression set to `balanced` or `aggressive` mode? (Check `~/.tokenpak/config.json`, key `compression.level`)
 - Are your requests using long system prompts or repetitive context? Those compress best.
-- Run `tokenpak demo --verbose` to see the pipeline applied to a sample payload.
+- Run `tokenpak demo` to inspect the offline fixture, then use `tokenpak savings` for receipt-backed savings.
 
 ### The 48.9% Benchmark
 
@@ -354,13 +355,20 @@ For longer-term monitoring, the `/metrics` endpoint exposes Prometheus-compatibl
 Every request is logged locally. Query recent activity:
 
 ```bash
-tokenpak debug list
+tokenpak trace --last 50
 ```
 
-Export a specific request trace for analysis:
+Filter by model or cost:
 
 ```bash
-tokenpak debug export <trace_id> --json > trace.json
+tokenpak trace --last 50 --model claude-3-5-sonnet
+tokenpak trace --last 50 --min-cost 0.01
+```
+
+Export the full log for analysis:
+
+```bash
+tokenpak trace --export --format json > audit.json
 ```
 
 ### Production Checklist
@@ -370,7 +378,7 @@ tokenpak debug export <trace_id> --json > trace.json
 - [ ] `curl http://localhost:8766/health` returns `"status": "ok"`
 - [ ] Monthly budget is set
 - [ ] At least one alert channel is configured
-- [ ] `tokenpak debug list` returns recent request data
+- [ ] `tokenpak trace --last 50` returns recent request data
 - [ ] You know how to query the audit log
 
 ---

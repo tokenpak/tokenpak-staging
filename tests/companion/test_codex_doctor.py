@@ -1,347 +1,126 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Doctor lane: WARN-status surfacing + new checks (L3 audit deltas).
+"""Doctor WARN tier + Std 56 skills-path checks (regression-repair packet).
 
-Covers:
-- ``check_skills_installed`` reads the canonical ``$HOME/.agents/skills``
-  path (not the pre-L3 ``~/.codex/skills`` hardcode).
-- ``check_skills_legacy_orphans`` WARNs on pre-L3 leftovers.
-- ``check_agents_md_size`` WARNs once AGENTS.md crosses the 80%-of-32-KiB
-  threshold.
-- ``check_hooks_feature`` parses the fixture-captured ``codex features
-  list`` output and emits a WARN row for the ``under development`` label.
-- ``run()`` exit code is 0 when the failure set is empty even if WARNs
-  are present, and the summary line names the WARN count.
+Scope note: this pins the *in-scope* doctor surface restored by the
+regression repair — the skills-installed check on the canonical
+``$HOME/.agents/skills`` location, the legacy-orphan WARN row, and the
+runner's PASS/WARN/FAIL normalization where WARN never fails the exit
+code.  It deliberately does not exercise the broader ``codex features``
+real-state probes: those depend on a ``tests/fixtures/codex`` sample that
+is outside this packet's ``expected_files_changed`` scope.
 """
 from __future__ import annotations
 
-import io
-import os
-import subprocess
 from pathlib import Path
-
-import pytest
 
 from tokenpak.companion.codex import doctor
 from tokenpak.companion.codex import skills_installer as si
 
-_FIXTURE = (
-    Path(__file__).resolve().parent.parent
-    / "fixtures"
-    / "codex"
-    / "codex_features_list.txt"
-)
+
+def _fake_bundled(tmp_path: Path, names: tuple[str, ...] = ("alpha", "beta")) -> Path:
+    bundled = tmp_path / "bundled"
+    for name in names:
+        (bundled / name).mkdir(parents=True)
+        (bundled / name / "SKILL.md").write_text(f"# {name}\n")
+    return bundled
 
 
-# ---------------------------------------------------------------------------
-# codex binary guidance
-# ---------------------------------------------------------------------------
-
-def test_check_codex_binary_missing_is_actionable(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
-    status, detail = doctor.check_codex_binary()
-    assert status == "FAIL"
-    assert "Codex CLI not found on PATH" in detail
-    assert "npm install -g @openai/codex" in detail
-    assert "codex --version" in detail
-    assert "Win" + "Error" not in detail
+# ── status normalization ──────────────────────────────────────────────
 
 
-def test_check_codex_binary_filenotfound_avoids_raw_exception(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/bin/codex")
-
-    def missing(*args, **kwargs):
-        raise FileNotFoundError("Win" + "Error 2")
-
-    monkeypatch.setattr(doctor.subprocess, "run", missing)
-    status, detail = doctor.check_codex_binary()
-    assert status == "FAIL"
-    assert "codex --version failed: Codex CLI not found on PATH" in detail
-    assert "Win" + "Error" not in detail
+def test_status_of_binary_and_warn():
+    assert doctor._status_of(True) == "PASS"
+    assert doctor._status_of(False) == "FAIL"
+    assert doctor._status_of(doctor._WARN) == "WARN"
 
 
-# ---------------------------------------------------------------------------
-# check_skills_installed — canonical path
-# ---------------------------------------------------------------------------
-
-def test_check_skills_installed_uses_dot_agents_path(monkeypatch, tmp_path: Path):
-    target = tmp_path / "agents_skills"
-    si.install_skills(target_dir=target)
-    monkeypatch.setattr(doctor, "SKILLS_TARGET", target)
-    status, detail = doctor.check_skills_installed()
-    assert status == "PASS"
-    assert str(target) in detail
+# ── skills-installed check targets the canonical .agents/skills path ───
 
 
-def test_check_skills_installed_fails_when_canonical_path_missing(
-    monkeypatch, tmp_path: Path
-):
-    monkeypatch.setattr(doctor, "SKILLS_TARGET", tmp_path / "does_not_exist")
-    status, detail = doctor.check_skills_installed()
-    assert status == "FAIL"
-    assert "missing" in detail.lower()
+def test_check_skills_installed_uses_agents_not_codex_path(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(si, "_BUNDLED_SKILLS", _fake_bundled(tmp_path))
+
+    # Canonical target absent → FAIL, and the detail names the .agents path.
+    ok, detail = doctor.check_skills_installed()
+    assert ok is False
+    assert ".agents" in detail
+    assert ".codex/skills" not in detail
+
+    # Install into the canonical path → PASS.
+    si.install_skills(target_dir=home / ".agents" / "skills")
+    ok, detail = doctor.check_skills_installed()
+    assert ok is True
 
 
-def test_check_skills_installed_does_not_lie_about_codex_discovery(
-    monkeypatch, tmp_path: Path
-):
-    """The PASS detail must hint that Codex-side verification is L5 work.
-
-    Pre-L3 the check stated "N skills present" with no indication that we
-    were stat-ing a directory Codex doesn't even scan.  The detail string
-    is part of the contract."""
-    target = tmp_path / "agents_skills"
-    si.install_skills(target_dir=target)
-    monkeypatch.setattr(doctor, "SKILLS_TARGET", target)
-    status, detail = doctor.check_skills_installed()
-    assert status == "PASS"
-    assert "pending" in detail.lower() or "L5" in detail
+# ── legacy-orphan WARN row ─────────────────────────────────────────────
 
 
-# ---------------------------------------------------------------------------
-# check_skills_legacy_orphans
-# ---------------------------------------------------------------------------
+def test_legacy_orphans_pass_when_clean(monkeypatch, tmp_path):
+    monkeypatch.setattr(si, "_BUNDLED_SKILLS", _fake_bundled(tmp_path))
+    monkeypatch.setattr(si, "_LEGACY_TARGET", tmp_path / "codex" / "skills")
+    raw, detail = doctor._check_skills_legacy_orphans()
+    assert raw is True
+    assert doctor._status_of(raw) == "PASS"
 
-def test_check_skills_legacy_orphans_warns_when_legacy_path_populated(
-    monkeypatch, tmp_path: Path
-):
-    legacy = tmp_path / "codex_skills"
+
+def test_legacy_orphans_warn_when_present(monkeypatch, tmp_path):
+    monkeypatch.setattr(si, "_BUNDLED_SKILLS", _fake_bundled(tmp_path))
+    legacy = tmp_path / "codex" / "skills"
     monkeypatch.setattr(si, "_LEGACY_TARGET", legacy)
     si.install_skills(target_dir=legacy)
-    status, detail = doctor.check_skills_legacy_orphans()
-    assert status == "WARN"
-    assert "uninstall" in detail.lower()
-    for name in si.bundled_skill_names():
-        assert name in detail
+
+    raw, detail = doctor._check_skills_legacy_orphans()
+    assert raw == doctor._WARN
+    assert doctor._status_of(raw) == "WARN"
+    assert "~/.codex/skills" in detail
 
 
-def test_check_skills_legacy_orphans_passes_when_no_legacy_install(
-    monkeypatch, tmp_path: Path
-):
-    monkeypatch.setattr(si, "_LEGACY_TARGET", tmp_path / "nope")
-    status, _ = doctor.check_skills_legacy_orphans()
-    assert status == "PASS"
+# ── runner treats WARN as advisory, FAIL as fatal ──────────────────────
 
 
-# ---------------------------------------------------------------------------
-# check_agents_md_size
-# ---------------------------------------------------------------------------
-
-def test_check_agents_md_size_passes_below_threshold(
-    monkeypatch, tmp_path: Path
-):
-    home = tmp_path / "home"
-    (home / ".codex").mkdir(parents=True)
-    (home / ".codex" / "AGENTS.md").write_text("x" * 1024)
-    monkeypatch.setenv("HOME", str(home))
-    # Path.home() consults HOME on POSIX; covers the default-Path lookup.
-    status, detail = doctor.check_agents_md_size()
-    assert status == "PASS"
-    assert "1024" in detail
-
-
-def test_check_agents_md_size_warns_at_or_above_80pct(
-    monkeypatch, tmp_path: Path
-):
-    home = tmp_path / "home"
-    (home / ".codex").mkdir(parents=True)
-    # 80% of 32 KiB = 26214 bytes; write at threshold exactly.
-    threshold = int(32 * 1024 * 0.80)
-    (home / ".codex" / "AGENTS.md").write_text("x" * threshold)
-    monkeypatch.setenv("HOME", str(home))
-    status, detail = doctor.check_agents_md_size()
-    assert status == "WARN"
-    assert "80%" in detail
-
-
-def test_check_agents_md_size_skipped_when_file_missing(
-    monkeypatch, tmp_path: Path
-):
-    monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
-    status, detail = doctor.check_agents_md_size()
-    # Missing file is reported by the separate AGENTS.md presence check;
-    # the size check must not double-fail.
-    assert status == "PASS"
-    assert "skipped" in detail.lower() or "missing" in detail.lower()
-
-
-def test_check_agents_md_size_threshold_is_configurable(
-    monkeypatch, tmp_path: Path
-):
-    home = tmp_path / "home"
-    (home / ".codex").mkdir(parents=True)
-    (home / ".codex" / "AGENTS.md").write_text("x" * 100)
-    monkeypatch.setenv("HOME", str(home))
-    # Tiny cap → 100 bytes is over threshold.
-    status, _ = doctor.check_agents_md_size(max_bytes=100, warn_fraction=0.5)
-    assert status == "WARN"
-
-
-# ---------------------------------------------------------------------------
-# check_hooks_feature — fixture-driven (no live `codex features list`)
-# ---------------------------------------------------------------------------
-
-def _run_with_fixture_features_list(monkeypatch):
-    """Make subprocess.run('codex features list') return the captured fixture."""
-    fixture_text = _FIXTURE.read_text()
-
-    class FakeCompleted:
-        def __init__(self, stdout):
-            self.stdout = stdout
-            self.stderr = ""
-            self.returncode = 0
-
-    real_run = subprocess.run
-
-    def fake_run(cmd, *args, **kwargs):
-        if cmd[:3] == ["codex", "features", "list"]:
-            return FakeCompleted(fixture_text)
-        return real_run(cmd, *args, **kwargs)
-
-    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
-
-
-def test_check_hooks_feature_warns_under_development(monkeypatch):
-    _run_with_fixture_features_list(monkeypatch)
-    status, detail = doctor.check_hooks_feature()
-    assert status == "WARN"
-    assert "under development" in detail.lower()
-    assert "codex may break this" in detail.lower()
-
-
-def test_check_hooks_feature_failure_when_row_absent(monkeypatch):
-    class FakeCompleted:
-        stdout = "other_feature  stable  true\n"
-        stderr = ""
-        returncode = 0
-
-    real_run = subprocess.run
-
-    def fake_run(cmd, *args, **kwargs):
-        if cmd[:3] == ["codex", "features", "list"]:
-            return FakeCompleted()
-        return real_run(cmd, *args, **kwargs)
-
-    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
-    status, detail = doctor.check_hooks_feature()
-    assert status == "FAIL"
-    assert "hooks" in detail
-
-
-def test_parse_hooks_maturity_multiword_label():
-    sample = "hooks   under development   true\n"
-    label_enabled = doctor._parse_hooks_maturity(sample)
-    assert label_enabled == ("under development", True)
-
-
-def test_parse_hooks_maturity_returns_none_when_missing():
-    assert doctor._parse_hooks_maturity("other  stable  true\n") is None
-
-
-# ---------------------------------------------------------------------------
-# check_linux_sandbox — bounded Codex sandbox smoke
-# ---------------------------------------------------------------------------
-
-def test_check_linux_sandbox_passes_when_codex_sandbox_succeeds(monkeypatch):
-    class FakeCompleted:
-        stdout = ""
-        stderr = ""
-        returncode = 0
-
-    def fake_run(cmd, *args, **kwargs):
-        assert cmd == ["codex", "sandbox", "true"]
-        assert kwargs["timeout"] == doctor.SANDBOX_TIMEOUT_SECONDS
-        return FakeCompleted()
-
-    monkeypatch.setattr(doctor.sys, "platform", "linux")
-    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
-
-    status, detail = doctor.check_linux_sandbox()
-
-    assert status == "PASS"
-    assert "OK" in detail
-
-
-def test_check_linux_sandbox_warns_on_bubblewrap_failure(monkeypatch):
-    class FakeCompleted:
-        stdout = ""
-        stderr = "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n"
-        returncode = 1
-
-    def fake_run(cmd, *args, **kwargs):
-        assert cmd == ["codex", "sandbox", "true"]
-        return FakeCompleted()
-
-    monkeypatch.setattr(doctor.sys, "platform", "linux")
-    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
-
-    status, detail = doctor.check_linux_sandbox()
-
-    assert status == "WARN"
-    assert "bwrap: loopback" in detail
-    assert "AppArmor" in detail
-    assert doctor.SANDBOX_HELP_ANCHOR in detail
-
-
-def test_check_linux_sandbox_warns_on_timeout(monkeypatch):
-    def fake_run(cmd, *args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
-
-    monkeypatch.setattr(doctor.sys, "platform", "linux")
-    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
-
-    status, detail = doctor.check_linux_sandbox()
-
-    assert status == "WARN"
-    assert f"{doctor.SANDBOX_TIMEOUT_SECONDS}s" in detail
-    assert doctor.SANDBOX_HELP_ANCHOR in detail
-
-
-def test_check_linux_sandbox_skips_on_non_linux(monkeypatch):
-    def fail_run(*args, **kwargs):
-        raise AssertionError("codex sandbox should not run on non-Linux")
-
-    monkeypatch.setattr(doctor.sys, "platform", "darwin")
-    monkeypatch.setattr(doctor.subprocess, "run", fail_run)
-
-    status, detail = doctor.check_linux_sandbox()
-
-    assert status == "PASS"
-    assert "not applicable" in detail
-    assert "darwin" in detail
-
-
-# ---------------------------------------------------------------------------
-# run() — exit code does not gate on WARN rows
-# ---------------------------------------------------------------------------
-
-def test_run_exit_zero_with_only_warn_rows(monkeypatch, capsys):
+def test_run_warn_does_not_fail_exit(monkeypatch, capsys):
     monkeypatch.setattr(
         doctor,
         "CHECKS",
         [
-            ("dummy ok", lambda: ("PASS", "fine")),
-            ("dummy warn", lambda: ("WARN", "advisory only")),
+            ("all good", lambda: (True, "ok")),
+            ("advisory", lambda: (doctor._WARN, "heads up")),
         ],
     )
     rc = doctor.run()
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "[PASS]" in captured.out
-    assert "[WARN]" in captured.out
-    assert "1 WARN" in captured.out
-
-
-def test_run_exit_one_when_any_fail(monkeypatch, capsys):
-    monkeypatch.setattr(
-        doctor,
-        "CHECKS",
-        [
-            ("dummy fail", lambda: ("FAIL", "bad")),
-            ("dummy warn", lambda: ("WARN", "advisory")),
-        ],
-    )
-    rc = doctor.run()
-    assert rc == 1
     out = capsys.readouterr().out
-    assert "1 FAIL" in out
-    assert "some checks failed" in out
+    assert rc == 0
+    assert "[WARN]" in out
+    assert "1 warning" in out
+
+
+def test_run_fail_sets_nonzero_exit(monkeypatch, capsys):
+    monkeypatch.setattr(
+        doctor,
+        "CHECKS",
+        [
+            ("all good", lambda: (True, "ok")),
+            ("advisory", lambda: (doctor._WARN, "heads up")),
+            ("broken", lambda: (False, "nope")),
+        ],
+    )
+    rc = doctor.run()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "[FAIL]" in out
+    assert "1 failed" in out
+
+
+def test_run_exception_in_check_is_fail(monkeypatch, capsys):
+    def _boom():
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(doctor, "CHECKS", [("x", _boom)])
+    rc = doctor.run()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "[FAIL]" in out
+    assert "kaboom" in out

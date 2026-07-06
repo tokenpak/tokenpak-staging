@@ -1,8 +1,7 @@
 """Regression: /health + /stats response builders must exist and be exercisable.
 
-Guards against P1-PROXY-HEALTH-STATS-MISSING-BUILDERS — `routes.py` lazily
-imports `build_health_response`/`build_stats_response` from
-`tokenpak.proxy.stats`; a prior bulk auto-commit dropped both defs, so hitting
+`routes.py` lazily imports `build_health_response`/`build_stats_response` from
+`tokenpak.proxy.stats`; both defs were dropped in an earlier change, so hitting
 GET /health or GET /stats raised ImportError. These tests fail with ImportError
 against the broken tree and pass once the builders are restored.
 """

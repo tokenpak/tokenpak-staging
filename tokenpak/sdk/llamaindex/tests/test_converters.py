@@ -1,8 +1,7 @@
 """Tests for LlamaIndex ↔ TokenPak Block conversion."""
 
 import pytest
-
-from tokenpak.sdk.llamaindex import (
+from llamaindex_tokenpak import (
     LlamaBlock,
     block_to_llamaindex_node,
     blocks_to_llamaindex_nodes,

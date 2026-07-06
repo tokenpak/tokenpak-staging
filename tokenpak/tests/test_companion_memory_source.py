@@ -5,7 +5,7 @@ Covers the "bring your own knowledge base" path added so a fresh (solo) user
 can point the companion at any Markdown notes directory — without the vault
 ``03_AGENT_PACKS/<agent>/memory/`` schema.
 
-Maps to the packet acceptance criteria:
+Maps to the feature acceptance criteria:
   AC#1 vault-schema default path still works (regression guard)
   AC#2 custom memory dir ingests
   AC#3 Markdown supported (.md / .markdown)
@@ -179,7 +179,7 @@ class TestIngestSources:
         hash), so both ``ingest_from_dir`` and ``ingest_from_vault`` re-insert
         on a second run.  This test documents that parity — the generic path
         does not introduce a new behavior, and changing the DB to dedupe is
-        out of this packet's scope.
+        out of scope for this change.
         """
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "n.md").write_text(
@@ -189,3 +189,43 @@ class TestIngestSources:
             first = db.count()
             assert ingest_from_dir(tmp, db) == 2
             assert db.count() == first + 2  # re-insert, same as vault path
+
+
+def test_status_reports_sources(monkeypatch):
+    """AC#5: ``session_info`` surfaces configured memory sources + a hint.
+
+    The MCP ``session_info`` tool only *reports* ``memory_dirs`` (and, when none
+    are set, a hint on how to configure them) — it never ingests. This guards
+    that the hint points at the shipped surface (the env var + the library API)
+    and NOT at the deliberately deferred ``tokenpak companion ingest`` CLI verb.
+    """
+    import json
+
+    from tokenpak.companion.mcp import tools as mcp_tools
+
+    # Exercise only the local-config surface; never touch a real proxy.
+    monkeypatch.setattr(
+        mcp_tools, "_proxy_get",
+        lambda *a, **k: (0, {"detail": "proxy down (test)"}),
+    )
+
+    # No memory dirs configured -> a self-explaining hint is reported.
+    cfg_empty = CompanionConfig.from_env()
+    cfg_empty.memory_dirs = []
+    out = json.loads(mcp_tools._handle_session_info(
+        mcp_tools.CompanionState(config=cfg_empty), {}))
+    assert out["config"]["memory_dirs"] == []
+    hint = out["config"]["memory_source_hint"]
+    assert "TOKENPAK_COMPANION_MEMORY_DIRS" in hint
+    assert ("ingest_from_dir" in hint) or ("ingest_sources" in hint)
+    # Must NOT advertise the deferred CLI flag / verb.
+    assert "--memory-dir" not in hint
+    assert "companion ingest" not in hint
+
+    # Memory dirs configured -> reported, and no "configure me" hint.
+    cfg_set = CompanionConfig.from_env()
+    cfg_set.memory_dirs = [Path("/tmp/notes"), Path("/tmp/journal")]
+    out2 = json.loads(mcp_tools._handle_session_info(
+        mcp_tools.CompanionState(config=cfg_set), {}))
+    assert out2["config"]["memory_dirs"] == ["/tmp/notes", "/tmp/journal"]
+    assert "memory_source_hint" not in out2["config"]

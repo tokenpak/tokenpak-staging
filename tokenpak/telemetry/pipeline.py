@@ -21,29 +21,10 @@ logger = logging.getLogger(__name__)
 # --- Shadow hook + intent classifier (fail-silent) ---
 try:
     from tokenpak.proxy.shadow_hook import ShadowHook as _ShadowHookClass
-    from tokenpak.proxy.shadow_hook import _shadow_enabled_from_env
 
+    _shadow_hook = _ShadowHookClass()
 except Exception:
-    _ShadowHookClass = None  # type: ignore
-    _shadow_enabled_from_env = None  # type: ignore
-
-_shadow_hook = None  # type: ignore
-
-
-def _get_shadow_hook():
-    """Lazily construct the routing ledger hook only when shadow mode is enabled."""
-    global _shadow_hook
-    if _shadow_hook is not None:
-        return _shadow_hook
-    if _ShadowHookClass is None:
-        return None
-    try:
-        if _shadow_enabled_from_env is not None and not _shadow_enabled_from_env():
-            return None
-        _shadow_hook = _ShadowHookClass()
-    except Exception:
-        _shadow_hook = None  # type: ignore
-    return _shadow_hook
+    _shadow_hook = None  # type: ignore
 
 try:
     from tokenpak.compression.complexity import classify_intent as _classify_intent  # type: ignore
@@ -242,10 +223,9 @@ class TelemetryPipeline:
 
         # Shadow hook: pre-store (fail-silent)
         _txn_key = None
-        shadow_hook = _get_shadow_hook()
-        if shadow_hook is not None:
+        if _shadow_hook is not None:
             try:
-                _txn_key = shadow_hook.record_request(
+                _txn_key = _shadow_hook.record_request(
                     model=model,
                     query=str(event.get("query", ""))[:500],
                     context_tokens=normalized.get("input_tokens", 0),
@@ -287,62 +267,61 @@ class TelemetryPipeline:
                 "raw": event,
             },
         )
-        self.storage.insert_event(telemetry_event)
+        # Persist usage + cost rows alongside the event so dashboard tables
+        # can show tokens/$. All three rows are written in ONE transaction
+        # via storage.insert_trace: a failed usage/cost write rolls back the
+        # event too and propagates, so the pipeline reports failure instead
+        # of silently claiming success over a half-written trace.
+        from .models import Cost, Usage
 
-        # Also persist usage + cost rows so dashboard tables can show tokens/$.
-        try:
-            from .models import Cost, Usage
+        usage_raw = event.get("usage") or {}
+        u = Usage(
+            trace_id=trace_id,
+            usage_source=(
+                "provider_reported"
+                if (normalized.get("input_tokens") or normalized.get("output_tokens"))
+                else "unknown"
+            ),
+            confidence=(
+                "high"
+                if (normalized.get("input_tokens") or normalized.get("output_tokens"))
+                else "low"
+            ),
+            input_billed=int(normalized.get("input_tokens") or 0),
+            output_billed=int(normalized.get("output_tokens") or 0),
+            input_est=int(normalized.get("input_tokens") or 0),
+            output_est=int(normalized.get("output_tokens") or 0),
+            cache_read=int(normalized.get("cache_read_tokens") or 0),
+            cache_write=int(normalized.get("cache_write_tokens") or 0),
+            total_tokens=int(normalized.get("total_tokens") or 0),
+            total_tokens_billed=int(normalized.get("total_tokens") or 0),
+            total_tokens_est=int(normalized.get("total_tokens") or 0),
+            provider_usage_raw=json.dumps(usage_raw, default=str),
+        )
 
-            usage_raw = event.get("usage") or {}
-            u = Usage(
-                trace_id=trace_id,
-                usage_source=(
-                    "provider_reported"
-                    if (normalized.get("input_tokens") or normalized.get("output_tokens"))
-                    else "unknown"
-                ),
-                confidence=(
-                    "high"
-                    if (normalized.get("input_tokens") or normalized.get("output_tokens"))
-                    else "low"
-                ),
-                input_billed=int(normalized.get("input_tokens") or 0),
-                output_billed=int(normalized.get("output_tokens") or 0),
-                input_est=int(normalized.get("input_tokens") or 0),
-                output_est=int(normalized.get("output_tokens") or 0),
-                cache_read=int(normalized.get("cache_read_tokens") or 0),
-                cache_write=int(normalized.get("cache_write_tokens") or 0),
-                total_tokens=int(normalized.get("total_tokens") or 0),
-                total_tokens_billed=int(normalized.get("total_tokens") or 0),
-                total_tokens_est=int(normalized.get("total_tokens") or 0),
-                provider_usage_raw=json.dumps(usage_raw, default=str),
-            )
-            self.storage.insert_usage(u)
+        # cost: accept provider-reported breakdown when available, else 0/unknown
+        cst = (usage_raw.get("cost") or {}) if isinstance(usage_raw, dict) else {}
+        c = Cost(
+            trace_id=trace_id,
+            cost_input=float(cst.get("input") or 0.0),
+            cost_output=float(cst.get("output") or 0.0),
+            cost_cache_read=float(cst.get("cacheRead") or cst.get("cache_read") or 0.0),
+            cost_cache_write=float(cst.get("cacheWrite") or cst.get("cache_write") or 0.0),
+            cost_total=float(cst.get("total") or 0.0),
+            cost_source="provider" if float(cst.get("total") or 0.0) > 0 else "unknown",
+            baseline_cost=0.0,
+            actual_cost=float(cst.get("total") or 0.0),
+            savings_total=0.0,
+            savings_qmd=0.0,
+            savings_tp=0.0,
+        )
 
-            # cost: accept provider-reported breakdown when available, else 0/unknown
-            cst = (usage_raw.get("cost") or {}) if isinstance(usage_raw, dict) else {}
-            c = Cost(
-                trace_id=trace_id,
-                cost_input=float(cst.get("input") or 0.0),
-                cost_output=float(cst.get("output") or 0.0),
-                cost_cache_read=float(cst.get("cacheRead") or cst.get("cache_read") or 0.0),
-                cost_cache_write=float(cst.get("cacheWrite") or cst.get("cache_write") or 0.0),
-                cost_total=float(cst.get("total") or 0.0),
-                cost_source="provider" if float(cst.get("total") or 0.0) > 0 else "unknown",
-                baseline_cost=0.0,
-                actual_cost=float(cst.get("total") or 0.0),
-                savings_total=0.0,
-                savings_qmd=0.0,
-                savings_tp=0.0,
-            )
-            self.storage.insert_cost(c)
-        except Exception:
-            pass
+        self.storage.insert_trace(telemetry_event, usage=u, cost=c)
 
         # Shadow hook: post-store (fail-silent)
-        if shadow_hook is not None and _txn_key is not None:
+        if _shadow_hook is not None and _txn_key is not None:
             try:
-                shadow_hook.record_response(
+                _shadow_hook.record_response(
                     txn_key=_txn_key,
                     response_text=str(event.get("response", ""))[:200],
                     response_tokens=normalized.get("output_tokens", 0),

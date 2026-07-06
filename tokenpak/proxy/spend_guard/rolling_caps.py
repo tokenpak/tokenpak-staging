@@ -19,12 +19,20 @@ Design notes:
   schema change.
 - Agent attribution comes from the X-Tokenpak-Agent request header set
   by agent-claude-worker.sh. Sessions-without-header are bucketed to
-  "unknown" and only the aggregate cap restrains them.
+  "unknown" and only the fleet-wide cap restrains them.
 - Session→agent mapping is maintained in-memory as requests flow.
   After proxy restart, the mapping resets — that's degraded but safe
-  (fail-open: under-count briefly, never over-block).
+  for attribution only (per-agent under-count briefly).
+- Usage MEASUREMENT fails closed: if the usage DB exists but cannot be
+  read (locked/corrupt/unreadable), caps block rather than evaluating
+  against a phantom $0. A missing DB on a fresh install still allows.
 - A 30-second result cache limits monitor.db query load when many
-  requests arrive in burst.
+  requests arrive in burst. In-flight (pending) spend is tracked in a
+  process-local counter that BYPASSES this cache, so concurrent
+  admissions are visible to each other. Process-local is acceptable:
+  a single proxy process per host is the normal deployment shape; a
+  multi-process deployment would under-count in-flight spend across
+  processes (DB-recorded usage is still shared).
 - Existing per-session cap behavior is UNCHANGED.
 """
 
@@ -32,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import sqlite3
 import sys
 import threading
@@ -40,9 +49,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from tokenpak import _paths
-
 _log = logging.getLogger(__name__)
+
+# Historical default, kept as a sentinel: when ``_DEFAULT_MONITOR_DB`` still
+# equals this literal, the shared resolver (tokenpak._paths.monitor_db) picks
+# the real DB path; when a test/config has patched ``_DEFAULT_MONITOR_DB``,
+# the override is honored verbatim.
+_LEGACY_DEFAULT_MONITOR_DB = "~/.tokenpak/monitor.db"
+_DEFAULT_MONITOR_DB = _LEGACY_DEFAULT_MONITOR_DB
 
 # In-memory session→agent mapping. Populated as the proxy sees requests
 # (orchestrator calls record_session_agent at evaluate-time). Cleared
@@ -55,6 +69,95 @@ _SESSION_AGENT: dict[str, tuple[str, float]] = {}  # session_id → (agent_id, l
 _USAGE_CACHE_LOCK = threading.Lock()
 _USAGE_CACHE: dict[str, tuple[float, dict]] = {}  # key → (expires_at, usage_dict)
 _USAGE_CACHE_TTL_SEC = 30.0
+
+# ---------------------------------------------------------------------------
+# In-flight (pending) spend accounting — closes the check-then-spend window.
+#
+# monitor.db rows are written only AFTER a response lands, and the usage
+# query above is cached for 30s — so N concurrent requests would all pass
+# the cap against the same frozen snapshot, overshooting by roughly
+# concurrency × per-request projected cost plus a cache-TTL of admissions.
+#
+# Each admitted request registers its PROJECTED cost/tokens here at
+# admission time and is settled (removed) once its actual cost is recorded
+# (or the request fails). The totals are computed FRESH on every cap check
+# (never cached), so concurrent in-flight spend is visible immediately.
+#
+# Process-local by design: single-proxy-process deployments are the norm.
+# Entries also carry a TTL so a crashed/never-settled request cannot
+# permanently inflate the counter.
+# ---------------------------------------------------------------------------
+_INFLIGHT_LOCK = threading.Lock()
+# ticket → (agent_id, cost_usd, tokens_total, cache_read_tokens, admitted_at)
+_INFLIGHT: dict[str, tuple[str, float, int, int, float]] = {}
+_INFLIGHT_TTL_SEC = 600.0
+
+# Serializes check+admit so two concurrent requests cannot both pass the
+# same cap headroom before either registers its pending spend.
+_ADMISSION_LOCK = threading.Lock()
+
+
+def admit_pending_spend(
+    agent_id: str,
+    projected_cost_usd: float,
+    projected_tokens_total: int,
+    projected_cache_read_tokens: int,
+) -> str:
+    """Register a request's projected spend as in-flight. Returns a ticket."""
+    ticket = "adm_" + secrets.token_hex(8)
+    now = time.time()
+    with _INFLIGHT_LOCK:
+        _INFLIGHT[ticket] = (
+            (agent_id or "").lower(),
+            float(projected_cost_usd),
+            int(projected_tokens_total),
+            int(projected_cache_read_tokens),
+            now,
+        )
+    return ticket
+
+
+def settle_pending_spend(ticket: Optional[str]) -> bool:
+    """Remove an in-flight entry (response landed or request failed).
+
+    Idempotent — settling an unknown/already-settled ticket is a no-op.
+    """
+    if not ticket:
+        return False
+    with _INFLIGHT_LOCK:
+        return _INFLIGHT.pop(ticket, None) is not None
+
+
+def _pending_spend_totals(agent_id: str) -> dict:
+    """Sum non-expired in-flight spend for ``agent_id`` and the fleet.
+
+    Computed fresh on every call — deliberately NOT behind the usage cache.
+    """
+    cutoff = time.time() - _INFLIGHT_TTL_SEC
+    agent_key = (agent_id or "").lower()
+    totals = {
+        "agent_cost_usd": 0.0,
+        "agent_tokens_total": 0,
+        "agent_cache_read_tokens": 0,
+        "fleet_cost_usd": 0.0,
+        "fleet_tokens_total": 0,
+        "fleet_cache_read_tokens": 0,
+    }
+    with _INFLIGHT_LOCK:
+        for ticket, (aid, cost, tokens, cache_read, admitted_at) in list(_INFLIGHT.items()):
+            if admitted_at < cutoff:
+                # Never settled (crashed request / dropped response path) —
+                # expire so it cannot permanently inflate the counter.
+                _INFLIGHT.pop(ticket, None)
+                continue
+            totals["fleet_cost_usd"] += cost
+            totals["fleet_tokens_total"] += tokens
+            totals["fleet_cache_read_tokens"] += cache_read
+            if agent_key and aid == agent_key:
+                totals["agent_cost_usd"] += cost
+                totals["agent_tokens_total"] += tokens
+                totals["agent_cache_read_tokens"] += cache_read
+    return totals
 
 
 @dataclass
@@ -69,23 +172,29 @@ class RollingCapsConfig:
     per_agent_max_tokens_total: int = 5_000_000
     per_agent_max_cache_read_tokens: int = 4_000_000
 
-    # Aggregate caps across all agents
+    # Per-fleet (all agents combined) caps
     per_fleet_max_cost_usd: float = 60.0
     per_fleet_max_tokens_total: int = 15_000_000
     per_fleet_max_cache_read_tokens: int = 12_000_000
+
+
+# Sentinel cap_dimension for "the usage DB exists but could not be read".
+# Blocks carry this so operators/agents can distinguish a real cap breach
+# from an unmeasurable-usage fail-closed block.
+CAP_DIMENSION_UNMEASURABLE = "rolling_cap_unmeasurable"
 
 
 @dataclass
 class CapBreach:
     """A rolling-cap evaluation result indicating the request must block."""
 
-    cap_dimension: str  # e.g. "per_agent_cost_usd", "per_fleet_cache_read_tokens"
+    cap_dimension: str          # e.g. "per_agent_cost_usd", "per_fleet_cache_read_tokens"
     agent_id: str
     window_seconds: int
-    used: float  # current usage (cost in USD or tokens as int)
-    cap: float  # configured cap
-    projected_add: float  # what THIS request would add
-    retry_after_seconds: int  # seconds until enough usage ages out
+    used: float                 # current usage (cost in USD or tokens as int)
+    cap: float                  # configured cap
+    projected_add: float        # what THIS request would add
+    retry_after_seconds: int    # seconds until enough usage ages out
 
 
 def record_session_agent(session_id: str, agent_id: str) -> None:
@@ -100,46 +209,47 @@ def record_session_agent(session_id: str, agent_id: str) -> None:
         _SESSION_AGENT[session_id] = (agent_id.lower(), time.time())
 
 
-def _warn_degraded(message: str) -> None:
+def _warn_unmeasurable(message: str) -> None:
+    """Operator-actionable warning — logged AND printed to stderr.
+
+    The stderr line is deliberate: when logging is routed to a file (the
+    proxy's normal shape), a silent fail-closed block is the second-worst
+    outcome after a silent fail-open one.
+    """
     _log.warning(message)
-    print(f"tokenpak: WARN {message}", file=sys.stderr)
+    try:
+        print(f"tokenpak: WARN {message}", file=sys.stderr)
+    except Exception:
+        pass
 
 
-def _blank_usage(*, degraded_reason: Optional[str] = None) -> dict:
-    return {
-        "agent_cost_usd": 0.0,
-        "agent_tokens_total": 0,
-        "agent_cache_read_tokens": 0,
-        "fleet_cost_usd": 0.0,
-        "fleet_tokens_total": 0,
-        "fleet_cache_read_tokens": 0,
-        "degraded": degraded_reason is not None,
-        "degraded_reason": degraded_reason,
-    }
+def _path(monitor_db_path: Optional[str]) -> Path:
+    """Resolve the usage-DB path the caps should measure against.
 
-
-def _cache_usage(cache_key: str, usage: dict, now: float) -> dict:
-    with _USAGE_CACHE_LOCK:
-        _USAGE_CACHE[cache_key] = (now + _USAGE_CACHE_TTL_SEC, usage)
-    return usage
-
-
-def _path(monitor_db_path: Optional[str]) -> Optional[Path]:
+    Uses the shared resolver (``tokenpak._paths.monitor_db``) so caps read
+    the SAME file the proxy writes (``~/.tpk`` on fresh installs, legacy
+    ``~/.tokenpak`` where that is active) instead of a hardcoded legacy
+    path. An explicit argument or a patched ``_DEFAULT_MONITOR_DB``
+    (tests/config) wins over the resolver.
+    """
     if monitor_db_path:
         return Path(os.path.expanduser(monitor_db_path))
-    return _paths.monitor_db(mode="read")
-
-
-def _missing_db_reason() -> str:
+    if _DEFAULT_MONITOR_DB != _LEGACY_DEFAULT_MONITOR_DB:
+        return Path(os.path.expanduser(_DEFAULT_MONITOR_DB))
     try:
-        candidates = _paths.monitor_db_candidates()
-    except Exception:
-        return "monitor_db_unresolved"
-    return (
-        "monitor_db_invalid"
-        if any(candidate.get("exists") for candidate in candidates)
-        else "monitor_db_missing"
-    )
+        from tokenpak._paths import _monitor_db_candidates, monitor_db
+        resolved = monitor_db(mode="read")
+        if resolved is not None:
+            return resolved
+        # No candidate passed validation. If one EXISTS but was rejected
+        # (corrupt/unreadable), return it so measurement fails closed on
+        # read rather than being misread as a fresh install.
+        for cand in _monitor_db_candidates():
+            if cand.exists():
+                return cand
+    except Exception as e:  # resolver itself failing must not crash the guard
+        _log.debug("rolling_caps: monitor-db resolver failed: %s", e)
+    return Path(os.path.expanduser(_DEFAULT_MONITOR_DB))
 
 
 def _get_agents_for_window(window_seconds: int) -> dict[str, list[str]]:
@@ -164,8 +274,8 @@ def compute_rolling_usage(
     window_seconds: int,
     *,
     monitor_db_path: Optional[str] = None,
-) -> dict:
-    """Compute rolling-window usage for one agent plus aggregate traffic.
+) -> Optional[dict]:
+    """Compute rolling-window usage for ONE agent + the whole fleet.
 
     Returns:
         {
@@ -178,10 +288,17 @@ def compute_rolling_usage(
         }
 
     Cached for 30 seconds keyed by (agent_id, window_seconds, db_path).
-    Returns all-zero on any failure (fail open).
+
+    Failure semantics (fail CLOSED on unmeasurable state):
+    - Usage DB missing entirely (fresh install, nothing recorded yet):
+      returns all-zero usage — allowing is correct, nothing was spent.
+    - Usage DB present but unreadable (locked past timeout, corrupt,
+      permission error): returns ``None``. Callers must treat None as
+      "usage unmeasurable" and BLOCK, because evaluating caps against a
+      phantom $0 during exactly the runaway/lock-contention case defeats
+      the caps entirely.
     """
-    p = _path(monitor_db_path)
-    db_path = str(p) if p is not None else "<unresolved-monitor-db>"
+    db_path = str(_path(monitor_db_path))
     cache_key = f"{agent_id}|{window_seconds}|{db_path}"
 
     now = time.time()
@@ -190,22 +307,21 @@ def compute_rolling_usage(
         if cached and cached[0] > now:
             return cached[1]
 
-    if p is None:
-        reason = _missing_db_reason()
-        _warn_degraded(
-            "rolling caps degraded: no valid monitor.db resolved via "
-            f"tokenpak._paths.monitor_db(mode='read') ({reason}); returning unknown/zero usage"
-        )
-        return _cache_usage(cache_key, _blank_usage(degraded_reason=reason), now)
+    blank = {
+        "agent_cost_usd": 0.0,
+        "agent_tokens_total": 0,
+        "agent_cache_read_tokens": 0,
+        "fleet_cost_usd": 0.0,
+        "fleet_tokens_total": 0,
+        "fleet_cache_read_tokens": 0,
+    }
+    p = _path(monitor_db_path)
     if not p.exists():
-        _warn_degraded(
-            f"rolling caps degraded: monitor.db not found at {p}; returning unknown/zero usage"
+        _log.info(
+            "rolling_caps: usage DB %s does not exist yet (fresh install) — "
+            "rolling caps evaluate against zero recorded usage", p,
         )
-        return _cache_usage(
-            cache_key,
-            _blank_usage(degraded_reason="monitor_db_missing"),
-            now,
-        )
+        return blank
 
     cutoff_iso = time.strftime(
         "%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - float(window_seconds))
@@ -228,8 +344,8 @@ def compute_rolling_usage(
         fleet_cost, fleet_tokens, fleet_cache_read = float(row[0]), int(row[1]), int(row[2])
 
         # Per-agent totals — restrict to sessions the proxy has mapped
-        # to this agent. Sessions with no mapping count toward the aggregate
-        # only (handled by the aggregate query above).
+        # to this agent. Sessions with no mapping count toward fleet
+        # only (handled by the fleet query above).
         agent_cost = 0.0
         agent_tokens = 0
         agent_cache_read = 0
@@ -247,11 +363,7 @@ def compute_rolling_usage(
                          AND session_id IN ({placeholders})""",
                     (cutoff_iso, *sessions),
                 ).fetchone()
-                agent_cost, agent_tokens, agent_cache_read = (
-                    float(row2[0]),
-                    int(row2[1]),
-                    int(row2[2]),
-                )
+                agent_cost, agent_tokens, agent_cache_read = float(row2[0]), int(row2[1]), int(row2[2])
         conn.close()
         usage = {
             "agent_cost_usd": agent_cost,
@@ -260,32 +372,25 @@ def compute_rolling_usage(
             "fleet_cost_usd": fleet_cost,
             "fleet_tokens_total": fleet_tokens,
             "fleet_cache_read_tokens": fleet_cache_read,
-            "degraded": False,
-            "degraded_reason": None,
         }
         with _USAGE_CACHE_LOCK:
             _USAGE_CACHE[cache_key] = (now + _USAGE_CACHE_TTL_SEC, usage)
         return usage
-    except sqlite3.OperationalError as e:
-        _warn_degraded(
-            f"rolling caps degraded: monitor.db query failed for {p}: {e}; "
-            "returning unknown/zero usage"
+    except sqlite3.Error as e:
+        _warn_unmeasurable(
+            f"rolling_caps: usage DB {p} exists but could not be read "
+            f"({type(e).__name__}: {e}) — rolling-cap usage is UNMEASURABLE "
+            "and requests will be blocked (fail closed). Operator action: "
+            "repair or remove the usage DB."
         )
-        return _cache_usage(
-            cache_key,
-            _blank_usage(degraded_reason="monitor_db_query_failed"),
-            now,
-        )
+        return None
     except Exception as e:
-        _warn_degraded(
-            f"rolling caps degraded: unexpected monitor.db error for {p}: {e}; "
-            "returning unknown/zero usage"
+        _warn_unmeasurable(
+            f"rolling_caps: unexpected error reading usage DB {p} "
+            f"({type(e).__name__}: {e}) — rolling-cap usage is UNMEASURABLE "
+            "and requests will be blocked (fail closed)."
         )
-        return _cache_usage(
-            cache_key,
-            _blank_usage(degraded_reason="monitor_db_unexpected_error"),
-            now,
-        )
+        return None
 
 
 def check_rolling_caps(
@@ -308,15 +413,41 @@ def check_rolling_caps(
     Returns None when:
         - Rolling caps are disabled
         - Usage is below all configured caps (with projected_add included)
-        - Any computation error (fail-open per Standard 29 §9.8)
+
+    Returns a ``cap_dimension="rolling_cap_unmeasurable"`` breach (fail
+    CLOSED) when the usage DB exists but cannot be read — a cap that
+    silently evaluates against $0 during a lock/corruption event is no
+    cap at all.
+
+    In-flight (admitted but not yet recorded) spend is ADDED to the
+    DB-derived usage, so concurrent requests see each other's projected
+    spend even within the usage-cache TTL.
     """
     if not config.enabled:
         return None
-    usage = compute_rolling_usage(agent_id, config.window_seconds, monitor_db_path=monitor_db_path)
+    usage = compute_rolling_usage(
+        agent_id, config.window_seconds, monitor_db_path=monitor_db_path
+    )
+    if usage is None:
+        # Usage DB present but unreadable — measurement failed, block.
+        return CapBreach(
+            cap_dimension=CAP_DIMENSION_UNMEASURABLE,
+            agent_id=agent_id or "unknown",
+            window_seconds=config.window_seconds,
+            used=0.0,
+            cap=0.0,
+            projected_add=float(projected_cost_usd),
+            retry_after_seconds=60,
+        )
+    pending = _pending_spend_totals(agent_id)
+    if pending["fleet_cost_usd"] or pending["fleet_tokens_total"] or pending["fleet_cache_read_tokens"]:
+        usage = {k: usage[k] + pending[k] for k in usage}
     # tokens_total = input + output only (cache_read EXCLUDED
     # 2026-05-15: cache_read is ~90% cheaper and inflates the count without
     # reflecting real cost. cache_read keeps its own dedicated cap dimension.
-    projected_tokens_total = int(projected_input_tokens) + int(projected_output_tokens)
+    projected_tokens_total = (
+        int(projected_input_tokens) + int(projected_output_tokens)
+    )
 
     def retry_after(cost_used: float, tokens_used: float, cap: float) -> int:
         # Coarse heuristic: time until the oldest in-window request ages
@@ -327,92 +458,101 @@ def check_rolling_caps(
     # Per-agent — only when agent_id is known
     if agent_id:
         a_cost = usage["agent_cost_usd"]
-        if (
-            config.per_agent_max_cost_usd > 0
-            and a_cost + projected_cost_usd > config.per_agent_max_cost_usd
-        ):
+        if config.per_agent_max_cost_usd > 0 and a_cost + projected_cost_usd > config.per_agent_max_cost_usd:
             return CapBreach(
                 cap_dimension="per_agent_cost_usd",
-                agent_id=agent_id,
-                window_seconds=config.window_seconds,
-                used=a_cost,
-                cap=config.per_agent_max_cost_usd,
+                agent_id=agent_id, window_seconds=config.window_seconds,
+                used=a_cost, cap=config.per_agent_max_cost_usd,
                 projected_add=projected_cost_usd,
                 retry_after_seconds=retry_after(a_cost, 0, config.per_agent_max_cost_usd),
             )
         a_tok = usage["agent_tokens_total"]
-        if (
-            config.per_agent_max_tokens_total > 0
-            and a_tok + projected_tokens_total > config.per_agent_max_tokens_total
-        ):
+        if config.per_agent_max_tokens_total > 0 and a_tok + projected_tokens_total > config.per_agent_max_tokens_total:
             return CapBreach(
                 cap_dimension="per_agent_tokens_total",
-                agent_id=agent_id,
-                window_seconds=config.window_seconds,
-                used=float(a_tok),
-                cap=float(config.per_agent_max_tokens_total),
+                agent_id=agent_id, window_seconds=config.window_seconds,
+                used=float(a_tok), cap=float(config.per_agent_max_tokens_total),
                 projected_add=float(projected_tokens_total),
                 retry_after_seconds=retry_after(0, a_tok, config.per_agent_max_tokens_total),
             )
         a_cr = usage["agent_cache_read_tokens"]
-        if (
-            config.per_agent_max_cache_read_tokens > 0
-            and a_cr + projected_cache_read_tokens > config.per_agent_max_cache_read_tokens
-        ):
+        if config.per_agent_max_cache_read_tokens > 0 and a_cr + projected_cache_read_tokens > config.per_agent_max_cache_read_tokens:
             return CapBreach(
                 cap_dimension="per_agent_cache_read_tokens",
-                agent_id=agent_id,
-                window_seconds=config.window_seconds,
-                used=float(a_cr),
-                cap=float(config.per_agent_max_cache_read_tokens),
+                agent_id=agent_id, window_seconds=config.window_seconds,
+                used=float(a_cr), cap=float(config.per_agent_max_cache_read_tokens),
                 projected_add=float(projected_cache_read_tokens),
                 retry_after_seconds=retry_after(0, a_cr, config.per_agent_max_cache_read_tokens),
             )
 
-    # Aggregate cap applies whether or not agent is known
+    # Per-fleet — applies whether or not agent is known
     f_cost = usage["fleet_cost_usd"]
-    if (
-        config.per_fleet_max_cost_usd > 0
-        and f_cost + projected_cost_usd > config.per_fleet_max_cost_usd
-    ):
+    if config.per_fleet_max_cost_usd > 0 and f_cost + projected_cost_usd > config.per_fleet_max_cost_usd:
         return CapBreach(
             cap_dimension="per_fleet_cost_usd",
-            agent_id=agent_id or "unknown",
-            window_seconds=config.window_seconds,
-            used=f_cost,
-            cap=config.per_fleet_max_cost_usd,
+            agent_id=agent_id or "unknown", window_seconds=config.window_seconds,
+            used=f_cost, cap=config.per_fleet_max_cost_usd,
             projected_add=projected_cost_usd,
             retry_after_seconds=retry_after(f_cost, 0, config.per_fleet_max_cost_usd),
         )
     f_tok = usage["fleet_tokens_total"]
-    if (
-        config.per_fleet_max_tokens_total > 0
-        and f_tok + projected_tokens_total > config.per_fleet_max_tokens_total
-    ):
+    if config.per_fleet_max_tokens_total > 0 and f_tok + projected_tokens_total > config.per_fleet_max_tokens_total:
         return CapBreach(
             cap_dimension="per_fleet_tokens_total",
-            agent_id=agent_id or "unknown",
-            window_seconds=config.window_seconds,
-            used=float(f_tok),
-            cap=float(config.per_fleet_max_tokens_total),
+            agent_id=agent_id or "unknown", window_seconds=config.window_seconds,
+            used=float(f_tok), cap=float(config.per_fleet_max_tokens_total),
             projected_add=float(projected_tokens_total),
             retry_after_seconds=retry_after(0, f_tok, config.per_fleet_max_tokens_total),
         )
     f_cr = usage["fleet_cache_read_tokens"]
-    if (
-        config.per_fleet_max_cache_read_tokens > 0
-        and f_cr + projected_cache_read_tokens > config.per_fleet_max_cache_read_tokens
-    ):
+    if config.per_fleet_max_cache_read_tokens > 0 and f_cr + projected_cache_read_tokens > config.per_fleet_max_cache_read_tokens:
         return CapBreach(
             cap_dimension="per_fleet_cache_read_tokens",
-            agent_id=agent_id or "unknown",
-            window_seconds=config.window_seconds,
-            used=float(f_cr),
-            cap=float(config.per_fleet_max_cache_read_tokens),
+            agent_id=agent_id or "unknown", window_seconds=config.window_seconds,
+            used=float(f_cr), cap=float(config.per_fleet_max_cache_read_tokens),
             projected_add=float(projected_cache_read_tokens),
             retry_after_seconds=retry_after(0, f_cr, config.per_fleet_max_cache_read_tokens),
         )
     return None
+
+
+def check_rolling_caps_and_admit(
+    agent_id: str,
+    projected_cost_usd: float,
+    projected_input_tokens: int,
+    projected_output_tokens: int,
+    projected_cache_read_tokens: int,
+    config: RollingCapsConfig,
+    *,
+    monitor_db_path: Optional[str] = None,
+) -> tuple[Optional[CapBreach], Optional[str]]:
+    """Atomically check the caps and, on pass, register in-flight spend.
+
+    Serialized under a module lock so two concurrent requests cannot both
+    pass against the same headroom before either registers. Returns
+    ``(breach, None)`` on block, ``(None, ticket)`` on admission. The
+    caller MUST eventually :func:`settle_pending_spend` the ticket (a TTL
+    backstop reclaims dropped tickets).
+    """
+    with _ADMISSION_LOCK:
+        breach = check_rolling_caps(
+            agent_id,
+            projected_cost_usd,
+            projected_input_tokens,
+            projected_output_tokens,
+            projected_cache_read_tokens,
+            config,
+            monitor_db_path=monitor_db_path,
+        )
+        if breach is not None:
+            return breach, None
+        ticket = admit_pending_spend(
+            agent_id,
+            projected_cost_usd,
+            int(projected_input_tokens) + int(projected_output_tokens),
+            projected_cache_read_tokens,
+        )
+        return None, ticket
 
 
 def reset_caches_for_testing() -> None:
@@ -421,3 +561,5 @@ def reset_caches_for_testing() -> None:
         _SESSION_AGENT.clear()
     with _USAGE_CACHE_LOCK:
         _USAGE_CACHE.clear()
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.clear()
