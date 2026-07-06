@@ -14,7 +14,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 ### Added
 - **Dashboard v2 JSON foundation.** `tokenpak dashboard --json` now emits a versioned
   `dashboard.v2.0` snapshot with measured/not-measured semantics and source labeling, backed by
-  the new `tokenpak.platform` capability-detection package. Legacy TUI and fleet views are
+  the new `tokenpak.platform` capability-detection package. Legacy TUI and fleet-wide views are
   adapted to the new contract.
 - **Dashboard SSH tunnel launcher.** New `tokenpak dashboard connect` / `disconnect` subcommands
   establish and tear down an SSH-tunneled dashboard session (ControlMaster-based, with liveness
