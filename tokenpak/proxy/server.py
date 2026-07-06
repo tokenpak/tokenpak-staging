@@ -39,9 +39,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
-import httpx
-
 from tokenpak import __version__ as _tokenpak_version
+from tokenpak import _paths  # scoped-home path resolver (honors TOKENPAK_HOME)
 from tokenpak.cache.telemetry import CacheMetrics
 from tokenpak.cache.telemetry import get_collector as _get_cache_collector
 from tokenpak.core.config import get_stats_footer_enabled
@@ -87,33 +86,32 @@ from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost
 from .startup import format_startup_report, run_startup_checks
 from .stats import CompressionStats
 from .streaming import extract_sse_tokens
-
-# ---------------------------------------------------------------------------
-# Upstream retry configuration — transparent retry on transient 5xx and
-# protocol errors so the Claude CLI never sees the mid-stream disconnects
-# Anthropic currently produces at ~15% on large requests.
-# ---------------------------------------------------------------------------
-MAX_UPSTREAM_RETRIES: int = int(os.environ.get("TOKENPAK_UPSTREAM_RETRIES", "3"))
-
-_RETRYABLE_UPSTREAM_EXCEPTIONS: tuple = (
-    httpx.RemoteProtocolError,
-    httpx.LocalProtocolError,
-    httpx.ReadError,
-    httpx.WriteError,
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
+from .upstream_retry import (
+    UpstreamRetryPolicy,
+    UpstreamTruncatedJSONError,
+    build_terminal_recovery_payload,
+    extract_tip_plan_id,
+    persist_failed_request_metadata,
+    response_has_truncated_json,
 )
 
+# ---------------------------------------------------------------------------
+# Upstream retry configuration.
+#
+# Retry behavior is factored into UpstreamRetryPolicy so the streaming and
+# non-streaming paths share the same transient-error, deterministic-mode, and
+# Retry-After rules.
+# ---------------------------------------------------------------------------
 
-def _is_retryable_upstream_status(status_code: int) -> bool:
-    return status_code in (502, 503, 504)
-
-
-def _upstream_retry_backoff(attempt: int) -> float:
-    # 0.2s, 0.6s, 1.8s — bounded
-    return min(2.5, 0.2 * (3 ** attempt))
-
+# Deprecated compatibility alias — import compatibility only. Retry behavior
+# is governed by UpstreamRetryPolicy, which reads TOKENPAK_UPSTREAM_RETRIES
+# itself (the supported operator control); mutating this constant has no
+# effect. It mirrors the policy's parse of TOKENPAK_UPSTREAM_RETRIES at
+# import time and will be removed in a future minor release.
+try:
+    MAX_UPSTREAM_RETRIES: int = max(1, int(os.environ.get("TOKENPAK_UPSTREAM_RETRIES", "3")))
+except ValueError:
+    MAX_UPSTREAM_RETRIES = 3
 
 # ---------------------------------------------------------------------------
 # Per-(provider, session) outbound concurrency limiter.
@@ -136,6 +134,23 @@ import threading as _threading
 _upstream_semaphores: Dict[tuple, _threading.BoundedSemaphore] = {}
 _upstream_sem_lock = _threading.Lock()
 _upstream_inflight: Dict[tuple, int] = {}
+# Last touch (fetch or counter change) per key — drives idle eviction below.
+_upstream_sem_last_activity: Dict[tuple, float] = {}
+
+# How long a (provider, session) entry must sit at zero in-flight with no
+# activity before its semaphore object may be evicted. Evicting at the moment
+# the counter hits zero is racy: acquisition is fetch-semaphore → acquire →
+# increment (not atomic), so a release-to-zero eviction between another
+# thread's fetch and acquire leaves that thread gating on the orphaned
+# semaphore while the next request mints a fresh one for the same key —
+# allowing up to 2x the per-(provider, session) concurrency cap. Deferring
+# eviction until the entry has been idle far longer than any fetch→acquire
+# window (bounded by the acquire timeout) removes the race in practice while
+# still bounding memory growth from high-churn ip:port-derived session keys.
+_UPSTREAM_SEM_IDLE_EVICT_SECONDS: float = max(
+    float(os.environ.get("TOKENPAK_UPSTREAM_SEM_IDLE_EVICT_SECS", "600")),
+    2.0 * _UPSTREAM_ACQUIRE_TIMEOUT,
+)
 
 
 def _get_upstream_semaphore(
@@ -153,8 +168,25 @@ def _get_upstream_semaphore(
         if sem is None:
             sem = _threading.BoundedSemaphore(_UPSTREAM_CONCURRENCY)
             _upstream_semaphores[key] = sem
-            _upstream_inflight[key] = 0
+            _upstream_inflight.setdefault(key, 0)
+        _upstream_sem_last_activity[key] = time.monotonic()
     return sem
+
+
+def _evict_idle_upstream_entries_locked(now: float) -> None:
+    """Evict zero-in-flight entries idle past the eviction window.
+
+    Caller must hold ``_upstream_sem_lock``.
+    """
+    cutoff = now - _UPSTREAM_SEM_IDLE_EVICT_SECONDS
+    for key in [
+        k
+        for k, last in _upstream_sem_last_activity.items()
+        if last < cutoff and _upstream_inflight.get(k, 0) <= 0
+    ]:
+        _upstream_sem_last_activity.pop(key, None)
+        _upstream_inflight.pop(key, None)
+        _upstream_semaphores.pop(key, None)
 
 
 def _upstream_inflight_delta(
@@ -162,21 +194,22 @@ def _upstream_inflight_delta(
 ) -> int:
     """Adjust and return the in-flight counter for (provider, session).
 
-    When a release (delta < 0) drives the counter to zero, the key is evicted
-    from both _upstream_inflight and _upstream_semaphores. session_key falls
-    back to the per-connection client "ip:port", so without eviction every
-    distinct key mints a permanent entry in both dicts that is never reclaimed
-    — they accumulate even with zero active connections, which is the RSS heap
-    leak. Entries are recreated lazily on the next request for the same key.
+    The semaphore object is deliberately NOT evicted the moment its counter
+    returns to zero — that raced with acquisition (see the eviction-window
+    comment above) and allowed 2x the concurrency cap. Instead, zero-count
+    entries are swept only after _UPSTREAM_SEM_IDLE_EVICT_SECONDS without
+    activity, which still reclaims the memory that high-churn ip:port session
+    keys would otherwise leak (entries are recreated lazily on the next
+    request for the same key).
     """
     key = (provider or "_unknown", session_key or "_shared")
+    now = time.monotonic()
     with _upstream_sem_lock:
         count = max(0, _upstream_inflight.get(key, 0) + delta)
+        _upstream_inflight[key] = count
+        _upstream_sem_last_activity[key] = now
         if delta < 0 and count == 0:
-            _upstream_inflight.pop(key, None)
-            _upstream_semaphores.pop(key, None)
-        else:
-            _upstream_inflight[key] = count
+            _evict_idle_upstream_entries_locked(now)
         return count
 
 
@@ -184,10 +217,45 @@ def get_upstream_inflight_snapshot() -> Dict[str, int]:
     """Return a snapshot of current in-flight counts, for /health exposure.
 
     Keyed as ``"<provider>::<session>"`` for JSON-friendliness. The
-    legacy shared path appears under ``"<provider>::_shared"``.
+    legacy shared path appears under ``"<provider>::_shared"``. Zero-count
+    entries (kept alive briefly for the eviction-window guarantee above)
+    are omitted — the snapshot reports actual in-flight work.
     """
     with _upstream_sem_lock:
-        return {f"{prov}::{sess}": n for (prov, sess), n in _upstream_inflight.items()}
+        return {
+            f"{prov}::{sess}": n
+            for (prov, sess), n in _upstream_inflight.items()
+            if n > 0
+        }
+
+
+# ---------------------------------------------------------------------------
+# Circuit-breaker outcome classification
+# ---------------------------------------------------------------------------
+
+# Upstream statuses that count as provider failures for the provider circuit
+# breaker: the retryable gateway statuses (502/503/504) plus 500 and 529
+# (provider "overloaded") — all provider-side failure signals even when the
+# HTTP exchange itself completes without an exception. 429 is deliberately
+# EXCLUDED: rate limiting feeds the separate rate-limit circuit breaker.
+_CB_FAILURE_STATUSES = frozenset({500, 502, 503, 504, 529})
+
+
+def _cb_status_is_provider_failure(status_code: Optional[int]) -> bool:
+    """True when a completed exchange's final status is a provider failure."""
+    return status_code in _CB_FAILURE_STATUSES
+
+
+def _is_client_disconnect_error(exc: BaseException) -> bool:
+    """True for socket errors from OUR downstream client, not the provider.
+
+    Upstream I/O failures surface wrapped in httpx exception types, so a raw
+    ``BrokenPipeError``/``ConnectionResetError`` escaping the handler comes
+    from writing to ``self.wfile`` — i.e. the CLI/client vanished
+    mid-response. The provider did nothing wrong; these must not count
+    against the provider circuit breaker.
+    """
+    return isinstance(exc, (BrokenPipeError, ConnectionResetError))
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +458,12 @@ from tokenpak.proxy.forecast_endpoint import (  # noqa: E402
     _forecast_latency_lock,
 )
 
+
+def _is_app_endpoint_path(path: str) -> bool:
+    """True for proxy-owned app API namespaces that must never fall through."""
+    return path.startswith("/tpk/v1/") or path.startswith("/pak/v1/")
+
+
 # ---------------------------------------------------------------------------
 # Threaded HTTP server
 # ---------------------------------------------------------------------------
@@ -564,9 +638,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _tp_try_get(self):
                 return
         except Exception as _exc:
-            # App endpoint dispatch must never break the LLM passthrough.
             import sys as _sys
-            print(f"[tokenpak] /tpk/v1 dispatch error: {_exc}", file=_sys.stderr)
+            print(f"[tokenpak] app endpoint dispatch error: {_exc}", file=_sys.stderr)
+            if _is_app_endpoint_path(path):
+                self._send_app_endpoint_dispatch_error(_exc)
+                return
 
         # Always allow /health during shutdown (needed for health-check polling)
         if path == "/health" or path.startswith("/health?"):
@@ -749,7 +825,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 return
         except Exception as _exc:
             import sys as _sys
-            print(f"[tokenpak] /tpk/v1 POST dispatch error: {_exc}", file=_sys.stderr)
+            print(f"[tokenpak] app endpoint POST dispatch error: {_exc}", file=_sys.stderr)
+            if _is_app_endpoint_path(self.path):
+                self._send_app_endpoint_dispatch_error(_exc)
+                return
 
         if ps.shutdown.is_shutting_down and (
             self.path.startswith("http") or self.path.startswith("/v1/")
@@ -878,6 +957,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         content_length = int(self.headers.get("Content-Length", 0))
         body: Optional[bytes] = self.rfile.read(content_length) if content_length > 0 else None
+        _original_body = body
+        _retry_policy = UpstreamRetryPolicy.from_env(
+            body=body,
+            headers=dict(self.headers),
+        )
+        _tip_plan_id = extract_tip_plan_id(dict(self.headers), body, _req_id)
 
         model = "unknown"
         input_tokens = 0
@@ -935,6 +1020,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # See tokenpak/proxy/spend_guard/ + standards/29-spend-guard-agent-contract.md
         # Disabled with: spend_guard.enabled=false in config.yaml
         #            or: TOKENPAK_SPEND_GUARD_ENABLED=0
+        _sg_admission_ticket = None  # rolling-cap in-flight spend ticket
         if should_log and is_messages and body:
             try:
                 from tokenpak.proxy.request_pipeline import _resolve_session_id
@@ -947,13 +1033,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _sg_model = str(_sg_body_json.get("model") or "")
                 except Exception:
                     pass
-                _sg_session = _resolve_session_id(self.headers, _sg_model or "unknown")
+                # Empty-string fallback: the monitor.db row for this request
+                # is written with the same resolver and an empty model
+                # fallback, so the guard-side check and the recorded row
+                # MUST agree on the session key for header-less traffic.
+                # (A model-name pseudo-session summed zero recorded rows
+                # forever, silently disabling session-cumulative caps.)
+                _sg_session = _resolve_session_id(self.headers, "")
                 _sg_outcome = _sg_evaluate(
                     body,
-                    _sg_model or "claude-sonnet-4-6",  # safe default rate
+                    # Empty when the body carries no model. Pricing falls
+                    # back to default-class rates (tokenpak.models.get_rates)
+                    # without inventing a model id, and the context-window
+                    # lookup falls back to cfg.block_tokens — so guard rows
+                    # never record a fabricated model name.
+                    _sg_model,
                     _sg_session,
                     dict(self.headers),
                 )
+                _sg_admission_ticket = getattr(_sg_outcome, "admission_ticket", None)
                 # Forwarded outcomes update body for downstream pipeline.
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
@@ -983,21 +1081,39 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
                 else:
-                    # block / hard_block / cancel / reprompt / estimate
+                    # block / hard_block / cancel / reprompt / estimate.
+                    # Once the guard decided NOT to forward, a failure while
+                    # writing the response to the client must never fall
+                    # through to the forward path — hence the inner
+                    # try/except with an unconditional return.
                     _sg_resp = _sg_outcome.response_body or b"{}"
-                    self.send_response(_sg_outcome.http_status or 402)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(_sg_resp)))
-                    self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
-                    self.end_headers()
-                    self.wfile.write(_sg_resp)
+                    try:
+                        self.send_response(_sg_outcome.http_status or 402)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(_sg_resp)))
+                        self.send_header("X-TokenPak-Spend-Guard", _sg_outcome.kind)
+                        self.end_headers()
+                        self.wfile.write(_sg_resp)
+                    except Exception as _sg_wexc:
+                        import logging as _sg_log
+                        _sg_log.getLogger(__name__).warning(
+                            "tokenpak.spend_guard: failed writing %s response "
+                            "to client (%s: %s) — request stays blocked",
+                            _sg_outcome.kind, type(_sg_wexc).__name__, _sg_wexc,
+                        )
                     return
             except ImportError:
                 pass  # spend guard not installed
             except Exception as _sg_exc:
+                # The guard's own evaluate() converts internal evaluator
+                # errors into fail-closed 402s, so an exception here is a
+                # proxy-hook defect (header/session resolution, outcome
+                # handling). Forwarding without the guard is deliberate for
+                # that narrow case — but it must be LOUD, not a debug line.
                 import logging as _sg_log
-                _sg_log.getLogger(__name__).debug(
-                    "tokenpak.spend_guard: error (passthrough): %s: %s",
+                _sg_log.getLogger(__name__).warning(
+                    "tokenpak.spend_guard: unexpected proxy-hook error — "
+                    "forwarding WITHOUT spend-guard evaluation: %s: %s",
                     type(_sg_exc).__name__, _sg_exc,
                 )
 
@@ -1466,15 +1582,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # string` JSON parse errors in the client's SSE reader).
                 sse_buffer = b""
                 _stream_wrote_to_client = False
-                for _ustream_attempt in range(MAX_UPSTREAM_RETRIES):
+                for _ustream_attempt in range(_retry_policy.max_attempts):
                     _stream_retry = False
                     try:
                         with pool.stream(method, target_url, content=body, headers=fwd_headers, session_key=_session_key) as resp:
-                            if (
-                                _is_retryable_upstream_status(resp.status_code)
-                                and not _stream_wrote_to_client
-                                and _ustream_attempt < MAX_UPSTREAM_RETRIES - 1
-                            ):
+                            _retry_decision = _retry_policy.retry_for_response(
+                                resp.status_code,
+                                resp.headers,
+                                _ustream_attempt,
+                                stream_started=_stream_wrote_to_client,
+                            )
+                            if _retry_decision.should_retry:
                                 # Drain body to release the pooled connection, then retry
                                 for _ in resp.iter_bytes(chunk_size=4096):
                                     pass
@@ -1529,17 +1647,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         break
                                     if should_log and is_messages:
                                         sse_buffer += chunk
-                    except _RETRYABLE_UPSTREAM_EXCEPTIONS:
+                    except _retry_policy.retryable_exceptions as _stream_exc:
                         # Once we've committed to writing to the client, can't retry —
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
-                        if _stream_wrote_to_client:
-                            raise
-                        if _ustream_attempt >= MAX_UPSTREAM_RETRIES - 1:
+                        _retry_decision = _retry_policy.retry_for_exception(
+                            _stream_exc,
+                            _ustream_attempt,
+                            stream_started=_stream_wrote_to_client,
+                        )
+                        if not _retry_decision.should_retry:
                             raise
                         _stream_retry = True
 
                     if _stream_retry:
-                        time.sleep(_upstream_retry_backoff(_ustream_attempt))
+                        time.sleep(_retry_decision.delay_seconds)
                         continue
                     break
 
@@ -1557,24 +1678,51 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # Server disconnected, 502/503/504). Safe because the client
                 # has not yet received any bytes at this point.
                 resp = None
-                for _ustream_attempt in range(MAX_UPSTREAM_RETRIES):
+                for _ustream_attempt in range(_retry_policy.max_attempts):
                     try:
                         resp = pool.request(method, target_url, content=body, headers=fwd_headers, session_key=_session_key)
-                        if (
-                            _is_retryable_upstream_status(resp.status_code)
-                            and _ustream_attempt < MAX_UPSTREAM_RETRIES - 1
-                        ):
+                        _retry_decision = _retry_policy.retry_for_response(
+                            resp.status_code,
+                            resp.headers,
+                            _ustream_attempt,
+                            stream_started=False,
+                        )
+                        if _retry_decision.should_retry:
                             try:
                                 resp.close()
                             except Exception:
                                 pass
-                            time.sleep(_upstream_retry_backoff(_ustream_attempt))
+                            time.sleep(_retry_decision.delay_seconds)
                             continue
+                        if response_has_truncated_json(
+                            resp.status_code,
+                            resp.headers,
+                            resp.content,
+                        ):
+                            _retry_decision = _retry_policy.retry_for_truncated_json(
+                                _ustream_attempt,
+                                stream_started=False,
+                            )
+                            if _retry_decision.should_retry:
+                                try:
+                                    resp.close()
+                                except Exception:
+                                    pass
+                                time.sleep(_retry_decision.delay_seconds)
+                                continue
+                            raise UpstreamTruncatedJSONError(
+                                "Upstream returned truncated JSON before response bytes were sent"
+                            )
                         break
-                    except _RETRYABLE_UPSTREAM_EXCEPTIONS:
-                        if _ustream_attempt >= MAX_UPSTREAM_RETRIES - 1:
+                    except _retry_policy.retryable_exceptions as _nonstream_exc:
+                        _retry_decision = _retry_policy.retry_for_exception(
+                            _nonstream_exc,
+                            _ustream_attempt,
+                            stream_started=False,
+                        )
+                        if not _retry_decision.should_retry:
                             raise
-                        time.sleep(_upstream_retry_backoff(_ustream_attempt))
+                        time.sleep(_retry_decision.delay_seconds)
                         continue
                 assert resp is not None
 
@@ -1643,7 +1791,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             latency_ms = int((time.time() - t0) * 1000)
             with _forecast_latency_lock:
                 _forecast_latencies.append(latency_ms)
-            _cb_success = True  # reached here without exception → request succeeded
+            # "No exception escaped" is NOT "provider healthy": a retryable
+            # 5xx that exhausted its retries still flows through the normal
+            # send path above. Gate breaker success on the FINAL upstream
+            # status so provider 5xx storms trip the breaker instead of
+            # recording an unbroken success streak (and keeping /status
+            # green while every request fails).
+            _final_upstream_status = resp.status_code if "resp" in dir() else None  # type: ignore
+            _cb_success = not _cb_status_is_provider_failure(_final_upstream_status)
 
             # ── Request logging ───────────────────────────────────────────
             try:
@@ -1698,6 +1853,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                                  cache_read_tokens, cache_creation_tokens)
                 saved = max(0, input_tokens - sent_input_tokens)
                 cost_saved = max(0.0, cost_without - cost)
+
+                # Settle the spend-guard in-flight admission now that this
+                # request's actual cost is known (the monitor row below makes
+                # it visible to DB-derived usage). Requests that die before
+                # reaching this point are reclaimed by the counter's TTL.
+                if _sg_admission_ticket:
+                    try:
+                        from tokenpak.proxy.spend_guard.rolling_caps import (
+                            settle_pending_spend as _sg_settle,
+                        )
+                        _sg_settle(_sg_admission_ticket)
+                    except Exception:
+                        pass
+                    _sg_admission_ticket = None
 
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
@@ -1929,11 +2098,23 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _cb_registry is not None and _cb_provider is not None:
                 if _cb_success:
                     _cb_registry.record_success(_cb_provider)
-                # failure is recorded in except block
+                else:
+                    # Provider-side 5xx that exhausted retries: the exchange
+                    # completed, but it is a provider failure for breaker
+                    # accounting.
+                    _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
             # ── Circuit breaker: record failure ───────────────────────────
-            if _cb_registry is not None and _cb_provider is not None:
+            # ...unless OUR client's socket died (BrokenPipeError /
+            # ConnectionResetError writing to self.wfile). That says nothing
+            # about provider health — counting it opened the breaker for a
+            # healthy provider whenever CLIs were killed mid-response.
+            if (
+                _cb_registry is not None
+                and _cb_provider is not None
+                and not _is_client_disconnect_error(exc)
+            ):
                 _cb_registry.record_failure(_cb_provider)
 
             with ps._session_lock:
@@ -1971,6 +2152,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
             # Build an actionable error message depending on the exception type
+            _is_retry_boundary_error = (
+                _retry_policy.is_retryable_exception(exc)
+                or isinstance(exc, UpstreamTruncatedJSONError)
+                or (_client_headers_sent and is_streaming)
+            )
+            _recovery_record_path = None
+            if _is_retry_boundary_error:
+                _recovery_record_path = persist_failed_request_metadata(
+                    request_id=_req_id,
+                    tip_plan_id=_tip_plan_id,
+                    target_url=target_url,
+                    method=method,
+                    headers=fwd_headers if "fwd_headers" in locals() else dict(self.headers),
+                    body=body if body is not None else _original_body,
+                    stream_started=bool(_client_headers_sent),
+                    recovery_status="terminally_failed",
+                    error_type=exc_type,
+                    error_message=exc_msg,
+                )
             if "timeout" in exc_type.lower() or isinstance(exc, TimeoutError):
                 user_detail = (
                     "The upstream LLM provider did not respond in time. "
@@ -2014,18 +2214,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             # parser surfaces it as "Unterminated string". Extra
                             # blank lines between frames are legal per the SSE spec
                             # and harmless when the upstream cut off cleanly.
+                            _terminal_payload = build_terminal_recovery_payload(
+                                request_id=_req_id,
+                                tip_plan_id=_tip_plan_id,
+                                error_type="upstream_stream_terminal_failure",
+                                message=(
+                                    "Upstream connection dropped mid-stream "
+                                    f"({exc_type}). The stream was not replayed "
+                                    "because client-visible output had already started."
+                                ),
+                                stream_started=True,
+                                recovery_record=(
+                                    str(_recovery_record_path)
+                                    if _recovery_record_path is not None
+                                    else None
+                                ),
+                            )
                             _sse_err = (
                                 "\n\n"
                                 "event: error\n"
                                 "data: " + json.dumps({
                                     "type": "error",
-                                    "error": {
-                                        "type": "overloaded_error",
-                                        "message": (
-                                            f"Upstream connection dropped mid-stream "
-                                            f"({exc_type}). Retry the request."
-                                        ),
-                                    },
+                                    **_terminal_payload,
                                 }) + "\n\n"
                             ).encode("utf-8")
                             self.wfile.write(_sse_err)
@@ -2035,14 +2245,37 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # Non-streaming: headers+partial body already flushed; nothing
                     # safe to append. Just let the connection close.
                 else:
-                    err = json.dumps({
-                        "error": {
-                            "type": "proxy_error",
-                            "message": user_detail,
-                            "detail": exc_msg,
-                            "hint": "Run `tokenpak doctor` for diagnostics or `tokenpak status` for recent errors.",
+                    if _is_retry_boundary_error:
+                        err_payload = build_terminal_recovery_payload(
+                            request_id=_req_id,
+                            tip_plan_id=_tip_plan_id,
+                            error_type="upstream_terminal_failure",
+                            message=user_detail,
+                            stream_started=False,
+                            recovery_record=(
+                                str(_recovery_record_path)
+                                if _recovery_record_path is not None
+                                else None
+                            ),
+                        )
+                        err_payload["error"]["detail"] = exc_msg
+                        err_payload["error"]["hint"] = (
+                            "Retry later or use a future explicit recovery command; "
+                            "TokenPak did not hide a replay."
+                        )
+                    else:
+                        err_payload = {
+                            "error": {
+                                "type": "proxy_error",
+                                "message": user_detail,
+                                "detail": exc_msg,
+                                "hint": (
+                                    "Run `tokenpak doctor` for diagnostics or "
+                                    "`tokenpak status` for recent errors."
+                                ),
+                            }
                         }
-                    }).encode()
+                    err = json.dumps(err_payload).encode()
                     self.send_response(502)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(err)))
@@ -2240,7 +2473,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             result = execute_via_claude_code(
                 openclaw_session=oc_session,
                 messages=body_data.get("messages", []),
-                model=body_data.get("model", "claude-sonnet-4-6"),
+                # Empty when the request carries no model: the CLI backend
+                # then runs with its own configured default, and the
+                # response/receipt reports the model as unknown rather
+                # than a fabricated id.
+                model=body_data.get("model") or "",
                 system=body_data.get("system", ""),
                 max_tokens=body_data.get("max_tokens", 4096),
                 workspace=oc_workspace,
@@ -2281,7 +2518,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
           3. message_delta — contains stop_reason + usage.output_tokens
         """
         msg_id = result.get("id", "msg_unknown")
-        model = result.get("model", "claude-sonnet-4-6")
+        # Never invent a model id — echo whatever the backend reported,
+        # empty if unknown, so downstream logging/cost attribution cannot
+        # key on a fabricated model name.
+        model = result.get("model") or ""
         usage = result.get("usage", {})
         content = result.get("content", [])
         text = ""
@@ -2371,6 +2611,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_app_endpoint_dispatch_error(self, exc: Exception) -> None:
+        body = json.dumps({
+            "error": "app_endpoint_dispatch_failed",
+            "detail": type(exc).__name__,
+        }).encode()
+        try:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
+
     def _handle_metrics_dashboard(self) -> None:
         """GET /metrics/dashboard — dashboard JSON with top-20 sessions panel.
 
@@ -2378,14 +2633,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         by request count. Each entry contains the columns documented in
         Spec Component 11.
         """
-        import os
         import sqlite3 as _sqlite3
 
         ps = self.server.proxy_server
         db_path = (
             ps.monitor.db_path
             if getattr(ps, "monitor", None) is not None
-            else os.path.expanduser("~/.tokenpak/monitor.db")
+            else str(_paths.under("monitor.db"))
         )
 
         sessions: list = []
@@ -2751,15 +3005,19 @@ class ProxyServer:
           4. Close the HTTP connection pool
           5. Stop the HTTP server
         """
-        # Always close the pool, even if server wasn't started
-        if self._connection_pool is not None:
-            try:
-                self._connection_pool.close()
-            except Exception:
-                pass
-
+        # Never started (or already stopped): nothing is in flight, so just
+        # release pool resources and return. For a RUNNING server the pool
+        # must NOT be closed here — closing it before the drain below kills
+        # every in-flight request's upstream connection, turning a graceful
+        # SIGTERM into a mid-stream connection reset for every active
+        # request. The pool is closed at step 4, after the drain completes.
         if self._server is None:
-            return  # already stopped
+            if self._connection_pool is not None:
+                try:
+                    self._connection_pool.close()
+                except Exception:
+                    pass
+            return
 
         # ── Step 1: Stop accepting new proxy requests ─────────────────────
         self.shutdown.begin()
@@ -2825,16 +3083,31 @@ class ProxyServer:
         Writes a shutdown summary entry to the compression events JSONL file
         so stats from the current session are preserved across restarts.
         """
+        # Snapshot under the session lock — requests may still be mutating
+        # these counters while the drain window is open.
+        with self._session_lock:
+            session = dict(self.session)
         shutdown_record = {
             "event": "shutdown",
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
-            "session_requests": self.session.get("requests", 0),
-            "session_tokens_saved": self.session.get("saved_tokens", 0),
-            "session_cost_saved": round(self.session.get("cost_saved", 0.0), 6),
-            "session_cost_total": round(self.session.get("cost", 0.0), 6),
-            "session_errors": self.session.get("errors", 0),
-            "uptime_seconds": round(time.time() - self.session.get("start_time", time.time())),
+            "session_requests": session.get("requests", 0),
+            "session_tokens_saved": session.get("saved_tokens", 0),
+            "session_cost_saved": round(session.get("cost_saved", 0.0), 6),
+            "session_cost_total": round(session.get("cost", 0.0), 6),
+            "session_errors": session.get("errors", 0),
+            "uptime_seconds": round(time.time() - session.get("start_time", time.time())),
         }
+        # Drain the monitor's async write queue so queued request rows are
+        # persisted before exit. The monitor DB writer is a daemon thread that
+        # is killed abruptly at process exit; without this drain, up to a
+        # queue's worth of already-recorded request rows are lost on a clean
+        # shutdown (recorded spend < real spend, under-firing rolling caps).
+        # Ordered before the compression-stats flush so a failure in that sink
+        # cannot skip the monitor drain — recorded request rows are the
+        # critical data.
+        if self.monitor is not None:
+            self.monitor.flush(timeout=5.0)
+
         # Delegate to the compression_stats recorder (writes to ~/.tokenpak/compression_events.jsonl)
         self.compression_stats.flush_shutdown_record(shutdown_record)
 
@@ -2961,7 +3234,11 @@ class ProxyServer:
         }
 
     def stats(self) -> dict:
-        s = self.session
+        # Copy under the session lock: handler threads mutate these counters
+        # concurrently, and returning the live dict let JSON serialization
+        # race with (and observe torn) mid-request updates.
+        with self._session_lock:
+            s = dict(self.session)
         return {
             "session": s,
             "compilation_mode": self.compilation_mode,
@@ -2973,7 +3250,8 @@ class ProxyServer:
         }
 
     def session_stats(self) -> dict:
-        s = self.session
+        with self._session_lock:
+            s = dict(self.session)
         uptime = round((time.time() - s["start_time"]) / 3600, 2)
         return {
             "session_requests": s["requests"],
@@ -3035,6 +3313,19 @@ ForwardProxyHandler = _ProxyHandler
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+def _write_proxy_pid_file() -> Path:
+    """Resolve the proxy PID path under TOKENPAK_HOME and write the current PID.
+
+    Extracted so scoped-home isolation is unit-testable without launching the
+    server. Honors TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a
+    scoped-home proxy writes its own pid instead of clobbering the default home.
+    """
+    pid_path = _paths.under("proxy.pid")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    return pid_path
+
+
 def main() -> None:
     """
     Entry point for ``python -m tokenpak.proxy.server``.
@@ -3056,7 +3347,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config", default=None, metavar="PATH",
-        help="Path to config YAML (env: TOKENPAK_CONFIG, default: ~/.tokenpak/config.yaml)",
+        help="Path to config YAML (env: TOKENPAK_CONFIG, default: <TOKENPAK_HOME>/config.yaml, i.e. ~/.tokenpak/config.yaml)",
     )
     parser.add_argument(
         "--log-level", default=None,
@@ -3080,6 +3371,12 @@ def main() -> None:
         os.environ["TOKENPAK_PROFILE"] = args.profile
     if args.config is not None:
         os.environ["TOKENPAK_CONFIG"] = args.config
+    elif "TOKENPAK_CONFIG" not in os.environ:
+        # Default config path honors TOKENPAK_HOME so a scoped-home proxy resolves
+        # its own config; unchanged (~/.tokenpak/config.yaml) when TOKENPAK_HOME is
+        # unset. NOTE: config.py's import-time loader may resolve the config file
+        # independently of this — full config scoping is a config.py residual.
+        os.environ["TOKENPAK_CONFIG"] = str(_paths.under("config.yaml"))
 
     _log_level = (args.log_level or os.environ.get("TOKENPAK_LOG_LEVEL", "warning")).upper()
     logging.basicConfig(level=_log_level, format="%(levelname)s %(name)s: %(message)s")
@@ -3095,10 +3392,10 @@ def main() -> None:
         "aggressive": "everything except protected gets compressed",
     }
 
-    # Write PID file on startup; remove on clean shutdown.
-    _pid_path = Path.home() / ".tokenpak" / "proxy.pid"
-    _pid_path.parent.mkdir(parents=True, exist_ok=True)
-    _pid_path.write_text(str(os.getpid()))
+    # Write PID file on startup; remove on clean shutdown. Path resolves under
+    # TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a scoped-home
+    # proxy writes its own pid instead of clobbering the default home.
+    _pid_path = _write_proxy_pid_file()
 
     from tokenpak.proxy.config import PROVIDER_DISPLAY as _provider_display
     print(f"""

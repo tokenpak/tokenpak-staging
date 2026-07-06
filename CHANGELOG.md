@@ -6,6 +6,78 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.10.4] — 2026-07-05
+
+> **Release note:** version **1.10.3 was tagged but never published to PyPI.** Its release run
+> stopped fail-closed at the test gate (a release-only `pytest-timeout` enforcement issue in the
+> dev/full test shapes — no build, GitHub Release, or PyPI artifact was produced) and PyPI remained
+> at 1.10.2. 1.10.4 carries the intended 1.10.3 changes (below), plus the release-test fix.
+
+### Fixed
+- **Release test-gate stability.** A health-check integration test that polls `/health` for up to
+  ~30 seconds by design is given a per-test timeout above the global 30-second cap, so it is no
+  longer killed under the enforced `pytest-timeout` in the dev/full test shapes. Release-mechanics
+  only — no runtime behavior change.
+
+## [1.10.3] — 2026-07-05
+
+> Patch release: a curated set of concurrency, durability, and telemetry-truth fixes for the
+> SQLite-backed stores and the proxy connection lifecycle. No new capabilities or CLI surface.
+
+### Fixed
+- **Concurrency and crash-durability across the SQLite-backed stores.** The companion
+  journal/budget store, the dispatch effect ledger, the telemetry store, the spend-guard pending
+  store, and the monitor write path now use atomic writes, single-owner database resolvers, and
+  uniqueness keys that hold under concurrent access and across crash/restart. Dedupe keys prevent
+  double-counting and cost accounting reflects actual spend.
+- **Telemetry/monitor windowing and write-truth.** `get_stats` now windows on the parsed
+  timestamp, so an N-hour window is a real N-hour window (previously a same-date row could be
+  counted regardless of the hour). Monitor write failures surface as dropped-row diagnostics
+  instead of being lost silently.
+- **Proxy connection lifecycle and breaker accounting.** Session-client leases are released
+  exactly once — a streaming-request construction failure no longer double-releases and
+  prematurely closes a client another in-flight request still holds — and breaker/concurrency-gate
+  accounting races are closed.
+- **Queued telemetry flushed on shutdown.** Request rows still queued for the monitor's background
+  writer are drained to disk on a clean shutdown instead of being dropped when the writer thread
+  exits.
+- **Runtime state scoped under `TOKENPAK_HOME`.** Monitor database resolution honors
+  `TOKENPAK_HOME` so runtime state stays within the configured home directory.
+
+## [1.10.2] — 2026-07-03
+
+> **Release note:** version **1.10.1 was never released.** Its release pipeline runs stopped
+> fail-closed at the public-API snapshot gate (no build, GitHub Release, or PyPI artifact was
+> produced) and the `v1.10.1` tag was retired. 1.10.2 carries the intended 1.10.1 changes
+> below, plus the corrected public-API snapshot.
+
+### Fixed
+- **Proxy upstream transport reliability.** Transient upstream failures (connection resets,
+  server disconnects, retryable 5xx honoring `Retry-After`) are now retried with a bounded,
+  policy-driven recovery before any bytes reach the client — and never after streaming output
+  has started. Failed-request recovery metadata is persisted with credentials redacted.
+- **Connection pool no longer hands retries a dead connection.** A pooled client that raises a
+  transport error is evicted (identity-checked) so the retry gets a fresh connection; evicted,
+  idle-reaped, and LRU-displaced clients are retired and closed after a grace period instead of
+  being closed while requests are still in flight on them. New pool metrics `evicted_clients`
+  and `retired_pending_close`; pool timeouts are env-tunable via `TOKENPAK_POOL_CONNECT_TIMEOUT`
+  and `TOKENPAK_POOL_READ_TIMEOUT`.
+
+### Deprecated
+- `tokenpak.proxy.server.MAX_UPSTREAM_RETRIES` is retained as a compatibility alias so existing
+  imports continue to work, but it is now non-authoritative and deprecated (planned for removal
+  in a future minor release): retry behavior is governed by `UpstreamRetryPolicy`, and
+  `TOKENPAK_UPSTREAM_RETRIES` remains the supported operator control. Operator-facing behavior
+  is unchanged.
+
+### Release integrity
+- **Public-API snapshot regenerated in the canonical release environment.** The previous snapshot
+  had been regenerated against a stale installed package instead of the source tree, which is what
+  stopped the 1.10.1 release runs at the snapshot gate. The snapshot now records the bounded-retry
+  public surface (`tokenpak.proxy.upstream_retry`, re-exported by `tokenpak.proxy.server` and
+  `tokenpak.proxy.server_async`) and drops two symbol records that were never part of the released
+  package, plus a host-specific import-error record.
+
 ## [1.10.0] — 2026-06-28
 
 ### Added
