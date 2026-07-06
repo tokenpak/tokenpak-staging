@@ -9989,10 +9989,6 @@
     },
     {
       "module": "tokenpak.proxy.server",
-      "name": "extract_sse_stop_reason"
-    },
-    {
-      "module": "tokenpak.proxy.server",
       "name": "extract_sse_tokens"
     },
     {
@@ -10774,10 +10770,6 @@
     {
       "module": "tokenpak.proxy.streaming",
       "name": "StreamUsage"
-    },
-    {
-      "module": "tokenpak.proxy.streaming",
-      "name": "extract_sse_stop_reason"
     },
     {
       "module": "tokenpak.proxy.streaming",

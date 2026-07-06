@@ -15,7 +15,7 @@ HTTP 200 are distinguishable from successful completions.
 
 - **Streaming (SSE) path:** `stop_reason` is extracted from the buffered
   `message_delta` event (`delta.stop_reason`) after the stream has been
-  forwarded; new `extract_sse_stop_reason()` helper in `proxy.streaming`.
+  forwarded; parsing is handled by an internal helper in `proxy.streaming`.
 
 - **Byte-preservation unchanged:** both observations parse copies only -
   forwarded request/response bytes are never re-serialized or modified.
