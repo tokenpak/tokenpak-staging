@@ -109,7 +109,7 @@ def _detect_dashboard_capabilities(
         "fleet_projection": _capability(
             "configured" if fleet_config_exists else "not_configured",
             source="tokenpak-home/fleet.yaml",
-            detail="opt-in only; local dashboard does not assume fleet by default",
+            detail="opt-in only; local dashboard does not assume a fleet configuration by default",
             default_enabled=False,
         ),
     }
