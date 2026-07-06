@@ -35,7 +35,7 @@ REQUIRED_DISPATCH_DATA_GLOBS = (
     "tokenpak/orchestration/dispatch/registry/overlays/*.yaml",
     "tokenpak/orchestration/dispatch/schemas/*.json",
 )
-# Companion packaged-data contract (Std 30 §13.1 R9 content-completeness):
+# Companion packaged-data contract (release-gate content-completeness):
 # tokenpak/companion/codex/hooks.py resolves its shell scripts next to itself
 # at runtime (_HOOKS_DIR = Path(__file__).parent), so a wheel that omits them
 # yields hooks.json entries pointing at nonexistent files — every hook then

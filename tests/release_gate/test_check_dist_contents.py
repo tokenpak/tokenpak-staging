@@ -118,7 +118,7 @@ def test_required_generic_data_still_enforced():
         cdc._assert_required_data(SHIPPED_NAMES - {"tokenpak/term_cards.json"}, "wheel")
 
 
-# --- companion packaged-data assertion (Std 30 §13.1 R9) --------------------
+# --- companion packaged-data assertion (release-gate content-completeness) --
 # The codex companion resolves its hook scripts next to hooks.py at runtime,
 # so the gate must FAIL when any companion shell hook, codex skill, or the
 # companion guide drops out of a built artifact.
