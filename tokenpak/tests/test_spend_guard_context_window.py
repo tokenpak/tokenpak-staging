@@ -140,6 +140,7 @@ class TestRegistrySingleSource:
     def test_catalog_section_is_loaded(self):
         import json
         from pathlib import Path
+
         import tokenpak.models as models_pkg
         catalog = json.loads(
             (Path(models_pkg.__file__).parent / "data" / "seed_catalog.json")
