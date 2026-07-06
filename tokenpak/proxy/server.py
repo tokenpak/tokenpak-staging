@@ -85,7 +85,7 @@ from .route_policy import get_policy
 from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost
 from .startup import format_startup_report, run_startup_checks
 from .stats import CompressionStats
-from .streaming import extract_sse_tokens
+from .streaming import _extract_sse_stop_reason, extract_sse_tokens
 from .upstream_retry import (
     UpstreamRetryPolicy,
     UpstreamTruncatedJSONError,
@@ -975,6 +975,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # when the upstream response includes ``usage.cache_creation`` breakdown).
         cache_creation_1h_tokens = 0
         cache_creation_5m_tokens = 0
+        # Provider stop_reason observed on the response path (read-only parse of
+        # a response copy; forwarded bytes are never modified). '' = not observed.
+        stop_reason = ""
 
         trace: Optional[PipelineTrace] = None
         if should_log and is_messages:
@@ -1661,6 +1664,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
                 if should_log and is_messages and sse_buffer:
                     sse_usage = extract_sse_tokens(sse_buffer)
+                    # stop_reason from message_delta (read-only on the buffered
+                    # copy - forwarded stream bytes already went out unmodified).
+                    stop_reason = _extract_sse_stop_reason(sse_buffer)
                     output_tokens = sse_usage.get("output_tokens", 0)
                     cache_read_tokens = sse_usage.get("cache_read_input_tokens", 0)
                     cache_creation_tokens = sse_usage.get("cache_creation_input_tokens", 0)
@@ -1772,6 +1778,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     output_tokens = _extract_response_tokens(body_for_metrics)
+                    # stop_reason from the response JSON copy (read-only -
+                    # the client already received the original bytes above).
+                    stop_reason = _extract_response_stop_reason(body_for_metrics)
                     try:
                         usage = json.loads(body_for_metrics).get("usage", {})
                         cache_read_tokens = usage.get("cache_read_input_tokens", 0)
@@ -1953,6 +1962,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             agent_id=_mon_agent_id,
                             cycle_id=_mon_cycle_id,
                             attribution_source=_mon_attribution_source,
+                            stop_reason=stop_reason,
                         )
                     except Exception:
                         pass  # DB errors must never break the request
@@ -2759,6 +2769,21 @@ def _extract_response_tokens(body: bytes) -> int:
         )
     except Exception:
         return 0
+
+
+def _extract_response_stop_reason(body: bytes) -> str:
+    """Read ``stop_reason`` from a non-streaming response JSON copy.
+
+    Read-only observation for telemetry (the original response bytes are
+    forwarded unmodified). Returns '' when absent or unparseable - never
+    fabricated. Distinguishes refusals returned as HTTP 200 (e.g.
+    ``stop_reason: "refusal"``) from successful completions on receipt rows.
+    """
+    try:
+        value = json.loads(body).get("stop_reason")
+        return str(value) if value else ""
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
