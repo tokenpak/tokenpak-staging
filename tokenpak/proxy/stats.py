@@ -23,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -471,6 +472,16 @@ class CompressionStats:
                 "avg_ratio": sum(self._ratios) / n if n else 0.0,
                 "avg_latency_ms": sum(self._latencies) // n if n else 0,
             }
+
+    def flush_shutdown_record(self, record: Dict[str, Any]) -> None:
+        """Append a shutdown summary record to the compression telemetry log."""
+        event = dict(record)
+        event.setdefault("event", "shutdown")
+        path = _pathlib.Path(self.log_path)
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(event, sort_keys=True) + "\n")
 
 
 def get_compression_stats() -> CompressionStats:
