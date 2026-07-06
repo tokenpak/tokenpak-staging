@@ -1045,7 +1045,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _sg_session = _resolve_session_id(self.headers, "")
                 _sg_outcome = _sg_evaluate(
                     body,
-                    _sg_model or "claude-sonnet-4-6",  # safe default rate
+                    # Empty when the body carries no model. Pricing falls
+                    # back to default-class rates (tokenpak.models.get_rates)
+                    # without inventing a model id, and the context-window
+                    # lookup falls back to cfg.block_tokens — so guard rows
+                    # never record a fabricated model name.
+                    _sg_model,
                     _sg_session,
                     dict(self.headers),
                 )
@@ -2478,7 +2483,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             result = execute_via_claude_code(
                 openclaw_session=oc_session,
                 messages=body_data.get("messages", []),
-                model=body_data.get("model", "claude-sonnet-4-6"),
+                # Empty when the request carries no model: the CLI backend
+                # then runs with its own configured default, and the
+                # response/receipt reports the model as unknown rather
+                # than a fabricated id.
+                model=body_data.get("model") or "",
                 system=body_data.get("system", ""),
                 max_tokens=body_data.get("max_tokens", 4096),
                 workspace=oc_workspace,
@@ -2519,7 +2528,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
           3. message_delta — contains stop_reason + usage.output_tokens
         """
         msg_id = result.get("id", "msg_unknown")
-        model = result.get("model", "claude-sonnet-4-6")
+        # Never invent a model id — echo whatever the backend reported,
+        # empty if unknown, so downstream logging/cost attribution cannot
+        # key on a fabricated model name.
+        model = result.get("model") or ""
         usage = result.get("usage", {})
         content = result.get("content", [])
         text = ""
