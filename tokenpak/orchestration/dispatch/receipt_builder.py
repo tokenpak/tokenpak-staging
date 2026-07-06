@@ -1,4 +1,4 @@
-"""DispatchReceipt builder — assemble a §4.7 receipt from a finished run.
+"""DispatchReceipt builder — assemble a receipt from a finished run.
 
 The :class:`~tokenpak.orchestration.dispatch.runner.FulfillmentLine` finalizes a
 :class:`~tokenpak.orchestration.dispatch.models.run.DispatchRun` but does **not**
@@ -7,7 +7,7 @@ itself emit a :class:`~tokenpak.orchestration.dispatch.models.receipt.DispatchRe
 persisted receipt, and nothing in the runtime writes one. This module closes
 that gap: :func:`build_receipt` walks a finished run's station-run / decision /
 effect records (read back from the :class:`~tokenpak.orchestration.dispatch.ledger.db.RunLedger`)
-and assembles the receipt, aggregating per-station telemetry into the §4.7
+and assembles the receipt, aggregating per-station telemetry into the
 :class:`~tokenpak.orchestration.dispatch.models.receipt.ReceiptTelemetry` block.
 
 The receipt is a pure projection of records already persisted by the runner; it
@@ -20,7 +20,7 @@ Telemetry note (v0.1-alpha): the per-station token spend is not yet threaded
 back from TIP into the persisted :class:`DispatchStationRun` records, so token
 totals here are aggregated from whatever the caller supplies via
 ``token_overrides`` (the deterministic fixtures pass the mocked turn spend). When
-the proxy attribution columns (Standards Delta v0 §7) are wired through, this
+the proxy attribution columns are wired through, this
 builder reads them directly and the override seam is removed. Until then the
 override keeps the receipt's telemetry block assertable without fabricating
 numbers the runtime cannot yet observe.
@@ -30,7 +30,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Optional
-from uuid import uuid4
 
 from .ledger.db import RunLedger
 from .models.receipt import (
@@ -42,18 +41,32 @@ from .models.receipt import (
 )
 from .models.run import DispatchRun
 
-# First-N characters of a station's result payload kept on the receipt (§4.7:
-# "first 500 chars; full in DispatchStationRun").
+# First-N characters of a station's result payload kept on the receipt
+# ("first 500 chars; full in DispatchStationRun").
 _EXCERPT_LIMIT = 500
 
 
 def _excerpt(payload: Optional[dict]) -> str:
-    """Return a <=500-char string excerpt of a station's result payload (§4.7)."""
+    """Return a <=500-char string excerpt of a station's result payload."""
 
     if not payload:
         return ""
     text = str(payload)
     return text[:_EXCERPT_LIMIT]
+
+
+def receipt_id_for_run(run_id: str) -> str:
+    """Derive the deterministic receipt id for *run_id* (1:1 run→receipt).
+
+    A receipt is a pure projection of its run, so its identity is a function of
+    the run's identity — NOT a fresh random id per build. Building the receipt
+    twice therefore produces the same id, and the ledger's id-keyed upsert
+    (``INSERT OR REPLACE``) dedupes the rebuild into the same row instead of
+    accumulating orphaned receipts and repointing the run.
+    """
+
+    suffix = run_id[len("run_"):] if run_id.startswith("run_") else run_id
+    return f"receipt_{suffix}"
 
 
 def build_receipt(
@@ -65,7 +78,7 @@ def build_receipt(
     token_overrides: Optional[Mapping[str, int]] = None,
     clock: Optional[Callable[[], datetime]] = None,
 ) -> DispatchReceipt:
-    """Assemble a :class:`DispatchReceipt` for a finished ``run`` (§4.7).
+    """Assemble a :class:`DispatchReceipt` for a finished ``run``.
 
     Reads the run's station runs, decisions, and effects back from ``ledger`` and
     projects them onto the receipt's station / decision / effect rows. Per-station
@@ -118,7 +131,7 @@ def build_receipt(
             )
 
     return DispatchReceipt(
-        id=receipt_id or f"receipt_{uuid4().hex}",
+        id=receipt_id or receipt_id_for_run(run.id),
         job_id=run.job_id,
         run_id=run.id,
         route_id=run.route_id,
@@ -140,7 +153,7 @@ def build_and_write_receipt(
     token_overrides: Optional[Mapping[str, int]] = None,
     clock: Optional[Callable[[], datetime]] = None,
 ) -> DispatchReceipt:
-    """Build a receipt, persist it, and link its id onto the run (§4.4 ``receipt_id``).
+    """Build a receipt, persist it, and link its id onto the run (``receipt_id``).
 
     Writes the receipt to the Run Ledger and updates the run's ``receipt_id`` so
     the ``tokenpak dispatch receipt`` reader (which queries ``dispatch_receipts``
@@ -161,4 +174,4 @@ def build_and_write_receipt(
     return receipt
 
 
-__all__ = ["build_receipt", "build_and_write_receipt"]
+__all__ = ["build_receipt", "build_and_write_receipt", "receipt_id_for_run"]

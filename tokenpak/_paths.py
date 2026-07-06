@@ -68,10 +68,6 @@ _STD_33_SUBDIRS: frozenset[str] = frozenset(
 _ADOPTED_SUBDIRS: frozenset[str] = frozenset(
     {
         "paks",
-        # cards/ — user-global installed/compiled card manifests per the
-        # Cards authoring layer (Std 54 §K: ~/.tpk/cards/installed/,
-        # ~/.tpk/cards/compiled/). Path-layout reconciliation pending.
-        "cards",
     }
 )
 
@@ -186,16 +182,6 @@ def under(*parts: str) -> Path:
     )
 
 
-def update_check_cache() -> Path:
-    """Path to the update-check cache file (last-checked epoch + cached latest version).
-
-    Top-level file under the resolved home (``<home>/update_check.json``). Used by
-    the in-launcher "update available" nudge to throttle PyPI checks to <=1/day.
-    Pure-path helper — does not create the parent (callers fail-open).
-    """
-    return under("update_check.json")
-
-
 def is_legacy_active() -> bool:
     """True when the *resolved* home is the legacy directory.
 
@@ -245,7 +231,15 @@ def _is_valid_monitor_db(p: Path) -> bool:
 
 
 def _monitor_db_candidates() -> list[Path]:
-    """Ordered candidate paths for the monitor DB (read resolution order)."""
+    """Ordered candidate paths for the monitor DB (read resolution order).
+
+    When ``TOKENPAK_HOME`` is set, the scoped home is the sole home-derived
+    candidate so every consumer of this list (the proxy writer, the
+    spend-guard readers, doctor) converges on the same scoped file and a
+    scoped run can never read or write the default home's DB. Explicit DB
+    overrides (``TOKENPAK_DB`` / compat) still win first in both shapes.
+    When unset, the historical read-migration order is unchanged.
+    """
     candidates: list[Path] = []
     env_val = os.environ.get(_MONITOR_DB_ENV, "").strip()
     if env_val:
@@ -254,6 +248,11 @@ def _monitor_db_candidates() -> list[Path]:
         env_compat = os.environ.get(_MONITOR_DB_ENV_COMPAT, "").strip()
         if env_compat:
             candidates.append(Path(env_compat).expanduser())
+    if os.environ.get(ENV_VAR, "").strip():
+        scoped = home() / "monitor.db"
+        if scoped not in candidates:
+            candidates.append(scoped)
+        return candidates
     candidates.append(Path.home() / CANONICAL_DIRNAME / "monitor.db")
     candidates.append(Path.home() / LEGACY_DIRNAME / "monitor.db")
     candidates.append(Path.home() / "tokenpak" / "monitor.db")
@@ -265,16 +264,22 @@ def monitor_db(mode: str = "read") -> Optional[Path]:
 
     mode="read":  Return the first valid active DB, or None if no
                   valid DB exists. Does not create anything.
-    mode="write": Return the existing active DB if found, otherwise
-                  the canonical fresh-install path (~/.tpk/monitor.db).
-                  Creates the parent directory if needed, but does NOT
-                  create the DB file itself.
+    mode="write": Return the existing active DB if found, otherwise the
+                  fresh-install path: the scoped home when
+                  ``TOKENPAK_HOME`` is set, else the canonical
+                  ``~/.tpk/monitor.db`` (never the legacy dir, even when
+                  the legacy dir is the resolved home). Creates the
+                  parent directory if needed, but does NOT create the DB
+                  file itself.
     """
     for candidate in _monitor_db_candidates():
         if _is_valid_monitor_db(candidate):
             return candidate
     if mode == "write":
-        target = Path.home() / CANONICAL_DIRNAME / "monitor.db"
+        if os.environ.get(ENV_VAR, "").strip():
+            target = home() / "monitor.db"
+        else:
+            target = Path.home() / CANONICAL_DIRNAME / "monitor.db"
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         return target
     return None
@@ -326,7 +331,6 @@ __all__ = [
     "needs_migration",
     "ensure_home",
     "under",
-    "update_check_cache",
     "is_legacy_active",
     "monitor_db",
     "monitor_db_candidates",

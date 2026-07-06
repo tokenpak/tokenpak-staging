@@ -1,4 +1,4 @@
-"""FulfillmentLine runner — sequential station execution (Standards Delta v0 §5).
+"""FulfillmentLine runner — sequential station execution.
 
 The :class:`FulfillmentLine` is the top-level execution engine P-EXEC-01 ships. It
 takes a *selected, bound* route (from :class:`DispatchRuntime.select_route`) and
@@ -9,27 +9,27 @@ propagates.
 **Sequential execution only.** Stations run strictly in declaration order; the
 output of each station is available to the next. There is **no parallel
 execution** and **no branch primitive** in v0.1-alpha — these are a deliberate
-omission (Standards Delta v0 §13 "Explicitly NOT v0.1-alpha": parallel
-fulfillment, branch decisions). A FulfillmentLine is a *line*, not a graph; the
+omission (parallel fulfillment and branch decisions are explicitly NOT in
+v0.1-alpha). A FulfillmentLine is a *line*, not a graph; the
 runner asserts this by walking ``route.stations`` in order with no fan-out.
 
 What the FulfillmentLine wires together:
 
 * the **StationRunner** for each worker station (worker + overlay + context cargo
   + tool registry + bounded loop, :mod:`.station_runner`);
-* the **Reviewer Station** for a station whose role is ``reviewer`` (§5.7),
+* the **Reviewer Station** for a station whose role is ``reviewer``,
   invoked through the injected :class:`ReviewerLLM` boundary;
-* the **Gatehouse** Delivery Gate (§5.7) — reviewer ``pass`` continues,
+* the **Gatehouse** Delivery Gate — reviewer ``pass`` continues,
   ``warning`` auto-creates a :class:`DispatchDecision`, ``fail`` blocks delivery;
 * the **Run Ledger** — the :class:`DispatchRun` record is written at start and
   updated as stations complete; each :class:`DispatchStationRun` is committed by
   its StationRunner only after schema-valid output (criterion 4);
-* **Spend Guard inheritance** (§8) — a station that fails with
+* **Spend Guard inheritance** — a station that fails with
   ``reason=spend_guard_exceeded`` halts the line and surfaces a
   :class:`DispatchDecision` (raise budget / change route / cancel);
-* **Resume** (§5.5) — :meth:`FulfillmentLine.resume` reconciles an interrupted
+* **Resume** — :meth:`FulfillmentLine.resume` reconciles an interrupted
   run via :func:`reconcile_run` before continuing;
-* **Cancellation** (§5.6) — a cancel token marks queued stations ``cancelled``
+* **Cancellation** — a cancel token marks queued stations ``cancelled``
   and captures a late TIP result as a :class:`LateResult`.
 """
 
@@ -90,6 +90,38 @@ from .stations.reviewer import (
     ReviewerStationResult,
 )
 
+# Terminal run statuses. ``DispatchRun.status`` tracks ``DispatchJob.status``;
+# the job state machine defines exactly these four as terminal. A run in one of
+# these states must never be re-walked, re-finalized, or resumed.
+TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(
+    {"delivered", "cancelled", "failed", "withdrawn"}
+)
+
+
+class RunAlreadyTerminalError(RuntimeError):
+    """Raised when run()/resume() targets a run already in a terminal status."""
+
+    def __init__(self, run_id: str, status: str) -> None:
+        self.run_id = run_id
+        self.status = status
+        super().__init__(
+            f"run {run_id!r} is already terminal (status {status!r}); "
+            "it cannot be run or resumed again"
+        )
+
+
+class RunLeaseHeldError(RuntimeError):
+    """Raised when another caller holds the run lease (concurrent run/resume)."""
+
+    def __init__(self, run_id: str, holder: Optional[str]) -> None:
+        self.run_id = run_id
+        self.holder = holder
+        held_by = f" (held by {holder!r})" if holder else ""
+        super().__init__(
+            f"run {run_id!r} is already being executed by another caller{held_by}; "
+            "this caller is exiting without doing any work"
+        )
+
 
 # Status the line returns. Distinct from any single station's status: it reports
 # the *line-level* outcome the caller acts on.
@@ -106,7 +138,7 @@ class LineStatus(str, Enum):
 
 @dataclass
 class FulfillmentResult:
-    """The result of running a FulfillmentLine (Standards Delta v0 §5).
+    """The result of running a FulfillmentLine.
 
     Carries the line status, the persisted :class:`DispatchRun`, the per-station
     :class:`DispatchStationRun` records produced, any :class:`DispatchDecision`
@@ -128,7 +160,7 @@ class FulfillmentResult:
 
 
 class FulfillmentLine:
-    """Sequential station-execution engine (Standards Delta v0 §5).
+    """Sequential station-execution engine.
 
     Construct with the foundation seams — a :class:`WorkerLLM` (the TIP worker
     boundary), a context provider, a :class:`RunLedger`, a worker registry, and
@@ -138,8 +170,8 @@ class FulfillmentLine:
 
     **Sequential, no parallel, no branches.** :meth:`_walk_stations` iterates
     ``route.stations`` in order. There is no fan-out, no concurrent station, and
-    no conditional branch primitive — that is the deliberate v0.1-alpha omission
-    (§13). A later version may add a branch model; this runner does not.
+    no conditional branch primitive — that is the deliberate v0.1-alpha omission.
+    A later version may add a branch model; this runner does not.
     """
 
     def __init__(
@@ -187,31 +219,45 @@ class FulfillmentLine:
         :class:`StationRunner` (or the Reviewer Station for a reviewer station),
         and finalizes the run record. Halts early on a failed station, a
         spend-guard hard stop, a reviewer block/decision, or cancellation.
+
+        Raises :class:`RunAlreadyTerminalError` when ``run_id`` names an existing
+        run already in a terminal status, and :class:`RunLeaseHeldError` when
+        another caller currently holds the run's execution lease.
         """
 
         mode = autonomy_mode if isinstance(autonomy_mode, AutonomyMode) else AutonomyMode(autonomy_mode)
         rid = run_id or f"run_{uuid4().hex}"
         intent = route_intent if route_intent is not None else _route_intent(route)
 
-        run = DispatchRun(
-            id=rid,
-            job_id=manifest.job_id,
-            manifest_id=manifest.id,
-            route_id=route.id,
-            started_at=self._clock(),
-            status="running",
-        )
-        self._ledger.write_run(run)
+        owner = self._claim_lease(rid)
+        try:
+            # Terminal-state guard (checked under the lease so a concurrent
+            # finalize cannot slip between check and write).
+            existing = self._ledger.read_run(rid)
+            if existing is not None and existing.status in TERMINAL_RUN_STATUSES:
+                raise RunAlreadyTerminalError(rid, existing.status)
 
-        return self._walk_stations(
-            run=run,
-            route=route,
-            manifest=manifest,
-            mode=mode,
-            intent=intent,
-            approval_granted=approval_granted,
-            start_index=0,
-        )
+            run = DispatchRun(
+                id=rid,
+                job_id=manifest.job_id,
+                manifest_id=manifest.id,
+                route_id=route.id,
+                started_at=self._clock(),
+                status="running",
+            )
+            self._ledger.write_run(run)
+
+            return self._walk_stations(
+                run=run,
+                route=route,
+                manifest=manifest,
+                mode=mode,
+                intent=intent,
+                approval_granted=approval_granted,
+                start_index=0,
+            )
+        finally:
+            self._ledger.release_run_lease(rid, owner)
 
     def resume(
         self,
@@ -224,13 +270,21 @@ class FulfillmentLine:
         route_intent: Optional[str] = None,
         approval_granted: bool = False,
     ) -> FulfillmentResult:
-        """Resume an interrupted run (Standards Delta v0 §5.5).
+        """Resume an interrupted run.
 
         Reconciles the last station via :func:`reconcile_run`, persists the
         station-status transition, and — depending on the reconciliation verdict —
         continues with the next station, reruns the interrupted station, or
         surfaces a :class:`DispatchDecision` (drift / unknown state). Multi-effect
-        auto-rollback is never performed (§4.8/§5.5 step 5).
+        auto-rollback is never performed.
+
+        A rerun directive carries the reconciliation's ``rerun_attempt_number``
+        through to the interrupted station's new attempt, so retried attempts
+        are numbered ``attempt+1`` rather than restarting at 1.
+
+        Raises :class:`RunAlreadyTerminalError` for a run already in a terminal
+        status (a delivered/failed/cancelled run is never silently re-executed)
+        and :class:`RunLeaseHeldError` when another caller holds the run lease.
         """
 
         mode = autonomy_mode if isinstance(autonomy_mode, AutonomyMode) else AutonomyMode(autonomy_mode)
@@ -239,52 +293,91 @@ class FulfillmentLine:
         run = self._ledger.read_run(run_id)
         if run is None:
             raise KeyError(f"cannot resume unknown run {run_id!r}")
+        if run.status in TERMINAL_RUN_STATUSES:
+            raise RunAlreadyTerminalError(run_id, run.status)
 
-        station_runs = self._ledger.read_station_runs_for_run(run_id)
-        effects_for_last = (
-            self._ledger.read_effects_for_station_run(station_runs[-1].id)
-            if station_runs
-            else []
-        )
-        outcome = reconcile_run(
-            station_runs=station_runs,
-            effects_for_last_station=effects_for_last,
-            workspace_root=workspace_root,
-            now=self._clock(),
-        )
+        owner = self._claim_lease(run_id)
+        try:
+            # Re-read under the lease: a concurrent caller may have finalized the
+            # run between the fast-path check above and the lease claim.
+            run = self._ledger.read_run(run_id)
+            if run is None:
+                raise KeyError(f"cannot resume unknown run {run_id!r}")
+            if run.status in TERMINAL_RUN_STATUSES:
+                raise RunAlreadyTerminalError(run_id, run.status)
 
-        # Persist any station-status transition the reconciliation directs.
-        if station_runs and outcome.station_status_transition is not None:
-            self._transition_station(station_runs[-1], outcome.station_status_transition)
-
-        # A decision halts the resume — record it and return.
-        if outcome.action is ResumeAction.DECISION_REQUIRED and outcome.decision is not None:
-            self._ledger.write_decision(outcome.decision)
-            run = self._finalize_run(run, status="blocked", decision=outcome.decision)
-            return FulfillmentResult(
-                status=LineStatus.DECISION_REQUIRED,
-                run=run,
+            station_runs = self._ledger.read_station_runs_for_run(run_id)
+            effects_for_last = (
+                self._ledger.read_effects_for_station_run(station_runs[-1].id)
+                if station_runs
+                else []
+            )
+            outcome = reconcile_run(
                 station_runs=station_runs,
-                decision=outcome.decision,
-                reason=outcome.reason,
+                effects_for_last_station=effects_for_last,
+                workspace_root=workspace_root,
+                now=self._clock(),
             )
 
-        # Promote planned effects that the reconciliation found were applied.
-        for effect_id in outcome.promote_effect_ids:
-            self._ledger.mark_effect_applied(effect_id)
+            # Persist any station-status transition the reconciliation directs.
+            if station_runs and outcome.station_status_transition is not None:
+                self._transition_station(station_runs[-1], outcome.station_status_transition)
 
-        # Determine where to continue from.
-        start_index = self._resume_start_index(route, station_runs, outcome)
-        return self._walk_stations(
-            run=run,
-            route=route,
-            manifest=manifest,
-            mode=mode,
-            intent=intent,
-            approval_granted=approval_granted,
-            start_index=start_index,
-            prior_station_runs=station_runs,
-        )
+            # A decision halts the resume — record it and return.
+            if outcome.action is ResumeAction.DECISION_REQUIRED and outcome.decision is not None:
+                self._ledger.write_decision(outcome.decision)
+                run = self._finalize_run(run, status="blocked", decision=outcome.decision)
+                return FulfillmentResult(
+                    status=LineStatus.DECISION_REQUIRED,
+                    run=run,
+                    station_runs=station_runs,
+                    decision=outcome.decision,
+                    reason=outcome.reason,
+                )
+
+            # Promote planned effects that the reconciliation found were applied.
+            for effect_id in outcome.promote_effect_ids:
+                self._ledger.mark_effect_applied(effect_id)
+
+            # Determine where to continue from (and, on a rerun, which attempt
+            # number the interrupted station's new attempt carries).
+            start_index = self._resume_start_index(route, station_runs, outcome)
+            first_attempt = (
+                outcome.rerun_attempt_number
+                if outcome.action is ResumeAction.RERUN_STATION
+                and outcome.rerun_attempt_number is not None
+                else 1
+            )
+            return self._walk_stations(
+                run=run,
+                route=route,
+                manifest=manifest,
+                mode=mode,
+                intent=intent,
+                approval_granted=approval_granted,
+                start_index=start_index,
+                prior_station_runs=station_runs,
+                first_station_attempt_number=first_attempt,
+            )
+        finally:
+            self._ledger.release_run_lease(run_id, owner)
+
+    # -- lease helper ----------------------------------------------------------
+
+    def _claim_lease(self, run_id: str) -> str:
+        """Claim the run's execution lease; return the owner token.
+
+        Raises :class:`RunLeaseHeldError` (with the holder, when readable) if
+        another caller already holds the lease. The token is unique per call so
+        two walks through the same FulfillmentLine instance still exclude each
+        other.
+        """
+
+        owner = f"line_{uuid4().hex}"
+        if not self._ledger.try_claim_run_lease(run_id, owner):
+            lease = self._ledger.read_run_lease(run_id)
+            raise RunLeaseHeldError(run_id, lease["owner"] if lease else None)
+        return owner
 
     # -- the sequential walk -------------------------------------------------
 
@@ -299,8 +392,14 @@ class FulfillmentLine:
         approval_granted: bool,
         start_index: int,
         prior_station_runs: Optional[list[DispatchStationRun]] = None,
+        first_station_attempt_number: int = 1,
     ) -> FulfillmentResult:
-        """Walk ``route.stations`` sequentially from ``start_index`` (no parallel)."""
+        """Walk ``route.stations`` sequentially from ``start_index`` (no parallel).
+
+        ``first_station_attempt_number`` is the attempt number for the station at
+        ``start_index`` (resume threads the reconciliation's rerun attempt
+        through it); every subsequent station starts at attempt 1.
+        """
 
         station_runs: list[DispatchStationRun] = list(prior_station_runs or [])
         late_results: list[LateResult] = []
@@ -337,7 +436,7 @@ class FulfillmentLine:
                 )
                 if review_run is not None:
                     station_runs.append(review_run)
-                # Reviewer ran → evaluate the Delivery Gate now (§5.7).
+                # Reviewer ran → evaluate the Delivery Gate now.
                 package = self._gatehouse.evaluate_delivery(
                     job_id=manifest.job_id,
                     manifest=manifest,
@@ -364,6 +463,9 @@ class FulfillmentLine:
                 mode=mode,
                 intent=intent,
                 approval_granted=approval_granted,
+                attempt_number=(
+                    first_station_attempt_number if index == start_index else 1
+                ),
             )
             station_runs.append(outcome.station_run)
             effect_ids.extend(outcome.effect_ids)
@@ -384,7 +486,7 @@ class FulfillmentLine:
                     reason="Cancellation propagated mid-station; late result captured.",
                 )
 
-            # Spend Guard hard stop (§8): surface a decision, halt the line.
+            # Spend Guard hard stop: surface a decision, halt the line.
             if outcome.failure_reason == SPEND_GUARD_EXCEEDED_REASON:
                 decision = self._build_spend_guard_decision(run, station)
                 self._ledger.write_decision(decision)
@@ -396,7 +498,7 @@ class FulfillmentLine:
                     decision=decision,
                     late_results=late_results,
                     effect_ids=effect_ids,
-                    reason="Spend Guard hard-stopped a station (§8).",
+                    reason="Spend Guard hard-stopped a station.",
                 )
 
             # Any other station failure halts the line (no automatic repair loop).
@@ -443,12 +545,13 @@ class FulfillmentLine:
         mode: AutonomyMode,
         intent: Optional[str],
         approval_granted: bool,
+        attempt_number: int = 1,
     ):
         """Resolve the worker + overlay, then run the station via a StationRunner."""
 
         worker = self._resolve_worker(station)
         overlay = self._resolve_overlay(station)
-        # §16 capability intersection: the worker must satisfy the overlay's and
+        # Capability intersection: the worker must satisfy the overlay's and
         # the station's required capabilities or the binding fails loud. The
         # route was already bound by select_route, but re-asserting here keeps the
         # station runner's contract local and explicit.
@@ -471,6 +574,7 @@ class FulfillmentLine:
             autonomy_mode=mode,
             overlay=overlay,
             route_intent=intent,
+            attempt_number=attempt_number,
             approval_granted=approval_granted,
         )
         # Append the station run id onto the run record (kept current as we go).
@@ -519,7 +623,7 @@ class FulfillmentLine:
         station: RouteStation,
         build_station_run: Optional[DispatchStationRun],
     ) -> tuple[ReviewerStationResult, Optional[DispatchStationRun]]:
-        """Run the Reviewer Station (§5.7) and commit its station-run record.
+        """Run the Reviewer Station and commit its station-run record.
 
         Requires a reviewer client to have been injected; raises if absent (a
         route with a reviewer station cannot run without one). Builds the
@@ -633,7 +737,16 @@ class FulfillmentLine:
         When a ``decision`` halted the run it is linked onto ``run.decisions`` (if
         not already there) so the Run Ledger record references it — the decision
         itself is written by the caller.
+
+        Idempotency guard: if the persisted run record is ALREADY in a terminal
+        status, this is a no-op that returns the persisted record unchanged — a
+        finished run is never re-finalized (its status, ``ended_at``, and receipt
+        linkage stay exactly as first written).
         """
+
+        persisted = self._ledger.read_run(run.id)
+        if persisted is not None and persisted.status in TERMINAL_RUN_STATUSES:
+            return persisted
 
         decisions = list(run.decisions)
         if decision is not None and decision.id not in decisions:
@@ -703,7 +816,7 @@ class FulfillmentLine:
     def _mark_remaining_cancelled(
         self, run: DispatchRun, remaining: list[RouteStation]
     ) -> None:
-        """Mark every not-yet-run station ``cancelled`` (§5.6 step 3).
+        """Mark every not-yet-run station ``cancelled``.
 
         Each queued station gets a ``cancelled`` :class:`DispatchStationRun` so
         the Run Ledger records exactly which stations never ran.
@@ -745,7 +858,7 @@ class FulfillmentLine:
     def _build_spend_guard_decision(
         self, run: DispatchRun, station: RouteStation
     ) -> DispatchDecision:
-        """Build the §8 Spend-Guard decision (raise budget / change route / cancel)."""
+        """Build the Spend-Guard decision (raise budget / change route / cancel)."""
 
         return DispatchDecision(
             id=f"decision_{run.id}_spend_guard",
@@ -759,7 +872,7 @@ class FulfillmentLine:
                 "the job?"
             ),
             reason=(
-                "Standards Delta v0 §8: a station hit the Spend Guard cap hard "
+                "A station hit the Spend Guard cap hard "
                 "stop (reason=spend_guard_exceeded). Dispatch surfaces a decision "
                 "rather than bypassing Spend Guard."
             ),
@@ -875,4 +988,7 @@ __all__ = [
     "LineStatus",
     "FulfillmentResult",
     "FulfillmentLine",
+    "TERMINAL_RUN_STATUSES",
+    "RunAlreadyTerminalError",
+    "RunLeaseHeldError",
 ]

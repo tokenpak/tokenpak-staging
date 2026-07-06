@@ -48,48 +48,6 @@ def _is_chatgpt_oauth_token(auth_header: str) -> bool:
     return token.startswith("eyJ") and "." in token
 
 
-def codex_responses_payload_fixup(body: bytes) -> bytes:
-    """Apply the ChatGPT Codex Responses constraints to a request body.
-
-    This mirrors :meth:`OpenAICodexResponsesAdapter.denormalize` but operates
-    directly on raw request bytes so the proxy can apply it on the additive
-    ``/v1/responses`` → ChatGPT-backend route WITHOUT running the full adapter
-    normalize/denormalize round-trip.
-
-    EXACT transformations applied (and nothing else):
-      1. ``stream``            → set to ``True``  (ChatGPT backend requires SSE)
-      2. ``store``             → set to ``False`` (ChatGPT backend rejects store)
-      3. ``max_output_tokens`` → removed (unsupported by the ChatGPT backend)
-      4. ``input`` (if a non-empty ``str``) → converted to the Responses list
-         form ``[{"role":"user","content":[{"type":"input_text","text":<text>}]}]``
-
-    No other field is read, added, or modified. No prompt/response content is
-    persisted. Returns the ORIGINAL bytes unchanged on any exception or when the
-    decoded body is not a JSON object (fail-open: never break a request).
-    """
-    try:
-        payload = json.loads(body)
-    except Exception:
-        return body
-    if not isinstance(payload, dict):
-        return body
-    try:
-        payload["stream"] = True
-        payload["store"] = False
-        payload.pop("max_output_tokens", None)
-        if isinstance(payload.get("input"), str):
-            text = payload["input"]
-            if text:
-                payload["input"] = [
-                    {"role": "user", "content": [{"type": "input_text", "text": text}]}
-                ]
-            else:
-                payload["input"] = []
-        return json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    except Exception:
-        return body
-
-
 class OpenAICodexResponsesAdapter(OpenAIResponsesAdapter):
     """Codex Responses adapter — same format, different upstream + detection.
 

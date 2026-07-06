@@ -1,4 +1,4 @@
-
+# ruff: noqa: I001
 import pytest
 
 # tokenpak.extraction is a namespace package in the slim OSS install — the
@@ -8,7 +8,6 @@ import pytest
 # so the release test gate stays green.
 try:
     from tokenpak.extraction import EntityExtractor, EntityType
-
     from tokenpak.vault.blocks import BlockStore
     from tokenpak.vault.indexer import VaultIndexer
 except ImportError as _exc:
@@ -16,10 +15,10 @@ except ImportError as _exc:
 
 
 def test_extracts_file_paths_correctly():
-    text = "See /home/user/projects/tokenpak/tokenpak/vault/indexer.py for details."
+    text = "See /home/trix/Projects/tokenpak/tokenpak/agent/vault/indexer.py for details."
     out = EntityExtractor().extract(text)
     paths = [e.value for e in out.by_type(EntityType.FILE_PATH)]
-    assert "/home/user/projects/tokenpak/tokenpak/vault/indexer.py" in paths
+    assert "/home/trix/Projects/tokenpak/tokenpak/agent/vault/indexer.py" in paths
 
 
 def test_extracts_api_endpoints_from_docs():

@@ -25,6 +25,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from tokenpak.vault._atomic import _atomic_write
+
 try:
     from tokenpak.telemetry.tokens import count_tokens
 except ImportError:
@@ -106,7 +108,7 @@ class VaultIndex:
 
     def _bm25_cache_path(self, index_path: Path) -> Path:
         """Return path for BM25 precomputed cache file."""
-        return index_path.parent / ".bm25_cache.pkl"
+        return index_path.parent / ".bm25_cache.json"
 
     def _try_load_bm25_cache(self, index_path: Path, mtime: float):
         """
@@ -114,13 +116,16 @@ class VaultIndex:
         Returns True and populates self if cache is valid (mtime matches).
         Returns False if cache is missing, stale, or corrupt.
         """
-        import pickle
         cache_path = self._bm25_cache_path(index_path)
         if not cache_path.exists():
             return False
         try:
-            with open(cache_path, "rb") as f:
-                cached = pickle.load(f)
+            try:
+                if cache_path.stat().st_mtime < index_path.stat().st_mtime:
+                    return False
+            except OSError:
+                return False
+            cached = json.loads(cache_path.read_text())
             if cached.get("mtime") != mtime:
                 return False  # stale — index changed
             # Restore block metadata (no content stored)
@@ -130,7 +135,7 @@ class VaultIndex:
             self._block_dl = cached["block_dl"]
             self._avg_dl = cached["avg_dl"]
             self._doc_count = cached["doc_count"]
-            self._inverted = cached["inverted"]
+            self._inverted = {term: set(block_ids) for term, block_ids in cached["inverted"].items()}
             self._last_mtime = mtime
             # Rebuild LRU cache from blocks dir (preload top-N recent)
             blocks_dir = index_path.parent / "blocks"
@@ -174,7 +179,6 @@ class VaultIndex:
 
     def _save_bm25_cache(self, index_path: Path, mtime: float):
         """Persist BM25 precomputed state to cache file for fast future loads."""
-        import pickle
         cache_path = self._bm25_cache_path(index_path)
         try:
             payload = {
@@ -185,12 +189,12 @@ class VaultIndex:
                 "block_dl": self._block_dl,
                 "avg_dl": self._avg_dl,
                 "doc_count": self._doc_count,
-                "inverted": self._inverted,
+                "inverted": {term: sorted(block_ids) for term, block_ids in self._inverted.items()},
             }
-            tmp = cache_path.with_suffix(".pkl.tmp")
-            with open(tmp, "wb") as f:
-                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-            tmp.replace(cache_path)
+            # Atomic publish with a per-writer unique tmp name; the old fixed
+            # ".json.tmp" name collided when two processes saved concurrently
+            # (one writer's replace could ship the other's half-written tmp).
+            _atomic_write(cache_path, json.dumps(payload, separators=(",", ":")))
             print(f"  💾 BM25 cache saved ({cache_path.stat().st_size // 1024 // 1024}MB)")
         except Exception as e:
             print(f"  ⚠️ BM25 cache save failed: {e}")
@@ -597,4 +601,3 @@ class VaultIndex:
         tokens_used = count_tokens(injection_text)
 
         return injection_text, tokens_used, source_refs
-

@@ -17,7 +17,7 @@ jobs:
     name: No internal identity / workflow language in changed files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -27,8 +27,12 @@ jobs:
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
           # Only files added or modified in this PR; binary files skipped.
+          # scripts/release_gate/check_release_leaks.py is excluded for the same
+          # reason this workflow and public-layout-check.yml are: it is the
+          # full-tree sibling scanner and intentionally contains the
+          # forbidden-pattern register + path-scoped allowlist literals.
           git diff --name-only --diff-filter=AM "$base" "$head" \
-            | grep -vE "^(packages/tests/|tests/|sdk/dist/|\.github/workflows/identity-language-check\.yml|\.github/workflows/public-layout-check\.yml|\.pre-commit-config\.yaml)" \
+            | grep -vE "^(packages/tests/|tests/|sdk/dist/|scripts/release_gate/check_release_leaks\.py|\.github/workflows/identity-language-check\.yml|\.github/workflows/public-layout-check\.yml|\.pre-commit-config\.yaml)" \
             | grep -E '\.(md|py|yml|yaml|json|toml|sh|js|ts|tsx)$' \
             > changed-files.txt || true
           echo "Changed files (filtered):"
@@ -85,9 +89,19 @@ jobs:
             'TIP-[0-9][0-9]'
             '\.claude/projects'
             '/home/sue/'
+            '~/vault/[0-9][0-9]_'
             'trixxie168'
-            '\bStd 2[0-9]\b'
-            '\bStd 3[0-9]\b'
+            # Internal standard / section / artifact citations. Widened
+            # 2026-06-28 (leak-gate Std/§ scanner extension) from the
+            # range-limited 'Std 2[0-9]'/'Std 3[0-9]' to ALL 'Std NN' (00-99),
+            # the no-space '§N' section form, and the 'Standards Delta'
+            # artifact name. Legitimate release-gate citations are masked per
+            # the explicit cite-lists in content_for_pattern() below; every
+            # other Std NN / §N / Standards Delta still trips. Mirror of
+            # scripts/release_gate/check_release_leaks.py PATTERNS (SYNC).
+            '\bStd [0-9]{2}\b'
+            '§[0-9]'
+            'Standards[ ]Delta'
             'Suki: auto-commit'
           )
 
@@ -154,6 +168,46 @@ jobs:
           is_release_gate_snapshot_path() {
             case "$1" in
               tokenpak/_snapshots/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          # Path-scoped allowlist for the OpenClaw provider/SDK/integration
+          # subsystem. `openclaw` is a real, public, non-renamable provider
+          # name: the integration ships under integrations/openclaw/**, and the
+          # SDK + creds + routing modules that implement/wire that provider
+          # reference it directly. In these specific files every `openclaw`
+          # occurrence is the legitimate provider/module name, so the
+          # \bopenclaw\b rule is fully masked HERE ONLY. This is path-scoped,
+          # NOT a global openclaw exemption — any other file referencing bare
+          # `openclaw` is still caught (and only the functional-literal masks
+          # below apply there).
+          is_openclaw_public_path() {
+            case "$1" in
+              tokenpak/integrations/openclaw/*) return 0 ;;
+              tokenpak/sdk/openclaw.py|tokenpak/sdk/registry.py|tokenpak/sdk/__init__.py) return 0 ;;
+              tokenpak/creds/providers/openclaw.py|tokenpak/creds/providers/__init__.py) return 0 ;;
+              tokenpak/creds/router.py|tokenpak/creds/doctor.py) return 0 ;;
+              tokenpak/services/routing_service/*|tokenpak/proxy/route_policy.py) return 0 ;;
+              tokenpak/tests/test_sdk_openclaw.py) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          # Path-scoped allowlist for the public `tokenpak fleet` / `dashboard
+          # --fleet` feature and its functional spend-guard fleet surface. In
+          # these specific feature files `fleet` is the user-facing
+          # multi-instance-proxy capability (machines the USER runs), not
+          # internal agent/governor language. The \bfleet\b rule is fully
+          # masked HERE ONLY. Internal-execution "fleet" (agent/governor/bot
+          # fleet) in any OTHER file remains forbidden (caught by the narrow
+          # masks below).
+          is_fleet_public_path() {
+            case "$1" in
+              tokenpak/cli/fleet.py|tokenpak/cli/commands/dashboard.py) return 0 ;;
+              tokenpak/tests/test_fleet.py|scripts/install-completions.sh) return 0 ;;
+              tokenpak/proxy/spend_guard/rolling_caps.py) return 0 ;;
+              tokenpak/integrations/openclaw/*) return 0 ;;
               *) return 1 ;;
             esac
           }
@@ -245,12 +299,29 @@ jobs:
               # internal task IDs, /home/sue/ paths, .claude/projects,
               # other Std numbers, "Suki: auto-commit", etc.) remain
               # enforced even in snapshot files.
+              # Snapshot-surface citation cite-list (Std 30 amendment — Class D;
+              # mirror of RELGATE_SNAPSHOT_*_CITES in check_release_leaks.py):
+              # the generated snapshot README + workflow-steps legitimately cite
+              # Std 21/30 and sections §7 / §13.3 (R7 / R11 governance metadata).
+              # Only these enumerated citations are masked; any other Std NN /
+              # §N in a snapshot still trips. The section boundary masks "§N"
+              # at a citation end (non-section char / sentence period / EOL) but
+              # not a ".<digit>" sub-section.
               sed -E \
+                -e 's/Apache-2\.0 §[0-9]+(\.[0-9]+)*/Apache-2.0 __PUBLIC_LICENSE_SEC__/g' \
                 -e 's/\bStd 21\b/Std __PUBLIC_RELGATE_REF_21__/g' \
                 -e 's/\bStd 30\b/Std __PUBLIC_RELGATE_REF_30__/g' \
+                -e 's/§13\.3(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SNAP_SEC_13_3__\1/g' \
+                -e 's/§7(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SNAP_SEC_7__\1/g' \
                 -e 's/\bopenclaw\b/__GENERATED_SYMBOL_OPENCLAW__/g' \
                 -e 's/\bfleet\b/__GENERATED_SYMBOL_FLEET__/g' \
                 "$file"
+            elif [ "$pat" = '\bfleet\b' ] && is_fleet_public_path "$file"; then
+              # Path-scoped allowlist (see is_fleet_public_path): the public
+              # fleet/dashboard feature + functional spend-guard fleet surface.
+              # Every `fleet` here is the user-facing multi-instance capability,
+              # so mask the whole word in these files only.
+              sed -E -e 's/\bfleet\b/__PUBLIC_FLEET_FEATURE__/g' "$file"
             elif [ "$pat" = '\bfleet\b' ]; then
               # Mask ONLY the public `tokenpak fleet` feature surface (the
               # multi-machine proxy fleet CLI/config command and its docs):
@@ -345,16 +416,47 @@ jobs:
                 -e 's/\(fleet → TokenPak/(__PUBLIC_PERMTIER_FLEET__ → TokenPak/g' \
                 "$file"
             elif is_release_gate_impl_path "$file"; then
-              # Tier 1 — release-gate implementation/test/workflow surface:
-              # mask the specific Std 21 / Std 30 references the code
-              # legitimately implements. All other patterns (agent names,
-              # internal IDs, paths, etc.) and all other Std numbers remain
-              # enforced. openclaw is NOT masked here — Tier 1 files should
-              # not reference openclaw.
+              # Tier 1 — release-gate implementation/test/workflow surface.
+              # Mask the EXPLICIT cite-list of Std NN / §N references the code
+              # legitimately implements (Std 30 amendment — Class D; mirror of
+              # RELGATE_IMPL_*_CITES in check_release_leaks.py). Only the
+              # enumerated citations are masked — any OTHER Std NN / §N in these
+              # files still trips (no blanket path mask). All non-standards
+              # patterns (agent names, internal IDs, paths) remain enforced;
+              # openclaw is NOT masked here (Tier 1 files should not cite it).
+              # The section boundary masks "§N" at a citation end (non-section
+              # char / sentence period / EOL) but not a ".<digit>" sub-section.
               sed -E \
+                -e 's/Apache-2\.0 §[0-9]+(\.[0-9]+)*/Apache-2.0 __PUBLIC_LICENSE_SEC__/g' \
+                -e 's/\bStd 02\b/Std __PUBLIC_RELGATE_STD_02__/g' \
+                -e 's/\bStd 10\b/Std __PUBLIC_RELGATE_STD_10__/g' \
+                -e 's/\bStd 12\b/Std __PUBLIC_RELGATE_STD_12__/g' \
                 -e 's/\bStd 21\b/Std __PUBLIC_RELGATE_REF_21__/g' \
                 -e 's/\bStd 30\b/Std __PUBLIC_RELGATE_REF_30__/g' \
+                -e 's/§3\.3(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_3_3__\1/g' \
+                -e 's/§3(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_3__\1/g' \
+                -e 's/§4(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_4__\1/g' \
+                -e 's/§5(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_5__\1/g' \
+                -e 's/§6(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_6__\1/g' \
+                -e 's/§7(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_7__\1/g' \
+                -e 's/§8(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_8__\1/g' \
+                -e 's/§9\.8(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_9_8__\1/g' \
+                -e 's/§11(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_11__\1/g' \
+                -e 's/§12(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_12__\1/g' \
+                -e 's/§13\.1(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_13_1__\1/g' \
+                -e 's/§13\.2(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_13_2__\1/g' \
+                -e 's/§13\.3(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_13_3__\1/g' \
+                -e 's/§13\.4(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_13_4__\1/g' \
+                -e 's/§13(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_13__\1/g' \
+                -e 's/§14\.1(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_14_1__\1/g' \
+                -e 's/§14(\.?[^0-9.]|\.$|$)/__PUBLIC_RELGATE_SEC_14__\1/g' \
                 "$file"
+            elif [ "$pat" = '\bopenclaw\b' ] && is_openclaw_public_path "$file"; then
+              # Path-scoped allowlist (see is_openclaw_public_path): the
+              # OpenClaw provider/SDK/integration subsystem — `openclaw` is the
+              # legitimate public provider/module name in these files, so mask
+              # the whole word here only.
+              sed -E -e 's/\bopenclaw\b/__INTEGRATION_OPENCLAW__/g' "$file"
             elif [ "$pat" = '\bopenclaw\b' ]; then
               # Functional-symbol mask (exact literals only). A few OpenClaw
               # references are real, non-renamable API/wire/CLI symbols: the SDK
@@ -437,6 +539,21 @@ jobs:
               # .claude/projects reference is still caught.
               sed -E \
                 -e 's#~/\.claude/projects#~/__FUNC_CLAUDE_TRANSCRIPT_DIR__#g' \
+                "$file"
+            elif [ "$pat" = '§[0-9]' ]; then
+              # The exact "Apache-2.0 §6" license-section citation (e.g.
+              # "Apache-2.0 §6 grants no trademark rights") is preserved
+              # legal/trademark text in the README / package metadata, NOT an
+              # internal section ref. The no-space "§N" matches it, so mask the
+              # exact "Apache-2.0 §N" literal for the section pattern. A bare
+              # internal "§N" (or any other license-id prefix) is still caught.
+              # Apache-2.0 ONLY per the 2026-06-28 ruling — the generic
+              # "<license-id> §N" SPDX carve-out is a separate Suki/Kevin policy
+              # decision. (Reached only for non-snapshot/non-impl paths; those
+              # are handled above with their own §-citation cite-lists.) Mirror
+              # of _mask_license_citations in check_release_leaks.py.
+              sed -E \
+                -e 's/Apache-2\.0 §[0-9]+(\.[0-9]+)*/Apache-2.0 __PUBLIC_LICENSE_SEC__/g' \
                 "$file"
             else
               cat "$file"

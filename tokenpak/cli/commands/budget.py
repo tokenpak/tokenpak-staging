@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -10,19 +11,12 @@ from typing import Optional
 
 SEP = "────────────────────────────────────────"
 
+# Reuse monitor DB for spend queries
+_MONITOR_DB = os.environ.get(
+    "TOKENPAK_DB",
+    os.path.expanduser("~/.tokenpak/data/monitor.db"),
+)
 _BUDGET_CONFIG = Path("~/.tokenpak/budget_config.yaml").expanduser()
-
-
-def _monitor_db_path() -> str:
-    """Resolve monitor.db (reused for spend queries) via the canonical resolver.
-
-    Delegates to ``tokenpak.core.paths.get_db_path`` so budget reads the SAME
-    database as the proxy writer and the other CLI readers. Resolved at call
-    time so env/home changes take effect without re-import.
-    """
-    from tokenpak.core.paths import get_db_path
-
-    return str(get_db_path("monitor.db"))
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +62,7 @@ def _save_config(cfg: dict) -> None:
 
 
 def _connect() -> Optional[sqlite3.Connection]:
-    db = Path(_monitor_db_path())
+    db = Path(_MONITOR_DB)
     if not db.exists():
         return None
     conn = sqlite3.connect(str(db))

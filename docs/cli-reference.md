@@ -7,6 +7,10 @@ _To update: edit `tokenpak/cli.py` then run `python scripts/generate-cli-docs.py
 
 ## Group: Getting Started
 
+### `tokenpak setup`
+
+Guided first-run setup
+
 ### `tokenpak start`
 
 Start the TokenPak proxy server, which routes LLM API requests through
@@ -74,16 +78,22 @@ Check proxy health
 - `--full` — Expanded view with all details
 - `--by-source` — Breakdown by request source (Claude Code, Codex, API, etc.)
 - `--by-provider` — Breakdown by provider (Anthropic, OpenAI, Google, etc.)
+- `--tip-cache` — Show compact TIP cache attribution only
 - `--minimal` — One-line savings summary
 - `--json` — Full JSON data dump
 - `--no-meme` — Suppress tagline
 - `--days` — Filter to last N days (combinable with --hours)
 - `--hours` — Filter to last N hours (combinable with --days)
-- `--window` — Time window: <N>m|<N>h|<N>d|<N>mo (e.g. 30m, 4h, 7d, 2mo)
-- `--all` — Show full persistent history (all time)
 - `--fleet` — Fleet rollup view — reads rollup_daily
 - `--since` — With --fleet: window in days, e.g. '7d' (default: 7d)
-- `--explain` — Explain a request's savings/skip reasons by id; with no id, show value-tier notes
+
+### `tokenpak upgrade`
+
+Open the canonical TokenPak Pro upgrade page in your default browser. Target URL is https://tokenpak.ai/pro (override with TOKENPAK_UPGRADE_URL).
+
+**Flags:**
+
+- `--print-url` — Print the upgrade URL to stdout instead of opening a browser
 
 ### `tokenpak logs`
 
@@ -172,6 +182,8 @@ Manage compression recipes
 
 **Subcommands:**
 
+- `list`
+  - `--category` — Filter by category (general, python, javascript, markdown, config, common_patterns)
 - `create`
   - `NAME` — Recipe name (e.g. my-legal-cleanup)
   - `--output-dir` — Directory to write the recipe file (default: current dir) (default: .)
@@ -586,9 +598,9 @@ TokenPak Dispatch — scoped, station-based, resumable, gated work packages with
 - `run`
   - `REQUEST` — The request text to dispatch
   - `--route` — Force an explicit Route (e.g. code_task); overrides auto-routing
-  - `--autonomy` — Autonomy mode override (default depends on caller — §14.2) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
+  - `--autonomy` — Autonomy mode override (default depends on caller) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
   - `--ci` — CI/automation caller; default autonomy = auto_dispatch_limited
-  - `--dry-run` — Draft only; default autonomy = draft
+  - `--dry-run` — Draft only; default autonomy = draft. Performs intake + route selection without persisting anything (no ledger writes)
   - `--confirm` — Treat an approval-gated route as approved (record the bound route)
   - `--json` — Emit machine-readable JSON instead of human-readable output
 - `status`
@@ -660,10 +672,6 @@ Examples:
   tokenpak codex --install-only    # set up without launching Codex
   tokenpak codex doctor            # verify installation
   tokenpak codex uninstall         # reverse installation
-  tokenpak codex statusline        # enable native status modules (additive)
-  tokenpak codex clean             # reclaim orphaned isolated codex homes
-  TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex   # per-project isolated home
-  TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex    # fresh per-session home
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
@@ -678,7 +686,7 @@ Examples:
 
 Inspect, manage, and dry-run-route credentials tokenpak can see from
 all registered providers (Codex CLI, Claude CLI, env vars,
-~/.tokenpak/credentials.toml, external agent profiles).
+~/.tokenpak/credentials.toml, and external client profiles).
 
 Proxy fast-path integration still deferred — `creds route` is a
 dry-run (what would I pick) with no side effects.
@@ -726,58 +734,6 @@ MultiPak Pro Phase 1 OSS surface. Read-only Vault Pak operations work without Pr
   - `PAK_FILE` — Path to a Pak file to install
   - `--force` — Overwrite if a Pak with the same id is already installed
 - `status`
-  - `--json` — Emit JSON instead of text
-
-### `tokenpak cards`
-
-TokenPak Cards authoring layer: .tip.md / .pak.md Markdown cards compile into canonical TokenPak contracts. The runtime trusts only validated compiled manifests; raw Markdown is never executed. Note: `tokenpak cards` operates on authoring sources, `tokenpak pak` on runtime Pak objects — they are not aliases.
-
-**Subcommands:**
-
-- `discover`
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `validate`
-  - `PATH` — Card file to validate (default: all)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--strict` — Require exact card == adapter capability equality
-  - `--json` — Emit JSON instead of text
-- `compile` — Validates then compiles cards into canonical JSON manifests under .tokenpak/cache/cards/compiled/. Only validated compiled manifests are runtime inputs.
-  - `PATH` — Card file to compile (default: all)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--strict` — Require exact card == adapter capability equality
-  - `--json` — Emit JSON instead of text
-- `install`
-  - `PATH` — Card file to install (default: all)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--strict` — Require exact card == adapter capability equality
-  - `--json` — Emit JSON instead of text
-- `list`
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `inspect`
-  - `NAME` — Card name (frontmatter `name:`)
-  - `--type` — Filter/select card type (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `preview` — OSS preview is a static declared scope/filter dump — no scored recall, no hydration, no render-to-messages injection. Live unranked candidates additionally require a registered connector (Phase 2). --pro probes the Pro Local daemon and falls back to the static dump when absent.
-  - `NAME` — Card name (frontmatter `name:`)
-  - `--pro` — Use Pro Local scoring when available
-  - `--query` — Recall query (used with --pro)
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
-  - `--json` — Emit JSON instead of text
-- `scaffold` — Scaffolds into the project (integrations/<name>/ for tip cards, paks/ for pak cards) — NEVER into the installed package tree.
-  - `--type` — Card type to scaffold (worker is Phase 2 — not yet available) — choices: `tip`, `pak`, `worker`
-  - `--kind` — tip_kind for tip cards (Phase 1: provider_adapter) (default: provider_adapter)
-  - `--name` — Card name (lowercase slug)
-  - `--json` — Emit JSON instead of text
-- `doctor`
-  - `--mode` — Trust mode: dev (project discovery, warnings allowed) or locked (installed cards only; strict consistency) (default: dev) — choices: `dev`, `locked`
   - `--json` — Emit JSON instead of text
 
 ### `tokenpak test`
@@ -1091,32 +1047,9 @@ Test search retrieval
 
 Evaluate alert rules and return exit code 1 if any fired.
 
-### `tokenpak companion`
-
-Point the tokenpak companion at your own Markdown notes/knowledge
-base — no special vault layout required.
-
-Examples:
-  tokenpak companion ingest --memory-dir ~/notes
-  tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal
-  TOKENPAK_COMPANION_MEMORY_DIRS=~/notes tokenpak companion ingest
-  tokenpak companion status
-
-**Subcommands:**
-
-- `ingest`
-  - `--memory-dir` — Directory of Markdown notes to ingest (repeatable). Falls back to TOKENPAK_COMPANION_MEMORY_DIRS if omitted.
-  - `--json` — Also print a JSON result
-- `status`
-
 ### `tokenpak compare`
 
-Show recorded cost for the last N requests.
-
-    Reports the actual recorded cost per request. Per-request cache/savings
-    attribution is not available from the receipt-backed event store, so it is
-    shown as a neutral unavailable state rather than estimated from a fabricated
-    cache-hit assumption.
+Show before/after cost comparison for last N requests.
 
 **Flags:**
 
@@ -1228,7 +1161,7 @@ Example:
 
 ### `tokenpak leaderboard`
 
-Show per-model efficiency ranking from receipt-backed telemetry.
+Show per-model efficiency ranking.
 
 **Flags:**
 
@@ -1335,10 +1268,6 @@ Show compression savings summary.
 
 - `--days` — Rolling window in days (default: 30)
 
-### `tokenpak setup`
-
-Interactive wizard for first-time TokenPak configuration.
-
 ### `tokenpak telemetry`
 
 **Subcommands:**
@@ -1368,11 +1297,6 @@ TIP is the protocol layer that adapter providers and platform integrations decla
 - `scaffold-adapter`
   - `NAME` — Adapter name (e.g. 'my-platform')
   - `--output`, `-o` — Output file path (default: ./<name>_adapter.py)
-- `sources`
-  - `--json` — Emit JSON instead of text
-- `observe`
-  - `--tool` — Only run the adapter for this tool slug
-  - `--json` — Emit JSON instead of text
 
 ### `tokenpak usage`
 

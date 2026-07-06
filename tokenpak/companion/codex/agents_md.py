@@ -10,40 +10,13 @@ The companion installs a global AGENTS.md with rules for:
 - How to use the journal
 - Budget-aware behavior
 - Context bloat avoidance
-
-The "Available MCP tools" list is generated from the canonical MCP TOOLS
-registry (``tokenpak.companion.mcp.tools``) at import time, so the prompt
-artifact can never drift from the tools the server actually exposes.  The
-assembled content is a module-level constant: byte-deterministic across
-calls, which keeps the provider-side prefix cache stable.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from ..mcp.tools import TOOLS
-from .mcp_config import codex_home
-
-
-def _tool_summary(description: str) -> str:
-    """Return the first sentence of a registry tool description.
-
-    The registry descriptions open with a one-sentence summary followed by
-    usage guidance; the AGENTS.md bullet list only needs the summary.
-    """
-    head, sep, _rest = description.partition(". ")
-    return (head + ".") if sep else head
-
-
-def _render_tool_bullets() -> str:
-    """Render the MCP tool list from the TOOLS registry (registry order)."""
-    return "\n".join(
-        f"- **{tool.name}** — {_tool_summary(tool.description)}" for tool in TOOLS
-    )
-
-
-_AGENTS_HEADER = """\
+_AGENTS_CONTENT = """\
 # TokenPak Companion
 
 You have access to TokenPak companion tools via MCP. These tools help manage
@@ -51,9 +24,13 @@ cost, context, and session continuity.
 
 ## Available MCP tools
 
-"""
-
-_AGENTS_GUIDANCE = """\
+- **estimate_tokens** — Check token count before including large content.
+- **check_budget** — Query remaining cost budget for this session and today.
+- **load_capsule** — Load compressed context from a prior session.
+- **prune_context** — Compress verbose tool output to reduce token usage.
+- **journal_read** — Read notes from past sessions.
+- **journal_write** — Save important decisions or milestones.
+- **session_info** — Get companion status and configuration.
 
 ## When to use tools
 
@@ -67,9 +44,6 @@ _AGENTS_GUIDANCE = """\
   output exceeds ~2000 tokens and you only need the summary.
 - **When making architectural decisions**: call `journal_write` to record
   the decision and rationale for future sessions.
-- **When the user references project docs or stored knowledge**: call
-  `vault_search` to locate relevant blocks, then `vault_retrieve` to fetch
-  the full content of a specific block.
 
 ## When NOT to load capsules
 
@@ -100,10 +74,6 @@ Do not load capsules automatically on every session start.  Only load when:
   compiles, passes tests, or visibly works.
 """
 
-# Assembled once at import: a static constant (no per-call computation), but
-# sourced from the TOOLS registry so the tool list cannot drift.
-_AGENTS_CONTENT = _AGENTS_HEADER + _render_tool_bullets() + "\n" + _AGENTS_GUIDANCE
-
 
 def generate_agents_md() -> str:
     """Return the AGENTS.md content for TokenPak companion."""
@@ -114,9 +84,8 @@ def install_agents_md(target: str = "global") -> Path:
     """Write AGENTS.md to the appropriate Codex config directory.
 
     Args:
-        target: "global" for AGENTS.md in the resolved Codex home
-                (``CODEX_HOME`` if set, else ``~/.codex``), or a repo
-                path for <repo>/AGENTS.md.
+        target: "global" for ~/.codex/AGENTS.md, or a repo path for
+                <repo>/AGENTS.md.
 
     Returns:
         Path to the written AGENTS.md file.
@@ -126,7 +95,7 @@ def install_agents_md(target: str = "global") -> Path:
     any other content.
     """
     if target == "global":
-        agents_path = codex_home() / "AGENTS.md"
+        agents_path = Path.home() / ".codex" / "AGENTS.md"
     else:
         agents_path = Path(target) / "AGENTS.md"
 

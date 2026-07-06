@@ -33,17 +33,9 @@ from .contracts import TIPDirective
 def _set_allow(d: TIPDirective, v: Optional[str]) -> None:
     if v in ("once", "15m", "session"):
         d.allow_scope = v  # type: ignore[assignment]
-    # ``allow=on`` / ``allow=true`` are treated as ``allow=session`` for ergonomics.
-    elif v in ("on", "true"):
+    # ``allow=on`` is treated as ``allow=session`` for ergonomics.
+    elif v in ("on", "true", "1"):
         d.allow_scope = "session"
-    # ``allow=<N>`` (positive integer) → pre-approve the next N blocked sends
-    # (count grant). N behaves exactly like answering "yes" N times. A bare
-    # ``allow=1`` is therefore a single approval (== allow=once); 0, negatives,
-    # and non-integers are ignored (the directive simply does nothing).
-    elif v is not None and v.isdigit():
-        n = int(v)
-        if n >= 1:
-            d.allow_count = n
 
 def _set_bypass(d: TIPDirective, v: Optional[str]) -> None:
     if v is None or v in ("on", "true", "1", "yes"):
@@ -76,20 +68,6 @@ def _set_max(d: TIPDirective, v: Optional[str]) -> None:
     except ValueError:
         pass
 
-def _set_ttl(d: TIPDirective, v: Optional[str]) -> None:
-    if not v:
-        return
-    v = v.strip().lower()
-    # Accept bare seconds ("300"), "<n>s", or "<n>m" (minutes).
-    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)(s|m)?$", v)
-    if not m:
-        return
-    n = float(m.group(1))
-    mult = {"m": 60, "s": 1}.get(m.group(2) or "", 1)
-    secs = int(n * mult)
-    if secs > 0:
-        d.ttl_seconds = secs
-
 def _set_estimate(d: TIPDirective, v: Optional[str]) -> None:
     if v is None or v in ("on", "true", "1", "yes"):
         d.estimate_only = True
@@ -107,86 +85,14 @@ def _set_reason(d: TIPDirective, v: Optional[str]) -> None:
         d.reason = v
 
 
-def _set_deterministic(d: TIPDirective, v: Optional[str]) -> None:
-    """``[TIP: deterministic=on]`` — reproducible eval mode.
-
-    Bare ``deterministic`` / on-values enable the mode; off-values are an
-    explicit no-op. Any OTHER value is recorded on
-    ``deterministic_invalid_value`` so the caller can fail loudly — per the
-    reproducible-eval contract, unsupported deterministic fields are NEVER
-    silently stripped.
-    """
-    if v is None or v in ("on", "true", "1", "yes"):
-        d.deterministic = True
-    elif v in ("off", "false", "0", "no"):
-        d.deterministic = False
-    else:
-        d.deterministic_invalid_value = v
-
-
 DIRECTIVE_REGISTRY: dict = {
-    "allow":    (_set_allow,    "Authorize the held request: once / 15m / session / <N> (pre-approve next N sends)."),
+    "allow":    (_set_allow,    "Authorize the held request: once / 15m / session."),
     "bypass":   (_set_bypass,   "Skip Yes/No prompt; still subject to hard-block."),
     "max":      (_set_max,      "Cost ceiling ($N) or token ceiling (Nk_tokens / Nm_tokens)."),
-    "ttl":      (_set_ttl,      "Session-grant window length, seconds (e.g. 300, 5m). Pairs with allow=session."),
     "estimate": (_set_estimate, "Return RiskEstimate JSON, no provider call."),
     "cancel":   (_set_cancel,   "Discard any pending request for this session."),
     "reason":   (_set_reason,   "Free-text annotation for audit log."),
-    "deterministic": (_set_deterministic,
-                      "Reproducible eval mode: disable upstream retries, semantic "
-                      "response substitution, and prompt mutation; emit request "
-                      "fingerprint + reproducibility metadata headers. Not a spend bypass."),
 }
-
-
-# ---------------------------------------------------------------------------
-# Request fingerprint (deterministic eval mode)
-# ---------------------------------------------------------------------------
-
-# Exact strip-list for fingerprint canonicalization. TOP-LEVEL request-body
-# keys (case-insensitive) removed before hashing because they are volatile
-# or transport-/telemetry-scoped, not part of the semantic request:
-#
-#   metadata        — client telemetry (e.g. Anthropic ``metadata.user_id``)
-#   stream          — transport choice; same logical request streamed or not
-#   nonce           — volatile anti-replay value
-#   timestamp       — volatile clock value
-#   request_id      — volatile correlation id
-#   idempotency_key — volatile retry-safety token
-#
-# Auth never appears in the request body (it travels in HTTP headers, which
-# are not hashed), so credentials are excluded by construction.
-FINGERPRINT_STRIP_FIELDS: frozenset = frozenset({
-    "metadata",
-    "stream",
-    "nonce",
-    "timestamp",
-    "request_id",
-    "idempotency_key",
-})
-
-
-def canonicalize_request_for_fingerprint(body: bytes) -> bytes:
-    """Canonicalize a request body for fingerprinting.
-
-    JSON bodies: parse → drop the top-level :data:`FINGERPRINT_STRIP_FIELDS`
-    keys → re-serialize with sorted keys and compact separators (UTF-8, no
-    ASCII escaping). Non-JSON bodies are hashed as raw bytes (best-effort —
-    deterministic eval traffic is JSON in practice).
-    """
-    try:
-        obj = json.loads(body.decode("utf-8", errors="replace"))
-    except Exception:
-        return body
-    if isinstance(obj, dict):
-        obj = {k: v for k, v in obj.items() if k.lower() not in FINGERPRINT_STRIP_FIELDS}
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def compute_request_fingerprint(body: bytes) -> str:
-    """SHA-256 over the canonicalized request body → ``sha256:<hex>``."""
-    import hashlib
-    return "sha256:" + hashlib.sha256(canonicalize_request_for_fingerprint(body)).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +206,6 @@ def strip_tip_header(text: str) -> str:
 
 __all__ = [
     "DIRECTIVE_REGISTRY",
-    "FINGERPRINT_STRIP_FIELDS",
-    "canonicalize_request_for_fingerprint",
-    "compute_request_fingerprint",
     "parse_tip_header",
     "parse_and_strip_tip_header",
     "strip_tip_header",

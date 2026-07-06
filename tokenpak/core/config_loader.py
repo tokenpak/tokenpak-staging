@@ -1,17 +1,11 @@
 """
 TokenPak Config Loader
 
-Single source of truth: <tpk-home>/config.yaml, where <tpk-home> is the
-canonical home resolver (``tokenpak._paths.home()``: $TOKENPAK_HOME override,
-else ~/.tpk when present, else legacy ~/.tokenpak). $TOKENPAK_CONFIG names an
-explicit file and wins (load-order layer 6). Drift-respect: on a split-home
-host whose config.yaml only exists under the legacy dir, the legacy file keeps
-being read until ``tokenpak config migrate`` reconciles — the loader never
-moves files across homes. Env vars override config file values.
+Single source of truth: ~/.tokenpak/config.yaml
+Env vars override config file values.
 
-Auto-migration: if config.json exists in a home but config.yaml does not, the
-JSON is converted to YAML in place and the original renamed to
-config.json.migrated (same-directory rename only).
+Auto-migration: if ~/.tokenpak/config.json exists but config.yaml does not,
+the JSON is converted to YAML and the original renamed to config.json.migrated.
 """
 
 import json as _json
@@ -37,69 +31,22 @@ except ImportError:
             return _json.load(f)
 
 
-def _resolve_config_path() -> Path:
-    """Resolve the active config.yaml path (fresh, at call time).
-
-    $TOKENPAK_CONFIG (explicit file, layer 6) → <resolved-home>/config.yaml
-    when present → <legacy-home>/config.yaml when present (drift-respect: a
-    split-home host keeps reading its legacy config until `config migrate`)
-    → <resolved-home>/config.yaml as the default/init target.
-    """
-    override = os.environ.get("TOKENPAK_CONFIG", "").strip()
-    if override:
-        return Path(override).expanduser()
-    try:
-        from tokenpak import _paths
-    except Exception:
-        return Path.home() / ".tokenpak" / "config.yaml"
-    resolved = _paths.home() / "config.yaml"
-    if resolved.exists():
-        return resolved
-    legacy = _paths.legacy_home() / "config.yaml"
-    if legacy != resolved and legacy.exists():
-        return legacy
-    return resolved
-
-
-def _config_home_candidates() -> list[Path]:
-    """Directories the JSON auto-migration may act on, in resolution order."""
-    try:
-        from tokenpak import _paths
-        homes = [_paths.home(), _paths.legacy_home()]
-    except Exception:
-        homes = [Path.home() / ".tokenpak"]
-    out: list[Path] = []
-    for h in homes:
-        if h not in out:
-            out.append(h)
-    return out
-
-
-def __getattr__(name: str):
-    # Back-compat (PEP 562): CONFIG_PATH stays importable but resolves freshly
-    # per access through the canonical home resolver, so every consumer
-    # (config show/init in _cli_core, tests) repoints without code changes.
-    if name == "CONFIG_PATH":
-        return _resolve_config_path()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+CONFIG_PATH = Path(os.environ.get("TOKENPAK_CONFIG", str(Path.home() / ".tokenpak" / "config.yaml")))
 
 
 def _maybe_migrate_json_to_yaml() -> None:
-    """Auto-migrate config.json -> config.yaml (one-shot, in place).
+    """Auto-migrate ~/.tokenpak/config.json -> config.yaml (one-shot).
 
-    Probes the resolved home first, then the legacy home, and acts on the
-    first directory holding a config.json without a config.yaml. The rename
-    stays within that directory — the loader never moves files across homes
-    (cross-home reconciliation is ``tokenpak config migrate``'s job).
+    Runs only when config.yaml does NOT exist and config.json DOES.
+    After writing config.yaml the original is renamed to config.json.migrated
+    so it is preserved but no longer picked up by any loader.
     """
-    for home_dir in _config_home_candidates():
-        yaml_path = home_dir / "config.yaml"
-        json_path = home_dir / "config.json"
-        if not yaml_path.exists() and json_path.exists():
-            break
-    else:
+    yaml_path = CONFIG_PATH
+    json_path = CONFIG_PATH.parent / "config.json"
+    migrated_path = CONFIG_PATH.parent / "config.json.migrated"
+
+    if yaml_path.exists() or not json_path.exists():
         return  # nothing to do
-    migrated_path = home_dir / "config.json.migrated"
 
     try:
         data = _json.loads(json_path.read_text(encoding="utf-8"))
@@ -165,7 +112,7 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     if path is None:
         _maybe_migrate_json_to_yaml()
 
-    config_path = Path(path) if path else _resolve_config_path()
+    config_path = Path(path) if path else CONFIG_PATH
     if config_path.exists():
         try:
             _config = _load_yaml(str(config_path))
@@ -345,7 +292,7 @@ mode: hybrid  # strict|hybrid|aggressive
 compression:
   enabled: true
   max_chars: 120
-  threshold_tokens: 1500  # was 4500 pre-TRIX-01; lowered for default savings
+  threshold_tokens: 1500  # lowered from 4500 for default savings
   cache_size: 2000
 
 features:
@@ -364,7 +311,7 @@ features:
   strict_mode: false
   # Tier 2 modules
   error_normalizer: false
-  budget_controller: true  # was false pre-TRIX-01; enabled for default budget enforcement
+  budget_controller: true  # enabled by default for budget enforcement
   request_logger: false
   salience_router: false
   cache_registry: false
@@ -385,7 +332,7 @@ capsule:
   hot_window: 2
 
 vault:
-  index_path: ~/.tokenpak
+  index_path: ~/vault/.tokenpak
   inject_budget: 4000
   inject_top_k: 5
   inject_min_score: 2.0
@@ -437,7 +384,7 @@ failover:
       credential_env: GOOGLE_API_KEY
 
 # TIP Spend Guard (proxy-side pre-send circuit breaker, available v1.5.1+)
-# Standard 29 governs the wire contract; docs/spend-guard.md is the user guide.
+# docs/spend-guard.md is the user guide.
 # Every key has a TOKENPAK_SPEND_GUARD_* env-var counterpart.
 spend_guard:
   enabled: true                       # global on/off
@@ -455,13 +402,13 @@ spend_guard:
 # MultiPak Pro — local-first cross-platform AI context continuity.
 # Phase 1 OSS surface: Vault Pak adapter, companion Pak-aware journal,
 # tokenpak pak CLI, /pak/v1/* proxy stubs. Pro daemon (closed source)
-# is gated by the Pro-tier boundary and ships separately.
-# multipak.enabled defaults to false until a 1-week soak per the MultiPak
-# Decision #6. The OSS surface (read-only Vault Pak inspection,
+# ships separately.
+# multipak.enabled defaults to false until a 1-week soak completes.
+# The OSS surface (read-only Vault Pak inspection,
 # /pak/v1/status diagnostic) works regardless of this flag.
 pro:
   multipak:
-    enabled: false                    # opt-in until soak (MultiPak rollout)
+    enabled: false                    # opt-in until soak completes
 
 # Custom providers — register any OpenAI/Anthropic/Google-compatible endpoint.
 # Each entry becomes a routable provider with full compression/caching pipeline.

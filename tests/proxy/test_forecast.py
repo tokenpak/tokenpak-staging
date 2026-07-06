@@ -37,6 +37,24 @@ from tokenpak.proxy.forecast_endpoint import (  # noqa: E402
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _clear_forecast_latency_buffer():
+    """Isolate from the module-global rolling latency buffer.
+
+    ``estimate_ttfb_ms`` prefers the process-wide ``_forecast_latencies``
+    deque over DB history and the formula. Any earlier test in the session
+    that drives real requests through the proxy appends observed latencies
+    there (server-side per-request hook), which silently flips these tests
+    onto the buffer path. Clear it on both sides so each test starts from
+    the documented empty-buffer behavior.
+    """
+    from tokenpak.proxy import forecast_endpoint
+
+    forecast_endpoint._forecast_latencies.clear()
+    yield
+    forecast_endpoint._forecast_latencies.clear()
+
+
 @pytest.fixture()
 def empty_db(tmp_path):
     """Provide a path to an empty (no tables) SQLite DB."""
@@ -234,11 +252,20 @@ class TestBuildForecastResponse:
         result = build_forecast_response(body, empty_db)
         assert result["input_tokens"] == 0
 
-    def test_default_model_when_missing(self, empty_db):
+    def test_missing_model_reported_as_empty_not_fabricated(self, empty_db):
+        """A body without a model must not have one invented for it."""
         body = {"messages": [{"role": "user", "content": "hi"}]}
         result = build_forecast_response(body, empty_db)
         assert isinstance(result["model"], str)
-        assert len(result["model"]) > 0
+        assert result["model"] == ""
+        # Cost is still estimated (default-class rates), just not
+        # attributed to a real model name.
+        assert result["estimated_cost_usd"] > 0
+
+    def test_non_string_model_reported_as_empty(self, empty_db):
+        body = {"model": 42, "messages": [{"role": "user", "content": "hi"}]}
+        result = build_forecast_response(body, empty_db)
+        assert result["model"] == ""
 
     def test_opus_costs_more_than_haiku(self, empty_db):
         msg = [{"role": "user", "content": "Hello world, tell me everything you know."}]

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cached, non-blocking, honest status source for the interactive menu.
 
-Cumulative-spec section D (status strip) + design-pass §4.4 honesty fix.
+Cumulative-spec section D (status strip) + design-pass honesty fix.
 
 Why this module exists
 ----------------------
@@ -39,13 +39,6 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional
-
-# Public surface of this module. ``snapshot`` and ``json_snapshot`` are
-# internal convenience wrappers (the latter consumed only by the internal
-# ``tokenpak._cli_core`` via direct attribute access, which ``__all__`` does
-# not affect) — never intended public entrypoints. They are scoped out of the
-# API snapshot.
-__all__ = ["ProxyStatus", "STATUS_SCHEMA_VERSION", "StatusCache", "reset_cache"]
 
 # Schema version for the machine-readable (``--json``) snapshot. Bump on any
 # field rename/removal so consumers can pin. (spec F3)

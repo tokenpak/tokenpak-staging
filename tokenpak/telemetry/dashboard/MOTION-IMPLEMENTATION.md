@@ -524,4 +524,4 @@ MotionChoreography.triggerRefreshAnimation();
 
 **Status:** Core motion system complete. Integration with templates and Chart.js pending.
 
-See `tokenpak/telemetry/dashboard/` in the package source for implementation files.
+See `~/vault/Projects/tokenpak/packages/pypi/tokenpak/telemetry/dashboard/` for implementation files.

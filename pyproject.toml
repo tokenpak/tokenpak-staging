@@ -50,7 +50,7 @@ classifiers = [
     "Topic :: Utilities",
     "Typing :: Typed",
 ]
-# Slim core dependencies — Standard 02 §9 / Constitution 00 compliance.
+# Slim core dependencies — keep the runtime footprint minimal.
 # Anything that drags in torch / nvidia-* / scipy / pandas / a multi-hundred-MB
 # transitive belongs in [project.optional-dependencies] below, not here.
 # See proposals/2026-05-01-tokenpak-install-footprint-extras-split.md.
@@ -66,6 +66,9 @@ dependencies = [
     "watchdog>=3.0.0",
     "cryptography>=41.0.0",
     "urllib3>=2.0.0",
+    # TOML reader for permission-tier / creds config on Python < 3.11
+    # (stdlib `tomllib` lands in 3.11; `tomli` is the tiny backport).
+    "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 [project.license]
@@ -90,7 +93,7 @@ intelligence = [
     # scipy is the only intelligence-tier dep currently imported (guarded in
     # tokenpak/intelligence/ab_optimizer.py). scikit-learn / sympy were
     # candidates in the proposal but no source file imports them today, so
-    # adding them would violate Standard 02 §9 ("New runtime deps require a
+    # adding them would violate the slim-core-deps policy ("New runtime deps require a
     # PR note explaining what they do, why stdlib won't work, and what
     # happens when they're missing"). Add them here when a real consumer
     # lands.
@@ -131,6 +134,10 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-benchmark>=4.0.0",
     "pytest-mock>=3.12.0",
+    # pytest-timeout makes the `timeout = 30` pyproject option + per-test timeout
+    # marks actually enforce in CI (a hung subprocess fails fast instead of
+    # stalling the job to the runner limit).
+    "pytest-timeout>=2.1.0",
     "black>=24.0.0",
     "ruff>=0.2.0",
     # Subsystem test deps: the dispatch test suite imports pydantic/jsonschema.
@@ -194,10 +201,17 @@ where = [
 include = [
     "tokenpak*",
 ]
+exclude = [
+    "tokenpak.tests*",
+    "tokenpak.sdk.*.tests*",
+    "*.tests*",
+]
 
 [tool.setuptools.package-data]
 tokenpak = [
     "py.typed",
+    "budget_config.yaml",
+    "term_cards.json",
     "recipes_oss/*.yaml",
     "routing/model_tiers.json",
     "config/schema.json",
@@ -212,6 +226,10 @@ tokenpak = [
     "orchestration/dispatch/registry/routes/*.yaml",
     "orchestration/dispatch/registry/overlays/*.yaml",
     "orchestration/dispatch/schemas/*.json",
+    "companion/GUIDE.md",
+    "companion/hooks/*.sh",
+    "companion/codex/*.sh",
+    "companion/codex/skills/*/SKILL.md",
 ]
 
 [tool.setuptools.dynamic]

@@ -15,6 +15,23 @@ from tokenpak.cli.commands.help import (
 )
 
 
+class TestQuickHelp:
+    """Test top-level beginner help output."""
+
+    def test_top_level_help_shows_setup(self):
+        """tokenpak --help should surface setup in the beginner quick start."""
+        result = subprocess.run(
+            ["python3", "-m", "tokenpak.cli", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent),
+        )
+
+        assert result.returncode == 0
+        assert "Quick Start:" in result.stdout
+        assert "  setup        Guided first-run setup" in result.stdout
+
+
 class TestEssentialHelp:
     """Test default help output shows only essential commands."""
 
@@ -43,12 +60,12 @@ class TestEssentialHelp:
         assert "--all" in text
 
     def test_essential_commands_count(self):
-        """Essential commands list should have exactly 8 commands."""
-        assert len(_ESSENTIAL_COMMANDS) == 8, "Expected exactly 8 essential commands"
+        """Essential commands list should have exactly 9 commands."""
+        assert len(_ESSENTIAL_COMMANDS) == 9, "Expected exactly 9 essential commands"
 
     def test_essential_commands_are(self):
-        """Verify the correct 8 essential commands are defined."""
-        expected = {"setup", "start", "stop", "status", "cost", "savings", "doctor", "dashboard"}
+        """Verify the correct 9 essential commands are defined."""
+        expected = {"setup", "start", "stop", "status", "cost", "savings", "doctor", "dashboard", "upgrade"}
         actual = set(_ESSENTIAL_COMMANDS.keys())
         assert actual == expected, f"Essential commands mismatch. Expected {expected}, got {actual}"
 

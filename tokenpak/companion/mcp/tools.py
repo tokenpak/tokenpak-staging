@@ -60,10 +60,6 @@ class CompanionState:
     _budget_tracker: Any = None
     _journal_store: Any = None
 
-    def __post_init__(self) -> None:
-        if not self.session_id:
-            self.session_id = self.config.session_id
-
     @property
     def budget_tracker(self) -> Any:
         if self._budget_tracker is None:
@@ -307,8 +303,9 @@ def _handle_session_info(state: CompanionState, args: dict[str, Any]) -> str:
     # fresh user knows why ingestion may be empty and how to point it at notes.
     if not local["config"]["memory_dirs"]:
         local["config"]["memory_source_hint"] = (
-            "no memory dirs configured — set TOKENPAK_COMPANION_MEMORY_DIRS "
-            "or pass --memory-dir to ingest your own Markdown notes"
+            "no memory dirs configured — set TOKENPAK_COMPANION_MEMORY_DIRS to "
+            "directories of your own Markdown notes, then ingest them with the "
+            "companion memory-source API (ingest_from_dir / ingest_sources)"
         )
     status, proxy_info = _proxy_get("/tpk/v1/session/info")
     if status == 200:

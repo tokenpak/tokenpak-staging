@@ -4,65 +4,19 @@ Gracefully degrades if sentence-transformers is not installed.
 """
 from __future__ import annotations
 
-import contextlib
 import importlib.util
 import logging
 import os
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from tokenpak.vault._atomic import _atomic_write
+
 from .base import RetrievalQuery, RetrievalResult, Retriever, RetrieverType
 
 logger = logging.getLogger(__name__)
-
-# Opt-in escape hatch for runtime model downloads.
-#
-# TokenPak is offline-first: nothing should reach the network unless the user
-# asked for it. The embedding backend (sentence-transformers, via
-# huggingface_hub) will, by default, silently fetch a missing model from the
-# Hub at runtime — an egress path the product does not otherwise take. We
-# therefore load the model OFFLINE-ONLY by default; a missing model fails
-# closed with an actionable message. Setting the env flag below to a truthy
-# value (``1``/``true``/``yes``/``on``) restores the prior download-capable
-# behaviour for users who explicitly want it.
-ALLOW_MODEL_DOWNLOAD_ENV = "TOKENPAK_ALLOW_MODEL_DOWNLOAD"
-
-# Env vars honoured by huggingface_hub / transformers to force offline loads.
-# Discovered/applied at load time rather than hardcoded into the model call so
-# the guard works across backend versions (some of which do not accept a
-# ``local_files_only`` constructor kwarg).
-_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
-
-
-def _model_download_allowed() -> bool:
-    """Return True only when the operator has explicitly opted in to downloads."""
-    val = os.environ.get(ALLOW_MODEL_DOWNLOAD_ENV, "").strip().lower()
-    return val in ("1", "true", "yes", "on")
-
-
-@contextlib.contextmanager
-def _offline_model_env():
-    """Force the backend into offline mode for the duration of a model load.
-
-    Sets ``HF_HUB_OFFLINE``/``TRANSFORMERS_OFFLINE`` so the embedding backend
-    never reaches the network, then restores the prior environment. A no-op
-    when the operator has opted in via ``TOKENPAK_ALLOW_MODEL_DOWNLOAD``.
-    """
-    if _model_download_allowed():
-        yield
-        return
-    previous = {k: os.environ.get(k) for k in _OFFLINE_ENV_VARS}
-    for k in _OFFLINE_ENV_VARS:
-        os.environ[k] = "1"
-    try:
-        yield
-    finally:
-        for k, prev in previous.items():
-            if prev is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = prev
 
 # Optional dependency availability.
 #
@@ -195,44 +149,10 @@ class LocalVectorRetriever(Retriever):
                 )
                 self._available = False
                 return False
-            # Load offline-only by default: a missing model must fail closed
-            # rather than triggering a silent runtime download from the model
-            # Hub. ``local_files_only=True`` is passed where the backend accepts
-            # it; the surrounding env guard enforces offline mode regardless.
-            offline = not _model_download_allowed()
             try:
-                with _offline_model_env():
-                    if offline:
-                        try:
-                            self._model = model_cls(
-                                self._model_name, local_files_only=True
-                            )
-                        except TypeError:
-                            # Backend version without a ``local_files_only``
-                            # kwarg — the env guard still forces offline loading.
-                            self._model = model_cls(self._model_name)
-                    else:
-                        self._model = model_cls(self._model_name)
+                self._model = model_cls(self._model_name)
             except Exception as e:
-                if offline:
-                    logger.warning(
-                        "Embedding model %r is not available locally and offline "
-                        "mode is active, so it was not downloaded: %s. "
-                        "Pre-download the model (e.g. run sentence-transformers "
-                        "once with network access, or point %s at a locally "
-                        "cached model directory), or set %s=1 to permit a "
-                        "one-time runtime download.",
-                        self._model_name,
-                        "TOKENPAK_VECTOR_MODEL",
-                        ALLOW_MODEL_DOWNLOAD_ENV,
-                        e,
-                    )
-                else:
-                    logger.warning(
-                        "Failed to load sentence-transformers model %r: %s",
-                        self._model_name,
-                        e,
-                    )
+                logger.warning("Failed to load sentence-transformers model %r: %s", self._model_name, e)
                 self._available = False
                 return False
         return True
@@ -342,24 +262,36 @@ class LocalVectorRetriever(Retriever):
         return [(int(i), float(sims[i])) for i in top_indices]
 
     def save(self) -> None:
-        """Persist embeddings to disk."""
+        """Persist embeddings to disk.
+
+        All artefacts are published atomically (same-directory tmp +
+        ``os.replace``; see ``tokenpak/vault/_atomic.py``) so a concurrent
+        ``load()`` never observes a torn file.
+        """
         if self._index_path is None or self._embeddings is None:
             return
         import json
 
         self._index_path.mkdir(parents=True, exist_ok=True)
-        np.save(str(self._index_path / "embeddings.npy"), self._embeddings)
-        (self._index_path / "doc_ids.txt").write_text(
-            "\n".join(self._doc_ids), encoding="utf-8"
+        # np.save writes the file itself, so apply the tmp+replace pattern
+        # around it manually. The tmp name must keep the .npy suffix or
+        # np.save would append one and the replace source would not exist.
+        emb_target = self._index_path / "embeddings.npy"
+        emb_tmp = (
+            self._index_path
+            / f"embeddings.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}.npy"
+        )
+        np.save(str(emb_tmp), self._embeddings)
+        os.replace(emb_tmp, emb_target)
+        _atomic_write(
+            self._index_path / "doc_ids.txt", "\n".join(self._doc_ids)
         )
         # Escape newlines in content for single-line storage
         escaped = [c.replace("\\", "\\\\").replace("\n", "\\n") for c in self._contents]
-        (self._index_path / "contents.txt").write_text(
-            "\n".join(escaped), encoding="utf-8"
+        _atomic_write(
+            self._index_path / "contents.txt", "\n".join(escaped)
         )
-        (self._index_path / "meta.json").write_text(
-            json.dumps(self._meta), encoding="utf-8"
-        )
+        _atomic_write(self._index_path / "meta.json", json.dumps(self._meta))
 
     def load(self) -> bool:
         """Load embeddings from disk. Returns True on success."""

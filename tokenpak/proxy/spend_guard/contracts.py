@@ -89,27 +89,12 @@ class TIPDirective:
 
     raw: str = ""
     allow_scope: Optional[Literal["once", "15m", "session"]] = None
-    # [TIP: allow=<N>] — pre-approve the next N blocked sends (count grant).
-    # Mutually exclusive with allow_scope in the grammar; a positive int only.
-    allow_count: Optional[int] = None
     bypass: bool = False
     max_cost_usd: Optional[float] = None
     max_tokens: Optional[int] = None
-    ttl_seconds: Optional[int] = None  # [TIP: allow=session ttl=<sec>] grant window
     estimate_only: bool = False
     cancel: bool = False
     reason: Optional[str] = None
-    # [TIP: deterministic=on] — reproducible eval mode (governed by the TIP
-    # versioning standard). Disables output-changing proxy behaviors (upstream
-    # retries, semantic response substitution, prompt mutation) and emits
-    # reproducibility metadata. NOT a spend bypass: policy bands fire
-    # exactly as without the directive.
-    deterministic: bool = False
-    # Fail-loud marker: an unsupported value (e.g. ``deterministic=maybe``)
-    # is recorded here so the caller can REJECT the request with a
-    # structured error. Per the reproducible-eval contract, unsupported
-    # deterministic fields fail loudly — they are never silently stripped.
-    deterministic_invalid_value: Optional[str] = None
     unknown_keys: list = field(default_factory=list)  # for warning audit
 
 
@@ -148,10 +133,10 @@ class GuardOutcome:
     decision: Optional[PreflightDecision] = None
     pending_id: Optional[str] = None
     audit_event: Optional[str] = None         # event_type for audit row
-    # Active budget-reservation hold for this forward (Standard 29 §15). The
-    # proxy response path settles it via reservation.settle_reservation();
-    # unsettled holds expire at their TTL.
-    reservation_id: Optional[str] = None
+    # In-flight admission ticket (rolling-cap accounting). Present only on
+    # forward outcomes that were admitted past the rolling caps; the proxy
+    # settles it once the request's actual cost is recorded (or it fails).
+    admission_ticket: Optional[str] = None
 
     @classmethod
     def passthrough(cls, body: bytes) -> "GuardOutcome":

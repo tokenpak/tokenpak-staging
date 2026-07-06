@@ -58,10 +58,7 @@ def _proxy_pid_path() -> Path:
 
 
 def _monitor_db_path() -> Path:
-    # Canonical resolver — same candidate chain as every other reader/writer.
-    from tokenpak.core.paths import get_db_path
-
-    return get_db_path("monitor.db")
+    return Path.home() / ".tokenpak" / "monitor.db"
 
 
 class CheckResult(TypedDict):

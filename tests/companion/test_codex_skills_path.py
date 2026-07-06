@@ -110,7 +110,7 @@ def test_orphaned_legacy_skills_empty_when_nothing_at_legacy_path(
     monkeypatch, tmp_path: Path
 ):
     monkeypatch.setattr(si, "_LEGACY_TARGET", tmp_path / "nowhere")
-    assert si.orphaned_legacy_skills() == []
+    assert si._orphaned_legacy_skills() == []
 
 
 def test_orphaned_legacy_skills_lists_installed_pre_l3_skills(
@@ -120,8 +120,113 @@ def test_orphaned_legacy_skills_lists_installed_pre_l3_skills(
     monkeypatch.setattr(si, "_LEGACY_TARGET", legacy_target)
     si.install_skills(target_dir=legacy_target)
 
-    orphans = si.orphaned_legacy_skills()
+    orphans = si._orphaned_legacy_skills()
     assert orphans == si.bundled_skill_names(), (
         "every bundled skill installed at the legacy path should appear "
         "as an orphan until uninstall + reinstall"
     )
+
+
+# ---------------------------------------------------------------------------
+# Atomic / concurrent install hardening (regression-repair packet req #3):
+# a racing pair of launcher starts must never leave a half-copied or
+# missing skill, and crash leftovers must be swept without failing.
+# ---------------------------------------------------------------------------
+
+
+def _bundled_dir_with(tmp_path: Path, names: list[str]) -> Path:
+    bundled = tmp_path / "bundled"
+    for name in names:
+        skill = bundled / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(f"# {name}\n")
+        # A second file so a half-copy would be observable as an
+        # incomplete tree, not just a missing SKILL.md.
+        (skill / "body.md").write_text("payload\n" * 50)
+    return bundled
+
+
+def test_install_leaves_no_temp_or_backup_dirs(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(si, "_BUNDLED_SKILLS", _bundled_dir_with(tmp_path, ["a", "b"]))
+    target = tmp_path / "agents" / "skills"
+    si.install_skills(target_dir=target)
+    # The published directory Codex scans holds only real skills — no
+    # stage/backup bookkeeping (the lock sentinel lives in the parent).
+    leftovers = [
+        p.name
+        for p in target.iterdir()
+        if p.name.startswith(si._STAGE_PREFIX) or p.name.startswith(si._BACKUP_PREFIX)
+    ]
+    assert leftovers == [], f"unexpected temp/backup dirs: {leftovers}"
+    assert sorted(p.name for p in target.iterdir()) == ["a", "b"]
+
+
+def test_install_sweeps_stale_stage_and_backup(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(si, "_BUNDLED_SKILLS", _bundled_dir_with(tmp_path, ["a"]))
+    target = tmp_path / "agents" / "skills"
+    target.mkdir(parents=True)
+    stale_stage = target / f"{si._STAGE_PREFIX}a-4242"
+    stale_stage.mkdir()
+    (stale_stage / "junk").write_text("x")
+    stale_backup = target / f"{si._BACKUP_PREFIX}a-4242"
+    stale_backup.mkdir()
+
+    si.install_skills(target_dir=target)
+
+    assert not stale_stage.exists(), "stale stage dir was not swept"
+    assert not stale_backup.exists(), "stale backup dir was not swept"
+    assert (target / "a" / "SKILL.md").exists()
+
+
+def test_concurrent_installs_never_expose_partial_skill(monkeypatch, tmp_path: Path):
+    import threading
+
+    monkeypatch.setattr(
+        si, "_BUNDLED_SKILLS", _bundled_dir_with(tmp_path, ["a", "b", "c"])
+    )
+    target = tmp_path / "agents" / "skills"
+    target.mkdir(parents=True)
+
+    import os
+
+    errors: list[BaseException] = []
+    stop = threading.Event()
+    observed_partial: list[tuple[str, list[str]]] = []
+
+    def _installer() -> None:
+        try:
+            for _ in range(8):
+                si.install_skills(target_dir=target)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the test
+            errors.append(exc)
+
+    def _reader() -> None:
+        # Continuously read the published tree.  A skill dir may be briefly
+        # ABSENT during the atomic rename swap (acceptable per the design),
+        # but it must NEVER be observed present-but-incomplete: a single
+        # ``listdir`` snapshot of ``target/name`` either fails (mid-swap
+        # absence) or returns the fully-populated tree.
+        while not stop.is_set():
+            for name in ("a", "b", "c"):
+                try:
+                    entries = set(os.listdir(target / name))
+                except FileNotFoundError:
+                    continue  # briefly absent during the rename swap — fine
+                if not {"SKILL.md", "body.md"} <= entries:
+                    observed_partial.append((name, sorted(entries)))
+
+    installers = [threading.Thread(target=_installer) for _ in range(4)]
+    reader = threading.Thread(target=_reader)
+    reader.start()
+    for t in installers:
+        t.start()
+    for t in installers:
+        t.join()
+    stop.set()
+    reader.join()
+
+    assert not errors, f"install raised under concurrency: {errors}"
+    assert observed_partial == [], f"reader saw half-published skills: {observed_partial}"
+    for name in ("a", "b", "c"):
+        assert (target / name / "SKILL.md").exists()
+        assert (target / name / "body.md").exists()

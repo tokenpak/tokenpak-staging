@@ -52,12 +52,6 @@ DEFAULT_OUT = REPO_ROOT / "tokenpak" / "_snapshots" / "public-api.json"
 # snapshot deterministically reflects the TokenPak-owned released surface.
 _THIRD_PARTY_REEXPORTS: set[tuple[str, str]] = {
     ("tokenpak.vault.retrieval.vector_local", "faiss"),
-    # ``SentenceTransformer`` is a lazily-bound module global (``= None`` until
-    # first use, then assigned ``sentence_transformers.SentenceTransformer``).
-    # It is a third-party re-export kept for back-compat attribute access, NOT
-    # TokenPak public API — the same class as the ``faiss`` re-export in this
-    # very module. Exclude it so the snapshot reflects the TokenPak-owned surface.
-    ("tokenpak.vault.retrieval.vector_local", "SentenceTransformer"),
     ("tokenpak.proxy.server_extra.websocket_proxy", "WebSocketServerProtocol"),
 }
 
@@ -112,11 +106,25 @@ def _format_import_error(e: BaseException, module_name: str = "") -> str:
             r"cannot import name '[^']+' from '([a-z_]+_tokenpak)'"
         )
 
-    # Walk-site sidecar normalization (transform 3 above)
+    # Walk-site sidecar normalization (transform 3 above).
+    #
+    # H6 hardening (L11b release-gate integrity): previously this rewrote ANY
+    # exception raised while importing a ``tokenpak.sdk.<sidecar>.*`` module to
+    # the canonical "optional sidecar absent" string, regardless of the real
+    # exception. That masked genuine regressions — a SyntaxError, an
+    # AttributeError, or a first-party ``tokenpak.*`` ModuleNotFoundError inside
+    # the sidecar walk — behind a benign placeholder, so the snapshot never
+    # drifted and the release gate never caught them. We now normalize ONLY the
+    # genuine case: a ``ModuleNotFoundError`` whose missing top-level module is
+    # the third-party sidecar package itself (e.g. ``crewai`` / ``crewai_tokenpak``),
+    # never a first-party ``tokenpak.*`` module. Every other exception falls
+    # through to the honest representation below and therefore drifts the snapshot.
     m_walk = re.match(r"^tokenpak\.sdk\.([a-z_]+)\.", module_name)
-    if m_walk:
-        sidecar = m_walk.group(1)
-        return f"<IMPORT_ERROR: ModuleNotFoundError: No module named '{sidecar}_tokenpak'>"
+    if m_walk and isinstance(e, ModuleNotFoundError):
+        missing_mod = getattr(e, "name", "") or ""
+        if missing_mod and not missing_mod.startswith("tokenpak"):
+            sidecar = m_walk.group(1)
+            return f"<IMPORT_ERROR: ModuleNotFoundError: No module named '{sidecar}_tokenpak'>"
 
     msg = _ABS_PATH_PAREN_RE.sub("", str(e))
     m = _SIDECAR_RE.search(msg)

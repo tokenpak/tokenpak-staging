@@ -16,7 +16,7 @@ Competitors compared: [Helicone](https://helicone.ai), [LangSmith](https://smith
 |---|---|---|---|---|---|---|---|
 | **Local-first** (proxy on your machine) | ✅ Yes | ✅ Yes (Docker) | ❌ No (enterprise BYOC only) | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No (cloud-only) |
 | **Open source** | ✅ Apache-2.0 | ✅ MIT core | ❌ No | ✅ MIT | ✅ Gateway OSS | ✅ MIT | ❌ No |
-| **Compression / token reduction** | ✅ Yes — deterministic, client-side | ✅ Yes (claimed up to 5×) | ❌ No | ❌ No | ❌ No (caching pass-through only) | ❌ No | ❌ No |
+| **Compression / token reduction** | ✅ Yes — deterministic, route-specific, client-side | ✅ Yes (claimed up to 5×) | ❌ No | ❌ No | ❌ No (caching pass-through only) | ❌ No | ❌ No |
 | **Multi-provider routing** | ✅ Yes (smart routing) | ✅ Yes (100+ providers) | ❌ No (observability only) | ✅ Yes (100+ providers) | ✅ Yes (200+ providers) | ❌ No | ✅ Yes (290+ models) |
 | **Cost tracking** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
 | **Budget enforcement** (hard 429 on overage) | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes |
@@ -31,9 +31,9 @@ Competitors compared: [Helicone](https://helicone.ai), [LangSmith](https://smith
 
 ## Where TokenPak Wins
 
-### 1. Local-first / zero data leaving your machine
+### 1. Local-first / no second cloud intermediary
 
-TokenPak runs as a local proxy process. Your prompts are compressed on your hardware before they reach any upstream API. Nothing goes through a third-party cloud intermediary — no Helicone servers, no SaaS dashboards, no vendor retention.
+TokenPak runs as a local proxy process. Your prompts are compressed on your hardware before they reach your configured upstream API. No prompt content goes through TokenPak's cloud or a third-party observability intermediary.
 
 This matters for three reasons:
 - **Privacy.** Regulated industries (healthcare, finance, legal) often cannot route prompts through a third-party cloud.
@@ -43,6 +43,13 @@ This matters for three reasons:
 ### 2. Deterministic compression with reproducible benchmarks
 
 TokenPak's compression is deterministic: the same input produces the same compressed output every time. This means you can benchmark it in CI and trust the numbers. The [headline benchmark](BENCHMARKS.md) ships in the CI pipeline and runs on every commit — no black-box "up to 5×" marketing claims.
+
+Savings are route-specific. Direct API, CLI, and uncached repeated-agent loops
+are the best fit for context compression. Claude Code/TUI routes can show lower
+incremental savings when the provider cache already handled repeated context.
+`tokenpak status` and `tokenpak status --tip-cache` split provider/client cache
+from TokenPak compression and TokenPak managed-cache savings, so observed
+platform-cache hits are not credited to TokenPak.
 
 The compaction algorithm operates on the raw token stream before the request leaves your machine. It does not depend on semantic similarity lookups, embeddings, or an external service. It works offline.
 
@@ -68,7 +75,7 @@ TokenPak supports multi-provider routing, but if you need instant access to 200+
 
 | If you need… | Consider… |
 |---|---|
-| Token savings + zero data leaving your machine | **TokenPak** |
+| Token savings without a second cloud intermediary | **TokenPak** |
 | LangChain tracing + evaluation | LangSmith |
 | Maximum provider breadth (200+ models) | LiteLLM or Portkey |
 | Instant access to many models, no infra | OpenRouter |
@@ -92,7 +99,7 @@ None of the alternatives in the table above were designed around Claude Code's c
 | **Per-mode profiles** (CLI / TUI / tmux / SDK / IDE / cron auto-detected) | ✅ 6 profiles, auto-detected via session headers | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Vault context injection post-cache-boundary** | ✅ Yes — injected before upstream call, respects `cache_control` boundary | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Multi-provider failover presenting as Anthropic-compatible** | ✅ Yes — Bedrock / Vertex / OpenAI behind a single `ANTHROPIC_BASE_URL` | ⚠️ Routing only (changes base URL) | ❌ No | ⚠️ Routing only (changes SDK target) | ⚠️ Routing only (changes SDK target) | ❌ No | ⚠️ Routing only (changes SDK target) |
-| **One-step Claude Code setup** (`tokenpak integrate claude-code`) | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| **One-command Claude Code installer** (`tokenpak install --claude-code`) | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **`tokenpak doctor --claude-code` health check** | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Inline savings reporting** (TUI footer / IDE header / SSE event) | ✅ Yes — 3 surfaces, per-turn | ❌ No (dashboard only) | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Per-host config drift detection** | ✅ Yes — flags when profile or vault config diverges across hosts | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |

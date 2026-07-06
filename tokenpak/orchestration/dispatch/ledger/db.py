@@ -1,7 +1,7 @@
 """Dispatch Run Ledger — SQLite persistence for Dispatch execution records.
 
 The Run Ledger is the durable store for the ten Dispatch record classes
-produced during a run (Standards Delta v0 §4–§5). It lives under the canonical
+produced during a run. It lives under the canonical
 TokenPak home (``~/.tpk/dispatch/runs.db``, resolved via
 :func:`tokenpak._paths.under`) and **never** writes into the project repo
 (acceptance criterion 6).
@@ -22,7 +22,7 @@ Design (acceptance criteria 1–9):
   :meth:`RunLedger.mark_effect_applied` / :meth:`RunLedger.mark_effect_failed`
   finalize it after. :meth:`RunLedger.select_dangling_planned_effects` returns
   ``planned`` effects with no ``finalized_at`` for resume reconciliation
-  (Standards Delta v0 §4.8 / §5.5, criterion 5).
+  (criterion 5).
 * **Execution records only** — the ledger does not promote records to canonical
   Pak types (criterion 7).
 
@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional
 
@@ -262,7 +262,7 @@ class RunLedger:
     def read_station_runs_for_run(self, run_id: str) -> list[DispatchStationRun]:
         """Return every station run for *run_id*, ordered by insertion (rowid).
 
-        Resume reconciliation (Standards Delta v0 §5.5) needs the station runs of
+        Resume reconciliation needs the station runs of
         a run in execution order so it can inspect the *last* one. SQLite assigns
         a monotonically increasing implicit ``rowid`` in insert order, so ordering
         by it reproduces the order the runner wrote the rows (the runner runs
@@ -278,7 +278,7 @@ class RunLedger:
     def read_effects_for_station_run(self, station_run_id: str) -> list[DispatchEffect]:
         """Return every effect recorded for *station_run_id* (ordered by created_at).
 
-        Used by resume reconciliation (Standards Delta v0 §5.5 cases 3 & 4) to
+        Used by resume reconciliation (cases 3 & 4) to
         enumerate the applied / planned effects of the interrupted station so the
         runner can compare current workspace hashes against each effect's
         ``after_hash`` / ``before_hash``.
@@ -378,7 +378,7 @@ class RunLedger:
 
         The lifecycle helpers below (:meth:`record_planned_effect` /
         :meth:`mark_effect_applied` / :meth:`mark_effect_failed`) are the
-        preferred API for the §4.8 protocol; this is the low-level writer they
+        preferred API for the effect-lifecycle protocol; this is the low-level writer they
         build on, and is also usable directly for replay/import.
         """
 
@@ -401,10 +401,10 @@ class RunLedger:
     def read_effect(self, effect_id: str) -> Optional[DispatchEffect]:
         return self._read_payload("dispatch_effects", effect_id, DispatchEffect)  # type: ignore[return-value]
 
-    # -- DispatchEffect lifecycle (Standards Delta v0 §4.8) -----------------
+    # -- DispatchEffect lifecycle -----------------
 
     def record_planned_effect(self, effect: DispatchEffect) -> DispatchEffect:
-        """Write a ``planned`` effect BEFORE tool execution (§4.8 protocol).
+        """Write a ``planned`` effect BEFORE tool execution.
 
         The effect MUST be in the ``planned`` state with no ``finalized_at``;
         this is the durable "I am about to mutate" marker that resume
@@ -433,7 +433,7 @@ class RunLedger:
         after_hash: Optional[str] = None,
         rollback_available: Optional[bool] = None,
     ) -> DispatchEffect:
-        """Transition a planned effect to ``applied`` AFTER success (§4.8).
+        """Transition a planned effect to ``applied`` AFTER success.
 
         Sets ``status=applied`` and ``finalized_at`` (defaulting to now in UTC).
         Optionally records the post-write ``after_hash`` and
@@ -456,7 +456,7 @@ class RunLedger:
         *,
         finalized_at: Optional[datetime] = None,
     ) -> DispatchEffect:
-        """Transition a planned effect to ``failed`` on error (§4.8).
+        """Transition a planned effect to ``failed`` on error.
 
         Sets ``status=failed`` and ``finalized_at``. Raises ``KeyError`` if the
         effect id is unknown.
@@ -489,11 +489,82 @@ class RunLedger:
         self.write_effect(effect)
         return effect
 
+    # -- run lease (single-runner mutual exclusion) ---------------------------
+
+    # A lease older than this is considered abandoned (e.g. the holding process
+    # crashed and never released) and may be reclaimed by the next claimer. The
+    # lease is NOT refreshed mid-run in this version — lease/heartbeat semantics
+    # are part of the versioned durable-resume contract and may change.
+    DEFAULT_LEASE_STALE_SECONDS = 3600
+
+    def try_claim_run_lease(
+        self,
+        run_id: str,
+        owner: str,
+        *,
+        now: Optional[datetime] = None,
+        stale_after_seconds: int = DEFAULT_LEASE_STALE_SECONDS,
+    ) -> bool:
+        """Atomically claim the run lease for *owner*; return True on success.
+
+        The claim is a single ``INSERT OR IGNORE`` into the lease sidecar table
+        (primary-keyed by ``run_id``), so exactly one of any set of concurrent
+        claimers wins. A pre-existing lease older than ``stale_after_seconds``
+        is treated as abandoned (crashed holder) and reclaimed in the same
+        transaction; a fresh lease held by another owner makes the claim fail.
+        Re-claiming a lease you already hold succeeds (idempotent).
+        """
+
+        when = now or datetime.now(timezone.utc)
+        cutoff = (when - timedelta(seconds=stale_after_seconds)).isoformat()
+        with self._transaction() as conn:
+            # Reap an abandoned lease so a crashed holder cannot brick resume.
+            conn.execute(
+                "DELETE FROM dispatch_run_leases WHERE run_id = ? AND acquired_at < ?",
+                (run_id, cutoff),
+            )
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO dispatch_run_leases (run_id, owner, acquired_at) "
+                "VALUES (?, ?, ?)",
+                (run_id, owner, when.isoformat()),
+            )
+            if cursor.rowcount == 1:
+                return True
+            row = conn.execute(
+                "SELECT owner FROM dispatch_run_leases WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            return row is not None and row["owner"] == owner
+
+    def release_run_lease(self, run_id: str, owner: str) -> bool:
+        """Release the run lease if *owner* holds it; return True when released."""
+
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM dispatch_run_leases WHERE run_id = ? AND owner = ?",
+                (run_id, owner),
+            )
+            return cursor.rowcount == 1
+
+    def read_run_lease(self, run_id: str) -> Optional[dict[str, str]]:
+        """Return the current lease row for *run_id* (or ``None`` if unclaimed)."""
+
+        row = self._conn.execute(
+            "SELECT run_id, owner, acquired_at FROM dispatch_run_leases WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row["run_id"],
+            "owner": row["owner"],
+            "acquired_at": row["acquired_at"],
+        }
+
     def select_dangling_planned_effects(self, run_id: str) -> list[DispatchEffect]:
         """Return ``planned`` effects with no ``finalized_at`` for *run_id*.
 
-        These are the "effect started but never finalized" records of Standards
-        Delta v0 §5.5 step 4 — an interrupted effect that resume reconciliation
+        These are the "effect started but never finalized" records — an
+        interrupted effect that resume reconciliation
         must inspect. Effects are linked to a run via their station runs
         (DispatchEffect.station_run_id → DispatchStationRun.run_id), so this
         joins through ``dispatch_station_runs``. Results are ordered by
