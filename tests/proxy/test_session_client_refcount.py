@@ -190,6 +190,20 @@ def test_request_releases_lease_on_transport_error():
     pool.close()
 
 
+def test_request_transport_error_closes_retired_client_after_release():
+    pool = _pool(_FailingTransport(), retire_close_grace_seconds=3600.0)
+    client = pool._get_session_client(NETLOC, "sess-1")
+
+    with pytest.raises(httpx.ReadError):
+        pool.request("POST", URL, content=b"{}", session_key="sess-1")
+
+    assert pool._session_client_refs == {}
+    assert (NETLOC, "sess-1") not in pool._session_clients
+    assert pool.metrics()["retired_pending_close"] == 0
+    assert client.is_closed is True
+    pool.close()
+
+
 def test_stream_releases_lease_on_exit_and_midstream_error():
     pool = _pool(_ok_transport())
     with pool.stream("POST", URL, content=b"{}", session_key="sess-1") as resp:
@@ -205,6 +219,22 @@ def test_stream_releases_lease_on_exit_and_midstream_error():
     assert failing._session_client_refs == {}
     pool.close()
     failing.close()
+
+
+def test_stream_transport_error_closes_retired_client_after_release():
+    pool = _pool(_MidStreamFailTransport(), retire_close_grace_seconds=3600.0)
+    client = pool._get_session_client(NETLOC, "sess-1")
+
+    with pytest.raises(httpx.ReadError):
+        with pool.stream("POST", URL, content=b"{}", session_key="sess-1") as resp:
+            for _ in resp.iter_bytes(chunk_size=8):
+                pass
+
+    assert pool._session_client_refs == {}
+    assert (NETLOC, "sess-1") not in pool._session_clients
+    assert pool.metrics()["retired_pending_close"] == 0
+    assert client.is_closed is True
+    pool.close()
 
 
 def test_stream_releases_lease_when_enter_fails():

@@ -410,6 +410,7 @@ class ConnectionPool:
         """
         key = (netloc, session_key)
         close_now = False
+        close_retired_now = False
         with self._session_lock:
             refs = self._session_client_refs.get(client, 0) - 1
             if refs > 0:
@@ -422,11 +423,15 @@ class ConnectionPool:
             elif refs <= 0 and client in self._overflow_clients:
                 self._overflow_clients.discard(client)
                 close_now = True
+            elif refs <= 0:
+                close_retired_now = True
         if close_now:
             try:
                 client.close()
             except Exception:
                 pass
+        if close_retired_now:
+            self._close_retired_client_now(client)
 
     def _touch_session(self, netloc: str, session_key: str) -> None:
         """Re-stamp a session client's last_used after a request completes,
@@ -442,6 +447,24 @@ class ConnectionPool:
         """Queue *client* to be closed after the in-flight grace period."""
         with self._retired_lock:
             self._retired_clients.append((client, time.monotonic()))
+
+    def _close_retired_client_now(self, client: httpx.Client) -> None:
+        """Close *client* immediately if it is retired and no longer leased."""
+        close_now = False
+        with self._retired_lock:
+            keep: List[Tuple[httpx.Client, float]] = []
+            for retired_client, retired_at in self._retired_clients:
+                if retired_client is client:
+                    close_now = True
+                else:
+                    keep.append((retired_client, retired_at))
+            if close_now:
+                self._retired_clients = keep
+        if close_now:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     def _evict_client(
         self, netloc: str, session_key: Optional[str], client: httpx.Client
