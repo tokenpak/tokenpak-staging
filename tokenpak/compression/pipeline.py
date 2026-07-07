@@ -210,7 +210,7 @@ def _estimate_tokens(messages: List[Dict[str, Any]]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Compaction helpers — text + request body (A2b transfer from monolith)
+# Compaction helpers — text + request body assembly (A2b transfer from monolith)
 # ---------------------------------------------------------------------------
 
 _COMPACT_CACHE: Dict[str, str] = {}
@@ -266,11 +266,17 @@ def compact_text(text: str) -> str:
     return t
 
 
-def compact_request_body(
+def _assemble_request_body_with_cache_control(
     body_bytes: bytes, adapter=None, *, request: "Optional[ProxyRequest]" = None
 ) -> Tuple[bytes, int, int, int]:
     """
-    Style-contract-aware compaction.
+    Assemble a style-contract-aware request body and return token accounting.
+
+    This helper may rewrite eligible message text with ``compact_text`` and may
+    preserve cache-control/request-shaping semantics, but it does not guarantee
+    upstream token reduction. Callers must treat ``sent_tokens`` as measured
+    accounting, not proof of savings.
+
     Returns (new_body_bytes, sent_tokens, original_tokens, protected_token_count).
     """
     if request is not None:
@@ -302,7 +308,7 @@ def compact_request_body(
     if original_tokens < COMPACT_THRESHOLD_TOKENS:
         return body_bytes, original_tokens, original_tokens, 0
     if COMPACT_MAX_TOKENS > 0 and original_tokens > COMPACT_MAX_TOKENS:
-        # Skip compression for large payloads — latency cost exceeds token savings
+        # Skip request rewriting for large payloads — latency cost exceeds likely benefit.
         return body_bytes, original_tokens, original_tokens, 0
 
     mode = COMPILATION_MODE
@@ -367,3 +373,15 @@ def compact_request_body(
         return body_bytes, original_tokens, original_tokens, protected_tokens
     _, sent_tokens = extract_request_tokens(new_body, adapter=active_adapter)
     return new_body, sent_tokens, original_tokens, protected_tokens
+
+
+def compact_request_body(
+    body_bytes: bytes, adapter=None, *, request: "Optional[ProxyRequest]" = None
+) -> Tuple[bytes, int, int, int]:
+    """
+    Backward-compatible alias for request assembly/token accounting.
+
+    Historical callers use this name, but it is not a token-savings guarantee.
+    Prefer ``_assemble_request_body_with_cache_control`` in new internal code.
+    """
+    return _assemble_request_body_with_cache_control(body_bytes, adapter=adapter, request=request)

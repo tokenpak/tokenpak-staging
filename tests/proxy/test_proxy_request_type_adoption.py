@@ -158,6 +158,15 @@ class TestInjectVaultContextRequest:
 # ---------------------------------------------------------------------------
 
 class TestCompactRequestBodyRequest:
+    def test_honest_request_assembly_name_available(self):
+        """Internal code can use the non-savings helper name."""
+        from tokenpak.compression.pipeline import _assemble_request_body_with_cache_control
+
+        body = _body_bytes()
+        result = _assemble_request_body_with_cache_control(body)
+        assert isinstance(result, tuple)
+        assert len(result) == 4
+
     def test_request_kwarg_signature_accepted(self):
         """compact_request_body accepts request kwarg without TypeError."""
         from tokenpak.compression.pipeline import compact_request_body
@@ -198,6 +207,28 @@ class TestCompactRequestBodyRequest:
         result = compact_request_body(b"", request=req)
         assert isinstance(result, tuple)
         assert len(result) == 4
+
+    def test_single_latest_user_turn_is_not_a_savings_claim(self):
+        """The request helper reports measured accounting, not guaranteed savings."""
+        import json
+
+        from tokenpak.compression.pipeline import _assemble_request_body_with_cache_control
+
+        repeated = "repeat this context. " * 1200
+        body = json.dumps(
+            {
+                "model": "claude-sonnet-4-6",
+                "messages": [{"role": "user", "content": repeated}],
+            }
+        ).encode("utf-8")
+
+        new_body, sent_tokens, original_tokens, protected_tokens = (
+            _assemble_request_body_with_cache_control(body)
+        )
+
+        assert new_body == body
+        assert sent_tokens == original_tokens
+        assert protected_tokens == 0
 
 
 # ---------------------------------------------------------------------------

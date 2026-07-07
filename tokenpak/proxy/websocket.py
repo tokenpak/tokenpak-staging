@@ -38,11 +38,11 @@ _ws_active_connections_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 async def _ws_handler(websocket, compact_request_body) -> None:
-    """Handle a single WebSocket connection: receive JSON, compress, proxy to Anthropic, stream back.
+    """Handle a single WebSocket connection: receive JSON, shape the request, proxy to Anthropic, stream back.
 
     Args:
         websocket: The WebSocket connection object (websockets library).
-        compact_request_body: Callable from runtime/proxy.py that applies the compression pipeline.
+        compact_request_body: Historical request-body assembly callable from runtime/proxy.py.
     """
     global _ws_active_connections
 
@@ -81,7 +81,7 @@ async def _ws_handler(websocket, compact_request_body) -> None:
         req_data["stream"] = True
         body_bytes: bytes = json.dumps(req_data).encode()
 
-        # Apply TokenPak compression pipeline (sync — run in thread executor)
+        # Apply TokenPak request-body assembly pipeline (sync — run in thread executor)
         loop = asyncio.get_event_loop()
         try:
             compressed_body, _sent, _orig, _prot = await loop.run_in_executor(

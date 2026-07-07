@@ -11,7 +11,7 @@ Two top-level paths:
   re-serialization is forbidden — Anthropic billing routes on the exact
   byte representation.
 - **full pipeline** (OpenClaw / SDK): JSON-level processing with
-  compaction, cache control, compression, etc.
+  request shaping, cache control, compression, etc.
 
 Usage::
 
@@ -265,13 +265,14 @@ def stage_compaction(
     adapter: Any = None,
     compact_fn: Any = None,
 ) -> Tuple[ProxyRequest, StageResult]:
-    """Run compaction on the request body to reduce token count.
+    """Run the historical compaction stage on the request body.
 
     Skipped for ``byte_preserved`` routes (Claude Code).
 
     Args:
-        compact_fn: Callable matching ``compact_request_body(body, adapter=)``
-            signature. Injected from the monolith during migration.
+        compact_fn: Callable matching ``compact_request_body(body, adapter=)``.
+            The callable returns token accounting, but a nonzero reduction is
+            not guaranteed.
     """
     result = StageResult(name="compaction")
 
