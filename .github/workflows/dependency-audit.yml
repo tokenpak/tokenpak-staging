@@ -1,0 +1,101 @@
+name: Scheduled Dependency Audit
+
+# Advisory visibility layer for dependency vulnerabilities.
+# Complements Dependabot alerts/security updates; it does not replace them and
+# does not run on pull_request or push, preserving CI quota discipline.
+
+on:
+  schedule:
+    # Weekly, early Monday UTC.
+    - cron: "17 6 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit advisory scan
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Build audit environment
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit
+          python -m venv .audit-venv
+          .audit-venv/bin/python -m pip install --upgrade pip
+          .audit-venv/bin/python -m pip install .
+
+      - name: Run pip-audit against installed package dependencies
+        id: audit
+        run: |
+          set -euo pipefail
+          mkdir -p dependency-audit
+          audit_status=0
+          pip-audit \
+            --path .audit-venv/lib/python3.11/site-packages \
+            --format json \
+            --output dependency-audit/pip-audit.json \
+            --progress-spinner off || audit_status=$?
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("dependency-audit/pip-audit.json")
+          summary_path = Path("dependency-audit/summary.md")
+          data = json.loads(report_path.read_text(encoding="utf-8"))
+          dependencies = data.get("dependencies", [])
+          findings = []
+          for dep in dependencies:
+              for vuln in dep.get("vulns", []):
+                  findings.append((dep.get("name", ""), dep.get("version", ""), vuln))
+
+          lines = [
+              "# Scheduled Dependency Audit",
+              "",
+              f"Dependencies scanned: {len(dependencies)}",
+              f"Vulnerability findings: {len(findings)}",
+              "",
+          ]
+          if findings:
+              lines.append("| Package | Version | ID | Fix versions |")
+              lines.append("|---|---:|---|---|")
+              for name, version, vuln in findings:
+                  fix_versions = ", ".join(vuln.get("fix_versions") or []) or "not listed"
+                  lines.append(
+                      f"| `{name}` | `{version}` | `{vuln.get('id', 'unknown')}` | {fix_versions} |"
+                  )
+          else:
+              lines.append("No known vulnerabilities reported by pip-audit.")
+
+          summary_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+          print("\\n".join(lines))
+          PY
+
+          cat dependency-audit/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$audit_status" -ne 0 ]; then
+            echo "::warning::pip-audit reported vulnerability findings; see dependency-audit artifact."
+          fi
+          exit 0
+
+      - name: Upload dependency audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit
+          path: dependency-audit/
+          retention-days: 14
