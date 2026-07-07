@@ -1177,11 +1177,11 @@ Show per-model efficiency ranking.
 
 ### `tokenpak monitor`
 
-Start the live monitor dashboard.
+Deprecated - prints a notice pointing to `dashboard` / `status`.
 
 **Flags:**
 
-- `--port` — Dashboard port (default: 8767) (default: 8767)
+- `--port` — Ignored (monitor is deprecated) (default: 8767)
 
 
 ### `tokenpak optimize`

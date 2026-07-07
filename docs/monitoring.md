@@ -1,99 +1,36 @@
-# TokenPak Live Monitor Dashboard
+# Monitoring TokenPak
 
-A real-time single-page dashboard for monitoring TokenPak proxy health, request throughput, error rates, and cost.
+> **`tokenpak monitor` is deprecated and no longer available.**
+>
+> The old single-page monitor dashboard was retired — its static assets were
+> removed, so the command no longer starts a server. Running `tokenpak monitor`
+> now prints a short deprecation notice pointing here, and remains reachable for
+> one more minor version before it is removed.
 
-## Quick Start
+## What to use instead
 
-```bash
-# Start the dashboard (default port 8767)
-tokenpak monitor
-
-# Custom port
-tokenpak monitor --port 9000
-```
-
-Then open: **http://localhost:8767/**
-
-The proxy must be running on port 8766 (`tokenpak serve`) for live data.
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **Request counter** | Total session requests + error count |
-| **Cache hit rate** | Live cache hits/misses/rate |
-| **Token savings** | Compressed tokens saved this session |
-| **Cost ticker** | Running cost + projection /hour, /day, /month |
-| **Latency percentiles** | p50, p75, p95, p99 from recent 100 requests |
-| **Model chart** | Pie chart of requests per model |
-| **Error log** | Filterable error viewer with export |
-| **Dark/light mode** | Persisted in localStorage |
-| **Auto-refresh** | Configurable 3s/5s/10s/30s or paused |
-
-## Architecture
-
-```
-tokenpak monitor (port 8767)
-├── GET / → dashboard.html (self-contained)
-├── GET /api/stats → proxied from localhost:8766/stats
-└── GET /api/errors → reads ~/.tokenpak/logs/errors-*.jsonl
-```
-
-- No external JS dependencies — pure vanilla JS
-- Self-contained HTML file (can be opened directly from disk)
-- Graceful fallback when proxy is offline (shows "Proxy Offline")
-
-## Backend Data Sources
-
-### `/api/stats`
-Forwards to the TokenPak proxy stats endpoint (`http://127.0.0.1:8766/stats`).
-
-Returns session metrics:
-- `requests`, `errors`, `cost`, `cost_saved`, `saved_tokens`
-- `cache_hits`, `cache_misses`
-- `start_time`, `recent_requests[]` (with `latency_ms`, `model`)
-
-### `/api/errors`
-Reads from `~/.tokenpak/logs/errors-*.jsonl` (last 3 days).
-
-Query params:
-- `limit=N` — max entries (default 100)
-- `model=name` — filter by model name
-
-## Customization
-
-### Change refresh interval
-Use the dropdown in the header (3s default, or pause).
-
-### Proxy URL
-Set `TOKENPAK_PROXY_URL` env var to override proxy address:
-```bash
-TOKENPAK_PROXY_URL=http://192.168.1.100:8766 tokenpak monitor
-```
-
-### Logs directory
-Error logs are read from `~/.tokenpak/logs/errors-*.jsonl`.
-This is populated by the `p2-tokenpak-error-telemetry-logger` system.
-
-## Exporting Errors
-
-Use the **Export JSON** or **Export CSV** buttons to download filtered error logs.
-
-## Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| "Proxy Offline" | Start proxy: `tokenpak serve` |
-| No error data | Check `~/.tokenpak/logs/` has `errors-*.jsonl` files |
-| Port already in use | Use `--port 8768` |
-| Dashboard blank | Check browser console for CORS/network errors |
-
-## Running as Background Service
+| You want… | Use |
+|---|---|
+| A real-time health dashboard (proxy status, throughput, errors, cost) | `tokenpak dashboard` |
+| A one-shot proxy + savings snapshot | `tokenpak status` |
 
 ```bash
-# Start in background
-nohup tokenpak monitor --port 8767 > /tmp/tokenpak-monitor.log 2>&1 &
+# Real-time health dashboard (replaces the retired monitor UI)
+tokenpak dashboard
 
-# Check it's running
-curl -s http://localhost:8767/ | head -5
+# Point-in-time proxy + savings snapshot
+tokenpak status
 ```
+
+Both read the same live proxy data the old monitor UI used, so no telemetry is
+lost by switching.
+
+## The telemetry store is unaffected
+
+Only the **`monitor` command and its dashboard UI** were retired. The
+`monitor.db` telemetry store that the proxy writes is the canonical source for
+savings, cost, and per-model reporting and is untouched. It continues to back:
+
+- `tokenpak dashboard` — real-time health dashboard
+- `tokenpak status` — proxy + savings snapshot
+- `tokenpak savings` / `tokenpak cost` / `tokenpak models` — reporting views

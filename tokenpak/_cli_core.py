@@ -3013,8 +3013,16 @@ def build_parser():
     )
     p_serve.set_defaults(func=cmd_serve)
 
-    p_monitor = sub.add_parser("monitor", help="Start the live monitor dashboard")
-    p_monitor.add_argument("--port", type=int, default=8767, help="Dashboard port (default: 8767)")
+    p_monitor = sub.add_parser(
+        "monitor",
+        help="Deprecated - use 'dashboard' or 'status' (prints a notice)",
+    )
+    # --port is accepted but ignored: the monitor dashboard was retired, so
+    # the verb now prints a deprecation notice instead of starting a server.
+    # Kept reachable for one minor version to avoid a usage-error regression.
+    p_monitor.add_argument(
+        "--port", type=int, default=8767, help="Ignored (monitor is deprecated)"
+    )
     p_monitor.set_defaults(func=cmd_monitor)
 
     p_bench = sub.add_parser(
@@ -8766,11 +8774,20 @@ def _build_prune_parser(sub):
 
 
 def cmd_monitor(args):
-    """Start the live monitor dashboard."""
-    from tokenpak.telemetry.monitoring.server import run
-
-    port = getattr(args, "port", 8767)
-    run(port=port)
+    """Deprecated - prints a notice pointing to `dashboard` / `status`."""
+    # Retire-first: the monitor dashboard's static assets were removed, so
+    # the old server would only serve a misleading empty page. The verb is
+    # kept reachable for one minor version as this notice and no longer
+    # starts a server; hard removal is tracked separately as a version-floor
+    # note.
+    sys.stderr.write(
+        "tokenpak monitor is deprecated and no longer starts a dashboard "
+        "server.\n"
+        "The live dashboard was retired; use one of:\n"
+        "  tokenpak dashboard   real-time health dashboard\n"
+        "  tokenpak status      proxy and savings snapshot\n"
+    )
+    return 0
 
 
 def cmd_cost_show_budget(args):
