@@ -272,6 +272,44 @@ def wait_for_dashboard_health(
         time.sleep(interval_seconds)
 
 
+def _dashboard_page_ok(local_port: int) -> bool:
+    """Return True only if GET ``/dashboard`` responds 200 with a non-empty body.
+
+    ``/health`` returning OK proves the proxy is up; it does NOT prove the
+    dashboard route itself renders. When the served build is missing dashboard
+    assets, ``/dashboard`` 404s while ``/health`` stays green, so gating connect
+    success on health alone opens the browser onto a 404. This probes the page.
+    """
+    try:
+        with urllib.request.urlopen(_dashboard_url(local_port), timeout=1) as response:
+            status = getattr(response, "status", None)
+            if status is None:
+                status = response.getcode()
+            if status != 200:
+                return False
+            return bool(response.read().strip())
+    except Exception:
+        # urllib raises HTTPError for 4xx/5xx (e.g. the 404 this guards against),
+        # and URLError when the tunnel is not reachable; both mean "not servable".
+        return False
+
+
+def wait_for_dashboard_page(
+    local_port: int,
+    *,
+    timeout_seconds: float = DEFAULT_HEALTH_TIMEOUT_SECONDS,
+    interval_seconds: float = 0.25,
+) -> bool:
+    """Poll ``/dashboard`` until it renders (200, non-empty) or the deadline."""
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        if _dashboard_page_ok(local_port):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_seconds)
+
+
 def _start_ssh_tunnel(
     target: str,
     local_port: int,
@@ -342,9 +380,11 @@ def connect_dashboard(
                 requested_matches = False
         remote_matches = int(existing.get("remote_port", -1)) == int(remote_port)
         if remote_matches and (requested_auto or requested_matches):
-            if tunnel_is_alive(existing) and wait_for_dashboard_health(
-                int(existing["local_port"]),
-                timeout_seconds=health_timeout,
+            existing_port = int(existing["local_port"])
+            if (
+                tunnel_is_alive(existing)
+                and wait_for_dashboard_health(existing_port, timeout_seconds=health_timeout)
+                and wait_for_dashboard_page(existing_port, timeout_seconds=health_timeout)
             ):
                 result = _result_from_record(existing, reused=True)
                 if open_browser:
@@ -376,6 +416,15 @@ def connect_dashboard(
         raise DashboardTunnelError(
             f"Dashboard health check did not return OK at {_health_url(chosen_local)} "
             f"within {health_timeout:g}s. Confirm the remote dashboard is running on port {remote_port}."
+        )
+
+    if not wait_for_dashboard_page(chosen_local, timeout_seconds=health_timeout):
+        disconnect_dashboard(host, ssh_user=ssh_user, quiet=True)
+        raise DashboardTunnelError(
+            f"Dashboard did not render at {_dashboard_url(chosen_local)} within "
+            f"{health_timeout:g}s (health check passed but the dashboard route did not "
+            f"return a page). The remote build may be missing dashboard assets; "
+            f"upgrade the remote to a build that packages the dashboard."
         )
 
     result = _result_from_record(record, reused=False)

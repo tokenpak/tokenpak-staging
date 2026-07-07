@@ -83,6 +83,7 @@ def test_tunnel_paths_create_tpk_tunnels_dir(tmp_path: Path, monkeypatch):
 def test_existing_valid_tunnel_is_reused(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / ".tpk"))
     monkeypatch.setattr(tunnel, "wait_for_dashboard_health", lambda *a, **kw: True)
+    monkeypatch.setattr(tunnel, "wait_for_dashboard_page", lambda *a, **kw: True)
     monkeypatch.setattr(tunnel, "tunnel_is_alive", lambda record: True)
 
     def fail_start(*args, **kwargs):
@@ -204,6 +205,129 @@ def test_connect_health_failure_cleans_started_tunnel(tmp_path: Path, monkeypatc
     assert not paths.metadata.exists()
     assert not paths.control_socket.exists()
     assert not paths.pid_file.exists()
+
+
+class _PageResponse:
+    """Minimal context-manager stand-in for urllib.request.urlopen."""
+
+    def __init__(self, status: int, body: bytes) -> None:
+        self._status = status
+        self._body = body
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def getcode(self):
+        return self._status
+
+    def read(self):
+        return self._body
+
+
+def test_dashboard_page_ok_true_on_200(monkeypatch):
+    monkeypatch.setattr(
+        tunnel.urllib.request,
+        "urlopen",
+        lambda *a, **kw: _PageResponse(200, b"<html>dashboard</html>"),
+    )
+
+    assert tunnel._dashboard_page_ok(8766) is True
+
+
+def test_dashboard_page_ok_false_on_empty_body(monkeypatch):
+    monkeypatch.setattr(
+        tunnel.urllib.request,
+        "urlopen",
+        lambda *a, **kw: _PageResponse(200, b"   "),
+    )
+
+    assert tunnel._dashboard_page_ok(8766) is False
+
+
+def test_dashboard_page_ok_false_on_404(monkeypatch):
+    import urllib.error
+
+    def raise_404(*a, **kw):
+        raise urllib.error.HTTPError(
+            url=tunnel._dashboard_url(8766), code=404, msg="Not Found", hdrs=None, fp=None
+        )
+
+    monkeypatch.setattr(tunnel.urllib.request, "urlopen", raise_404)
+
+    assert tunnel._dashboard_page_ok(8766) is False
+
+
+def test_wait_for_dashboard_page_times_out(monkeypatch):
+    monkeypatch.setattr(tunnel, "_dashboard_page_ok", lambda *a, **kw: False)
+
+    assert tunnel.wait_for_dashboard_page(8766, timeout_seconds=0) is False
+
+
+def test_connect_page_404_raises_and_cleans_when_health_ok(tmp_path: Path, monkeypatch):
+    """Health OK but /dashboard 404 (missing assets) must NOT be reported as success."""
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / ".tpk"))
+    monkeypatch.setattr(tunnel, "port_is_available", lambda port, host="127.0.0.1": True)
+    monkeypatch.setattr(tunnel, "wait_for_dashboard_health", lambda *a, **kw: True)
+    monkeypatch.setattr(tunnel, "wait_for_dashboard_page", lambda *a, **kw: False)
+    monkeypatch.setattr(tunnel, "_run_ssh_control", lambda *a, **kw: True)
+    opened = []
+    monkeypatch.setattr(tunnel.webbrowser, "open", lambda url: opened.append(url))
+
+    def fake_start(target, local_port, remote_port, paths):
+        paths.control_socket.write_text("", encoding="utf-8")
+        paths.pid_file.write_text("12345\n", encoding="utf-8")
+        return 12345
+
+    monkeypatch.setattr(tunnel, "_start_ssh_tunnel", fake_start)
+
+    with pytest.raises(tunnel.DashboardTunnelError, match="did not render"):
+        tunnel.connect_dashboard(
+            "dashboard.example.internal",
+            ssh_user="user",
+            local_port="auto",
+            open_browser=True,
+            health_timeout=0,
+        )
+
+    # No browser opened onto the 404, and the broken tunnel is torn down.
+    assert opened == []
+    paths = tunnel.state_paths("user@dashboard.example.internal", 8766, 8766)
+    assert not paths.metadata.exists()
+    assert not paths.control_socket.exists()
+    assert not paths.pid_file.exists()
+
+
+def test_connect_success_opens_browser_when_page_renders(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / ".tpk"))
+    monkeypatch.setattr(tunnel, "port_is_available", lambda port, host="127.0.0.1": True)
+    monkeypatch.setattr(tunnel, "wait_for_dashboard_health", lambda *a, **kw: True)
+    monkeypatch.setattr(tunnel, "wait_for_dashboard_page", lambda *a, **kw: True)
+    monkeypatch.setattr(tunnel, "_run_ssh_control", lambda *a, **kw: True)
+    opened = []
+    monkeypatch.setattr(tunnel.webbrowser, "open", lambda url: opened.append(url))
+
+    def fake_start(target, local_port, remote_port, paths):
+        paths.control_socket.write_text("", encoding="utf-8")
+        paths.pid_file.write_text("12345\n", encoding="utf-8")
+        return 12345
+
+    monkeypatch.setattr(tunnel, "_start_ssh_tunnel", fake_start)
+
+    result = tunnel.connect_dashboard(
+        "dashboard.example.internal",
+        ssh_user="user",
+        local_port="auto",
+        open_browser=True,
+        health_timeout=0,
+    )
+
+    assert result.reused is False
+    assert result.url.endswith("/dashboard")
+    assert opened == [result.url]
 
 
 def test_cmd_dashboard_tunnel_connect_json(monkeypatch, capsys):

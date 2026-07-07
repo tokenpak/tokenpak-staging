@@ -11,6 +11,10 @@ def get_dashboard_files():
     """Return paths to dashboard files."""
     return {
         "index.html": DASHBOARD_DIR / "index.html",
+        # sessions.js is the only external script index.html loads (the Top
+        # Sessions panel). It must be in the serve whitelist or /dashboard renders
+        # an empty panel and GET /dashboard/sessions.js 404s.
+        "sessions.js": DASHBOARD_DIR / "sessions.js",
         "metrics.js": DASHBOARD_DIR / "metrics.js",
         "charts.js": DASHBOARD_DIR / "charts.js",
         "styles.css": DASHBOARD_DIR / "styles.css",
