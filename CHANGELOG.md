@@ -6,6 +6,9 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Docs
+- Add a value-proof guide for `tokenpak prove` and remove stale lifetime savings examples from current docs.
+
 ## [1.11.1] — 2026-07-06
 
 > Patch release: ship the CLI command registry in built distributions so a clean
