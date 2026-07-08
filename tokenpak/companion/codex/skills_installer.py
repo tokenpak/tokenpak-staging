@@ -15,8 +15,18 @@ is serialized with a TokenPak-owned interprocess lock, each skill is
 staged in full inside a unique temp sibling and then published with fast
 renames — so a reader (Codex scanning the directory) never sees a
 half-copied skill and only ever sees an installed skill absent for the
-span of a single rename.  Stale stage/backup leftovers from a crashed
-prior install are swept defensively without failing a normal launch.
+span of a single rename.
+
+The prior copy of a replaced skill is **retained** as a timestamped
+generation rather than deleted the instant it is superseded: ``os.replace``
+only rebinds a name, so a reader that opened the old directory before the
+swap still holds that inode, and deleting it immediately would empty the
+inode mid-``readdir`` (``os.listdir`` is ``opendir`` + iterative
+``readdir``, not an atomic snapshot).  Retired generations and stale
+stage/backup leftovers from a crashed prior install are reclaimed on a
+later launch once they are older than :data:`_RECLAIM_MIN_AGE_S` — long
+past any live directory enumeration — so cleanup never races a reader and
+old generations are never retained indefinitely.
 """
 
 from __future__ import annotations
@@ -25,6 +35,7 @@ import contextlib
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -45,6 +56,14 @@ _BACKUP_PREFIX = ".tokenpak-backup-"
 # scans stays free of TokenPak bookkeeping and an uninstall leaves it
 # genuinely empty.
 _LOCK_SUFFIX = ".tokenpak-install.lock"
+
+# Minimum age (seconds) before a retired generation or a leftover
+# stage/backup dir is reclaimed. A directory enumeration (``opendir`` +
+# ``readdir``) completes in well under this window, so anything older
+# than it cannot still be held by a live reader — reclaiming it can never
+# empty a directory out from under an in-flight ``os.listdir``. Kept as a
+# module attribute so tests can force immediate reclamation (set to 0).
+_RECLAIM_MIN_AGE_S = 5.0
 
 
 def bundled_skill_names() -> list[str]:
@@ -106,25 +125,43 @@ def _install_lock(target: Path) -> Iterator[None]:
             os.close(fd)
 
 
-def _sweep_stale_temp(target: Path) -> None:
-    """Remove leftover stage/backup dirs from a crashed prior install.
+def _reclaim_retired(target: Path) -> None:
+    """Reclaim aged retired generations and crash-leftover temp dirs.
 
-    Called while holding the install lock, so any such directory is
-    guaranteed stale (no live install is using it).  Best-effort: an
-    entry that cannot be removed is skipped rather than aborting a normal
-    launch over a harmless leftover.
+    Removes ``_STAGE_PREFIX`` / ``_BACKUP_PREFIX`` entries under ``target``
+    that are older than :data:`_RECLAIM_MIN_AGE_S`.  Called while holding
+    the install lock.
+
+    The age gate is what makes reclamation safe under concurrent readers:
+    a retired skill generation (a directory a reader may have opened just
+    before it was superseded) is kept until no reader could still be
+    mid-``readdir`` of it, then removed — so cleanup never empties an inode
+    out from under an in-flight ``os.listdir``, and generations are not
+    retained forever.  A too-young entry is simply left for a later launch.
+    Best-effort: an entry that cannot be removed (or stat'd) is skipped
+    rather than aborting a normal launch.
     """
     try:
         entries = list(target.iterdir())
     except OSError:
         return
+    now = time.time()
     for entry in entries:
-        if entry.name.startswith(_STAGE_PREFIX) or entry.name.startswith(_BACKUP_PREFIX):
-            with contextlib.suppress(OSError):
-                if entry.is_dir():
-                    shutil.rmtree(entry)
-                else:
-                    entry.unlink()
+        if not (
+            entry.name.startswith(_STAGE_PREFIX) or entry.name.startswith(_BACKUP_PREFIX)
+        ):
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age < _RECLAIM_MIN_AGE_S:
+            continue  # possibly still observable by a live reader — keep it
+        with contextlib.suppress(OSError):
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
 
 
 def _publish_skill(src: Path, dst: Path, target: Path) -> Path:
@@ -137,17 +174,25 @@ def _publish_skill(src: Path, dst: Path, target: Path) -> Path:
     first, so the only window in which ``dst`` is absent is between two
     rename syscalls.  On a failed swap the prior ``dst`` is restored so a
     launch never strands the user with a missing skill.
+
+    A superseded ``dst`` is retired to a uniquely-named backup and left in
+    place — NOT deleted here.  ``os.replace`` only rebinds the name, so a
+    reader that opened the old ``dst`` before the swap still holds that
+    inode; deleting it now would empty it mid-``readdir``.  The retired
+    generation is reclaimed by a later launch's :func:`_reclaim_retired`
+    once it is older than :data:`_RECLAIM_MIN_AGE_S`.
     """
     stage = Path(tempfile.mkdtemp(prefix=f"{_STAGE_PREFIX}{dst.name}-", dir=target))
-    backup = target / f"{_BACKUP_PREFIX}{dst.name}-{os.getpid()}"
+    # Retirement target for any superseded generation. Unique per publish
+    # (reuse the stage's random suffix) so concurrent/repeated publishes
+    # never collide on one backup path, and each is aged out on its own.
+    unique = stage.name.rsplit("-", 1)[-1]
+    backup = target / f"{_BACKUP_PREFIX}{dst.name}-{unique}"
     try:
         # Full copy into the staged sibling while it is invisible as dst.
         shutil.copytree(src, stage, dirs_exist_ok=True)
         moved_aside = False
         if dst.exists():
-            with contextlib.suppress(OSError):
-                if backup.exists():
-                    shutil.rmtree(backup)
             os.replace(dst, backup)
             moved_aside = True
         try:
@@ -158,11 +203,11 @@ def _publish_skill(src: Path, dst: Path, target: Path) -> Path:
                 with contextlib.suppress(OSError):
                     os.replace(backup, dst)
             raise
-        if moved_aside:
-            with contextlib.suppress(OSError):
-                shutil.rmtree(backup)
+        # The retired generation (``backup``) is deliberately left for a
+        # later _reclaim_retired — see the docstring (reader-vs-delete race).
     finally:
-        # Clean the stage dir if it was not consumed by the swap.
+        # Clean the stage dir if it was not consumed by the swap. The stage
+        # is never observable under a skill name, so removing it now is safe.
         with contextlib.suppress(OSError):
             if stage.exists():
                 shutil.rmtree(stage)
@@ -177,14 +222,15 @@ def install_skills(target_dir: Path | None = None) -> list[Path]:
     under concurrent launcher starts: the whole operation is serialized
     with an interprocess lock, and each skill is fully staged in a temp
     sibling then swapped into place — so a reader never observes a
-    half-copied or long-missing skill.
+    half-copied or long-missing skill.  Superseded skill generations are
+    retired and reclaimed lazily (see :func:`_reclaim_retired`).
     """
     target = target_dir or _DEFAULT_TARGET
     target.mkdir(parents=True, exist_ok=True)
 
     installed: list[Path] = []
     with _install_lock(target):
-        _sweep_stale_temp(target)
+        _reclaim_retired(target)
         for name in bundled_skill_names():
             src = _BUNDLED_SKILLS / name
             dst = target / name
