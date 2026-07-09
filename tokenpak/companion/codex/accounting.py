@@ -255,7 +255,21 @@ def build_receipt(
             "billed_cost_usd": None,
         },
         "attribution": {
-            "tokenpak_mechanism_active": bool(setup.get("setup_completed")),
+            "receipt_wrapper_active": bool(
+                setup.get("receipt_wrapper_active", True)
+            ),
+            "tokenpak_mechanism_active": bool(
+                setup.get(
+                    "tokenpak_mechanism_active",
+                    setup.get("setup_completed"),
+                )
+            ),
+            "tokenpak_value_mechanism_active": bool(
+                setup.get(
+                    "tokenpak_mechanism_active",
+                    setup.get("setup_completed"),
+                )
+            ),
             "provider_native_caching_involved": (
                 usage.get("cached_input_tokens") is not None
             ),

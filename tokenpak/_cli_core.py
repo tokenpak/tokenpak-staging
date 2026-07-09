@@ -2244,16 +2244,36 @@ def cmd_codex(args):
     """
     import os
     import sys
-    if getattr(args, "budget", None) is not None:
-        os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     forwarded, trailing_receipt_out, trailing_run_id = _extract_codex_accounting_flags(
         list(args.args)
     )
+    forwarded, trailing_receipt_only = _extract_codex_receipt_only_flag(forwarded)
     receipt_out = getattr(args, "receipt_out", None) or trailing_receipt_out
     run_id = getattr(args, "run_id", None) or trailing_run_id
+    receipt_only = bool(getattr(args, "receipt_only", False) or trailing_receipt_only)
     if bool(receipt_out) != bool(run_id):
         print(
             "tokenpak codex: --receipt-out and --run-id must be provided together",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if receipt_only and getattr(args, "budget", None) is not None:
+        print(
+            "tokenpak codex: --receipt-only cannot be combined with --budget",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not receipt_only and getattr(args, "budget", None) is not None:
+        os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
+    if receipt_only and not (receipt_out and run_id):
+        print(
+            "tokenpak codex: --receipt-only requires --receipt-out and --run-id",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if receipt_only and getattr(args, "install_only", False):
+        print(
+            "tokenpak codex: --receipt-only cannot be combined with --install-only",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -2265,6 +2285,8 @@ def cmd_codex(args):
         sys.exit(uninstall_main(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
+    if receipt_only:
+        forwarded = ["--receipt-only", *forwarded]
     from .companion.codex import launch
     sys.exit(launch(args=forwarded, receipt_out=receipt_out, run_id=run_id))
 
@@ -2309,12 +2331,25 @@ def _extract_codex_accounting_flags(
     return stripped, receipt_out, run_id
 
 
+def _extract_codex_receipt_only_flag(forwarded: list[str]) -> tuple[list[str], bool]:
+    """Consume TokenPak's Vanilla receipt-only flag wherever it appears."""
+    stripped: list[str] = []
+    receipt_only = False
+    for token in forwarded:
+        if token == "--receipt-only":
+            receipt_only = True
+            continue
+        stripped.append(token)
+    return stripped, receipt_only
+
+
 def _codex_namespace_from_tail(tail: list[str]) -> argparse.Namespace:
     """Parse TokenPak-owned ``codex`` flags while preserving Codex-native flags."""
     budget = None
     install_only = False
     passthrough: list[str] = []
     stripped, receipt_out, run_id = _extract_codex_accounting_flags(tail)
+    stripped, receipt_only = _extract_codex_receipt_only_flag(stripped)
 
     index = 0
     while index < len(stripped):
@@ -2350,6 +2385,7 @@ def _codex_namespace_from_tail(tail: list[str]) -> argparse.Namespace:
         func=cmd_codex,
         budget=budget,
         install_only=install_only,
+        receipt_only=receipt_only,
         receipt_out=receipt_out,
         run_id=run_id,
         args=passthrough,
@@ -2551,6 +2587,14 @@ def _build_codex_parser(sub):
         "--install-only",
         action="store_true",
         help="Run setup (MCP, hooks, AGENTS.md, skills) and exit without launching codex",
+    )
+    p.add_argument(
+        "--receipt-only",
+        action="store_true",
+        help=(
+            "Launch vanilla Codex and write a no-body receipt without installing "
+            "or activating companion setup"
+        ),
     )
     p.add_argument(
         "--receipt-out",

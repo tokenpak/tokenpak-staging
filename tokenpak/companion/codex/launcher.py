@@ -281,6 +281,32 @@ def _run_codex_process(
     return proc.wait(), usage
 
 
+def _vanilla_receipt_env() -> dict[str, str]:
+    """Return a child environment with TokenPak companion state stripped."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("TOKENPAK_")
+    }
+
+
+def _receipt_only_setup_metadata() -> dict[str, object]:
+    return {
+        "mode": "receipt_only",
+        "setup_completed": False,
+        "receipt_wrapper_active": True,
+        "tokenpak_mechanism_active": False,
+        "profile": None,
+        "budget_daily_usd": None,
+        "rates_snapshot_refreshed": False,
+        "mcp_registered": False,
+        "hooks_enabled": False,
+        "hooks_installed": False,
+        "agents_md_installed": False,
+        "skills_installed_count": 0,
+    }
+
+
 def _write_accounting_receipt(
     *,
     receipt_out: str,
@@ -323,9 +349,91 @@ def main(
     args = list(args if args is not None else sys.argv[1:])
 
     install_only = False
+    receipt_only = False
     if "--install-only" in args:
         install_only = True
         args = [a for a in args if a != "--install-only"]
+    if "--receipt-only" in args:
+        receipt_only = True
+        args = [a for a in args if a != "--receipt-only"]
+
+    if receipt_only:
+        if not (receipt_out and run_id):
+            print(
+                "tokenpak: --receipt-only requires --receipt-out and --run-id",
+                file=sys.stderr,
+            )
+            return 2
+        if install_only:
+            print(
+                "tokenpak: --receipt-only cannot be combined with --install-only",
+                file=sys.stderr,
+            )
+            return 2
+        setup = _receipt_only_setup_metadata()
+        lock_exit = _preflight_state_lock()
+        if lock_exit is not None:
+            started_at = utc_now()
+            start_monotonic = time.monotonic()
+            try:
+                _write_accounting_receipt(
+                    receipt_out=receipt_out,
+                    run_id=run_id,
+                    codex_args=args,
+                    setup=setup,
+                    started_at=started_at,
+                    start_monotonic=start_monotonic,
+                    exit_code=lock_exit,
+                    status="blocked",
+                    missing_evidence=[
+                        "codex_process_not_launched_preflight_block"
+                    ],
+                )
+            except OSError as exc:
+                print(
+                    f"tokenpak: failed to write accounting receipt: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+            return lock_exit
+
+        env = _vanilla_receipt_env()
+        env["TOKENPAK_CODEX_RECEIPT_OUT"] = receipt_out
+        env["TOKENPAK_CODEX_RUN_ID"] = run_id
+        codex_args = ["codex", *args]
+        started_at = utc_now()
+        start_monotonic = time.monotonic()
+        usage = empty_usage()
+        status = "failed"
+        try:
+            exit_code, usage = _run_codex_process(codex_args, env)
+            status = "completed" if exit_code == 0 else "failed"
+        except KeyboardInterrupt:
+            exit_code = 130
+            status = "interrupted"
+        except OSError as exc:
+            exit_code = 1
+            status = "launch_failed"
+            print(f"tokenpak: failed to launch codex: {exc}", file=sys.stderr)
+        try:
+            _write_accounting_receipt(
+                receipt_out=receipt_out,
+                run_id=run_id,
+                codex_args=args,
+                setup=setup,
+                started_at=started_at,
+                start_monotonic=start_monotonic,
+                exit_code=exit_code,
+                status=status,
+                usage=usage,
+            )
+        except OSError as exc:
+            print(
+                f"tokenpak: failed to write accounting receipt: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        return exit_code
 
     config = CompanionConfig.from_env()
     config.profile_overrides()
