@@ -42,11 +42,11 @@ Each layout supports stable JSON output:
 tokenpak dashboard --layout spend --json
 ```
 
-The layouts project existing proxy, monitor, Dispatch, companion, and fleet
-configuration sources when they are present. Missing sources are reported as
-`unknown`, `not_measured`, or `not_configured`; the dashboard does not create
-credentials, edit configuration, start or stop services, or execute Dispatch
-runtime controls.
+The layouts project existing proxy, monitor, Dispatch, companion, and
+`fleet.yaml` configuration sources when they are present. Missing sources are
+reported as `unknown`, `not_measured`, or `not_configured`; the dashboard does
+not create credentials, edit configuration, start or stop services, or execute
+Dispatch runtime controls.
 
 ## Features
 

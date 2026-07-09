@@ -445,6 +445,7 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
+- `--layout` — Select read-only cockpit layout for terminal or JSON output (default: home) — choices: `home`, `dispatch`, `spend`, `debug`, `fleet`
 - `--public` — Advanced: show public URL with token for non-tunneled access
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
