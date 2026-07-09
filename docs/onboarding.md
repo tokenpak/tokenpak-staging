@@ -77,10 +77,11 @@ Then check your first savings:
 
 ```bash
 tokenpak cost
-# Cost today: $0.002 | Tokens saved: 1,847 (38%)
+# Requests today: 1 | Cost today: <your measured total>
+# Run tokenpak savings after real traffic for receipt-backed savings.
 ```
 
-If you see token savings above zero, compression is working.
+If receipt-backed savings appear above zero, compression is working for that workload.
 
 ### Day 1 Checklist
 
@@ -116,7 +117,7 @@ A healthy setup measurably reduces tokens on typical mixed workloads — check y
 
 - Is compression set to `balanced` or `aggressive` mode? (Check `~/.tokenpak/config.json`, key `compression.level`)
 - Are your requests using long system prompts or repetitive context? Those compress best.
-- Run `tokenpak demo --verbose` to see the pipeline applied to a sample payload.
+- Run `tokenpak demo` to inspect the offline fixture, then use `tokenpak savings` for receipt-backed savings.
 
 ### The 48.9% Benchmark
 
@@ -388,6 +389,7 @@ You've completed the onboarding journey. Here's what's next:
 
 | Goal | Where to look |
 |------|---------------|
+| Run Claude Code / Codex with the companion (MCP tools) | [Companion & MCP Setup](companion-mcp.md) |
 | Advanced proxy config (SSL, multi-provider) | [Proxy Setup](guides/proxy-setup.md) |
 | Build a custom compression recipe | [Recipe Development](guides/recipes.md) |
 | Deep dive on compression algorithms | [Compression](compression.md) |
