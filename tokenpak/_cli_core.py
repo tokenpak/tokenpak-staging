@@ -2133,6 +2133,7 @@ def cmd_dashboard(args):
     run_dashboard(
         fleet=getattr(args, "fleet", False),
         json_export=getattr(args, "json_export", False),
+        layout=getattr(args, "layout", "home"),
     )
 
 
@@ -3111,6 +3112,12 @@ def build_parser():
         dest="json_export",
         action="store_true",
         help="Export dashboard as JSON (non-interactive)",
+    )
+    p_dashboard.add_argument(
+        "--layout",
+        choices=("home", "dispatch", "spend", "debug", "fleet"),
+        default="home",
+        help="Select read-only cockpit layout for terminal or JSON output",
     )
     p_dashboard.add_argument(
         "--public",
@@ -5229,7 +5236,11 @@ def main():
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    if _is_first_run() and args.command not in ("help",):
+    machine_output = any(
+        bool(getattr(args, attr, False))
+        for attr in ("json", "json_export", "json_output", "as_json", "raw")
+    )
+    if _is_first_run() and args.command not in ("help",) and not machine_output:
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
             "   Run `tokenpak demo` to see compression in action.\n"
