@@ -6,6 +6,51 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Docs
+- Add a value-proof guide for `tokenpak prove` and remove stale lifetime savings examples from current docs.
+
+## [1.11.3] — 2026-07-08
+
+> **Release note:** version **1.11.2 was tagged but never published to PyPI.**
+> Its release run stopped fail-closed at the test gate on a concurrency safety
+> check for the Codex skills installer — no build, GitHub Release, or PyPI
+> artifact was produced and the last published release remained 1.11.1. 1.11.3
+> carries the intended 1.11.2 changes (below), plus the installer fix.
+
+### Fixed
+- **Codex skills installer never exposes an empty skill directory under
+  concurrent installs.** A replaced skill is now retired as a timestamped
+  generation and reclaimed only once it is old enough that no reader can still
+  be enumerating it, instead of being deleted the instant it is superseded.
+  Because `os.replace` only rebinds a name, a reader (Codex scanning the skills
+  directory) that opened the old directory just before the swap could otherwise
+  observe it emptied mid-scan; retaining the prior generation until it ages out
+  closes that window.
+
+## [1.11.2] — 2026-07-08
+
+> Patch release: tighten the runnable examples guidance, repair user recipe
+> overlay loading, and keep release validation stable for the packaged branch.
+
+### Fixed
+- **Runnable examples path clarified.** README and examples documentation now
+  explain that top-level example files are delivered through the public source
+  tree rather than bundled inside the PyPI wheel, with clone/archive paths and a
+  credential-free `examples/basic_compression.py` smoke path.
+- **User recipe overlays load from the TokenPak home.** The compression recipe
+  engine now loads optional user recipes from the resolved TokenPak home
+  `recipes/` directory and allows those recipes to intentionally shadow bundled
+  defaults.
+- **Companion guide tool reference corrected.** The companion guide now matches
+  the shipped MCP tool registry and documents vault search/retrieval as indexed
+  vault block lookup rather than structured Pak recall.
+
+### CI
+- **Release validation branch checks stabilized.** Release workflow artifact
+  labels now tolerate slash-containing branch names, and release rehearsal
+  snapshot validation uses the same canonical install shape as the release
+  workflow.
+
 ## [1.11.1] — 2026-07-06
 
 > Patch release: ship the CLI command registry in built distributions so a clean
