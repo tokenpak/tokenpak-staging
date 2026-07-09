@@ -111,33 +111,52 @@ Notes:
 
 ## Memory sources — bring your own knowledge base
 
-Point the companion at your own Markdown notes so it can surface lessons from
-your knowledge base. No special directory layout is required — any folder of
-`.md` / `.markdown` files works (scanned recursively).
+The companion can surface lessons from your own Markdown notes, not just its
+built-in memory schema. Any folder of `.md` / `.markdown` files works (scanned
+recursively) — no special directory layout is required.
+
+**Tell the companion where your notes live** with the
+`TOKENPAK_COMPANION_MEMORY_DIRS` environment variable. It accepts an
+OS-path-separator- or comma-separated list; `~` is expanded; missing or empty
+entries are dropped (never fatal):
 
 ```bash
-# Ingest a single notes directory
-tokenpak companion ingest --memory-dir ~/notes
-
-# Multiple directories (repeat the flag, or use the env var)
-tokenpak companion ingest --memory-dir ~/notes --memory-dir ~/work/journal
 export TOKENPAK_COMPANION_MEMORY_DIRS=~/notes:~/work/journal
-tokenpak companion ingest
-
-# See what's configured
-tokenpak companion status
 ```
 
-`TOKENPAK_COMPANION_MEMORY_DIRS` accepts an OS-path-separator- or
-comma-separated list; `~` is expanded. Missing or empty directories are
-reported, never fatal. The companion extracts lessons from `## Lessons
-Learned` / `## Notes` / task-summary sections of each file.
+The configured directories are parsed into `CompanionConfig.memory_dirs` and
+reported by the `session_info` MCP tool, which also surfaces a hint when no
+memory source is set — so an empty result is self-explaining.
+
+**Ingest with the library API.** `ingest_from_dir` ingests a single directory;
+`ingest_sources` orchestrates every configured source and returns a per-source
+status report:
+
+```python
+from tokenpak.companion.config import CompanionConfig
+from tokenpak.companion.memory.decision_memory import DecisionMemoryDB
+from tokenpak.companion.memory.lesson_ingest import ingest_from_dir, ingest_sources
+
+db = DecisionMemoryDB()
+
+# Ingest a single directory of notes
+n = ingest_from_dir("~/notes", db)
+
+# Or ingest every directory from TOKENPAK_COMPANION_MEMORY_DIRS, with status
+cfg = CompanionConfig.from_env()
+report = ingest_sources(db, memory_dirs=cfg.memory_dirs)
+# -> {"total": int, "sources": [{"path", "kind", "ingested", "reason"}, ...]}
+```
+
+Lessons are extracted from the `## Lessons Learned` / `## Notes` /
+task-summary sections of each file. Missing or unreadable files are skipped,
+never fatal.
 
 ---
 
 ## MCP Tools Reference
 
-When the companion is active, Claude Code gains seven MCP tools served by
+When the companion is active, Claude Code gains nine MCP tools served by
 `tokenpak.companion.mcp.server`.  The server runs as a stdio MCP process.
 
 | Tool | Description |
@@ -149,6 +168,11 @@ When the companion is active, Claude Code gains seven MCP tools served by
 | `journal_read` | Read journal entries for the current or a named session. Omit `session_id` to list recent sessions with stats. |
 | `journal_write` | Save a note, decision, or milestone to the current session journal for recall in future sessions. |
 | `session_info` | Return companion version, session ID, call count, config summary, and session cost/request counts. |
+| `vault_search` | Search indexed vault blocks with BM25 and return block IDs, relevance scores, paths, and token metadata. |
+| `vault_retrieve` | Fetch full vault block content and metadata by exact `block_id` or by path substring. |
+
+`vault_search` and `vault_retrieve` are relevance-ranked BM25 search/retrieval
+over indexed vault blocks. They are not structured Pak or MultiPak recall.
 
 ### Tool parameters
 
@@ -177,6 +201,23 @@ Valid `entry_type` values: `auto`, `user`, `milestone`, `cost`.
 ```json
 { "content": "Decided to use sqlite for the budget store." }
 ```
+
+**`vault_search`**
+```json
+{ "query": "cache policy", "limit": 5 }
+```
+Returns matching block IDs with relevance scores, source paths, token counts,
+and short snippets. `limit` defaults to 5 and is capped at 20.
+
+**`vault_retrieve`**
+```json
+{ "block_id": "docs/cache-policy" }
+```
+```json
+{ "path": "cache-policy.md" }
+```
+Returns one block's `content` plus metadata such as `block_id`, `path`,
+`source_path`, `tokens`, and `resolution`.
 
 ---
 

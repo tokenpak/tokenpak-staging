@@ -58,7 +58,7 @@ class AgentRegistry:
 
     Usage:
         registry = AgentRegistry()
-        agent_id = registry.register("agent-a", "worker-2", {"gpu": False, "memory_gb": 4})
+        agent_id = registry.register("trix", "agent-2", {"gpu": False, "memory_gb": 4})
         registry.heartbeat(agent_id)
         agents = registry.list_active()
         registry.deregister(agent_id)

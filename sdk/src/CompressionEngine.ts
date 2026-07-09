@@ -1,6 +1,6 @@
 /**
  * TokenPak CompressionEngine
- * Wraps the shipped /tpk/v1/compress HTTP endpoint.
+ * Wraps the /compress and /compress/conversation HTTP endpoints.
  */
 
 import { TokenPakHttpClient } from './client';
@@ -11,12 +11,11 @@ import {
   ConversationCompressOptions,
   ConversationCompressResult,
   TokenPakConfig,
-  TokenPakUnsupportedEndpointError,
 } from './types';
 
 interface CompressRequestBody {
   text: string;
-  max_tokens?: number;
+  target_tokens?: number;
   strategy?: string;
   cache?: boolean;
   preserve_code?: boolean;
@@ -24,16 +23,13 @@ interface CompressRequestBody {
 }
 
 interface CompressResponseBody {
-  original_text?: string;
-  compressed_text?: string;
-  pruned_text?: string;
+  original_text: string;
+  compressed_text: string;
   original_tokens: number;
-  compressed_tokens?: number;
-  pruned_tokens?: number;
-  savings_pct?: number;
-  reduction_pct?: number;
-  cache_hit?: boolean;
-  elapsed_ms?: number;
+  compressed_tokens: number;
+  savings_pct: number;
+  cache_hit: boolean;
+  elapsed_ms: number;
 }
 
 interface ConversationRequestBody {
@@ -49,11 +45,9 @@ interface ConversationResponseBody {
 
 export class CompressionEngine {
   private readonly client: TokenPakHttpClient;
-  private readonly experimentalEndpoints: boolean;
 
   constructor(config?: TokenPakConfig) {
     this.client = new TokenPakHttpClient(config);
-    this.experimentalEndpoints = config?.experimentalEndpoints ?? false;
   }
 
   /**
@@ -68,23 +62,23 @@ export class CompressionEngine {
   async compress(text: string, options: CompressOptions = {}): Promise<CompressResult> {
     const body: CompressRequestBody = {
       text,
-      max_tokens: options.targetTokens,
+      target_tokens: options.targetTokens,
       strategy: options.strategy ?? 'heuristic',
       cache: options.cache ?? true,
       preserve_code: options.preserveCode ?? true,
       preserve_structure: options.preserveStructure ?? true,
     };
 
-    const raw = await this.client.post<CompressResponseBody>('/tpk/v1/compress', body);
+    const raw = await this.client.post<CompressResponseBody>('/compress', body);
 
     return {
-      originalText: raw.original_text ?? text,
-      compressedText: raw.compressed_text ?? raw.pruned_text ?? text,
+      originalText: raw.original_text,
+      compressedText: raw.compressed_text,
       originalTokens: raw.original_tokens,
-      compressedTokens: raw.compressed_tokens ?? raw.pruned_tokens ?? raw.original_tokens,
-      savingsPct: raw.savings_pct ?? raw.reduction_pct ?? 0,
-      cacheHit: raw.cache_hit ?? false,
-      elapsedMs: raw.elapsed_ms ?? 0,
+      compressedTokens: raw.compressed_tokens,
+      savingsPct: raw.savings_pct,
+      cacheHit: raw.cache_hit,
+      elapsedMs: raw.elapsed_ms,
     };
   }
 
@@ -107,13 +101,6 @@ export class CompressionEngine {
     messages: ConversationMessage[],
     options: ConversationCompressOptions = {}
   ): Promise<ConversationCompressResult> {
-    if (!this.experimentalEndpoints) {
-      throw new TokenPakUnsupportedEndpointError(
-        'CompressionEngine.compressConversation',
-        '/compress/conversation'
-      );
-    }
-
     const body: ConversationRequestBody = {
       messages,
       keep_recent: options.keepRecent ?? 3,

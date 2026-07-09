@@ -119,7 +119,7 @@ For models not in the catalog, a conservative default is used (`$3.00/$15.00 per
 tokenpak cost --today
 tokenpak cost --week
 tokenpak cost --month
-tokenpak savings --lifetime
+tokenpak savings
 ```
 
 ### Session stats
@@ -136,8 +136,8 @@ tokenpak status --full
 Every request gets a trace ID. Inspect individual requests:
 
 ```bash
-tokenpak debug list
-tokenpak debug export <trace_id>
+tokenpak trace --last
+tokenpak trace --id <trace_id>
 ```
 
 Output:

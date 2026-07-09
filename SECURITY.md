@@ -1,61 +1,62 @@
 # Security Policy
 
-## Reporting a Security Issue
+## Reporting a Vulnerability
 
-If you discover a suspected security vulnerability in TokenPak, please report it privately.
-**Please do not open a public issue.**
+Please report vulnerabilities privately — never through a public issue, discussion, or pull request.
 
 - **Preferred:** [GitHub private vulnerability reporting](https://github.com/tokenpak/tokenpak/security/advisories/new)
-- **Email:** hello@tokenpak.ai
+- **Email fallback:** **security@tokenpak.ai**
 
-### What to include
-
-- TokenPak version (`tokenpak --version`)
-- Affected component (proxy, cache, compression, routing, CLI, …)
-- Steps to reproduce
-- Impact — what could an attacker do?
-- (Optional) a suggested fix
+Include the TokenPak version (`tokenpak --version`), reproduction steps, and your assessment of the impact. We aim to acknowledge reports within **3 calendar days**.
 
 ## Scope
 
-**In scope:** vulnerabilities in TokenPak's own code and published artifacts (this repository and
-the official packages it produces).
+**In scope:** the TokenPak code and published artifacts — the `tokenpak` package on PyPI, the local proxy, CLI, and companion components in this repository.
 
-**Out of scope:** third-party AI providers and their APIs; your own host, OS, or network
-configuration; social engineering; and vulnerabilities in dependencies (please report those
-upstream — we track them via automated dependency scanning).
-
-## Our Response (targets, not guarantees)
-
-The following are good-faith targets to set expectations — **not contractual SLAs or guarantees:**
-
-- **Acknowledgement:** within **3 calendar days** of your report.
-- **Triage & severity:** we assess impact and assign a severity (CVSS v3.1).
-- **Remediation targets by severity:**
-  - **Critical** — mitigation, advisory, or fix targeted within **~7 calendar days**.
-  - **High** — targeted within **~30 calendar days**.
-  - **Medium / Low** — addressed in a future scheduled release.
-- **Coordinated disclosure:** we will agree a disclosure date with you; our default embargo is
-  **90 days**, or until a fix/mitigation ships — whichever comes first.
-- When a fix ships we publish a **GitHub Security Advisory** and credit you unless you prefer otherwise.
+**Out of scope:** third-party model providers and their APIs, your own host and network configuration, and social engineering.
 
 ## Supported Versions
 
-TokenPak is currently in **beta**. During beta, security fixes target the **latest published minor
-only**, unless a specific advisory extends coverage.
+| Version | Supported |
+| ------- | --------- |
+| 1.11.x (latest minor) | ✅ Security fixes |
+| < 1.11 | ❌ Unsupported — please upgrade |
 
-| Version | Status |
-|---------|--------|
-| 1.7.x (latest) | ✅ Supported |
-| < 1.7 | ⚠️ Best-effort for critical issues only |
+TokenPak is in beta: security fixes target the **latest public minor release line** unless a security advisory explicitly extends support to an earlier line. This table is checked at each release.
 
-## Safe Harbor
+## Coordinated Disclosure
 
-We support good-faith security research and will not pursue legal action against researchers who:
+The timelines below are **targets we work to, not absolute guarantees**:
 
-- test only against their own installation;
+1. **Acknowledge** within 3 calendar days of receipt.
+2. **Triage** — we assign a CVSS v3.1 severity (Critical / High / Medium / Low).
+3. **Remediation targets by severity:**
+   - **Critical:** mitigation, advisory, or patched release targeted within **7 calendar days**.
+   - **High:** remediation targeted within **30 calendar days**.
+   - **Medium / Low:** next scheduled release.
+4. **Disclosure** — we coordinate a disclosure date with the reporter; the default embargo is **90 days**, or until a fix or mitigation is available, whichever is agreed.
+
+Fixes for Medium+ issues are published as GitHub Security Advisories with a CVE requested, and reporters are credited unless they decline. Security fixes are never patched silently.
+
+## Researcher Safe Harbor
+
+We welcome good-faith security research and will not pursue legal action against researchers who:
+
+- test only against their own TokenPak installation;
 - do not run denial-of-service, mass-targeting, or data-destruction tests;
-- do not access, modify, or exfiltrate data that is not theirs;
-- report promptly and allow reasonable time to remediate before any public disclosure.
+- do not access, modify, or exfiltrate data that isn't theirs;
+- report promptly through the channels above and allow reasonable remediation time before public disclosure.
 
-Thank you for helping keep TokenPak secure.
+## Best Practices
+
+### For Users
+- Keep TokenPak updated
+- Treat prompts as sensitive data
+- Avoid logging raw prompts or compressed blocks
+- Use separate keys for dev/prod
+
+### For Contributors
+- Never commit secrets or API keys
+- Validate all user inputs
+- Use parameterized database access
+- Keep dependencies current

@@ -17,13 +17,12 @@ from __future__ import annotations
 import json
 import os
 import random
-import re
 import sqlite3
 import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 try:
     import click
@@ -111,6 +110,10 @@ def _print_free_tier_upgrade_hint() -> None:
 
 SEP_INNER = "─────────────────────────────────"
 PROXY_DEFAULT = "http://127.0.0.1:8766"
+DB_DEFAULT = os.environ.get(
+    "TOKENPAK_DB",
+    os.path.expanduser("~/tokenpak/monitor.db"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -130,18 +133,23 @@ def _fetch(url: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
 def _get_db_path() -> str:
     """Resolve the monitor DB path via the canonical resolver.
 
-    Delegates to ``tokenpak.core.paths.get_db_path`` (which routes through
-    ``tokenpak._paths.monitor_db()``) so ``status``, ``_cli_core``,
-    ``doctor``, and the proxy writer all resolve the SAME DB through one
-    candidate chain (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` ->
-    ``~/tokenpak``). When no valid DB exists anywhere, the resolver's
-    canonical fresh-install path is returned (the former hand-rolled
-    ``DB_DEFAULT`` constant pointed at a legacy location and has been
-    removed — the resolver is the only path source).
+    D5 (feed normalization): delegate to ``tokenpak._paths.monitor_db()`` so
+    ``status``, ``_cli_core``, ``doctor``, and the proxy writer all resolve the
+    SAME DB through one candidate chain
+    (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` -> ``~/tokenpak``).
+    The previous hand-rolled list omitted ``~/.tpk`` (the canonical TPK home),
+    so the dashboard could read a different DB than the proxy writes once
+    ``~/.tpk/monitor.db`` exists — the latent split-brain this fixes.
+    Falls back to the legacy default only if no valid DB is found.
     """
-    from tokenpak.core.paths import get_db_path
-
-    return str(get_db_path("monitor.db"))
+    try:
+        from tokenpak import _paths
+        resolved = _paths.monitor_db(mode="read")
+        if resolved is not None:
+            return str(resolved)
+    except Exception:
+        pass
+    return DB_DEFAULT
 
 
 def _connect_db(db_path: Optional[str] = None) -> Optional[sqlite3.Connection]:
@@ -181,67 +189,6 @@ def _get_version() -> str:
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Time-window resolution — single source of truth for `tokenpak status`
-# windowing. Period tokens: None (all time), "today" (local calendar day),
-# the fixed keys 1h/24h/7d/30d, the legacy "<N>h_custom" from --days/--hours,
-# and the canonical --window units <N>m | <N>h | <N>d | <N>mo (Std 03 §2).
-# ---------------------------------------------------------------------------
-_PERIOD_MAP = {"1h": "-1 hours", "24h": "-1 days", "7d": "-7 days", "30d": "-30 days"}
-_WINDOW_RE = re.compile(r"^(\d+)(m|h|d|mo)$")
-_UNIT_SQL = {"m": "minutes", "h": "hours", "d": "days", "mo": "months"}
-
-
-def _parse_window(value: str) -> str:
-    """Validate a ``--window`` token: ``<N>m | <N>h | <N>d | <N>mo``.
-
-    Rejects ad-hoc sugar (``--4h``, ``1minute``, bare integers) per Std 03 §2 —
-    the only accepted spelling is an integer followed by one of m/h/d/mo.
-    """
-    import click
-
-    token = (value or "").strip().lower()
-    if not _WINDOW_RE.match(token):
-        raise click.BadParameter(
-            f"invalid --window {value!r}; use <N>m, <N>h, <N>d, or <N>mo "
-            "(e.g. 30m, 4h, 7d, 2mo)"
-        )
-    return token
-
-
-def _window_clause(period: Optional[str]) -> Tuple[str, list]:
-    """Map a period token to a SQL ``WHERE`` clause + params.
-
-    Stored timestamps are UTC; rolling windows use UTC-relative
-    ``datetime('now', '-N unit')`` while ``today`` compares the localised
-    timestamp against the local calendar day so "today" means the user's day.
-    """
-    if not period:
-        return "", []
-    if period == "today":
-        return "WHERE datetime(timestamp, 'localtime') >= date('now', 'localtime')", []
-    if period in _PERIOD_MAP:
-        return "WHERE timestamp >= datetime('now', ?)", [_PERIOD_MAP[period]]
-    if period.endswith("h_custom"):
-        hours = int(period.replace("h_custom", ""))
-        return "WHERE timestamp >= datetime('now', ?)", [f"-{hours} hours"]
-    m = _WINDOW_RE.match(period)
-    if m:
-        return "WHERE timestamp >= datetime('now', ?)", [f"-{m.group(1)} {_UNIT_SQL[m.group(2)]}"]
-    return "", []
-
-
-def _window_label(period: Optional[str]) -> str:
-    """Human-readable label for a period token, used in section headers."""
-    if not period:
-        return "all time"
-    if period == "today":
-        return "today"
-    if period.endswith("h_custom"):
-        return f"last {int(period.replace('h_custom', ''))}h"
-    return f"last {period}"
-
-
 def _calculate_fleet_savings(
     db_path: Optional[str] = None,
     period: Optional[str] = "24h",
@@ -262,8 +209,23 @@ def _calculate_fleet_savings(
     if conn is None:
         return {"error": "db_not_found", "db_path": db_path or _get_db_path()}
 
-    # Build time filter (single source of truth — supports today/window units)
-    where_clause, params = _window_clause(period)
+    # Build time filter
+    period_map = {
+        "1h": "-1 hours",
+        "24h": "-1 days",
+        "7d": "-7 days",
+        "30d": "-30 days",
+    }
+    where_clause = ""
+    params: list = []
+    if period and period in period_map:
+        where_clause = "WHERE timestamp >= datetime('now', ?)"
+        params = [period_map[period]]
+    elif period and period.endswith("h_custom"):
+        # Custom hour filter from --days/--hours flags
+        hours = int(period.replace("h_custom", ""))
+        where_clause = "WHERE timestamp >= datetime('now', ?)"
+        params = [f"-{hours} hours"]
 
     # Cache attribution: prefer the new `cache_origin` column (platform-agnostic).
     # Legacy DBs without it get conservative treatment in the per-row math below.
@@ -523,23 +485,6 @@ def _parse_since(since: str) -> int:
         return max(1, int(s))
     except ValueError:
         return 7
-
-
-def _actual_session_savings_pct(tokens_raw: Any, tokens_saved: Any) -> Optional[float]:
-    """Return receipt-backed compression savings pct from token counters."""
-    try:
-        raw = float(tokens_raw or 0)
-        saved = float(tokens_saved or 0)
-    except (TypeError, ValueError):
-        return None
-    if raw <= 0:
-        return None
-    pct = saved / raw * 100.0
-    return max(0.0, min(100.0, pct))
-
-
-def _fmt_savings_pct(pct: Optional[float], *, decimals: int = 1) -> str:
-    return "unknown" if pct is None else f"{pct:.{decimals}f}%"
 
 
 # ---------------------------------------------------------------------------
@@ -927,8 +872,6 @@ def run(
     hours: int = 0,
     fleet: bool = False,
     since: Optional[str] = None,
-    window: Optional[str] = None,
-    all_time: bool = False,
 ) -> None:
     """Print savings-first status to stdout.
 
@@ -968,19 +911,11 @@ def run(
     session = stats.get("session", {}) if stats else {}
 
     # --- Fetch DB data (historical, with optional time filter) ---
-    # Window precedence: --all > --window > --days/--hours > default (today).
-    # The default is today's local calendar day so the most-used view shows
-    # recent state, not an all-time firehose; --all opts back into full history.
     total_hours = days * 24 + hours
-    if all_time:
-        db_period = None
-    elif window:
-        db_period = _parse_window(window)
-    elif total_hours > 0:
+    if total_hours > 0:
         db_period = f"{total_hours}h_custom"
     else:
-        db_period = "today"
-    win_label = _window_label(db_period)
+        db_period = None  # all time
     savings_all = _calculate_fleet_savings(db_path=db_path, period=db_period)
 
     version = _get_version()
@@ -1163,7 +1098,7 @@ def run(
     # displayed below so you can see which hits tokenpak actually caused.
     print()
     total_cache_handled = sent_tok + cache_read_tok
-    print("  🔄 Cache activity (proxy session)")
+    print("  🔄 Cache activity (observed)")
     print(f"     Token cache rate     {provider_cache_pct:>9.0f}%   {_fmt_num(cache_read_tok)} of {_fmt_num(total_cache_handled)} input tokens")
     print(f"     Request hit rate     {tp_cache_hit_rate:>9.0f}%   {tp_cache_hits:,} of {tp_cache_hits + tp_cache_misses:,} requests")
     if cache_read_tok > 0 or cache_proxy_tok or cache_client_tok or cache_unknown_tok:
@@ -1187,7 +1122,7 @@ def run(
         model_rows = savings_all["models"]
         show_limit = len(model_rows) if full else 6
         print()
-        print(f"  🤖 Models — {win_label}")
+        print("  🤖 Models (all time)")
         print(f"     {'Model':<26} {'Reqs':>6}  {'Input':>8}  {'Cache%':>6}  {'Compressed':>10}")
         print(f"     {'─' * 26} {'─' * 6}  {'─' * 8}  {'─' * 6}  {'─' * 10}")
         for m in model_rows[:show_limit]:
@@ -1207,8 +1142,8 @@ def run(
 
     # --- 4b. FULL: by-source and by-provider summaries inline ---
     if full:
-        _print_by_source_inline(db_path, period=db_period)
-        _print_by_provider_inline(db_path, period=db_period)
+        _print_by_source_inline(db_path)
+        _print_by_provider_inline(db_path)
 
     # --- 5. PERFORMANCE ---
     print()
@@ -1236,7 +1171,7 @@ def run(
         except Exception:
             pass
     print(f"     Uptime               {uptime_str:>10}")
-    print(f"     Avg round-trip       {latency_str:>10}")
+    print(f"     Proxy overhead       {latency_str:>10}")
 
     # --- 6. HEALTH ---
     print()
@@ -1283,14 +1218,11 @@ _PROVIDER_CASE = """
 """
 
 
-def _query_breakdown(
-    db_path: Optional[str], group_expr: str, period: Optional[str] = None
-) -> list:
-    """Run a grouped breakdown query against monitor.db (optionally windowed)."""
+def _query_breakdown(db_path: Optional[str], group_expr: str) -> list:
+    """Run a grouped breakdown query against monitor.db."""
     conn = _connect_db(db_path)
     if conn is None:
         return []
-    where_clause, params = _window_clause(period)
     try:
         return conn.execute(f"""
             SELECT
@@ -1303,10 +1235,9 @@ def _query_breakdown(
                 COALESCE(SUM(estimated_cost), 0.0) AS cost,
                 GROUP_CONCAT(DISTINCT model) AS models
             FROM requests
-            {where_clause}
             GROUP BY label
             ORDER BY reqs DESC
-        """, params).fetchall()
+        """).fetchall()
     except Exception:
         return []
     finally:
@@ -1379,15 +1310,13 @@ def _run_by_provider(
     _print_breakdown_table("By Provider", "🏢", rows)
 
 
-def _print_by_source_inline(
-    db_path: Optional[str] = None, period: Optional[str] = None
-) -> None:
+def _print_by_source_inline(db_path: Optional[str] = None) -> None:
     """Print compact by-source summary for --full mode."""
-    rows = _query_breakdown(db_path, _SOURCE_CASE, period=period)
+    rows = _query_breakdown(db_path, _SOURCE_CASE)
     if not rows:
         return
     print()
-    print(f"  📱 Sources — {_window_label(period)}")
+    print("  📱 Sources (all time)")
     print(f"     {'Source':<20} {'Reqs':>7}  {'Cost':>10}  {'Cache%':>6}")
     print(f"     {'─' * 20} {'─' * 7}  {'─' * 10}  {'─' * 6}")
     for r in rows:
@@ -1398,15 +1327,13 @@ def _print_by_source_inline(
         print(f"     {r['label']:<20} {r['reqs']:>7,}  {_fmt_cost(r['cost']):>10}  {c_pct:>5.0f}%")
 
 
-def _print_by_provider_inline(
-    db_path: Optional[str] = None, period: Optional[str] = None
-) -> None:
+def _print_by_provider_inline(db_path: Optional[str] = None) -> None:
     """Print compact by-provider summary for --full mode."""
-    rows = _query_breakdown(db_path, _PROVIDER_CASE, period=period)
+    rows = _query_breakdown(db_path, _PROVIDER_CASE)
     if not rows:
         return
     print()
-    print(f"  🏢 Providers — {_window_label(period)}")
+    print("  🏢 Providers (all time)")
     print(f"     {'Provider':<20} {'Reqs':>7}  {'Cost':>10}  {'Cache%':>6}")
     print(f"     {'─' * 20} {'─' * 7}  {'─' * 10}  {'─' * 6}")
     for r in rows:
@@ -1436,14 +1363,14 @@ def _run_minimal(
         saved_tok = session.get("saved_tokens", 0)
         sent = session.get("sent_input_tokens", 0)
         raw = sent + saved_tok
-        pct = _actual_session_savings_pct(raw, saved_tok)
+        pct = (saved_tok / raw * 100) if raw > 0 else 0.0
         # Pull tokenpak cache hit rate from /cache-stats
         cache_data = _fetch(f"{proxy_base}/cache-stats")
         tp_hits = cache_data.get("cache_hits", 0) if cache_data else 0
         tp_misses = cache_data.get("cache_misses", 0) if cache_data else 0
         tp_total = tp_hits + tp_misses
         tp_cache_pct = (tp_hits / tp_total * 100) if tp_total > 0 else 0.0
-        line = f"📦 TokenPak: {_fmt_num(saved_tok)} tokens saved ({_fmt_savings_pct(pct, decimals=0)}) | {reqs:,} reqs | {tp_cache_pct:.0f}% cache hit"
+        line = f"📦 TokenPak: {_fmt_num(saved_tok)} tokens saved ({pct:.0f}%) | {reqs:,} reqs | {tp_cache_pct:.0f}% cache hit"
     else:
         # Fall back to DB
         savings = _calculate_fleet_savings(db_path=db_path, period="24h")
@@ -1548,13 +1475,13 @@ def run_full(
     tokens_raw = session.get("tokens_raw", 0)
     total_cost = session.get("total_cost", 0.0)
     cost_saved = session.get("session_total_saved", 0.0)
-    avg_savings = _actual_session_savings_pct(tokens_raw, tokens_saved)
+    avg_savings = session.get("avg_savings_pct", 0.0)
     errors = session.get("errors", 0)
     compression_avg = health.get("compression_ratio_avg", 0.0)
 
     if minimal:
         mark = "⚠️ DEGRADED" if is_degraded else "● Active"
-        pct = f"{_fmt_savings_pct(avg_savings)} saved" if avg_savings is not None else "unknown savings"
+        pct = f"{avg_savings:.1f}% saved" if tokens_raw else "n/a"
         print(f"{mark} | {requests:,} req | {pct}")
         return
 
@@ -1580,7 +1507,7 @@ def run_full(
         print("💰  Session Savings")
         print(f"    Requests:      {requests:,}")
         print(f"    Input tokens:  {tokens_raw:,}")
-        print(f"    Tokens saved:  {tokens_saved:,} ({_fmt_savings_pct(avg_savings)} compression)")
+        print(f"    Tokens saved:  {tokens_saved:,} ({avg_savings:.1f}% compression)")
         print(
             f"    Cache reads:   {session.get('cache_read_tokens', 0):,} ({savings_data.get('cache_hit_rate', 0):.0f}% hit rate)"
         )
@@ -1592,7 +1519,7 @@ def run_full(
         print(f"{'Errors:':<28}{errors:,}")
         print(f"{'Tokens (raw):':<28}{tokens_raw:,}")
         print(f"{'Tokens (saved):':<28}{tokens_saved:,}")
-        print(f"{'Avg Compression:':<28}{_fmt_savings_pct(avg_savings)}  (ratio {compression_avg:.3f})")
+        print(f"{'Avg Compression:':<28}{avg_savings:.1f}%  (ratio {compression_avg:.3f})")
         print(f"{'Cost (this session):':<28}${total_cost:.4f}")
         print(f"{'Cost Saved:':<28}${cost_saved:.4f}")
         print()
@@ -1653,8 +1580,6 @@ if HAS_CLICK:
     @click.option("--db", "db_path", default=None, help="Monitor DB path override")
     @click.option("--days", default=0, type=int, help="Filter to last N days (combinable with --hours)")
     @click.option("--hours", default=0, type=int, help="Filter to last N hours (combinable with --days)")
-    @click.option("--window", default=None, help="Time window: <N>m|<N>h|<N>d|<N>mo (e.g. 30m, 4h, 7d, 2mo)")
-    @click.option("--all", "all_time", is_flag=True, help="Show full persistent history (all time)")
     @click.option("--fleet", is_flag=True, help="Fleet rollup view — reads rollup_daily")
     @click.option("--since", default=None, help="With --fleet: window in days, e.g. '7d' (default: 7d)")
     def status_cmd(
@@ -1668,8 +1593,6 @@ if HAS_CLICK:
         db_path: Optional[str],
         days: int,
         hours: int,
-        window: Optional[str],
-        all_time: bool,
         fleet: bool,
         since: Optional[str],
     ) -> None:
@@ -1683,11 +1606,7 @@ if HAS_CLICK:
         Examples:
 
         \\b
-          tokenpak status                     # savings-first (today, local day)
-          tokenpak status --window 4h         # last 4 hours
-          tokenpak status --window 30m        # last 30 minutes
-          tokenpak status --window 2mo        # last 2 months
-          tokenpak status --all               # full persistent history
+          tokenpak status                     # savings-first (all time)
           tokenpak status --days 1            # last 24 hours
           tokenpak status --hours 6           # last 6 hours
           tokenpak status --days 1 --hours 6  # last 30 hours
@@ -1712,6 +1631,4 @@ if HAS_CLICK:
             hours=hours,
             fleet=fleet,
             since=since,
-            window=window,
-            all_time=all_time,
         )

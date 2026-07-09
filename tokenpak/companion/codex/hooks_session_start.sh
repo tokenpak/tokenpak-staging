@@ -4,13 +4,13 @@
 # Codex SessionStart hook — capsule auto-load + branded banner.
 #
 # Reads JSON from stdin with: session_id, transcript_path, cwd,
-# hook_event_name, model, source (startup|resume|clear).
+# hook_event_name, model, source (startup|resume|clear|compact).
 #
 # Actions:
 #   - Insert a "session_start" journal entry (best-effort)
-#   - Emit a branded banner to stderr
+#   - Emit a branded banner to stderr, except on source=clear
 #   - If a prior session for this cwd has a capsule_path, surface it
-#     via Codex's SessionStart `systemMessage` JSON output
+#     via Codex's SessionStart `systemMessage` JSON output, except on source=clear
 #   - Always exit 0 (SessionStart cannot block)
 # ──────────────────────────────────────────────────────────────
 
@@ -33,20 +33,8 @@ fi
 
 JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
 JOURNAL_DB="$JOURNAL_DIR/journal.db"
-RUN_DIR="$JOURNAL_DIR/run"
-
-if [ -n "$SESSION_ID" ]; then
-    if [ -d "$RUN_DIR" ] || mkdir -p "$RUN_DIR" 2>/dev/null; then
-        CURRENT_SESSION_FILE="$RUN_DIR/current-session"
-        OLD_SESSION_ID=""
-        if [ -f "$CURRENT_SESSION_FILE" ]; then
-            IFS= read -r OLD_SESSION_ID < "$CURRENT_SESSION_FILE" || true
-        fi
-        if [ "$OLD_SESSION_ID" != "$SESSION_ID" ]; then
-            printf '%s\n' "$SESSION_ID" > "$CURRENT_SESSION_FILE" 2>/dev/null || true
-        fi
-    fi
-fi
+QUIET_CLEAR=0
+[ "$SOURCE" = "clear" ] && QUIET_CLEAR=1
 
 if [ -n "$SESSION_ID" ] && [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     TIMESTAMP=$(date +%s)
@@ -57,7 +45,7 @@ fi
 
 # Capsule auto-load: look up most recent capsule_path for this cwd.
 CAPSULE_PATH=""
-if [ -n "$CWD" ] && [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+if [ "$QUIET_CLEAR" != "1" ] && [ -n "$CWD" ] && [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     CAPSULE_PATH=$(sqlite3 "$JOURNAL_DB" \
         "SELECT capsule_path FROM sessions
          WHERE project_dir = '$CWD' AND capsule_path IS NOT NULL AND capsule_path != ''
@@ -65,7 +53,7 @@ if [ -n "$CWD" ] && [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; 
 fi
 
 # Branded banner to stderr (visible in Codex TUI).
-if [ "${TOKENPAK_COMPANION_SHOW_BANNER:-1}" != "0" ]; then
+if [ "$QUIET_CLEAR" != "1" ] && [ "${TOKENPAK_COMPANION_SHOW_BANNER:-1}" != "0" ]; then
     MODEL_TAG=""
     [ -n "$MODEL" ] && MODEL_TAG=" — $MODEL"
     printf 'tokenpak: session %s (%s)%s\n' "${SESSION_ID:0:8}" "$SOURCE" "$MODEL_TAG" >&2

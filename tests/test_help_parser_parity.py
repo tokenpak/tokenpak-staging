@@ -48,7 +48,7 @@ P0_4_DISPOSED = {
 # command, catalog it in commands.json so help advertises it; if you add a
 # deliberately-internal verb, bump this number in the same change so the
 # decision is explicit and reviewed.
-EXPECTED_INTERNAL_UNADVERTISED = 36
+EXPECTED_INTERNAL_UNADVERTISED = 34  # public OSS surface: two internal verbs present in other distributions are not registered here
 
 
 def _registry_commands():

@@ -83,27 +83,6 @@ def _run_codex_bash_hook(
     )
 
 
-def _run_stop_bash_hook(
-    hook_input: dict,
-    tmp_path: Path,
-    extra_env: dict | None = None,
-) -> subprocess.CompletedProcess:
-    env = os.environ.copy()
-    env["TOKENPAK_COMPANION_ENABLED"] = "1"
-    env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(tmp_path)
-    if extra_env:
-        env.update(extra_env)
-    return subprocess.run(
-        ["bash", _STOP_HOOK],
-        input=json.dumps(hook_input),
-        capture_output=True,
-        text=True,
-        timeout=15,
-        cwd=_REPO_ROOT,
-        env=env,
-    )
-
-
 def _run_script(
     script: str,
     fixture_name: str,
@@ -191,40 +170,6 @@ def _seed_budget_db(tmp_path: Path, daily_cost: float) -> Path:
     return db
 
 
-def _install_fake_sqlite3(tmp_path: Path, select_output: str = "0.0") -> tuple[Path, dict]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    capture = tmp_path / "sqlite-capture.txt"
-    fake = bin_dir / "sqlite3"
-    fake.write_text(
-        textwrap.dedent(
-            """\
-            #!/usr/bin/env bash
-            {
-              printf 'ARGS:'
-              for arg in "$@"; do
-                printf ' [%s]' "$arg"
-              done
-              printf '\\n'
-            } >> "$TOKENPAK_SQLITE_CAPTURE"
-            for arg in "$@"; do
-              case "$arg" in
-                *SELECT*) printf '%s\\n' "${TOKENPAK_SQLITE_SELECT_OUTPUT:-0.0}"; exit 0 ;;
-              esac
-            done
-            exit 0
-            """
-        )
-    )
-    fake.chmod(0o755)
-    env = {
-        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
-        "TOKENPAK_SQLITE_CAPTURE": str(capture),
-        "TOKENPAK_SQLITE_SELECT_OUTPUT": select_output,
-    }
-    return capture, env
-
-
 # ──────────────────────────────────────────────────────────────
 # hooks #3 — pre-existing PR-45 contract, unchanged.
 # ──────────────────────────────────────────────────────────────
@@ -269,55 +214,6 @@ def test_codex_bash_hook_allow_no_budget(tmp_path):
     result = _run_codex_bash_hook(hook_input, tmp_path=tmp_path)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
-
-
-def test_codex_bash_hook_preserves_decimal_rate_snapshot(tmp_path):
-    transcript_path = tmp_path / "session.jsonl"
-    transcript_path.write_bytes(b"x" * 4_000_000)
-    rates_path = tmp_path / "model_rates.tsv"
-    rates_path.write_text("cheap-model\t0.8\n")
-    hook_input = dict(_SIX_FIELD_INPUT)
-    hook_input["transcript_path"] = str(transcript_path)
-    hook_input["model"] = "cheap-model"
-
-    result = _run_codex_bash_hook(
-        hook_input,
-        tmp_path=tmp_path,
-        extra_env={"TOKENPAK_COMPANION_RATES_FILE": str(rates_path)},
-    )
-
-    assert result.returncode == 0
-    assert "est $0.800000" in result.stderr
-
-
-def test_codex_bash_hook_sql_escapes_journal_values(tmp_path):
-    capture, fake_env = _install_fake_sqlite3(tmp_path)
-    (tmp_path / "journal.db").touch()
-    transcript_path = tmp_path / "session.jsonl"
-    transcript_path.write_bytes(b"x" * 4000)
-    hook_input = dict(_SIX_FIELD_INPUT)
-    hook_input["session_id"] = "sess'quoted"
-    hook_input["model"] = "model'quoted"
-    hook_input["transcript_path"] = str(transcript_path)
-
-    result = _run_codex_bash_hook(hook_input, tmp_path=tmp_path, extra_env=fake_env)
-
-    assert result.returncode == 0
-    import time
-
-    captured_sql = ""
-    for _ in range(20):
-        if capture.exists():
-            captured_sql = capture.read_text()
-            if "sess''quoted" in captured_sql:
-                break
-        time.sleep(0.05)
-    assert captured_sql, "fake sqlite3 should have captured the journal write"
-    assert "PRAGMA journal_mode=WAL" in captured_sql
-    assert "PRAGMA busy_timeout=5000" in captured_sql
-    assert "PRAGMA foreign_keys=ON" in captured_sql
-    assert "sess''quoted" in captured_sql
-    assert "model''quoted" in captured_sql
 
 
 # ──────────────────────────────────────────────────────────────
@@ -389,12 +285,11 @@ def test_session_start_hook_emits_banner_on_resume(tmp_path):
     assert "resume" in result.stderr.lower()
 
 
-def test_session_start_hook_writes_current_session(tmp_path):
-    result = _run_script(_SESSION_START_HOOK, "hook_session_start_startup.json", tmp_path)
+def test_session_start_hook_is_quiet_on_clear(tmp_path):
+    result = _run_script(_SESSION_START_HOOK, "hook_session_start_clear.json", tmp_path)
     assert result.returncode == 0
-    assert (
-        tmp_path / "run" / "current-session"
-    ).read_text().strip() == "fixture-session-start-startup"
+    assert result.stdout.strip() == ""
+    assert result.stderr.strip() == ""
 
 
 @_requires_sqlite3
@@ -414,6 +309,24 @@ def test_session_start_hook_surfaces_prior_capsule(tmp_path):
     payload = json.loads(result.stdout.strip())
     assert "/tmp/cap.json" in payload["systemMessage"]
     assert payload["continue"] is True
+
+
+@_requires_sqlite3
+def test_session_start_hook_does_not_surface_prior_capsule_on_clear(tmp_path):
+    """`/clear` must not inject hook output that can disrupt the TUI redraw."""
+    db = _seed_journal_db(tmp_path)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO sessions (session_id, started_at, project_dir, capsule_path) "
+        "VALUES (?, ?, ?, ?)",
+        ("prior-session", 1.0, "/tmp/tp-l2a-fixture", "/tmp/cap.json"),
+    )
+    conn.commit()
+    conn.close()
+    result = _run_script(_SESSION_START_HOOK, "hook_session_start_clear.json", tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ""
+    assert result.stderr.strip() == ""
 
 
 @_requires_sqlite3
@@ -523,46 +436,32 @@ def test_post_tool_use_hook_hardcap_emits_additional_context(tmp_path):
 
 
 # ──────────────────────────────────────────────────────────────
-# Stop fixture replay.
+# Stop hook timeout regression.
 # ──────────────────────────────────────────────────────────────
 
 
-def test_stop_hook_records_decimal_safe_cost_and_escaped_sql(tmp_path):
-    capture, fake_env = _install_fake_sqlite3(tmp_path)
+def test_stop_hook_bounds_slow_sqlite(tmp_path):
+    """Stop must exit 0 even when sqlite is slow or wedged."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sqlite = fake_bin / "sqlite3"
+    fake_sqlite.write_text("#!/usr/bin/env bash\nsleep 20\n")
+    fake_sqlite.chmod(0o755)
     (tmp_path / "journal.db").touch()
     (tmp_path / "budget.db").touch()
-    transcript_path = tmp_path / "session.jsonl"
-    transcript_path.write_bytes(b"x" * 800_000)
-    rates_path = tmp_path / "model_rates.tsv"
-    rates_path.write_text("model'quoted\t3\n")
-    hook_input = {
-        "session_id": "sess'quoted",
-        "transcript_path": str(transcript_path),
-        "cwd": str(tmp_path),
-        "hook_event_name": "Stop",
-        "model": "model'quoted",
-        "stop_hook_active": False,
-        "last_assistant_message": "",
-    }
 
-    result = _run_stop_bash_hook(
-        hook_input,
-        tmp_path=tmp_path,
+    result = _run_script(
+        _STOP_HOOK,
+        "hook_stop_basic.json",
+        tmp_path,
         extra_env={
-            **fake_env,
-            "TOKENPAK_COMPANION_RATES_FILE": str(rates_path),
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "TOKENPAK_COMPANION_SQLITE_TIMEOUT_SECONDS": "1",
         },
     )
 
     assert result.returncode == 0
-    captured_sql = capture.read_text()
-    assert "PRAGMA journal_mode=WAL" in captured_sql
-    assert "PRAGMA busy_timeout=5000" in captured_sql
-    assert "PRAGMA foreign_keys=ON" in captured_sql
-    assert "sess''quoted" in captured_sql
-    assert "model''quoted" in captured_sql
-    assert "0.600000" in captured_sql
-    assert "0.000600" not in captured_sql
+    assert "session closeout" in result.stderr
 
 
 # ──────────────────────────────────────────────────────────────

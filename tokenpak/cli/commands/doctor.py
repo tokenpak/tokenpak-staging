@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -50,11 +51,96 @@ def _proxy_get(path: str, port: int | None = None, timeout: int = 3) -> dict | N
 # Mirrors install.PROXY_URL so the route check compares against the same value
 # `tokenpak setup` writes. Overridable via TOKENPAK_PROXY_URL for non-default ports.
 CANONICAL_PROXY_URL = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+_DISK_USAGE_MAX_ENTRIES = 5000
+_DISK_USAGE_TIMEOUT_SECONDS = 0.25
+
+
+@dataclass(frozen=True)
+class _DiskUsageResult:
+    total_bytes: int
+    files: int
+    entries: int
+    truncated: bool = False
+    reason: str = ""
+
+
+def _measure_disk_usage(
+    root: Path,
+    *,
+    max_entries: int = _DISK_USAGE_MAX_ENTRIES,
+    timeout_s: float = _DISK_USAGE_TIMEOUT_SECONDS,
+) -> _DiskUsageResult:
+    """Return a bounded size estimate for TokenPak state."""
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    pending = [root]
+    total_bytes = 0
+    files = 0
+    entries = 0
+
+    def _truncated(reason: str) -> _DiskUsageResult:
+        return _DiskUsageResult(
+            total_bytes=total_bytes,
+            files=files,
+            entries=entries,
+            truncated=True,
+            reason=reason,
+        )
+
+    while pending:
+        if entries >= max_entries:
+            return _truncated(f"entry limit {max_entries}")
+        if time.monotonic() >= deadline:
+            return _truncated(f"timeout {timeout_s:.2f}s")
+
+        current = pending.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    entries += 1
+                    if entries >= max_entries:
+                        return _truncated(f"entry limit {max_entries}")
+                    if time.monotonic() >= deadline:
+                        return _truncated(f"timeout {timeout_s:.2f}s")
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            total_bytes += entry.stat(follow_symlinks=False).st_size
+                            files += 1
+                        elif entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+    return _DiskUsageResult(total_bytes=total_bytes, files=files, entries=entries)
 
 
 def _claude_settings_path() -> Path:
     """Path to Claude Code's settings.json (~/.claude/settings.json)."""
     return Path.home() / ".claude" / "settings.json"
+
+
+def _api_key_setup_detail() -> str:
+    """Detailed no-key setup guidance shared by default and verbose output."""
+    try:
+        from tokenpak.cli.commands.setup import env_var_help
+
+        examples = env_var_help("ANTHROPIC_API_KEY", "sk-...")
+    except Exception:
+        examples = "    export ANTHROPIC_API_KEY=sk-..."
+    if "setx ANTHROPIC_API_KEY" not in examples:
+        examples = "\n".join(
+            [
+                examples.rstrip(),
+                '    setx ANTHROPIC_API_KEY "sk-..."',
+                "    set ANTHROPIC_API_KEY=sk-...",
+            ]
+        )
+    return (
+        "Claude Code OAuth/session auth can use the local proxy with no direct API key.\n"
+        "To add a direct provider key, set one before launching TokenPak:\n"
+        f"{examples}"
+    )
 
 
 def _route_state() -> tuple[str, str | None]:
@@ -207,9 +293,9 @@ def build_lifecycle_summary(
     elif proxy_state == "starting":
         rows.append(("Proxy", "yellow", "starting", "wait for boot to finish"))
     elif proxy_state == "stopped":
-        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak proxy restart"))
+        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak restart"))
     else:  # unknown
-        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak proxy restart"))
+        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak restart"))
 
     # Update — from the cached L1 check only.
     if update_state == "available":
@@ -294,6 +380,137 @@ def verify_integration_target(key: str, proxy_url: str) -> tuple[bool, str]:
         return integration.verify_fn(proxy_url)
     except Exception as exc:
         return (False, f"verify raised: {exc}")
+
+
+def attribution_coverage(db_path) -> "tuple[int, int, float | None]":
+    """Return ``(known, total, pct)`` attribution coverage over the requests
+    ledger — the share of rows whose origin is genuinely known (non-empty
+    ``attribution_source``). Internal gate measure only; NOT a public number.
+    Degrades to ``(0, 0, None)`` when the db / table / column is absent."""
+    import sqlite3 as _sq
+
+    try:
+        conn = _sq.connect(str(db_path), timeout=2.0)
+    except Exception:
+        return (0, 0, None)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(requests)")]
+        if "attribution_source" not in cols:
+            return (0, 0, None)
+        total = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] or 0
+        known = conn.execute(
+            "SELECT COUNT(*) FROM requests "
+            "WHERE attribution_source IS NOT NULL AND attribution_source != ''"
+        ).fetchone()[0] or 0
+        pct = (100.0 * known / total) if total else None
+        return (known, total, pct)
+    except Exception:
+        return (0, 0, None)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def companion_hook_integrity() -> "list[tuple[str, str, str]]":
+    """Inspect installed companion hook configs for silent-failure hazards.
+
+    Returns ``(status, message, detail)`` tuples for _record(). Two hazards
+    are checked across Claude Code (``~/.claude/settings.json``) and Codex
+    (``~/.codex/hooks.json``) hook configs:
+
+    - The bash hook variants shell out to the ``sqlite3`` CLI for their
+      journal/budget writes and silently no-op when the binary is missing —
+      evidence loss with no error surfaced anywhere. WARN when bash hooks
+      are installed but the CLI is absent.
+    - Hook commands referencing script paths that no longer exist (e.g. a
+      relocated or partially removed install) fail on every prompt. WARN
+      listing the missing paths.
+    """
+    import shutil as _shutil
+
+    results: "list[tuple[str, str, str]]" = []
+    hook_cmds: "list[str]" = []
+
+    def _collect(hook_config) -> None:
+        if not isinstance(hook_config, dict):
+            return
+        for groups in hook_config.values():
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                for h in group.get("hooks", []) or []:
+                    if isinstance(h, dict):
+                        cmd = str(h.get("command", "") or "")
+                        if "tokenpak" in cmd.lower():
+                            hook_cmds.append(cmd)
+
+    for cfg_path in (
+        _claude_settings_path(),
+        Path.home() / ".codex" / "hooks.json",
+    ):
+        try:
+            if not cfg_path.exists():
+                continue
+            data = json.loads(cfg_path.read_text())
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            _collect(data.get("hooks", {}))
+
+    if not hook_cmds:
+        results.append((
+            "pass",
+            "Companion hooks     not installed (no hook commands found)",
+            "",
+        ))
+        return results
+
+    missing: "list[str]" = []
+    uses_bash_scripts = False
+    for cmd in hook_cmds:
+        for token in cmd.split():
+            if token.endswith((".sh", ".py")) and ("/" in token or "\\" in token):
+                if token.endswith(".sh"):
+                    uses_bash_scripts = True
+                if not Path(token).exists():
+                    missing.append(token)
+
+    healthy = True
+    if missing:
+        healthy = False
+        results.append((
+            "warn",
+            f"Companion hooks     {len(missing)} installed hook script path(s) missing",
+            "Missing: " + ", ".join(sorted(set(missing)))
+            + " — these hooks fail on every prompt. Re-run the companion "
+            "launcher (or reinstall) to repair the hook config.",
+        ))
+
+    if uses_bash_scripts and _shutil.which("sqlite3") is None:
+        healthy = False
+        results.append((
+            "warn",
+            "Companion hooks     sqlite3 CLI not found — bash hooks silently "
+            "skip journal/budget writes",
+            "The installed bash hook variants depend on the sqlite3 "
+            "command-line tool for journal and budget writes and no-op "
+            "without it. Install it (e.g. apt install sqlite3 / brew "
+            "install sqlite) or switch to the python hook variant.",
+        ))
+
+    if healthy:
+        results.append((
+            "pass",
+            f"Companion hooks     {len(hook_cmds)} hook command(s) installed — "
+            "scripts present"
+            + (", sqlite3 CLI available" if uses_bash_scripts else ""),
+            "",
+        ))
+    return results
 
 
 def run_doctor(
@@ -441,6 +658,24 @@ def run_doctor(
             f"{requests_total} reqs, {latency_str}",
             detail=f"compilation_mode={mode} requests={requests_total} p95={p95} p99={p99} outlier={outlier}",
         )
+
+        # Attribution coverage — % of ledger rows with a genuinely known origin
+        # (non-empty attribution_source). Internal gate measure; NOT a public
+        # number. Informational only — does not fail/penalize the doctor exit.
+        try:
+            _mon_db = _paths.monitor_db("read")
+        except Exception:
+            _mon_db = None
+        if _mon_db is not None:
+            _cov_known, _cov_total, _cov_pct = attribution_coverage(_mon_db)
+            if _cov_total > 0 and _cov_pct is not None:
+                _record(
+                    "attribution_coverage",
+                    "pass",
+                    f"Attribution         {_cov_pct:.0f}% known origin "
+                    f"({_cov_known}/{_cov_total} reqs)",
+                    detail=f"non-empty attribution_source on {_cov_known}/{_cov_total} requests rows",
+                )
     else:
         # Fall back to TCP check
         try:
@@ -458,7 +693,7 @@ def run_doctor(
                 _record(
                     "proxy_health",
                     "warn",
-                    f"Proxy not running   port {proxy_port} — start with: tokenpak proxy restart",
+                    f"Proxy not running   port {proxy_port} — start with: tokenpak restart",
                 )
         except Exception:
             _record(
@@ -894,55 +1129,48 @@ def run_doctor(
             "Recent error rate   monitor.db not found",
         )
 
-    # === Check 9: Token savings summary (honest, attribution-aware) =============
-    # Route through the same savings engine that ``tokenpak status`` uses so the
-    # doctor figure equals the status figure for the same window. That engine is
-    # cache-origin-aware: it credits only proxy-caused compression and cache
-    # reads, and never conflates client-placed (passthrough) cache with savings.
-    # The old path here did a raw SUM(input_tokens - compressed_tokens) over the
-    # last 100 rows with no origin filter, which over-claimed against an
-    # input-equals-100% denominator.
+    # === Check 9: Token savings summary from last 100 requests ==================
     if db_path.exists():
         try:
-            from tokenpak.cli.commands.status import _calculate_fleet_savings
-
-            # Match the status default window ("today", user-local day) so the
-            # two surfaces report the same number.
-            report = _calculate_fleet_savings(db_path=str(db_path), period="today")
-            err = report.get("error")
-            if err in ("no_data", "db_not_found"):
-                _record(
-                    "token_savings",
-                    "warn",
-                    "Token savings       no request data yet (today)",
-                )
-            elif err:
-                _record(
-                    "token_savings",
-                    "warn",
-                    f"Token savings       could not compute: {err}",
-                )
-            else:
-                totals = report["totals"]
-                models = report["models"]
-                saved_cost = totals["saved"]
-                pct_saved = totals["savings_pct"]
-                req_count = totals["requests"]
-                compressed_tok = sum(m["compressed_tokens"] for m in models)
-                with_cost = totals["with_cost"]
-                cost_str = f"${with_cost:.4f}"
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT "
+                "  COUNT(*) as total, "
+                "  SUM(input_tokens) as total_input, "
+                "  SUM(compressed_tokens) as total_sent, "
+                "  SUM(input_tokens - compressed_tokens) as tokens_saved, "
+                "  SUM(estimated_cost) as total_cost "
+                "FROM ("
+                "  SELECT input_tokens, compressed_tokens, estimated_cost "
+                "  FROM requests "
+                "  WHERE compressed_tokens IS NOT NULL AND input_tokens > 0 "
+                "  ORDER BY id DESC LIMIT 100"
+                ")"
+            )
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] and row[0] > 0:
+                total, total_input, total_sent, tokens_saved, total_cost = row
+                tokens_saved = tokens_saved or 0
+                total_input = total_input or 0
+                pct_saved = (tokens_saved / total_input * 100) if total_input > 0 else 0
+                cost_str = f"${total_cost:.4f}" if total_cost else "$0.0000"
                 _record(
                     "token_savings",
                     "pass",
-                    f"Token savings       ${saved_cost:.4f} saved ({pct_saved:.1f}%) "
-                    f"— {req_count} reqs today, cost {cost_str}",
+                    f"Token savings       {tokens_saved:,} saved ({pct_saved:.1f}%) "
+                    f"— {total} reqs, cost {cost_str}",
                     detail=(
-                        f"saved=${saved_cost:.4f} ({pct_saved:.1f}%) "
-                        f"compressed_tokens={compressed_tok:,} "
-                        f"cache_savings=${totals['cache_savings']:.4f} "
-                        f"compression_savings=${totals['compression_savings']:.4f} "
-                        f"cost={cost_str} window=today"
+                        f"total_input={total_input:,} sent={total_sent:,} "
+                        f"saved={tokens_saved:,} ({pct_saved:.1f}%) cost={cost_str}"
                     ),
+                )
+            else:
+                _record(
+                    "token_savings",
+                    "warn",
+                    "Token savings       no compressed request data yet",
                 )
         except Exception as exc:
             _record(
@@ -1042,11 +1270,20 @@ def run_doctor(
     # Disk usage
     try:
         if tokenpak_dir.exists():
-            total_bytes = sum(
-                f.stat().st_size for f in tokenpak_dir.rglob("*") if f.is_file()
-            )
-            size_mb = total_bytes / (1024 * 1024)
-            if size_mb < 500:
+            usage = _measure_disk_usage(tokenpak_dir)
+            size_mb = usage.total_bytes / (1024 * 1024)
+            if usage.truncated:
+                _record(
+                    "disk_usage",
+                    "warn",
+                    f"Disk usage          at least {size_mb:.1f} MB — bounded after "
+                    f"{usage.entries} entries ({usage.reason}); run: tokenpak maintenance",
+                    detail=(
+                        f"bytes_partial={usage.total_bytes} files_partial={usage.files} "
+                        f"entries={usage.entries} reason={usage.reason}"
+                    ),
+                )
+            elif size_mb < 500:
                 _record("disk_usage", "pass", f"Disk usage          {size_mb:.1f} MB — OK")
             else:
                 _record(
@@ -1110,31 +1347,13 @@ def run_doctor(
             f"API keys            {', '.join(found_keys)} — env vars set",
         )
     else:
-        # No direct key env var set. A direct ANTHROPIC_API_KEY is only
-        # genuinely needed when no OAuth / proxy / session-auth path covers
-        # Anthropic; warning otherwise is a false alarm. Reuse the canonical
-        # credential discovery to decide.
-        try:
-            from tokenpak.creds.auth_mode import non_direct_key_auth_available
-
-            anthropic_via_oauth = non_direct_key_auth_available("anthropic")
-        except Exception:
-            anthropic_via_oauth = False
-
-        if anthropic_via_oauth:
-            _record(
-                "api_keys",
-                "pass",
-                "API keys            Anthropic authenticated via OAuth/session "
-                "(no direct API key needed)",
-            )
-        else:
-            _record(
-                "api_keys",
-                "warn",
-                "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-                "or GOOGLE_API_KEY",
-            )
+        _record(
+            "api_keys",
+            "warn",
+            "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+            "or GOOGLE_API_KEY",
+            detail=_api_key_setup_detail(),
+        )
 
     # Proxy degradation check
     try:
@@ -1257,6 +1476,21 @@ def run_doctor(
                     print(f"  ✓ Created {d}")
     else:
         _record("required_dirs", "pass", "Required dirs       all present")
+
+    # === Companion hook integrity (script paths + sqlite3 CLI) ==================
+    # The bash hook variants no-op silently without the sqlite3 CLI, and a
+    # hook command pointing at a missing script fails on every prompt —
+    # both are invisible without a doctor check.
+    try:
+        for _ch_status, _ch_msg, _ch_detail in companion_hook_integrity():
+            _record("companion_hooks", _ch_status, _ch_msg, detail=_ch_detail)
+    except Exception as _ch_e:  # pragma: no cover — must never crash doctor
+        _record(
+            "companion_hooks",
+            "warn",
+            f"Companion hooks     could not inspect hook configs: {type(_ch_e).__name__}",
+            detail=str(_ch_e),
+        )
 
     # === Permission tiers (persistent tier vs launcher fleet mode) ==============
     # Three-row display. The persistent-tier rows can only ever read

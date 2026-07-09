@@ -21,7 +21,7 @@ from typing import Optional, Any
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine, CacheManager
-from tokenpak.compression.engines.base import CompactionHints
+from tokenpak.engines.base import CompactionHints
 
 
 def estimate_tokens(text: str) -> int:
@@ -61,7 +61,7 @@ class TokenPakAnthropicMessages:
             print("⚠️  anthropic package not installed — running in dry-run mode")
 
         self.engine = HeuristicEngine()
-        self.cache = CacheManager()
+        self.cache = CacheManager(default_ttl=300)
         self.target_tokens = target_tokens_per_msg
         self.keep_recent_turns = keep_recent_turns
         self.verbose = verbose
@@ -71,9 +71,9 @@ class TokenPakAnthropicMessages:
     def _compress(self, content: str) -> str:
         """Compress text with caching."""
         cache_key = hashlib.sha256(content.encode()).hexdigest()[:20]
-        cached = self.cache.get(cache_key)
+        hit, cached = self.cache.get(cache_key)
 
-        if cached is not None:
+        if hit:
             self._stats["cache_hits"] += 1
             return cached
 

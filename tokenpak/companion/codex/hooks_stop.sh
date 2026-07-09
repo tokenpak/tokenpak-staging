@@ -17,19 +17,27 @@ INPUT=$(cat)
 [ "${TOKENPAK_COMPANION_ENABLED:-1}" = "0" ] && exit 0
 
 JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
+SQLITE_TIMEOUT_SECONDS="${TOKENPAK_COMPANION_SQLITE_TIMEOUT_SECONDS:-2}"
+SQLITE_BUSY_MS="${TOKENPAK_COMPANION_SQLITE_BUSY_MS:-1000}"
 
-sql_escape() {
-    printf '%s' "$1" | sed "s/'/''/g"
-}
+case "$SQLITE_TIMEOUT_SECONDS" in
+    ''|*[!0-9]*) SQLITE_TIMEOUT_SECONDS=2 ;;
+esac
+case "$SQLITE_BUSY_MS" in
+    ''|*[!0-9]*) SQLITE_BUSY_MS=1000 ;;
+esac
 
-sqlite_write() {
+sqlite_best_effort() {
     db="$1"
     sql="$2"
-    sqlite3 "$db" "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; $sql" >/dev/null 2>&1
-}
+    [ -f "$db" ] || return 0
+    command -v sqlite3 >/dev/null 2>&1 || return 0
 
-cost_usd() {
-    awk -v tokens="$1" -v rate="$2" 'BEGIN { printf "%.6f", (tokens + 0) * (rate + 0) / 1000000 }'
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$SQLITE_TIMEOUT_SECONDS" sqlite3 -cmd ".timeout $SQLITE_BUSY_MS" "$db" "$sql" >/dev/null 2>&1 || true
+    else
+        sqlite3 -cmd ".timeout $SQLITE_BUSY_MS" "$db" "$sql" >/dev/null 2>&1 || true
+    fi
 }
 
 if command -v jq >/dev/null 2>&1; then
@@ -53,24 +61,20 @@ fi
 TOKENS_FMT=$(printf '%d' "$TOKENS" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,//')
 
 JOURNAL_DB="$JOURNAL_DIR/journal.db"
-if [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+if [ -f "$JOURNAL_DB" ]; then
     TIMESTAMP=$(date +%s)
-    SESSION_SQL=$(sql_escape "$SESSION_ID")
-    MODEL_LABEL="${MODEL:-unknown}"
-    MODEL_SQL=$(sql_escape "$MODEL_LABEL")
-    CONTENT_SQL=$(sql_escape "session stopped (~${TOKENS_FMT} total tokens, model: $MODEL_LABEL)")
-    sqlite_write "$JOURNAL_DB" \
-        "INSERT OR IGNORE INTO sessions (session_id, started_at, model)
-         VALUES ('$SESSION_SQL', $TIMESTAMP, '$MODEL_SQL');
-         INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
-         VALUES ('$SESSION_SQL', $TIMESTAMP, 'auto', '$CONTENT_SQL', '{}');
-         UPDATE sessions SET ended_at = $TIMESTAMP, total_requests = (
-             SELECT COUNT(*) FROM entries WHERE session_id = '$SESSION_SQL' AND entry_type = 'auto'
-         ) WHERE session_id = '$SESSION_SQL';"
+    sqlite_best_effort "$JOURNAL_DB" \
+        "INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
+         VALUES ('$SESSION_ID', $TIMESTAMP, 'auto', 'session stopped (~${TOKENS_FMT} total tokens, model: ${MODEL:-unknown})', '{}');"
+
+    sqlite_best_effort "$JOURNAL_DB" \
+        "UPDATE sessions SET ended_at = $TIMESTAMP, total_requests = (
+             SELECT COUNT(*) FROM entries WHERE session_id = '$SESSION_ID' AND entry_type = 'auto'
+         ) WHERE session_id = '$SESSION_ID';"
 fi
 
 BUDGET_DB="$JOURNAL_DIR/budget.db"
-if [ -f "$BUDGET_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+if [ -f "$BUDGET_DB" ]; then
     # Rate lookup shares the same TSV snapshot as pre_send (single source).
     RATES_FILE="${TOKENPAK_COMPANION_RATES_FILE:-$HOME/.tokenpak/companion/run/model_rates.tsv}"
     RATE=3
@@ -86,17 +90,14 @@ if [ -f "$BUDGET_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
         [ -z "$RATE" ] && RATE=3
     fi
 
-    COST_DOLLARS=$(cost_usd "$TOKENS" "$RATE")
+    COST_MICRO=$((TOKENS * RATE / 1000))
+    COST_DOLLARS="$((COST_MICRO / 1000)).$(printf '%06d' $((COST_MICRO % 1000000)))"
     TODAY=$(date +%Y-%m-%d)
     TIMESTAMP=$(date +%s)
-    SESSION_SQL=$(sql_escape "$SESSION_ID")
-    MODEL_LABEL="${MODEL:-unknown}"
-    MODEL_SQL=$(sql_escape "$MODEL_LABEL")
-    TODAY_SQL=$(sql_escape "$TODAY")
 
-    sqlite_write "$BUDGET_DB" \
+    sqlite_best_effort "$BUDGET_DB" \
         "INSERT INTO companion_costs (timestamp, date, session_id, model, input_tokens, cached_tokens, output_tokens, estimated_cost)
-         VALUES ($TIMESTAMP, '$TODAY_SQL', '$SESSION_SQL', '$MODEL_SQL', $TOKENS, 0, 0, $COST_DOLLARS);"
+         VALUES ($TIMESTAMP, '$TODAY', '$SESSION_ID', '${MODEL:-unknown}', $TOKENS, 0, 0, $COST_DOLLARS);"
 fi
 
 if [ "${TOKENPAK_COMPANION_SHOW_COST:-1}" != "0" ]; then

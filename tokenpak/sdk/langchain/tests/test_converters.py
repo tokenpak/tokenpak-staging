@@ -1,4 +1,4 @@
-from tokenpak.sdk.langchain.converters import (
+from langchain_tokenpak.converters import (
     Block,
     block_to_doc,
     blocks_to_docs,

@@ -6,7 +6,7 @@ Provides HTTP endpoints for retrieving and analyzing ingested usage entries
 stored as JSONL files in the vault index.
 
 Storage location:
-  ~/.tokenpak/entries/YYYY-MM-DD.jsonl
+  ~/vault/.tokenpak/entries/YYYY-MM-DD.jsonl
 
 Endpoints:
   GET  /query/entries          — entries for a date range

@@ -6,8 +6,9 @@ into prompts, handed off across sessions, or shared across agents. This
 module defines the TIP-1.x schema for Paks; it is the OSS-side contract
 that the MultiPak Pro daemon (closed-source) consumes.
 
-The schema follows the Pak architecture taxonomy and PRD §18. It must
-land in OSS before any Pro implementation can rely on it.
+The schema follows the MultiPak Pro architecture (taxonomy) and
+the PRD. It must land in OSS before any Pro implementation can rely on
+it.
 
 **Subtype taxonomy**:
 
@@ -21,10 +22,10 @@ The deprecated subtype names (``project``, ``memory``, ``context``) are
 preserved as import-time aliases until v3.0.0 with a ``DeprecationWarning``.
 
 **Privacy contract**: ``Pak`` instances are local-only. The
-license-validation egress path MUST NOT receive any field defined here;
-this is enforced by the privacy contract tests.
+license-validation egress path MUST NOT receive any field
+defined here; this is enforced by the privacy contract tests.
 
-Naming note: in code we use the title-case form ``Pak`` per glossary 08.
+Naming note: in code we use the title-case form ``Pak`` per the glossary.
 The all-caps form ``PAK`` is reserved for marketing-brand stylization
 within MultiPak Pro copy and for the acronym definition
 (``PAK = Portable AI Knowledge``).
@@ -44,8 +45,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 # Module-level alias table — kept outside ``PakSubtype`` to sidestep Enum
 # metaclass quirks (a dict assigned inside an Enum body would be treated
-# as a member). Maps deprecated pre-2026-05-07 subtype names to the
-# canonical TIP subtype names. Target removal: v3.0.0.
+# as a member). Maps deprecated legacy subtype names to the
+# canonical taxonomy names. Target removal: v3.0.0.
 _LEGACY_SUBTYPE_ALIASES: Mapping[str, str] = {
     "project": "vault",
     "context": "recall",
@@ -58,9 +59,9 @@ _LEGACY_SUBTYPE_ALIASES: Mapping[str, str] = {
 class PakSubtype(str, Enum):
     """Canonical Pak subtype taxonomy.
 
-    The 5 values are the ratified canonical taxonomy. Receivers parsing a
-    Pak with an unknown subtype string MUST fall back gracefully; never
-    raise on an unrecognized value.
+    The 5 values are the canonical taxonomy. Receivers parsing a
+    Pak with an unknown subtype string MUST fall back gracefully (per the
+    capability-codes rule); never raise on an unrecognized value.
     Use :func:`PakSubtype.parse` to normalize legacy/aliased values.
     """
 
@@ -77,8 +78,8 @@ class PakSubtype(str, Enum):
         Unknown values raise ``ValueError`` only after the alias table is
         consulted; new subtypes added in future minor revisions of TIP-1.x
         SHOULD be added to this enum and the registry catalog in lockstep
-        (no hardcoded enumeration in consumer code paths — discovery
-        stays dynamic).
+        (no hardcoded enumeration in consumer code paths; discovery stays
+        dynamic via the registry catalog).
         """
         normalized = value.strip().lower()
         if normalized in _LEGACY_SUBTYPE_ALIASES:
@@ -142,7 +143,7 @@ class PakRetention(str, Enum):
 
 
 class PakSourceType(str, Enum):
-    """How the Pak was originally produced (PRD §18)."""
+    """How the Pak was originally produced."""
 
     LLM_RESPONSE = "llm_response"
     FILE = "file"
@@ -168,7 +169,7 @@ class PakPrivacyClass(str, Enum):
 
 @dataclass(frozen=True)
 class PakScope:
-    """User / project / topic scoping.
+    """User / project / topic scoping (``project_scope``, ``topic_scope``).
 
     Cross-project leakage is blocked by default — recall hard-filters on
     ``project`` when an explicit project_scope is declared by the caller.
@@ -205,7 +206,7 @@ class PakAnchor:
 
 @dataclass(frozen=True)
 class PakRelationships:
-    """Directed relationships between Paks.
+    """Directed relationships between Paks (conflict_penalty).
 
     All four lists hold opaque Pak IDs.
     """
@@ -267,8 +268,8 @@ class Pak:
         """Render to a JSON-serializable dict matching the wire schema.
 
         Enum values render as their ``.value`` strings; ``privacy.class_``
-        renders as ``privacy.class`` per PRD §18 (the trailing underscore is
-        a Python keyword-collision workaround, not part of the wire shape).
+        renders as ``privacy.class`` per the wire schema (the trailing underscore
+        is a Python keyword-collision workaround, not part of the wire shape).
         """
 
         def _enum(v: Any) -> Any:
@@ -328,8 +329,8 @@ class Pak:
 
 
 # ---------------------------------------------------------------------------
-# Default-retention discovery (no hardcoded subtype enumeration in
-# consumer paths; consumers ask the contract).
+# Default-retention discovery (no hardcoded subtype enumeration in consumer
+# paths; consumers ask the contract).
 # ---------------------------------------------------------------------------
 
 
@@ -338,8 +339,8 @@ _DEFAULT_RETENTION_BY_SUBTYPE: Mapping[PakSubtype, PakRetention] = {
     PakSubtype.INTERACTION: PakRetention.DAYS_180,
     PakSubtype.DECISION: PakRetention.PERSISTENT,
     PakSubtype.RECALL: PakRetention.SESSION,
-    PakSubtype.HANDOFF: PakRetention.DAYS_30,  # PRD §21: handoff_pak_retention_days: 90
-    # NOTE: PRD §21 lists 90 days for handoff; the 30-day bucket is the
+    PakSubtype.HANDOFF: PakRetention.DAYS_30,  # PRD: handoff_pak_retention_days: 90
+    # NOTE: the PRD lists 90 days for handoff; the 30-day bucket is the
     # nearest enum value. Future revisions may add `DAYS_90` to PakRetention
     # — don't read the bucket as the literal day count.
 }

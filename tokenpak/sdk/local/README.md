@@ -1,12 +1,12 @@
 ---
-title: "tokenpak.sdk.local"
-description: "Local LLM integration helpers shipped with TokenPak"
+title: "tokenpak-local"
+description: "tokenpak-local"
 status: active
 maintainer: tokenpak
 created: 2026-03-11
 tags: [project]
 ---
-# tokenpak.sdk.local
+# tokenpak-local
 
 TokenPak integration for local LLMs — **Ollama**, **LM Studio**, and any **OpenAI-compatible** endpoint.
 
@@ -27,19 +27,19 @@ And even with large-context models, compression = faster inference + less RAM.
 
 ```bash
 # Ollama
-pip install ollama
+pip install tokenpak-local[ollama]
 
 # LM Studio / OpenAI-compatible
-pip install openai
+pip install tokenpak-local[openai]
 
 # Both
-pip install ollama openai
+pip install tokenpak-local[all]
 ```
 
 ## Quick Start: Ollama
 
 ```python
-from tokenpak.sdk.local import TokenPakOllama, TokenPak, Block
+from tokenpak_local import TokenPakOllama, TokenPak, Block
 
 # Build a TokenPak pack
 pack = TokenPak()
@@ -84,7 +84,7 @@ print(response["response"])
 ## Quick Start: LM Studio
 
 ```python
-from tokenpak.sdk.local import TokenPakLMStudio, TokenPak, Block
+from tokenpak_local import TokenPakLMStudio, TokenPak, Block
 
 client = TokenPakLMStudio()  # connects to http://localhost:1234/v1
 
@@ -109,7 +109,7 @@ print(models)  # ["meta-llama-3-8b-instruct", ...]
 ## Quick Start: Any OpenAI-Compatible Endpoint
 
 ```python
-from tokenpak.sdk.local import TokenPakOpenAICompat, TokenPak, Block
+from tokenpak_local import TokenPakOpenAICompat, TokenPak, Block
 
 # Works with LocalAI, llama.cpp server, vLLM, TabbyAPI, Ollama OpenAI mode, etc.
 client = TokenPakOpenAICompat(
@@ -131,7 +131,7 @@ response = client.complete(
 The core feature: `auto_budget()` computes a safe input token budget from the model's known context window.
 
 ```python
-from tokenpak.sdk.local import auto_budget, get_context_length
+from tokenpak_local import auto_budget, get_context_length
 
 # Get context length for any known model
 get_context_length("llama3")       # → 8192
@@ -177,7 +177,7 @@ Unknown models default to 4,096. Extend `MODEL_CONTEXT_LENGTHS` for custom model
 Convert retrieved documents to TokenPak Blocks:
 
 ```python
-from tokenpak.sdk.local import blocks_from_texts
+from tokenpak_local import blocks_from_texts
 
 docs = ["Document 1 content...", "Document 2 content..."]
 blocks = blocks_from_texts(docs, block_type="evidence")
@@ -188,7 +188,7 @@ blocks = blocks_from_texts(docs, block_type="evidence")
 Build a TokenPak from a block list:
 
 ```python
-from tokenpak.sdk.local import pack_from_blocks, auto_budget
+from tokenpak_local import pack_from_blocks, auto_budget
 
 budget = auto_budget("llama3")
 pack = pack_from_blocks(blocks, instructions="Answer the question.", budget=budget)
@@ -198,7 +198,7 @@ pack = pack_from_blocks(blocks, instructions="Answer the question.", budget=budg
 
 ```python
 import ollama
-from tokenpak.sdk.local import (
+from tokenpak_local import (
     TokenPakOllama,
     blocks_from_texts,
     pack_from_blocks,
@@ -241,4 +241,4 @@ Tested with:
 
 ## License
 
-MIT
+Apache-2.0

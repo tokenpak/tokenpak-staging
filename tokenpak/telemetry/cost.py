@@ -73,44 +73,23 @@ except (ImportError, AttributeError):
     }
 
 # ---------------------------------------------------------------------------
-# Current pricing rates (USD per 1,000,000 input/output tokens)
-# Source: official docs, 2026-06 snapshot
+# Current pricing rates (USD per 1K input/output tokens)
+# Source: official docs, 2026-02 snapshot
 # ---------------------------------------------------------------------------
 SEED_PRICING: List[dict] = [
     # Anthropic
     {
         "provider": "anthropic",
-        "model": "claude-fable-5",
-        "input_rate": 10.00,
-        "output_rate": 50.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-opus-4-8",
-        "input_rate": 5.00,
-        "output_rate": 25.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-opus-4-7",
-        "input_rate": 5.00,
-        "output_rate": 25.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
         "model": "claude-opus-4-6",
-        "input_rate": 5.00,
-        "output_rate": 25.00,
+        "input_rate": 15.00,
+        "output_rate": 75.00,
         "source": "official",
     },
     {
         "provider": "anthropic",
         "model": "claude-opus-4-5",
-        "input_rate": 5.00,
-        "output_rate": 25.00,
+        "input_rate": 15.00,
+        "output_rate": 75.00,
         "source": "official",
     },
     {
@@ -230,7 +209,7 @@ SEED_PRICING: List[dict] = [
     },
 ]
 
-CURRENT_PRICING_VERSION = "2026.06"
+CURRENT_PRICING_VERSION = "2026.02"
 CURRENT_EFFECTIVE_DATE = "2026-02-01"
 
 
@@ -273,19 +252,19 @@ class Pricing:
 
     provider: str
     model: str
-    input_rate: float  # USD per 1,000,000 tokens
-    output_rate: float  # USD per 1,000,000 tokens
+    input_rate: float  # USD per 1K tokens
+    output_rate: float  # USD per 1K tokens
     version: str
     effective_date: str
     source: str = "official"
 
     @property
     def input_per_token(self) -> float:
-        return self.input_rate / 1_000_000.0
+        return self.input_rate / 1000.0
 
     @property
     def output_per_token(self) -> float:
-        return self.output_rate / 1_000_000.0
+        return self.output_rate / 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +297,19 @@ class CostEngine:
         ON tp_pricing(version);
     """
 
+    # Uniqueness key: without it, concurrent COUNT-then-seed races (the
+    # in-process lock does not cover other processes) insert the full seed
+    # set twice, and pricing lookups return arbitrary duplicate rows.
+    # Applied as an additive migration; pre-existing duplicate rows are
+    # deduped (newest row wins) in the same transaction before the unique
+    # index is created.
+    _UNIQUE_INDEX_DDL = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tp_pricing_unique "
+        "ON tp_pricing(version, provider, model)"
+    )
+
     # Fallback rates for unknown models
-    _FALLBACK_INPUT_RATE = 3.00  # USD/1M (sonnet-tier estimate)
+    _FALLBACK_INPUT_RATE = 3.00  # USD/1K (sonnet-tier estimate)
     _FALLBACK_OUTPUT_RATE = 15.00
 
     def __init__(self, db_path: str = ""):
@@ -333,7 +323,7 @@ class CostEngine:
     # DB init & seeding
     # ------------------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, uri=self.db_path.startswith("file:"))
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -346,18 +336,48 @@ class CostEngine:
                 if stmt:
                     conn.execute(stmt)
             conn.commit()
+            self._ensure_unique_pricing_key(conn)
 
-            # Seed if table is empty
+            # Seed if table is empty. The COUNT check is only an
+            # optimization: _seed uses INSERT OR IGNORE against the
+            # UNIQUE(version, provider, model) key, so a concurrent
+            # process that races past the COUNT cannot double-seed.
             count = conn.execute("SELECT COUNT(*) FROM tp_pricing").fetchone()[0]
             if count == 0:
                 self._seed(conn)
             conn.close()
 
+    @staticmethod
+    def _ensure_unique_pricing_key(conn: sqlite3.Connection) -> None:
+        """Create the UNIQUE(version, provider, model) index.
+
+        Databases seeded before the uniqueness key existed may contain
+        duplicate pricing rows; dedupe (keep the newest row per key, i.e.
+        max rowid) and create the index inside one transaction so a crash
+        mid-migration leaves the database unchanged.
+        """
+        try:
+            conn.execute(CostEngine._UNIQUE_INDEX_DDL)
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            conn.execute(
+                """
+                DELETE FROM tp_pricing
+                WHERE rowid NOT IN (
+                    SELECT MAX(rowid) FROM tp_pricing
+                    GROUP BY version, provider, model
+                )
+                """
+            )
+            conn.execute(CostEngine._UNIQUE_INDEX_DDL)
+            conn.commit()
+
     def _seed(self, conn: sqlite3.Connection) -> None:
-        """Insert default pricing rows."""
+        """Insert default pricing rows (idempotent via the uniqueness key)."""
         for row in SEED_PRICING:
             conn.execute(
-                """INSERT INTO tp_pricing
+                """INSERT OR IGNORE INTO tp_pricing
                    (version, effective_date, provider, model, input_rate, output_rate, source)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
@@ -456,8 +476,6 @@ class CostEngine:
         """Parse a timestamp string to YYYY-MM-DD, defaulting to today."""
         if not ts:
             return datetime.now(timezone.utc).date().isoformat()
-        if isinstance(ts, (int, float)):
-            return datetime.fromtimestamp(float(ts), timezone.utc).date().isoformat()
         try:
             # Handle various ISO formats
             dt = ts.replace("Z", "+00:00")
@@ -606,7 +624,7 @@ class CostEngine:
                           u.output_billed AS output
                    FROM tp_events e
                    LEFT JOIN tp_usage u ON u.trace_id = e.trace_id
-                   WHERE DATE(e.ts, 'unixepoch') >= ? AND DATE(e.ts, 'unixepoch') <= ?
+                   WHERE DATE(e.ts) >= ? AND DATE(e.ts) <= ?
                      AND e.status != 'error'""",
                 (from_date, to_date),
             ).fetchall()

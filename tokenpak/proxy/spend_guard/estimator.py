@@ -2,7 +2,7 @@
 """Token + cost projection for spend guard preflight.
 
 Single source of truth for pricing is :mod:`tokenpak.models` — we never
-duplicate the rate map (pricing stays dynamic).
+duplicate the rate map (``feedback_always_dynamic``).
 
 Token estimation is intentionally cheap (char//4 heuristic on the JSON body
 plus an Anthropic-shaped messages walk to find the cached/uncached split).
@@ -163,7 +163,7 @@ def estimate(
         If we can't parse the body, use this as a floor for context size.
         Typically the proxy's last-known cache_read for this session.
     """
-    # Pricing — always dynamic (read from tokenpak.models)
+    # Pricing — always dynamic (per ``feedback_always_dynamic``)
     try:
         from tokenpak.models import get_rates
         rates = get_rates(model)

@@ -7,7 +7,7 @@
  * ```typescript
  * import { CompressionEngine } from 'tokenpak';
  *
- * const engine = new CompressionEngine({ baseUrl: 'http://127.0.0.1:8766' });
+ * const engine = new CompressionEngine({ baseUrl: 'http://localhost:8000' });
  * const result = await engine.compress("Very long prompt text...");
  * console.log(`Saved ${result.savingsPct.toFixed(1)}% tokens`);
  * ```
@@ -46,7 +46,6 @@ export {
   TokenPakError,
   TokenPakConnectionError,
   TokenPakTimeoutError,
-  TokenPakUnsupportedEndpointError,
 } from './types';
 
 /** Package version */

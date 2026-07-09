@@ -10,7 +10,7 @@ OFF BY DEFAULT.  Enable with::
     TOKENPAK_INDEX_CLAUDE_TRANSCRIPTS=1
 
 The adapter is **read-only**: transcripts are never modified.  Output blocks
-land in the same ``~/.tokenpak/{index.json,blocks/}`` store consumed
+land in the same ``~/vault/.tokenpak/{index.json,blocks/}`` store consumed
 by :class:`tokenpak.proxy.vault_bridge.VaultIndex`.  Blocks from other
 ``source_type`` values (notably ``filesystem``) are left untouched on merge,
 and ``vault_health.VaultHealth._do_rebuild`` preserves transcript blocks
@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
+
+from tokenpak.vault._atomic import _atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +311,9 @@ def index_claude_transcripts(
 
         block_file = blocks_dir / f"{bid}.txt"
         try:
-            block_file.write_text(rendered, encoding="utf-8")
+            # Atomic publish so a concurrent index reader never sees a
+            # half-written block file (see tokenpak/vault/_atomic.py).
+            _atomic_write(block_file, rendered)
         except OSError as exc:
             logger.warning("claude_transcript: cannot write block %s: %s", bid, exc)
             continue
@@ -361,10 +365,9 @@ def index_claude_transcripts(
     }
 
     try:
-        index_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        # Atomic publish so a concurrent index reader never sees a torn
+        # index.json (see tokenpak/vault/_atomic.py).
+        _atomic_write(index_path, json.dumps(data, indent=2, ensure_ascii=False))
     except OSError as exc:
         return {"error": f"write_failed: {exc}"}
 

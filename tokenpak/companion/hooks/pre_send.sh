@@ -13,216 +13,72 @@ INPUT=$(cat)
 # Quick exit if companion disabled
 [ "${TOKENPAK_COMPANION_ENABLED:-1}" = "0" ] && exit 0
 
-# Parse JSON fields — try jq first (fastest), fall back to sed (portable).
-# A single jq pass extracts every field we need (transcript, session, prompt)
-# so the 200k-byte payload is parsed once, not once per field. ``@sh``
-# shell-quotes the values for safe ``eval`` (handles quotes/newlines/spaces).
-PROMPT=""
+# Parse JSON fields — try jq first (fastest), fall back to sed (portable)
 if command -v jq >/dev/null 2>&1; then
-    eval "$(printf '%s' "$INPUT" | jq -r '@sh "TRANSCRIPT=\(.transcript_path // "") SESSION_ID=\(.session_id // "") PROMPT=\(.prompt // "")"' 2>/dev/null)"
+    _TP_FIELDS=()
+    mapfile -t _TP_FIELDS < <(
+        printf '%s' "$INPUT" | jq -r '(.transcript_path // ""), (.session_id // ""), (.model // "")' 2>/dev/null
+    )
+    TRANSCRIPT="${_TP_FIELDS[0]:-}"
+    SESSION_ID="${_TP_FIELDS[1]:-}"
+    MODEL="${_TP_FIELDS[2]:-}"
 else
-    # Portable sed extraction (no -P flag needed). PROMPT is jq-only (the
-    # dynamic title is skipped without jq).
-    TRANSCRIPT=$(printf '%s' "$INPUT" | sed -n 's/.*"transcript_path"\s*:\s*"\([^"]*\)".*/\1/p')
-    SESSION_ID=$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p')
+    # Portable sed extraction (no -P flag needed)
+    TRANSCRIPT=$(echo "$INPUT" | sed -n 's/.*"transcript_path"\s*:\s*"\([^"]*\)".*/\1/p')
+    SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id"\s*:\s*"\([^"]*\)".*/\1/p')
+    MODEL=$(echo "$INPUT" | sed -n 's/.*"model"\s*:\s*"\([^"]*\)".*/\1/p')
 fi
 
+_tp_block_budget() {
+    MSG="$1"
+    echo "$MSG" >&2
+    REASON=$(printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","decision":"block","reason":"%s"}}\n' "$REASON"
+    exit 2
+}
+
+_tp_to_micro() {
+    awk -v v="$1" 'BEGIN {
+        if (v !~ /^[0-9]+([.][0-9]+)?$/) exit 1
+        printf "%.0f\n", v * 1000000
+    }' 2>/dev/null
+}
+
+_tp_entry_hash() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s\037%s\037%s' "$1" "$2" "$3" | sha256sum 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s\037%s\037%s' "$1" "$2" "$3" | shasum -a 256 2>/dev/null | awk '{print $1}'
+    fi
+}
+
+_tp_ensure_dedupe_schema() {
+    sqlite3 -cmd ".timeout 5000" "$1" \
+        "ALTER TABLE entries ADD COLUMN content_hash TEXT;" >/dev/null 2>&1
+    sqlite3 -cmd ".timeout 5000" "$1" \
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_dedupe ON entries(session_id, entry_type, content_hash) WHERE content_hash IS NOT NULL;" >/dev/null 2>&1
+}
+
+# Session-binding marker (atomic tmp+mv): the companion MCP server — a
+# separate long-lived process — binds its active session id from this
+# run-dir file. Without it, a stale marker from an earlier session causes
+# cross-session misattribution of journal/budget writes. Mirrors
+# pre_send.py:_write_session_marker; must run BEFORE any early exit.
 if [ -n "$SESSION_ID" ]; then
-    JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
-    RUN_DIR="$JOURNAL_DIR/run"
-    if [ -d "$RUN_DIR" ] || mkdir -p "$RUN_DIR" 2>/dev/null; then
-        CURRENT_SESSION_FILE="$RUN_DIR/current-session"
-        OLD_SESSION_ID=""
-        if [ -f "$CURRENT_SESSION_FILE" ]; then
-            IFS= read -r OLD_SESSION_ID < "$CURRENT_SESSION_FILE" || true
-        fi
-        if [ "$OLD_SESSION_ID" != "$SESSION_ID" ]; then
-            printf '%s\n' "$SESSION_ID" > "$CURRENT_SESSION_FILE" 2>/dev/null || true
-        fi
+    RUN_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}/run"
+    _TP_CUR=""
+    if [ -f "$RUN_DIR/current-session" ]; then
+        IFS= read -r _TP_CUR < "$RUN_DIR/current-session" 2>/dev/null
     fi
-fi
-
-# derive_title — turn a raw prompt into a short SEMANTIC task title (not a
-# prefix truncation). Strips boilerplate openers, detects a leading task verb
-# → task noun, keeps the first significant topic words, recases known tokens,
-# caps at ~40 chars on a word boundary. Pure-bash word processing + 2 external
-# calls (tr, one sed) to stay within the hook budget. Returns non-zero (no
-# output) when nothing meaningful survives, so the caller can fall back.
-derive_title() {
-    local raw="$1" core verb="" out="" outlen=0 w n=0 lim=4 pretty add changed
-    # Cleanup is PURE BASH (zero subshells, ~3ms): lowercase, newlines/tabs →
-    # space, drop apostrophes, keep first sentence, collapse/trim, then
-    # loop-strip boilerplate openers + leading articles. (Exotic control chars
-    # are stripped JSON-side by the caller's escape pass.)
-    core="${raw,,}"
-    core="${core//$'\n'/ }"; core="${core//$'\t'/ }"; core="${core//$'\r'/ }"
-    core="${core//\'/}"
-    core="${core%%[.?!]*}"
-    while [[ "$core" == *"  "* ]]; do core="${core//  / }"; done
-    core="${core# }"; core="${core% }"
-    core="${core//the following /}"
-    changed=1
-    while [ "$changed" = 1 ]; do
-        changed=0
-        case "$core" in
-            "please "*) core="${core#please }"; changed=1 ;;
-            "kindly "*) core="${core#kindly }"; changed=1 ;;
-            "just "*) core="${core#just }"; changed=1 ;;
-            "simply "*) core="${core#simply }"; changed=1 ;;
-            "so "*) core="${core#so }"; changed=1 ;;
-            "ok "*) core="${core#ok }"; changed=1 ;;
-            "okay "*) core="${core#okay }"; changed=1 ;;
-            "hey "*|"hi "*|"well "*|"now "*) core="${core#* }"; changed=1 ;;
-            "can you "*) core="${core#can you }"; changed=1 ;;
-            "could you "*) core="${core#could you }"; changed=1 ;;
-            "would you "*) core="${core#would you }"; changed=1 ;;
-            "will you "*) core="${core#will you }"; changed=1 ;;
-            "id like you to "*) core="${core#id like you to }"; changed=1 ;;
-            "id would like you to "*) core="${core#id would like you to }"; changed=1 ;;
-            "i would like to "*) core="${core#i would like to }"; changed=1 ;;
-            "i want you to "*) core="${core#i want you to }"; changed=1 ;;
-            "i need you to "*) core="${core#i need you to }"; changed=1 ;;
-            "help me to "*) core="${core#help me to }"; changed=1 ;;
-            "help me "*) core="${core#help me }"; changed=1 ;;
-            "lets "*) core="${core#lets }"; changed=1 ;;
-            "here is "*) core="${core#here is }"; changed=1 ;;
-            "here are "*) core="${core#here are }"; changed=1 ;;
-            "heres "*) core="${core#heres }"; changed=1 ;;
-            "give me "*) core="${core#give me }"; changed=1 ;;
-            "get me "*) core="${core#get me }"; changed=1 ;;
-            "i need "*) core="${core#i need }"; changed=1 ;;
-            "i want "*) core="${core#i want }"; changed=1 ;;
-            "take a look at "*) core="${core#take a look at }"; changed=1 ;;
-            "look at "*) core="${core#look at }"; changed=1 ;;
-            "consider "*) core="${core#consider }"; changed=1 ;;
-            "what do you think about "*) core="${core#what do you think about }"; changed=1 ;;
-            "what do you think of "*) core="${core#what do you think of }"; changed=1 ;;
-            "what do you think "*) core="${core#what do you think }"; changed=1 ;;
-            "i believe "*) core="${core#i believe }"; changed=1 ;;
-            "i think "*) core="${core#i think }"; changed=1 ;;
-            "i feel like "*) core="${core#i feel like }"; changed=1 ;;
-            "i feel "*) core="${core#i feel }"; changed=1 ;;
-            "i guess "*) core="${core#i guess }"; changed=1 ;;
-            "we cant "*) core="${core#we cant }"; changed=1 ;;
-            "we cannot "*) core="${core#we cannot }"; changed=1 ;;
-            "we could not "*) core="${core#we could not }"; changed=1 ;;
-            "we need to "*) core="${core#we need to }"; changed=1 ;;
-            "why cant "*) core="${core#why cant }"; changed=1 ;;
-            "why not "*) core="${core#why not }"; changed=1 ;;
-            "the "*) core="${core#the }"; changed=1 ;;
-            "an "*) core="${core#an }"; changed=1 ;;
-            "a "*) core="${core#a }"; changed=1 ;;
-            "this "*|"that "*|"these "*|"those "*) core="${core#* }"; changed=1 ;;
-            "our "*|"your "*|"my "*|"its "*) core="${core#* }"; changed=1 ;;
-        esac
-    done
-    case "$core" in
-        analyze\ *)     verb="analysis";       core="${core#analyze }" ;;
-        analyse\ *)     verb="analysis";       core="${core#analyse }" ;;
-        review\ *)      verb="review";         core="${core#review }" ;;
-        fix\ *)         verb="fix";            core="${core#fix }" ;;
-        debug\ *)       verb="fix";            core="${core#debug }" ;;
-        implement\ *)   verb="implementation"; core="${core#implement }" ;;
-        draft\ *)       verb="draft";          core="${core#draft }" ;;
-        write\ *)       verb="draft";          core="${core#write }" ;;
-        compare\ *)     verb="comparison";     core="${core#compare }" ;;
-        investigate\ *) verb="investigation";  core="${core#investigate }" ;;
-        refactor\ *)    verb="refactor";       core="${core#refactor }" ;;
-        design\ *)      verb="design";         core="${core#design }" ;;
-        update\ *)      verb="update";         core="${core#update }" ;;
-        revise\ *)      verb="revision";       core="${core#revise }" ;;
-        explain\ *)     verb="explanation";    core="${core#explain }" ;;
-        create\ *)      verb="setup";          core="${core#create }" ;;
-        add\ *)         verb="setup";          core="${core#add }" ;;
-    esac
-    [ -n "$verb" ] && lim=3
-    for w in $core; do
-        case "$w" in
-            the|a|an|this|that|these|those|for|to|of|on|in|at|by|with|and|or|but|is|are|was|were|be|been|being|do|not|it|i|we|you|they|them|our|your|my|set|just|response|from|about|into|make|made|get|as|so|if|then|following|some|any|more|updated|new) continue ;;
-        esac
-        case "$w" in
-            pakline) pretty="PakLine" ;; tokenpak) pretty="TokenPak" ;;
-            ci) pretty="CI" ;; pr) pretty="PR" ;; api) pretty="API" ;;
-            json) pretty="JSON" ;; tui) pretty="TUI" ;; mcp) pretty="MCP" ;;
-            ttl) pretty="TTL" ;; osc) pretty="OSC" ;; tip) pretty="TIP" ;;
-            pak) pretty="PAK" ;; oauth) pretty="OAuth" ;;
-            *) pretty="$w" ;;
-        esac
-        add=$(( ${#pretty} + 1 ))
-        [ $(( outlen + add )) -gt 40 ] && break
-        out="$out $pretty"; outlen=$(( outlen + add )); n=$(( n + 1 ))
-        [ "$n" -ge "$lim" ] && break
-    done
-    out="${out# }"
-    if [ -n "$verb" ] && [ -n "$out" ] && [ $(( outlen + ${#verb} + 1 )) -le 40 ]; then
-        out="$out $verb"
-    fi
-    [ -n "$out" ] || return 1
-    printf '%s' "${out^}"
-}
-
-# ── Native dynamic session title (compute only; emitted on allow paths) ─
-# On the first prompt of a session, rename the Claude Code session to a
-# short, prompt-derived title using Claude Code's NATIVE mechanism: the
-# UserPromptSubmit ``hookSpecificOutput.sessionTitle`` field (documented as
-# "same effect as /rename"). No OSC-0, no terminal escapes — Claude Code owns
-# the title bar, session picker, and terminal title, and repaints on its own
-# render loop (which is why manual OSC-0 never survived). Fires exactly once
-# per session via a state marker; Claude Code's own aiTitle auto-naming may
-# take over afterward. Requires jq so the emitted JSON is always well-formed
-# — a malformed hook payload could disrupt prompt submission. Disable with
-# TOKENPAK_COMPANION_DYNAMIC_TITLE=0.
-#
-# A UserPromptSubmit hook may emit at most one JSON object, so the title is
-# computed here but only emitted (via emit_title) on the allow exits — never
-# on the budget-block path, whose decision JSON takes precedence. The state
-# marker is written only when the title is actually emitted, so a first
-# prompt that gets blocked still earns its title on the next allow.
-TITLE_JSON=""
-TITLE_TEXT=""
-TITLE_STATE_DIR=""
-TITLE_STATE=""
-if [ "${TOKENPAK_COMPANION_DYNAMIC_TITLE:-1}" != "0" ] \
-   && [ -n "$SESSION_ID" ] \
-   && [ -n "$PROMPT" ]; then
-    TITLE_STATE_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}/titles"
-    TITLE_STATE="$TITLE_STATE_DIR/$SESSION_ID"
-    if [ ! -f "$TITLE_STATE" ]; then
-        if [ -n "$PROMPT" ]; then
-            # Semantic title (verb/topic phrase). Fall back to a cleaned
-            # leading phrase only if the heuristic yields nothing usable.
-            SHORT=$(derive_title "$PROMPT") || SHORT=""
-            if [ -z "$SHORT" ]; then
-                SHORT=$(printf '%s' "$PROMPT" \
-                    | tr '\n\r\t' '   ' \
-                    | tr -d '\000-\037' \
-                    | sed -e 's/  */ /g' -e 's/^ //' -e 's/ *$//' \
-                    | cut -c1-40 \
-                    | sed -E 's/ +[^ ]*$//')
-            fi
-            if [ -n "$SHORT" ]; then
-                # Build the payload with printf to avoid a second jq in the
-                # hot path. SHORT is already control-char-free, so escaping
-                # the only remaining JSON-significant bytes (backslash then
-                # double-quote, in that order) yields a well-formed string.
-                SHORT_ESC=$(printf '%s' "$SHORT" | sed -e 's/[[:cntrl:]]//g' -e 's/\\/\\\\/g' -e 's/"/\\"/g')
-                TITLE_JSON=$(printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","sessionTitle":"📦 %s"}}' "$SHORT_ESC")
-                TITLE_TEXT="$SHORT"
-            fi
+    # Hot-path guard: rewrite only on session change (builtin read, no spawns).
+    if [ "$_TP_CUR" != "$SESSION_ID" ]; then
+        mkdir -p "$RUN_DIR" 2>/dev/null
+        if printf '%s' "$SESSION_ID" > "$RUN_DIR/current-session.$$.tmp" 2>/dev/null; then
+            mv -f "$RUN_DIR/current-session.$$.tmp" "$RUN_DIR/current-session" 2>/dev/null \
+                || rm -f "$RUN_DIR/current-session.$$.tmp" 2>/dev/null
         fi
     fi
 fi
-
-# emit_title — print the one-time native rename payload on an allow exit and
-# mark the session so it fires exactly once. No-op when no title is pending.
-emit_title() {
-    [ -n "$TITLE_JSON" ] || return 0
-    mkdir -p "$TITLE_STATE_DIR" 2>/dev/null
-    # Store the title TEXT (not an empty marker): it doubles as the fire-once
-    # flag AND PakLine's O(1) task source ($JOURNAL_DIR/titles/<session_id>).
-    printf '%s\n' "$TITLE_TEXT" > "$TITLE_STATE" 2>/dev/null
-    printf '%s\n' "$TITLE_JSON"
-}
 
 # Token estimation from file size (instant via stat)
 TOKENS=0
@@ -231,24 +87,46 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     TOKENS=$((FILE_SIZE / 4))
 fi
 
-[ "$TOKENS" -eq 0 ] && { emit_title; exit 0; }
+[ "$TOKENS" -eq 0 ] && exit 0
 
 # Format token count with thousands separators (pure bash)
 TOKENS_FMT="$TOKENS"
 if [ "$TOKENS" -ge 1000 ]; then
+    _TP_N="$TOKENS"
     TOKENS_FMT=""
-    REST="$TOKENS"
-    while [ "${#REST}" -gt 3 ]; do
-        TOKENS_FMT=",${REST: -3}$TOKENS_FMT"
-        REST="${REST:0:${#REST}-3}"
+    while [ "${#_TP_N}" -gt 3 ]; do
+        _TP_PART="${_TP_N: -3}"
+        _TP_N="${_TP_N:0:${#_TP_N}-3}"
+        if [ -n "$TOKENS_FMT" ]; then
+            TOKENS_FMT="${_TP_PART},${TOKENS_FMT}"
+        else
+            TOKENS_FMT="$_TP_PART"
+        fi
     done
-    TOKENS_FMT="$REST$TOKENS_FMT"
+    TOKENS_FMT="${_TP_N},${TOKENS_FMT}"
 fi
 
-# Cost estimation (sonnet rate: $3/M tokens)
-# Integer math in microdollars to avoid float
-COST_MICRO=$((TOKENS * 3 / 1000))
-COST_DOLLARS="$(( COST_MICRO / 1000 )).$(printf '%04d' $(( COST_MICRO % 1000 )) )"
+# Rate lookup: shared TSV snapshot generated by the companion Codex launcher.
+# Fallback rate 3 matches the registry's unknown/default input rate.
+RATES_FILE="${TOKENPAK_COMPANION_RATES_FILE:-$HOME/.tokenpak/companion/run/model_rates.tsv}"
+RATE=3
+if [ -n "$MODEL" ] && [ -f "$RATES_FILE" ]; then
+    RATE=$(awk -F'\t' -v m="$MODEL" '$1 == m { print $2; exit }' "$RATES_FILE" 2>/dev/null)
+    if [ -z "$RATE" ]; then
+        RATE=$(awk -F'\t' -v m="$MODEL" '
+            BEGIN { best_len = 0; best = "" }
+            index(m, $1) == 1 && length($1) > best_len { best_len = length($1); best = $2 }
+            END { if (best != "") print best }
+        ' "$RATES_FILE" 2>/dev/null)
+    fi
+    case "$RATE" in
+        ''|*[!0-9]*) RATE=3 ;;
+    esac
+fi
+
+# Integer math in microdollars: USD/Mtoken => tokens * rate microdollars.
+COST_MICRO=$((TOKENS * RATE))
+COST_DOLLARS="$(( COST_MICRO / 1000000 )).$(printf '%06d' $(( COST_MICRO % 1000000 )) )"
 
 # Budget check (only if TOKENPAK_COMPANION_BUDGET is set and > 0)
 BUDGET="${TOKENPAK_COMPANION_BUDGET:-0}"
@@ -260,20 +138,40 @@ if [ "$BUDGET" != "0" ] && [ -n "$BUDGET" ]; then
     TODAY=$(date +%Y-%m-%d)
     DAILY_TOTAL="0.0"
 
-    if [ -f "$BUDGET_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-        DAILY_TOTAL=$(sqlite3 "$BUDGET_DB" \
-            "SELECT COALESCE(SUM(estimated_cost), 0) FROM companion_costs WHERE date = '$TODAY';" 2>/dev/null || echo "0.0")
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        _tp_block_budget "tokenpak: budget check unavailable (sqlite3 missing) with TOKENPAK_COMPANION_BUDGET set"
+    fi
+
+    # Truthful daily spend: per (session, day) sum the actual rows when any
+    # exist (rows with a model are actuals), otherwise take the largest
+    # estimate — counts each message once instead of summing the cumulative
+    # pre-send estimate series plus actuals. Mirrors the python readers
+    # (companion/_sqlite.py DAILY_SPEND_SQL) without referencing the 'kind'
+    # column so it also works on not-yet-migrated databases.
+    if [ -f "$BUDGET_DB" ]; then
+        DAILY_TOTAL=$(sqlite3 -cmd ".timeout 5000" "$BUDGET_DB" \
+            "SELECT COALESCE(SUM(session_spend), 0) FROM (
+                 SELECT CASE
+                     WHEN SUM(CASE WHEN model != '' THEN 1 ELSE 0 END) > 0
+                     THEN SUM(CASE WHEN model != '' THEN estimated_cost ELSE 0 END)
+                     ELSE MAX(estimated_cost)
+                 END AS session_spend
+                 FROM companion_costs WHERE date = '$TODAY' GROUP BY session_id
+             );" 2>/dev/null || echo "0.0")
+        [ -z "$DAILY_TOTAL" ] && DAILY_TOTAL="0.0"
     fi
 
     # Compare using integer microdollars
-    BUDGET_MICRO=$(echo "$BUDGET * 1000000" | bc 2>/dev/null | cut -d. -f1 || echo 0)
-    DAILY_MICRO=$(echo "$DAILY_TOTAL * 1000000" | bc 2>/dev/null | cut -d. -f1 || echo 0)
-    EST_MICRO=$((TOKENS * 3))
+    BUDGET_MICRO=$(_tp_to_micro "$BUDGET" || echo "")
+    DAILY_MICRO=$(_tp_to_micro "$DAILY_TOTAL" || echo "")
+    EST_MICRO=$((TOKENS * RATE))
 
-    if [ "$((DAILY_MICRO + EST_MICRO))" -gt "${BUDGET_MICRO:-0}" ] 2>/dev/null; then
-        echo "tokenpak: budget exceeded (\$$DAILY_TOTAL / \$$BUDGET daily)" >&2
-        printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","decision":"block","reason":"budget exceeded"}}\n'
-        exit 2
+    if [ -z "$BUDGET_MICRO" ] || [ -z "$DAILY_MICRO" ]; then
+        _tp_block_budget "tokenpak: budget check unavailable (invalid budget accounting value)"
+    fi
+
+    if [ "$((DAILY_MICRO + EST_MICRO))" -gt "$BUDGET_MICRO" ] 2>/dev/null; then
+        _tp_block_budget "tokenpak: budget exceeded (\$$DAILY_TOTAL / \$$BUDGET daily)"
     fi
 
     # Budget percentage tag
@@ -285,9 +183,25 @@ fi
 
 # Print cost estimate to stderr (visible in TUI)
 if [ "${TOKENPAK_COMPANION_SHOW_COST:-1}" != "0" ]; then
-    printf 'tokenpak: ~%s tokens  est $%s%s\n' "$TOKENS_FMT" "$COST_DOLLARS" "$BUDGET_TAG" >&2
+    MODEL_TAG=""
+    [ -n "$MODEL" ] && MODEL_TAG=" ($MODEL)"
+    printf 'tokenpak: ~%s tokens  est $%s%s%s\n' "$TOKENS_FMT" "$COST_DOLLARS" "$MODEL_TAG" "$BUDGET_TAG" >&2
 fi
 
-# Allow path: emit the one-time native session rename (no-op if none pending).
-emit_title
+if [ -n "$SESSION_ID" ]; then
+    JOURNAL_DIR="${TOKENPAK_COMPANION_JOURNAL_DIR:-$HOME/.tokenpak/companion}"
+    JOURNAL_DB="$JOURNAL_DIR/journal.db"
+    if [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+        TIMESTAMP=$(date +%s)
+        ENTRY_CONTENT="prompt submitted (~${TOKENS_FMT} tokens, est \$$COST_DOLLARS, model: ${MODEL:-unknown})"
+        ENTRY_HASH=$(_tp_entry_hash 'auto' "$ENTRY_CONTENT" '{}')
+        {
+            _tp_ensure_dedupe_schema "$JOURNAL_DB"
+            sqlite3 -cmd ".timeout 5000" "$JOURNAL_DB" \
+                "INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json, content_hash)
+                 VALUES ('$SESSION_ID', $TIMESTAMP, 'auto', '$ENTRY_CONTENT', '{}', NULLIF('$ENTRY_HASH', ''));" 2>/dev/null
+        } &
+    fi
+fi
+
 exit 0

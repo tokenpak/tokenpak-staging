@@ -19,9 +19,6 @@ Get from zero to savings in 5 minutes. Pick your path:
 pip install tokenpak
 ```
 
-Already installed? Upgrade with `pip install -U tokenpak` or `tokenpak update`
-(a plain `pip install tokenpak` will not upgrade an existing version).
-
 ### Minute 2: Start the proxy
 
 ```bash
@@ -54,6 +51,18 @@ tokenpak status # live snapshot: requests, cache hit rate, models used
 
 That's it. Every request is now routed through tokenpak.
 
+### Editions, security, and compliance
+
+The OSS package is the Apache-2.0 local proxy and CLI. Run
+`tokenpak upgrade --print-url` to print the current Pro page, and see
+[multipak.md](./multipak.md) for the shipped OSS/Pro boundary.
+
+For trust review, start with
+[security architecture](./guides/enterprise/security-architecture.md) and
+[compliance mapping](./guides/enterprise/compliance-mapping.md). Those docs map
+deployment controls and report surfaces; they do not change the beta support
+model or imply hosted processing by the OSS package.
+
 ---
 
 ## SDK Path: Protocol-First
@@ -68,25 +77,25 @@ pip install tokenpak
 
 ### Compress and send
 
-Point your existing LLM client at the TokenPak proxy — no API changes needed:
-
 ```python
+from tokenpak import TokenPak, Block
+
+pack = TokenPak(budget=4000)
+pack.add_instructions("You are a helpful assistant.")
+pack.add_knowledge("docs", "Your long documentation here...")
+pack.add_conversation([{"role": "user", "content": "Summarize the docs"}])
+
+# Works with any OpenAI-compatible client
 from openai import OpenAI
-
-# Just change base_url — everything else stays the same
-client = OpenAI(
-    api_key="your-api-key",
-    base_url="http://localhost:8766"  # Route through TokenPak
-)
-
+client = OpenAI()
 response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Summarize the docs"}
-    ]
+ model="gpt-4",
+ messages=pack.to_messages()
 )
-# TokenPak compresses your request automatically — savings appear in the response footer
+
+# See how much was saved
+print(pack.compile().report)
+# → Input: 8,420 tokens → Output: 3,200 tokens | Savings: 62%
 ```
 
 ---

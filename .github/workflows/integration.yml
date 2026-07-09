@@ -10,6 +10,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   integration:
     name: Integration Tests (Python ${{ matrix.python-version }})
@@ -20,10 +24,10 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -48,12 +52,13 @@ jobs:
           TOKENPAK_TEST_MODE: "1"
 
       - name: Upload integration coverage
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@v6
         if: matrix.python-version == '3.12'
         with:
-          file: coverage-integration.xml
+          files: coverage-integration.xml
           flags: integration
           fail_ci_if_error: false
+          use_oidc: true
 
   chaos:
     name: Chaos Tests (Python ${{ matrix.python-version }})
@@ -64,10 +69,10 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -85,12 +90,13 @@ jobs:
           TOKENPAK_TEST_MODE: "1"
 
       - name: Upload chaos coverage
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@v6
         if: matrix.python-version == '3.12'
         with:
-          file: coverage-chaos.xml
+          files: coverage-chaos.xml
           flags: chaos
           fail_ci_if_error: false
+          use_oidc: true
 
   breaking-change-detection:
     name: Breaking Change Detection
@@ -98,12 +104,12 @@ jobs:
     if: github.event_name == 'pull_request'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -125,10 +131,10 @@ jobs:
     needs: [integration, chaos]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -176,8 +182,9 @@ jobs:
             --cov-fail-under=80
 
       - name: Upload combined coverage
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@v6
         with:
-          file: coverage-combined.xml
+          files: coverage-combined.xml
           flags: combined
           fail_ci_if_error: false
+          use_oidc: true

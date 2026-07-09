@@ -12,7 +12,7 @@ the projected request against the configured policy bands:
 - ``hard_block`` — cannot be released; even ``[TIP: bypass=on]`` /
   ``[TIP: allow=once]`` does NOT cross it.
 
-**Canonical default basis (Standard 29 §5 (2026-05-11 rev 2)):**
+**Canonical default basis (2026-05-11 rev 2):**
 context-window utilisation percent against the selected model's max
 context window — applied universally to every agent profile.
 
@@ -38,12 +38,10 @@ single-runaway-prompt cases where the model's max context is unknown.
 
 from __future__ import annotations
 
-import sys
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
-from .._local_data import default_spend_guard_db_path as _default_spend_guard_db_path
 from .contracts import PreflightDecision, RiskEstimate, TIPDirective
 
 # Default fraction of a model's max context above which a request is held
@@ -131,7 +129,7 @@ class SpendGuardConfig:
     :func:`load_config` (``tip_spend_guard:`` is accepted as an alias).
     Env-var overrides take precedence.
 
-    **Defaults (Standard 29 §5 (2026-05-11 rev 2)):**
+    **Defaults (2026-05-11 rev 2):**
 
     - ``default_basis = "context_window_percent"`` — block is denominated
       in context-window utilisation %, not dollars.
@@ -153,7 +151,7 @@ class SpendGuardConfig:
 
     enabled: bool = True
 
-    # ── Context-window-percent basis (canonical default per Standard 29 §5) ──
+    # ── Context-window-percent basis (canonical default) ──
     # Identifies which dimension the policy denominates default blocks in.
     # ``"context_window_percent"`` (default) → use the new % basis.
     # ``"dollar"`` → use the legacy dollar-band basis (opt-in only).
@@ -193,11 +191,11 @@ class SpendGuardConfig:
     # ── Dollar bands (opt-in, disabled by default) ──
     # Each defaults to ``0.0`` (disabled). Setting any of these to a
     # positive value engages the dollar plane for that band; setting one
-    # also emits a DeprecationWarning at config-load time (per Standard 29
-    # §5.1 deprecation notice).
+    # also emits a DeprecationWarning at config-load time (deprecation
+    # notice for the legacy dollar plane).
     block_cost_usd: float = 0.0
     hard_block_cost_usd: float = 0.0
-    # Session-cumulative defense (legacy; Standard 29 §5 v1.5.1). Catches the
+    # Session-cumulative defense (legacy; v1.5.1). Catches the
     # death-by-1000-cuts pattern: when running spend on a session in the
     # last ``session_window_seconds`` plus this projected request would
     # exceed ``session_block_cost_usd``, the request is blocked. Default
@@ -209,24 +207,14 @@ class SpendGuardConfig:
 
     # ── Operational knobs ──
     pending_ttl_seconds: int = 600
-    audit_db_path: str = field(default_factory=_default_spend_guard_db_path)
+    audit_db_path: str = "~/.tokenpak/spend_guard.db"
     # Below this projected-cost floor we don't even audit (avoid noise).
     audit_min_cost_usd: float = 0.10
-
-    # ── Session-scoped Yes-grant (Standard 29 §"Yes-grant scope") ──
-    # A POSITIVE intent (or [TIP: allow=session]) grants approval for this
-    # TTL window, keyed by (session_id, fleet_id, principal/agent_id), so a
-    # single Yes covers a whole agentic turn instead of one held request.
-    yes_grant_ttl_seconds: int = 300
-    # When False (default) a Yes-grant does NOT bypass rolling caps — caps
-    # are fleet-protection, not per-request consent. Flipping True logs on
-    # every request so the config drift stays visible (W5).
-    yes_grant_covers_rolling_caps: bool = False
 
     # ── Rolling/cumulative caps (2026-05-15 post-incident P0) ──
     # Supplements the per-session cap. Catches the 2026-05-15 pattern
     # where 64 sub-cap sessions cumulated to $566 in 8 hours. Default
-    # values per the rolling spend-guard cap policy.
+    # values per packet p0-rolling-spend-guard-caps-2026-05-15.md.
     rolling_caps_enabled: bool = True
     rolling_caps_window_seconds: int = 3600
     rolling_caps_per_agent_max_cost_usd: float = 20.0
@@ -240,21 +228,10 @@ class SpendGuardConfig:
     rolling_caps_per_fleet_max_tokens_total: int = 15_000_000
     rolling_caps_per_fleet_max_cache_read_tokens: int = 0
 
-    # ── Concurrent budget reservations (Standard 29 §15) ──
-    # Atomic admission control for in-flight requests against the SAME
-    # rolling-cap budget (settled + reserved + this request ≤ cap).
-    # Default OFF until the proxy response path settles holds
-    # (reservation.settle_reservation); until then every forward would
-    # hold its projection for the full TTL and over-block sustained
-    # traffic. The settle-wiring follow-up flips this default.
-    reservations_enabled: bool = False
-    reservation_ttl_seconds: int = 600
-
 
 # ---------------------------------------------------------------------------
 # Config loader — single source of truth for thresholds
 # ---------------------------------------------------------------------------
-
 
 def _coerce_bool(v) -> bool:
     if isinstance(v, bool):
@@ -272,7 +249,7 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
     config is read fresh from ``tokenpak.proxy.config``. Env vars override
     file config.
 
-    **Backward compatibility (Standard 29 §5.1):** explicit configuration of any
+    **Backward compatibility:** explicit configuration of any
     legacy dollar-denominated field (``block_cost_usd``, ``hard_block_cost_usd``,
     ``session_block_cost_usd``, ``default_dollar_cap``) — whether via YAML or
     ``TOKENPAK_SPEND_GUARD_*`` env vars — engages the dollar plane for that
@@ -301,13 +278,8 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
     else:
         try:
             from tokenpak.core.config_loader import load_config as _load_yaml
-
             _raw = _load_yaml() or {}
-        except Exception as exc:
-            print(
-                f"tokenpak: WARN failed to load spend guard config; using default caps: {exc}",
-                file=sys.stderr,
-            )
+        except Exception:
             _raw = {}
         sg_legacy = _raw.get("spend_guard") or {}
         sg_canonical = _raw.get("tip_spend_guard") or {}
@@ -358,9 +330,7 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         "block_tokens",
         "hard_block_tokens",
         "pending_ttl_seconds",
-        "yes_grant_ttl_seconds",
         "session_window_seconds",
-        "reservation_ttl_seconds",
         "rolling_caps_window_seconds",
         "rolling_caps_per_agent_max_tokens_total",
         "rolling_caps_per_agent_max_cache_read_tokens",
@@ -372,14 +342,6 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
                 setattr(cfg, k, int(sg[k]))
             except (TypeError, ValueError):
                 pass
-
-    # Yes-grant — bool field
-    if "yes_grant_covers_rolling_caps" in sg:
-        cfg.yes_grant_covers_rolling_caps = _coerce_bool(sg["yes_grant_covers_rolling_caps"])
-
-    # Concurrent reservations — bool field (Standard 29 §15)
-    if "reservations_enabled" in sg:
-        cfg.reservations_enabled = _coerce_bool(sg["reservations_enabled"])
 
     # Rolling caps — bool + float fields
     if "rolling_caps_enabled" in sg:
@@ -400,36 +362,26 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         if "enabled" in rc_block:
             cfg.rolling_caps_enabled = _coerce_bool(rc_block["enabled"])
         if "window_seconds" in rc_block:
-            try:
-                cfg.rolling_caps_window_seconds = int(rc_block["window_seconds"])
-            except (TypeError, ValueError):
-                pass
+            try: cfg.rolling_caps_window_seconds = int(rc_block["window_seconds"])
+            except (TypeError, ValueError): pass
         for sub, mapping in (
-            (
-                "per_agent",
-                {
-                    "max_cost_usd": ("rolling_caps_per_agent_max_cost_usd", float),
-                    "max_tokens_total": ("rolling_caps_per_agent_max_tokens_total", int),
-                    "max_cache_read_tokens": ("rolling_caps_per_agent_max_cache_read_tokens", int),
-                },
-            ),
-            (
-                "per_fleet",
-                {
-                    "max_cost_usd": ("rolling_caps_per_fleet_max_cost_usd", float),
-                    "max_tokens_total": ("rolling_caps_per_fleet_max_tokens_total", int),
-                    "max_cache_read_tokens": ("rolling_caps_per_fleet_max_cache_read_tokens", int),
-                },
-            ),
+            ("per_agent", {
+                "max_cost_usd": ("rolling_caps_per_agent_max_cost_usd", float),
+                "max_tokens_total": ("rolling_caps_per_agent_max_tokens_total", int),
+                "max_cache_read_tokens": ("rolling_caps_per_agent_max_cache_read_tokens", int),
+            }),
+            ("per_fleet", {
+                "max_cost_usd": ("rolling_caps_per_fleet_max_cost_usd", float),
+                "max_tokens_total": ("rolling_caps_per_fleet_max_tokens_total", int),
+                "max_cache_read_tokens": ("rolling_caps_per_fleet_max_cache_read_tokens", int),
+            }),
         ):
             sub_block = rc_block.get(sub) or {}
             if isinstance(sub_block, dict):
                 for yaml_key, (attr, caster) in mapping.items():
                     if yaml_key in sub_block:
-                        try:
-                            setattr(cfg, attr, caster(sub_block[yaml_key]))
-                        except (TypeError, ValueError):
-                            pass
+                        try: setattr(cfg, attr, caster(sub_block[yaml_key]))
+                        except (TypeError, ValueError): pass
 
     # Legacy dollar bands + warn-cost band
     for k in (
@@ -489,50 +441,17 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
         ("TOKENPAK_SPEND_GUARD_BLOCK_COST_USD", "block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_HARD_BLOCK_COST_USD", "hard_block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_PENDING_TTL", "pending_ttl_seconds", int),
-        ("TOKENPAK_SPEND_GUARD_YES_GRANT_TTL_SECONDS", "yes_grant_ttl_seconds", int),
-        (
-            "TOKENPAK_SPEND_GUARD_YES_GRANT_COVERS_ROLLING_CAPS",
-            "yes_grant_covers_rolling_caps",
-            _coerce_bool,
-        ),
         ("TOKENPAK_SPEND_GUARD_SESSION_BLOCK_COST_USD", "session_block_cost_usd", float),
         ("TOKENPAK_SPEND_GUARD_SESSION_WINDOW_SECONDS", "session_window_seconds", int),
-        # Concurrent reservations env overrides (Standard 29 §15)
-        ("TOKENPAK_SPEND_GUARD_RESERVATIONS_ENABLED", "reservations_enabled", _coerce_bool),
-        ("TOKENPAK_SPEND_GUARD_RESERVATION_TTL", "reservation_ttl_seconds", int),
         # Rolling caps env overrides
         ("TOKENPAK_SPEND_GUARD_ROLLING_CAPS_ENABLED", "rolling_caps_enabled", _coerce_bool),
         ("TOKENPAK_SPEND_GUARD_ROLLING_WINDOW_SECONDS", "rolling_caps_window_seconds", int),
-        (
-            "TOKENPAK_SPEND_GUARD_ROLLING_PER_AGENT_COST_USD",
-            "rolling_caps_per_agent_max_cost_usd",
-            float,
-        ),
-        (
-            "TOKENPAK_SPEND_GUARD_ROLLING_PER_AGENT_TOKENS",
-            "rolling_caps_per_agent_max_tokens_total",
-            int,
-        ),
-        (
-            "TOKENPAK_SPEND_GUARD_ROLLING_PER_AGENT_CACHE_READ",
-            "rolling_caps_per_agent_max_cache_read_tokens",
-            int,
-        ),
-        (
-            "TOKENPAK_SPEND_GUARD_ROLLING_PER_FLEET_COST_USD",
-            "rolling_caps_per_fleet_max_cost_usd",
-            float,
-        ),
-        (
-            "TOKENPAK_SPEND_GUARD_ROLLING_PER_FLEET_TOKENS",
-            "rolling_caps_per_fleet_max_tokens_total",
-            int,
-        ),
-        (
-            "TOKENPAK_SPEND_GUARD_ROLLING_PER_FLEET_CACHE_READ",
-            "rolling_caps_per_fleet_max_cache_read_tokens",
-            int,
-        ),
+        ("TOKENPAK_SPEND_GUARD_ROLLING_PER_AGENT_COST_USD", "rolling_caps_per_agent_max_cost_usd", float),
+        ("TOKENPAK_SPEND_GUARD_ROLLING_PER_AGENT_TOKENS", "rolling_caps_per_agent_max_tokens_total", int),
+        ("TOKENPAK_SPEND_GUARD_ROLLING_PER_AGENT_CACHE_READ", "rolling_caps_per_agent_max_cache_read_tokens", int),
+        ("TOKENPAK_SPEND_GUARD_ROLLING_PER_FLEET_COST_USD", "rolling_caps_per_fleet_max_cost_usd", float),
+        ("TOKENPAK_SPEND_GUARD_ROLLING_PER_FLEET_TOKENS", "rolling_caps_per_fleet_max_tokens_total", int),
+        ("TOKENPAK_SPEND_GUARD_ROLLING_PER_FLEET_CACHE_READ", "rolling_caps_per_fleet_max_cache_read_tokens", int),
     ):
         if env_key in env:
             try:
@@ -548,7 +467,9 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
     for pct_field in ("default_context_window_percent", "hard_stop_context_window_percent"):
         v = getattr(cfg, pct_field)
         if not isinstance(v, int) or v < 0 or v > 100:
-            raise ValueError(f"spend_guard.{pct_field} must be an integer in [0, 100]; got {v!r}")
+            raise ValueError(
+                f"spend_guard.{pct_field} must be an integer in [0, 100]; got {v!r}"
+            )
     if cfg.default_context_window_percent > cfg.hard_stop_context_window_percent:
         raise ValueError(
             "spend_guard.default_context_window_percent "
@@ -559,17 +480,18 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
 
     # Backward-compat: any explicit legacy-dollar-field setting engages the
     # dollar plane for that profile and emits a DeprecationWarning. The
-    # values still work — Standard 29 §5.1 keeps the dollar plane reachable as
+    # values still work — the dollar plane remains reachable as
     # an opt-in profile override.
     if legacy_dollar_set_via:
         cfg.dollar_cap_enabled_by_default = True
         fields_str = ", ".join(
-            f"{name} (via {src})" for name, src in sorted(legacy_dollar_set_via.items())
+            f"{name} (via {src})"
+            for name, src in sorted(legacy_dollar_set_via.items())
         )
         warnings.warn(
             "TIP Spend Guard: legacy dollar-denominated configuration is "
             "deprecated. The canonical default basis is context-window % "
-            "(default 90% block / 100% hard stop) per Standard 29 §5. The "
+            "(default 90% block / 100% hard stop). The "
             f"following dollar field(s) remain reachable as opt-in: {fields_str}. "
             "Migrate to default_context_window_percent / "
             "hard_stop_context_window_percent where possible.",
@@ -589,58 +511,8 @@ def load_config(raw_config: Optional[dict] = None) -> SpendGuardConfig:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic-directive precedence (reproducible-eval mode; TIP versioning standard)
-# ---------------------------------------------------------------------------
-
-
-def deterministic_precedence(tip: Optional[TIPDirective]) -> Optional[str]:
-    """Precedence contract for ``[TIP: deterministic=on]`` vs existing directives.
-
-    Pure function. Returns ``None`` when the directive combination is
-    compatible, or a conflict token (``deterministic_conflict:<key>``) when it
-    is INCOMPATIBLE — in which case the caller MUST fail loudly (reject the
-    request with a structured error before any provider send). Neither side of
-    an incompatible combination is ever silently stripped.
-
-    Final precedence behavior (documented per the reproducible-eval contract):
-
-    - ``deterministic=on + estimate=on`` → **compatible**. Estimate is
-      side-effect-free (returns RiskEstimate JSON, no provider call), so it
-      cannot violate any deterministic guarantee.
-    - ``deterministic=on + allow=once`` (or ``allow=15m`` / ``allow=session``
-      / ``allow=<N>``) → **incompatible**. Allow semantics release/replay a
-      previously HELD request — the replayed body is not the one carrying the
-      deterministic directive, and the approval round-trip is interactive
-      multi-turn state, both of which break the reproducibility contract.
-    - ``deterministic=on + bypass=on`` → **incompatible**. Bypass overrides
-      soft spend bands; deterministic mode is explicitly NOT a spend-band
-      override and must not be combinable with one.
-    - ``deterministic=on + max=... / ttl=...`` (without allow/bypass) →
-      compatible-inert: those keys only act alongside allow/bypass.
-    - ``deterministic=on + cancel`` → compatible: cancel never reaches a
-      provider (it discards pending state and acknowledges).
-    - Spend-guard precedence is unchanged in BOTH directions: deterministic
-      never relaxes any threshold (``hard_block``/``block`` bands fire
-      exactly as without the directive), and a spend block does not disable
-      deterministic semantics — the held request is simply not sent.
-    """
-    if tip is None or not getattr(tip, "deterministic", False):
-        return None
-    if getattr(tip, "bypass", False):
-        return "deterministic_conflict:bypass"
-    allow_scope = getattr(tip, "allow_scope", None)
-    if allow_scope:
-        return f"deterministic_conflict:allow={allow_scope}"
-    allow_count = getattr(tip, "allow_count", None)
-    if allow_count:
-        return f"deterministic_conflict:allow={allow_count}"
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Decision engine
 # ---------------------------------------------------------------------------
-
 
 def decide(
     estimate: RiskEstimate,
@@ -654,7 +526,7 @@ def decide(
 
     Order of checks (most specific first):
 
-    1. **Context-window-% hard stop** (canonical, Standard 29 §5) — projected
+    1. **Context-window-% hard stop** (canonical) — projected
        input tokens ≥ ``hard_stop_context_window_percent`` × max-context.
        NOT bypassable. Fires regardless of any ``[TIP: ...]`` directive.
     2. Legacy hard-block bands (dollar + token-fallback) — when the dollar
@@ -663,7 +535,7 @@ def decide(
     3. TIP-declared ceiling, when present and inside the hard-stop band.
        ``[TIP: allow=once max=$X]`` lets the request through provided the
        projected request fits the declared dimensions.
-    4. **Context-window-% soft block** (canonical, Standard 29 §5) — projected
+    4. **Context-window-% soft block** (canonical) — projected
        input tokens ≥ ``default_context_window_percent`` × max-context.
        Bypassable by Yes/``[TIP: allow=once]``.
     5. Legacy block band — dollar (when engaged) + token-fallback (when
@@ -674,12 +546,7 @@ def decide(
     8. ``allow`` — default.
 
     The canonical default basis is context-window utilisation %. Dollar
-    bands stay reachable as an opt-in profile override per Standard 29 §5.1.
-
-    ``[TIP: deterministic=on]`` is NOT a spend directive: a deterministic-only
-    directive sets none of the bypass/allow/ceiling fields, so every band in
-    this function fires exactly as it would with ``tip=None`` (see
-    :func:`deterministic_precedence` for the full precedence contract).
+    bands stay reachable as an opt-in profile override.
     """
     if cfg is None:
         cfg = load_config()
@@ -767,13 +634,7 @@ def decide(
         )
 
     # 3. TIP-declared ceiling
-    if tip is not None and (
-        tip.bypass
-        or tip.allow_scope
-        or tip.allow_count
-        or tip.max_cost_usd is not None
-        or tip.max_tokens is not None
-    ):
+    if tip is not None and (tip.bypass or tip.allow_scope or tip.max_cost_usd is not None or tip.max_tokens is not None):
         # When a TIP ceiling is specified, only the *specified* dimensions
         # bind. Unspecified dimensions are treated as user-authorized — the
         # caller has explicitly opted in. Hard-block / hard-stop (already
@@ -802,7 +663,7 @@ def decide(
             risk=estimate,
         )
 
-    # 4. Context-window-% soft block (canonical, Standard 29 §5).
+    # 4. Context-window-% soft block (canonical).
     if pct_block_tokens is not None and input_tokens >= pct_block_tokens:
         return PreflightDecision(
             decision="block",
@@ -851,7 +712,11 @@ def decide(
             requires_approval=True,
             threshold_hit=(
                 f"{threshold_source}>={effective_block_tokens}"
-                + (f" max_context={model_max_context_tokens}" if model_max_context_tokens else "")
+                + (
+                    f" max_context={model_max_context_tokens}"
+                    if model_max_context_tokens
+                    else ""
+                )
             ),
             risk=estimate,
         )

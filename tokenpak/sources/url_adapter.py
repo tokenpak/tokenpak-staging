@@ -18,11 +18,6 @@ from .base_source import Provenance, SourceAdapter, SourceFetchError
 # Timeout for HTTP requests (seconds)
 _HTTP_TIMEOUT = 10
 
-# Hard cap on a fetched response body. Guards against memory-exhaustion /
-# decompression-bomb responses from an otherwise-allowed host.
-_MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MiB
-_READ_CHUNK = 64 * 1024  # 64 KiB streaming chunk
-
 # Strip these common boilerplate tags (with their content)
 _STRIP_TAGS_WITH_CONTENT = re.compile(
     r"<(script|style|noscript|header|footer|nav|aside)[^>]*>.*?</\1>",
@@ -128,23 +123,6 @@ def _urlopen_checked(req: urllib.request.Request, timeout: int):
     return opener.open(req, timeout=timeout)
 
 
-def _read_capped(resp, max_bytes: int = _MAX_RESPONSE_BYTES) -> bytes:
-    """Read a response body with a hard byte cap.
-
-    Streams in chunks and stops once ``max_bytes`` is exceeded, returning at
-    most ``max_bytes`` bytes (oversized bodies are truncated at the cap).
-    """
-    chunks = []
-    remaining = max_bytes + 1  # read one extra byte to detect overflow
-    while remaining > 0:
-        chunk = resp.read(min(_READ_CHUNK, remaining))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)[:max_bytes]
-
-
 class URLAdapter(SourceAdapter):
     """Fetch and index web pages by URL."""
 
@@ -173,7 +151,7 @@ class URLAdapter(SourceAdapter):
                 headers={"User-Agent": "TokenPak/1.0 (context indexer)"},
             )
             with _urlopen_checked(req, timeout=_HTTP_TIMEOUT) as resp:
-                raw_bytes = _read_capped(resp)
+                raw_bytes = resp.read()
                 etag = resp.headers.get("ETag", "")
                 content_type = resp.headers.get("Content-Type", "")
         except Exception as exc:

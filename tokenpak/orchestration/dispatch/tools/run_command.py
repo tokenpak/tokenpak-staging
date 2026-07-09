@@ -1,14 +1,17 @@
 """``run_command`` tool — category-gated subprocess with effect record.
 
-Implements the ``run_command`` acceptance criteria from P-TOOLS-01 (Standards
-Delta v0 §5.3 + §4.8):
+Implements the ``run_command`` acceptance criteria from P-TOOLS-01:
 
 1. Validate the command ``category`` against the ``allowed_categories``
    allowlist.
 2. Reject when the category is in ``forbidden_categories``.
-3. Create a ``DispatchEffect(status="planned")`` for any *mutating* command.
+3. Create a ``DispatchEffect(status="planned")`` for any *mutating* command —
+   persisted durably via ``RunLedger.record_planned_effect`` when a ledger is
+   supplied, so an interrupted command leaves a reconcilable planned record.
 4. Execute via :mod:`subprocess` with the station-loop timeout.
-5. Capture stdout/stderr; promote the effect to ``applied`` on completion.
+5. Capture stdout/stderr; promote the effect to ``applied`` on completion
+   (``RunLedger.mark_effect_applied`` when a ledger is supplied; failures
+   finalize via ``mark_effect_failed``).
 
 A command that *runs to completion* — even with a non-zero exit code — is a
 successful tool invocation: the non-zero status is result data, captured in
@@ -17,7 +20,7 @@ to ``failed``) is reserved for the cases where the command could not run to
 completion: a timeout (returned with ``timed_out=True`` and captured partial
 output) or an OS-level launch error (re-raised). The mutating-command effect is created
 ``planned`` before launch so an interrupted run leaves a ``planned`` record
-without ``finalized_at`` for resume reconciliation (§5.5, handled in P-EXEC-01).
+without ``finalized_at`` for resume reconciliation (handled in P-EXEC-01).
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from tokenpak.orchestration.dispatch.models.common import StationLoopPolicy
@@ -47,7 +51,10 @@ from ._matrix import (
     authorize_tool_call,
 )
 
-# System-default station timeout (Dispatch contract §5.4 max_wall_seconds).
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from tokenpak.orchestration.dispatch.ledger.db import RunLedger
+
+# System-default station timeout (max_wall_seconds).
 _DEFAULT_TIMEOUT_SECONDS = StationLoopPolicy().max_wall_seconds
 
 
@@ -77,7 +84,7 @@ def _coerce_category(category: CommandCategory | str) -> CommandCategory:
 
 
 def validate_command_category(category: CommandCategory | str) -> CommandCategory:
-    """Validate a command category against the §5.3 allow/forbid sets.
+    """Validate a command category against the allow/forbid sets.
 
     Raises :class:`CommandCategoryError` when the category is explicitly
     forbidden or is simply not on the two-entry allowlist. Returns the coerced
@@ -105,17 +112,23 @@ def run_command(
     effect_id: str | None = None,
     approval_granted: bool = False,
     now: datetime | None = None,
+    ledger: "RunLedger | None" = None,
 ) -> RunCommandResult:
     """Run an allowlisted command, recording a mutating effect when applicable.
 
     ``command`` is an argv list (no shell). ``timeout_seconds`` defaults to the
-    §5.4 system default (``max_wall_seconds``). A non-mutating category
+    system default (``max_wall_seconds``). A non-mutating category
     (``read_only_inspection``) records no effect (``effect is None``); a mutating
     category (``tests``) records a ``command_output`` effect, ``planned`` before
     launch and ``applied`` after completion.
+
+    When ``ledger`` is supplied the mutating-command effect lifecycle is
+    persisted durably: the ``planned`` record is written BEFORE the subprocess
+    launches (so an interrupted command leaves a reconcilable marker) and the
+    ``applied``/``failed`` transition is written when the command finishes.
     """
 
-    # 1. Matrix gate (Dispatch contract §5.3).
+    # 1. Matrix gate.
     authorize_tool_call(ToolName.RUN_COMMAND, autonomy_mode, approval_granted=approval_granted)
 
     # 1b. + 2. Category allowlist / forbidden-list enforcement.
@@ -126,7 +139,8 @@ def run_command(
     mutating = CATEGORY_MUTATES_WORKSPACE[cat]
     when = now or datetime.now(timezone.utc)
 
-    # 3. Create the planned effect for mutating commands only (§5.3).
+    # 3. Create the planned effect for mutating commands only — persisted
+    #    durably BEFORE launch when a ledger is available.
     effect: DispatchEffect | None = None
     if mutating:
         effect = DispatchEffect(
@@ -146,6 +160,8 @@ def run_command(
             created_at=when,
             finalized_at=None,
         )
+        if ledger is not None:
+            ledger.record_planned_effect(effect)
 
     # 4. Execute.
     try:
@@ -160,12 +176,15 @@ def run_command(
         )
     except subprocess.TimeoutExpired as exc:
         if effect is not None:
+            failed_at = datetime.now(timezone.utc)
             effect = effect.model_copy(
                 update={
                     "status": EffectStatus.FAILED,
-                    "finalized_at": datetime.now(timezone.utc),
+                    "finalized_at": failed_at,
                 }
             )
+            if ledger is not None:
+                ledger.mark_effect_failed(effect.id, finalized_at=failed_at)
         return RunCommandResult(
             effect=effect,
             returncode=-1,
@@ -177,22 +196,28 @@ def run_command(
     except OSError:
         # Could not launch the process at all → failed effect, re-raise.
         if effect is not None:
+            failed_at = datetime.now(timezone.utc)
             effect = effect.model_copy(
                 update={
                     "status": EffectStatus.FAILED,
-                    "finalized_at": datetime.now(timezone.utc),
+                    "finalized_at": failed_at,
                 }
             )
+            if ledger is not None:
+                ledger.mark_effect_failed(effect.id, finalized_at=failed_at)
         raise
 
     # 5. Promote the effect to applied (command ran to completion).
     if effect is not None:
+        applied_at = datetime.now(timezone.utc)
         effect = effect.model_copy(
             update={
                 "status": EffectStatus.APPLIED,
-                "finalized_at": datetime.now(timezone.utc),
+                "finalized_at": applied_at,
             }
         )
+        if ledger is not None:
+            ledger.mark_effect_applied(effect.id, finalized_at=applied_at)
 
     return RunCommandResult(
         effect=effect,

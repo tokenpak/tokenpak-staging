@@ -43,7 +43,7 @@ tokenpak recommendations --json | jq '.recommendations[].id'
 | `pricing.missing:<model>` | tracking | A model was seen in traffic but no pricing entry exists in `tp_pricing_catalog` or the bundled pricing helper. |
 
 Rules that depend on optional tables (`tp_savings_attribution`, `tp_cache_miss_reasons` —
-both populated by the TIP-06 attribution-v2 pipeline) silently skip when those tables
+both populated by the attribution-v2 pipeline) silently skip when those tables
 aren't present, so this command always works even on telemetry stores that predate the
 attribution-v2 migration.
 
@@ -75,12 +75,12 @@ renamed. Treat unknown fields as forward-compat metadata and ignore them.
 
 The engine reads only aggregate columns (`tp_events.{provider,model,status,ts}`,
 `tp_usage.{cache_read,usage_source,...}`, `tp_pricing_catalog`, and the optional
-TIP-06 tables). It does **not** read raw prompts, responses, or capsule contents,
+attribution-v2 tables). It does **not** read raw prompts, responses, or capsule contents,
 and it does not require raw-prompt storage to produce useful output.
 
 ## Where this lives
 
 - Engine: `tokenpak/telemetry/recommendations.py`
 - CLI command: `tokenpak/cli/commands/recommendations.py`
-- Architecture layer: telemetry (Level 2 per Standard 01 §2). The engine is read-only;
+- Architecture layer: telemetry (Level 2 per the architecture standard). The engine is read-only;
   it is invoked by an entrypoint (CLI) and never by `services/` or `proxy/`.

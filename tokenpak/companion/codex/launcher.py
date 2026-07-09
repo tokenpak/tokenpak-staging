@@ -5,16 +5,22 @@ Does setup (rate snapshot, MCP registration, hooks install, AGENTS.md,
 skills) and either exec-replaces into ``codex`` (default) or exits
 after install (``--install-only``).
 
+Before exec-ing a real launch it preflights Codex's own local SQLite
+databases (``state_5.sqlite`` / ``logs_2.sqlite``) so a shared ``~/.codex``
+that is locked by another (or a suspended) Codex process surfaces an
+actionable wait/retry instead of Codex dying on a raw "database is
+locked" error. ``--install-only`` skips the preflight — it never exec-s.
+
 Companion features work without the launcher if the user manually
 configures MCP, hooks, and AGENTS.md — the launcher is convenience.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
-import random
 import sys
-from typing import TextIO
+import time
 
 from ..config import CompanionConfig
 
@@ -88,6 +94,159 @@ def _fleet_banner(env: dict[str, str] | None = None, fleet: bool = False) -> str
     return None
 
 
+# ── Codex local-database lock preflight ─────────────────────────────
+# Bounded total wait for a *live* holder to release before we give up and
+# print remediation. A stopped/suspended holder never releases, so it is
+# short-circuited without consuming this budget.
+_LOCK_WAIT_TIMEOUT_S = 30.0
+# How often we re-probe the databases while waiting.
+_LOCK_POLL_INTERVAL_S = 0.5
+_ESC = "\x1b"
+
+
+def _stdin_is_tty() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _drain_esc_pressed() -> bool:
+    """Best-effort, non-blocking check for a pending Esc keypress.
+
+    Returns True if Esc (``0x1b``) is waiting on stdin.  Never blocks and
+    never raises: on any platform/terminal where raw keys are unreadable
+    we report "not pressed" and rely on the bounded timeout instead.
+    """
+    try:
+        import select
+        import termios
+        import tty
+    except ImportError:  # non-POSIX — try the Windows console API.
+        try:
+            import msvcrt
+        except ImportError:  # pragma: no cover - no raw-key source
+            return False
+        pressed = False
+        while msvcrt.kbhit():  # pragma: no cover - needs a Windows console
+            if msvcrt.getwch() == _ESC:
+                pressed = True
+        return pressed
+
+    if not _stdin_is_tty():
+        return False
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+    except termios.error:
+        return False
+    try:
+        tty.setcbreak(fd)
+        pressed = False
+        while select.select([sys.stdin], [], [], 0)[0]:
+            ch = sys.stdin.read(1)
+            if not ch:
+                break
+            if ch == _ESC:
+                pressed = True
+        return pressed
+    finally:
+        with contextlib.suppress(termios.error):
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _preflight_state_lock(
+    *,
+    prober=None,
+    interactive: bool | None = None,
+    timeout_s: float = _LOCK_WAIT_TIMEOUT_S,
+    poll_interval_s: float = _LOCK_POLL_INTERVAL_S,
+    esc_pressed=None,
+    sleep=None,
+    monotonic=None,
+) -> "int | None":
+    """Preflight Codex-owned SQLite databases before exec.
+
+    Returns ``None`` when it is safe to launch — the home is clear, or a
+    contended lock cleared within the bounded wait.  Returns an ``int``
+    exit code when the caller should abort instead of exec-ing into a
+    contended home:
+
+    * a suspended/stopped holder (which never releases) short-circuits to
+      direct remediation without waiting;
+    * a live holder is waited on up to ``timeout_s`` — in a TTY the user
+      may press Esc to cancel promptly, non-interactive callers get
+      concise retry lines and a bounded timeout;
+    * either way, exhausting the wait prints the same actionable
+      remediation guidance rather than letting Codex fail on a raw lock.
+
+    The seams (``prober``/``esc_pressed``/``sleep``/``monotonic``/
+    ``interactive``) are injectable so the wait loop is testable without a
+    real TTY, real clock, or real key input.
+    """
+    from . import state_lock
+
+    prober = prober or state_lock.probe
+    esc_pressed = esc_pressed or _drain_esc_pressed
+    sleep = sleep or time.sleep
+    monotonic = monotonic or time.monotonic
+    if interactive is None:
+        interactive = _stdin_is_tty()
+
+    status = prober()
+    if not status.locked:
+        return None
+
+    # A stopped/suspended holder never releases the lock — waiting is
+    # futile, so surface direct remediation immediately.
+    if status.stopped_pids:
+        print(state_lock.remediation_hint(status), file=sys.stderr)
+        return 1
+
+    if interactive:
+        print(
+            "tokenpak: SQLite database is busy. Waiting to connect... "
+            "Press Esc to cancel.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "tokenpak: Codex local database is busy; waiting up to "
+            f"{int(timeout_s)}s for the holder to release "
+            "(set a fresh CODEX_HOME to skip)...",
+            file=sys.stderr,
+        )
+
+    deadline = monotonic() + timeout_s
+    while monotonic() < deadline:
+        if interactive and esc_pressed():
+            print(
+                "tokenpak: cancelled while waiting for the Codex database lock.",
+                file=sys.stderr,
+            )
+            print(state_lock.remediation_hint(status), file=sys.stderr)
+            return 130
+        sleep(poll_interval_s)
+        status = prober()
+        if not status.locked:
+            return None
+        if status.stopped_pids:
+            print(state_lock.remediation_hint(status), file=sys.stderr)
+            return 1
+        if not interactive:
+            print(
+                "tokenpak: still waiting for the Codex database lock...",
+                file=sys.stderr,
+            )
+
+    print(
+        f"tokenpak: Codex database still locked after {int(timeout_s)}s.",
+        file=sys.stderr,
+    )
+    print(state_lock.remediation_hint(status), file=sys.stderr)
+    return 1
+
+
 def main(args: list[str] | None = None) -> int:
     """Entry point for ``tokenpak codex``."""
     args = list(args if args is not None else sys.argv[1:])
@@ -97,117 +256,62 @@ def main(args: list[str] | None = None) -> int:
         install_only = True
         args = [a for a in args if a != "--install-only"]
 
-    # Opt-in: route codex through the local TokenPak proxy via a dedicated
-    # named profile. Stripped from the args before they reach codex. Default
-    # (no --proxy) behaviour is byte-identical to before this flag existed.
-    use_proxy = False
-    if "--proxy" in args:
-        use_proxy = True
-        args = [a for a in args if a != "--proxy"]
-
     config = CompanionConfig.from_env()
     config.profile_overrides()
 
     config.journal_dir.mkdir(parents=True, exist_ok=True)
-    progress = _LoadingStatus(sys.stderr)
-
-    # ── Step 0a: Resolve CODEX_HOME isolation mode ───────────
-    # workspace = default isolation unit (per-project), isolated =
-    # advanced (per-session). shared = current behavior (literal default).
-    # Provisioning + preflight run before any exec so a contended home
-    # is surfaced instead of hung on.
-    from . import session_home, state_lock
-
-    codex_home = None
-    try:
-        mode = session_home.resolve_mode()
-        if mode == session_home.MODE_ATTACH:
-            progress.clear()
-            print(
-                "tokenpak: TOKENPAK_CODEX_SESSION_MODE=attach is deferred; "
-                "falling back to shared mode",
-                file=sys.stderr,
-            )
-            mode = session_home.MODE_SHARED
-        provisioned = session_home.provision_codex_home(mode)
-        codex_home = provisioned.home
-    except Exception as exc:  # never let isolation block the launcher
-        progress.clear()
-        print(
-            f"tokenpak: codex home provisioning failed ({exc}); "
-            "using default ~/.codex",
-            file=sys.stderr,
-        )
-        provisioned = None
-
-    # State-lock preflight against the home that Codex will actually use.
-    if not install_only:
-        lock = state_lock.probe(codex_home)
-        if lock.locked:
-            progress.clear()
-            print(state_lock.remediation_hint(lock), file=sys.stderr)
-            return 1
 
     # ── Step 0: Refresh model-rate snapshot for shell hooks ──
     from .rates_snapshot import refresh as refresh_rates
 
-    progress.step("refreshing Codex companion rates")
-    refresh_rates()
+    rates_path = refresh_rates()
+    print(f"tokenpak: rates snapshot refreshed ({rates_path})", file=sys.stderr)
 
     # ── Step 1: Register MCP server ──────────────────────────
     from .mcp_config import get_env_vars, register
 
-    progress.step("registering Codex MCP server")
     env_vars = get_env_vars(config)
-    if not register(env_vars=env_vars):
-        progress.clear()
+    if register(env_vars=env_vars):
+        print("tokenpak: MCP server registered", file=sys.stderr)
+    else:
         print("tokenpak: MCP registration failed (continuing)", file=sys.stderr)
 
     # ── Step 2: Install hooks ────────────────────────────────
     if config.hooks_enabled:
         from .hooks import ensure_hooks_feature_enabled, install_hooks
 
-        progress.step("installing Codex hooks")
         if ensure_hooks_feature_enabled():
-            install_hooks(target="global")
+            hooks_path = install_hooks(target="global")
+            print(f"tokenpak: hooks installed ({hooks_path})", file=sys.stderr)
         else:
-            progress.clear()
             print(
                 "tokenpak: hooks feature could not be enabled",
                 file=sys.stderr,
             )
-    else:
-        progress.step("skipping Codex hooks")
 
     # ── Step 3: Install AGENTS.md ────────────────────────────
     from .agents_md import install_agents_md
 
-    progress.step("installing Codex AGENTS.md")
-    install_agents_md(target="global")
+    agents_path = install_agents_md(target="global")
+    print(f"tokenpak: AGENTS.md installed ({agents_path})", file=sys.stderr)
 
     # ── Step 4: Install skills ───────────────────────────────
     from .skills_installer import install_skills
 
-    progress.step("installing TokenPak skills")
-    install_skills()
+    installed = install_skills()
+    if installed:
+        print(f"tokenpak: {len(installed)} skills installed", file=sys.stderr)
 
     # ── Step 5: Banner ───────────────────────────────────────
-    proxy_url = ""
-    if use_proxy and not install_only:
-        progress.step("installing TokenPak proxy profile")
-        try:
-            _install_tokenpak_chatgpt_profile()
-            proxy_url = _TOKENPAK_CHATGPT_BASE_URL
-        except Exception as exc:
-            progress.clear()
-            print(
-                f"tokenpak: --proxy profile install failed ({exc}); "
-                "launching codex without proxy profile",
-                file=sys.stderr,
-            )
-
-    progress.clear()
-    _print_ready_banner(config, proxy_url, sys.stderr)
+    budget_phrase = (
+        f"budget ${config.budget_daily_usd:.2f}/day"
+        if config.budget_daily_usd > 0
+        else "no budget cap"
+    )
+    print(
+        f"tokenpak: companion ready for codex ({config.profile}, {budget_phrase})",
+        file=sys.stderr,
+    )
 
     if install_only:
         print(
@@ -216,19 +320,25 @@ def main(args: list[str] | None = None) -> int:
         )
         return 0
 
+    # ── Step 5.5: Preflight Codex local-database lock ────────
+    # Only for real launches (install-only returned above): a shared
+    # ~/.codex whose state/log SQLite is held by another — or a suspended
+    # — Codex process would otherwise fail Codex on a raw "database is
+    # locked" error at startup.
+    lock_exit = _preflight_state_lock()
+    if lock_exit is not None:
+        return lock_exit
+
     # ── Step 6: Exec into codex ──────────────────────────────
     if config.budget_daily_usd > 0:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(config.budget_daily_usd)
 
     env = os.environ.copy()
-    env.update(env_vars)
-
-    # Point the child Codex process at the provisioned home and record the
-    # PID sentinel (same PID survives execvpe, so it stays accurate). Do this
-    # before the bypass-flag injection so the bypass logic sees the final env.
-    if provisioned is not None and provisioned.mode != session_home.MODE_SHARED:
-        env = session_home.apply_to_env(provisioned.home, env)
-        session_home.record_pid(provisioned.home)
+    if config.profile != "balanced":
+        env["TOKENPAK_COMPANION_PROFILE"] = config.profile
+    default_journal_dir = str(config.journal_dir.__class__.home() / ".tokenpak" / "companion")
+    if str(config.journal_dir) != default_journal_dir:
+        env["TOKENPAK_COMPANION_JOURNAL_DIR"] = str(config.journal_dir)
 
     fleet = _fleet_state_enabled()
     forwarded = _maybe_inject_bypass_flag(args, env, fleet=fleet)
@@ -236,97 +346,7 @@ def main(args: list[str] | None = None) -> int:
     if banner:
         print(banner, file=sys.stderr)
     codex_args = ["codex", *forwarded]
-    if proxy_url:
-        codex_args = ["codex", "-p", "tokenpak-chatgpt", *forwarded]
     os.execvpe("codex", codex_args, env)
 
     print("tokenpak: failed to launch codex", file=sys.stderr)
     return 1
-
-
-class _LoadingStatus:
-    """Transient setup status for interactive terminals, plain lines for logs."""
-
-    def __init__(self, stream: TextIO) -> None:
-        self.stream = stream
-        self.interactive = bool(getattr(stream, "isatty", lambda: False)())
-        self._active = False
-        self._started = False
-
-    def step(self, message: str) -> None:
-        if self.interactive:
-            if not self._started:
-                self.stream.write("\n")
-                self._started = True
-            self.stream.write(f"\r{_CLEAR_LINE}{_DIM}tokenpak: {message}...{_RESET}")
-            self.stream.flush()
-            self._active = True
-            return
-        print(f"tokenpak: {message}...", file=self.stream)
-
-    def clear(self) -> None:
-        if not self.interactive or not self._active:
-            return
-        self.stream.write(f"\r{_CLEAR_LINE}")
-        self.stream.flush()
-        self._active = False
-
-
-def _print_ready_banner(
-    config: CompanionConfig,
-    proxy_url: str,
-    stream: TextIO,
-) -> None:
-    """Print the Codex companion banner using the Claude launcher style."""
-    from tokenpak.cli.commands.status import MEME_LINES, _get_version
-
-    mode = config.profile.capitalize()
-    budget = (
-        f"${config.budget_daily_usd:.2f}/day"
-        if config.budget_daily_usd > 0
-        else "Unlimited"
-    )
-    meme = random.choice(MEME_LINES)
-    version = _get_version()
-
-    print(file=stream)
-    print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Codex Companion", file=stream)
-    print(f"     {_DIM}TokenPak {version}{_RESET}", file=stream)
-    print(f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{_RESET}", file=stream)
-    if proxy_url:
-        print(f"     {_DIM}Proxy active \u2192 {proxy_url}{_RESET}", file=stream)
-    print(file=stream)
-    print(f"     {_DIM}{meme}{_RESET}", file=stream)
-    print(file=stream)
-
-
-# Exact contents of the dedicated named profile written under --proxy. This is
-# the ONLY file the launcher writes into ~/.codex, and only when --proxy is
-# passed. The global ~/.codex/config.toml and ~/.codex/AGENTS.md are never
-# touched.
-_TOKENPAK_CHATGPT_PROFILE_TOML = f"""model_provider = "tokenpak-chatgpt"
-
-[model_providers.tokenpak-chatgpt]
-name = "TokenPak ChatGPT"
-base_url = "{_TOKENPAK_CHATGPT_BASE_URL}"
-wire_api = "responses"
-requires_openai_auth = true
-supports_websockets = false
-stream_idle_timeout_ms = 300000
-"""
-
-
-def _install_tokenpak_chatgpt_profile() -> str:
-    """Write the named ``tokenpak-chatgpt`` profile file. Returns its path.
-
-    Creates ``~/.codex`` if missing and writes
-    ``~/.codex/tokenpak-chatgpt.config.toml`` with the exact provider block.
-    Never edits ``~/.codex/config.toml`` or ``~/.codex/AGENTS.md``.
-    """
-    from pathlib import Path
-
-    codex_dir = Path.home() / ".codex"
-    codex_dir.mkdir(parents=True, exist_ok=True)
-    profile_path = codex_dir / "tokenpak-chatgpt.config.toml"
-    profile_path.write_text(_TOKENPAK_CHATGPT_PROFILE_TOML, encoding="utf-8")
-    return str(profile_path)

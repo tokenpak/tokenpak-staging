@@ -121,7 +121,7 @@ clean-all: clean  ## Remove everything including venv
 .PHONY: api-snapshot api-snapshot-check api-snapshot-diff workflow-steps-snapshot \
         workflow-steps-check telemetry-snapshot telemetry-check taxonomy-check \
         deps-audit migration-multihop release-gate-snapshots release-gate-check \
-        trust-conformance
+        release-leak-check
 
 api-snapshot:  ## Std 30 §7 (R7) — regenerate tokenpak/_snapshots/public-api.json
 	$(PYTHON) scripts/release_gate/gen_api_snapshot.py
@@ -147,9 +147,6 @@ telemetry-check:  ## Std 30 §7 — fail if telemetry-schema.json drifts
 taxonomy-check:  ## Std 02 §13 + Std 30 §5 (R5) — every test has exactly one taxonomy marker
 	$(PYTHON) scripts/release_gate/taxonomy_check.py
 
-trust-conformance:  ## NOTICE / LICENSE / security-contact / DCO / public-claim conformance (advisory by default)
-	$(PYTHON) -m scripts.release_gate.trust_conformance --mode advisory
-
 deps-audit:  ## Std 02 §14 + Std 30 §13.2 (R17) — uv lock --check + pip-audit + yanked-package scan
 	@command -v uv >/dev/null && uv lock --check || echo "uv not installed; skipping uv lock --check (install uv to enable)"
 	$(PYTHON) -m pip install --quiet pip-audit
@@ -164,6 +161,7 @@ release-gate-snapshots: api-snapshot workflow-steps-snapshot telemetry-snapshot 
 release-gate-check: api-snapshot-check workflow-steps-check telemetry-check taxonomy-check  ## Validate ALL release-gate snapshots
 	@echo "✅  All release-gate checks passed"
 
-.PHONY: release-check
-release-check:  ## Tier-1 baseline — run the always-on deterministic release gates
-	$(PYTHON) scripts/release_check/release_check.py
+release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (release gate)
+	$(PYTHON) -m pip install --quiet build
+	$(PYTHON) -m build
+	$(PYTHON) scripts/release_gate/check_release_leaks.py --dist dist/

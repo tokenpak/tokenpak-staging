@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Codex state-database lock diagnostics for ``CODEX_HOME``.
+"""Codex local-database lock diagnostics for ``CODEX_HOME``.
 
-Codex keeps interactive session state in a single SQLite database
-(``state_5.sqlite``) under ``CODEX_HOME`` (default ``~/.codex/``).  When
-two Codex processes share the same home they contend over that database,
-and a Codex process that is suspended by job control (``Tl`` — stopped via
-SIGTSTP) keeps the file descriptors open without releasing the lock.  The
-result is a zombie-style lock: the foreground process blocks on a database
-held by a process that will never make progress.
+Codex keeps interactive session state and logs in SQLite databases under
+``CODEX_HOME`` (default ``~/.codex/``).  When two Codex processes share the
+same home they can contend over those databases, and a Codex process that
+is suspended by job control (``Tl`` — stopped via SIGTSTP) keeps the file
+descriptors open without releasing the lock.  The result is a zombie-style
+lock: the foreground process blocks on a database held by a process that
+will never make progress.
 
 This module gives the launcher a *preflight* read on that situation so it
 can refuse to start (or, in an isolated home, confirm the home is clean)
@@ -15,10 +15,10 @@ with an actionable message instead of hanging on a contended database.
 
 Detection is deliberately dependency-free:
 
-* the SQLite file is probed with an ``EXCLUSIVE`` ``BEGIN`` inside a short
-  connection — if another connection holds the database the probe raises
-  ``sqlite3.OperationalError`` ("database is locked"), which is the exact
-  symptom we want to surface;
+* each known Codex-owned SQLite file is probed with an ``EXCLUSIVE``
+  ``BEGIN`` inside a short connection — if another connection holds the
+  database the probe raises ``sqlite3.OperationalError`` ("database is
+  locked"), which is the exact symptom we want to surface;
 * candidate holder PIDs are read from any sidecar ``*.lock`` / WAL files
   and from a best-effort scan, then liveness-classified with
   ``os.kill(pid, 0)`` and (on Linux) ``/proc`` so a stopped/zombie holder
@@ -35,8 +35,17 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Codex's interactive state database filename under CODEX_HOME.
+# Companion-internal launcher helper (probe/remediation_hint are called by
+# launcher.py, not by end users): export nothing as released public API so
+# this module stays out of the public-API snapshot. Direct attribute access
+# (``state_lock.probe``) is unaffected — ``__all__`` only governs ``import *``
+# and the release-gate API walker.
+__all__: list[str] = []
+
+# Codex's interactive state/log database filenames under CODEX_HOME.
 STATE_DB_NAME = "state_5.sqlite"
+_LOG_DB_NAME = "logs_2.sqlite"
+_CODEX_DB_NAMES = (STATE_DB_NAME, _LOG_DB_NAME)
 
 # How long the probe waits for the database before declaring it locked.
 # Kept short — this is a preflight, not a retry loop.
@@ -48,7 +57,7 @@ class LockStatus:
     """Result of a state-lock preflight on one ``CODEX_HOME``.
 
     ``locked`` is the load-bearing field: ``True`` means another
-    connection currently holds the state database and a fresh Codex
+    connection currently holds a Codex local database and a fresh Codex
     session in this home would contend.  ``holder_pids`` /
     ``stopped_pids`` are best-effort context for the message — they may be
     empty even when ``locked`` is ``True`` (e.g. the holder PID could not
@@ -66,6 +75,11 @@ class LockStatus:
 
 def _db_path(home: Path) -> Path:
     return home / STATE_DB_NAME
+
+
+def _db_paths(home: Path) -> list[Path]:
+    """Known Codex local SQLite databases to preflight, in priority order."""
+    return [home / name for name in _CODEX_DB_NAMES]
 
 
 def _pid_alive(pid: int) -> bool:
@@ -130,7 +144,7 @@ def _candidate_holder_pids(home: Path) -> list[int]:
 
 
 def probe(home: "Path | str | None" = None) -> LockStatus:
-    """Preflight the Codex state database under ``home``.
+    """Preflight Codex-owned local databases under ``home``.
 
     ``home`` defaults to ``$CODEX_HOME`` then ``~/.codex``.  Returns a
     :class:`LockStatus`.  Never raises on a contended database — the lock
@@ -140,35 +154,38 @@ def probe(home: "Path | str | None" = None) -> LockStatus:
     if home is None:
         home = os.environ.get("CODEX_HOME") or (Path.home() / ".codex")
     home = Path(home)
-    db = _db_path(home)
+    dbs = _db_paths(home)
+    state_db = _db_path(home)
+    existing = [db for db in dbs if db.exists()]
 
-    if not db.exists():
-        # No state database yet — a fresh home is by definition uncontended.
+    if not existing:
+        # No Codex database yet — a fresh home is by definition uncontended.
         return LockStatus(
             home=home,
-            db_path=db,
+            db_path=state_db,
             exists=False,
             locked=False,
-            detail="no state database yet (uncontended)",
+            detail="no Codex local database yet (uncontended)",
         )
 
-    locked = _is_locked(db)
-    if not locked:
+    locked_db = next((db for db in existing if _is_locked(db)), None)
+    if locked_db is None:
+        names = ", ".join(db.name for db in existing)
         return LockStatus(
             home=home,
-            db_path=db,
+            db_path=existing[0],
             exists=True,
             locked=False,
-            detail="state database is free",
+            detail=f"Codex local databases are free: {names}",
         )
 
     # Locked — gather best-effort holder context for the message.
     candidates = [p for p in _candidate_holder_pids(home) if _pid_alive(p)]
     stopped = [p for p in candidates if _pid_stopped(p)]
-    detail = _format_lock_detail(candidates, stopped)
+    detail = _format_lock_detail(candidates, stopped, locked_db.name)
     return LockStatus(
         home=home,
-        db_path=db,
+        db_path=locked_db,
         exists=True,
         locked=True,
         holder_pids=candidates,
@@ -188,9 +205,7 @@ def _is_locked(db: Path) -> bool:
     """
     conn = None
     try:
-        conn = sqlite3.connect(
-            str(db), timeout=_PROBE_TIMEOUT_S, isolation_level=None
-        )
+        conn = sqlite3.connect(str(db), timeout=_PROBE_TIMEOUT_S, isolation_level=None)
         conn.execute("BEGIN EXCLUSIVE")
         conn.execute("ROLLBACK")
         return False
@@ -212,23 +227,20 @@ def _is_locked(db: Path) -> bool:
                 pass
 
 
-def _format_lock_detail(holders: list[int], stopped: list[int]) -> str:
+def _format_lock_detail(holders: list[int], stopped: list[int], db_name: str) -> str:
     """Human-actionable description of who holds the lock and what to do."""
     if not holders:
-        return (
-            "state database is locked by another Codex process "
-            "(holder PID unavailable)"
-        )
+        return f"{db_name} is locked by another Codex process (holder PID unavailable)"
     if stopped:
         s = ", ".join(str(p) for p in stopped)
         return (
-            f"state database is locked by a stopped Codex process (PID {s}); "
+            f"{db_name} is locked by a stopped Codex process (PID {s}); "
             "a suspended session never releases the lock — resume it (fg) and "
             "exit, or terminate it"
         )
     h = ", ".join(str(p) for p in holders)
     return (
-        f"state database is locked by an active Codex process (PID {h}); "
+        f"{db_name} is locked by an active Codex process (PID {h}); "
         "finish or close that session, or use an isolated home"
     )
 
@@ -241,7 +253,7 @@ def remediation_hint(status: LockStatus) -> str:
     design themselves.
     """
     lines = [
-        f"tokenpak: Codex state database is locked: {status.db_path}",
+        f"tokenpak: Codex local database is locked: {status.db_path}",
         f"          {status.detail}",
     ]
     if status.stopped_pids:

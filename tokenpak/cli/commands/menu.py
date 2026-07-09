@@ -586,6 +586,66 @@ def _section_permissions(hdr: str) -> None:
         _dispatch("permissions", choice)
 
 
+def _permission_tier_subtitle() -> str:
+    """Live one-line summary of the three tier rows (persistent + launcher).
+
+    Persistent-tier values are restricted to strict/standard/auto/custom;
+    launcher fleet mode is the separate enabled/disabled element. The
+    persistent rows never read "fleet".
+    """
+    try:
+        from tokenpak.cli.commands.permissions import doctor_rows
+
+        rows, _drift = doctor_rows()
+        # Compact: collapse the aligned rows into a single subtitle line.
+        return "   ".join(" ".join(r.split()) for r in rows)
+    except Exception:
+        return "Persistent tier per client + launcher fleet mode."
+
+
+def _section_permissions(hdr: str) -> None:
+    """Permission tier section — persistent tiers + launcher fleet mode.
+
+    Runs `tokenpak permissions ...` under the hood. Fleet is a launcher-
+    scoped opt-in (confirmation required); it never persists into client
+    config files.
+    """
+    c = supports_color()
+    while True:
+        choice = pick(
+            paint("Permission tier", Color.PASTEL_YELLOW, c),
+            [
+                ("show",         "View current tiers"),
+                ("set strict",   "Strict — prompts for everything"),
+                ("set standard", "Standard — accept edits (default)"),
+                ("set auto",     "Auto — no prompts (trusted)"),
+                ("set fleet",    "Fleet — launcher bypass (unattended)"),
+                ("reset",        "Reset managed keys + fleet off"),
+            ],
+            header=hdr,
+            subtitle=_permission_tier_subtitle(),
+            back_label="Back",
+        )
+        if choice is None or choice == _BACK_SENTINEL:
+            return
+        if choice == "set fleet":
+            confirm_opts = [("yes", "Yes, enable fleet mode"), ("no", "No, go back")]
+            ans = pick(
+                "Enable launcher fleet mode?",
+                confirm_opts,
+                header=hdr,
+                subtitle=(
+                    "tokenpak claude / tokenpak codex will inject permission-bypass "
+                    "flags (stderr banner on every launch). Client configs are NOT "
+                    "modified."
+                ),
+            )
+            if ans != "yes":
+                continue
+            choice = "set fleet --yes"
+        _exec("permissions", choice, clear=False)
+
+
 def _section_companion(hdr: str) -> None:
     c = supports_color()
     while True:

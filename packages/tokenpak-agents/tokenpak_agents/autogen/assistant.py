@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from tokenpak.orchestration.handoff import HandoffBlock, HandoffManager, HandoffWire, TokenPak
+from tokenpak.agent.agentic.handoff import HandoffBlock, HandoffManager, HandoffWire, TokenPak
 
 from .message import TokenPakMessage
 

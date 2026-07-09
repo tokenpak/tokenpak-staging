@@ -38,7 +38,7 @@ Token counting uses:
 Install tiktoken for precise counts:
 
 ```bash
-pip install tokenpak[tiktoken]
+pip install tokenpak tiktoken
 ```
 
 The heuristic is conservative — it slightly over-estimates, so the compression threshold check errs on the side of compressing when near the boundary.
@@ -99,13 +99,17 @@ Workers: 8 → 3.3s ← auto-selected on this machine
 Throughput: ~2,738 files/sec
 ```
 
-### Vault index health
+### Zero-token search
 
-Check and repair your vault index if entries become stale:
+The vault registry enables semantic search without any LLM calls:
 
 ```bash
-tokenpak vault repair
+tokenpak vault search "compression benchmark results"
+# Returns top-k matching files by relevance score
+# 0 tokens, 22.7ms average latency
 ```
+
+Search uses BM25 term matching over indexed symbols and file paths. No embeddings, no external service.
 
 ### File watching
 

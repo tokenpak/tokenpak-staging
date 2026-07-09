@@ -1,4 +1,4 @@
-from tokenpak.sdk.langchain.context import TokenPakContextManager
+from langchain_tokenpak.context import TokenPakContextManager
 
 
 def test_context_allocate():

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """``tokenpak dispatch`` CLI — Decision Inbox + dispatch verbs (P-CLI-01).
 
-TokenPak Dispatch (Standards Delta v0) is an OSS workflow-control layer that
+TokenPak Dispatch is an OSS workflow-control layer that
 turns ad-hoc requests into scoped, station-based, resumable, gated, auditable
 work packages. This module is the **CLI-first** control surface for v0.1-alpha
-(§14.3: MCP is post-alpha; the CLI ships first).
+(MCP is post-alpha; the CLI ships first).
 
-Command group (Standards Delta v0 §14.1)::
+Command group::
 
     tokenpak dispatch run "request text" [--route --autonomy --ci --dry-run --confirm --json]
     tokenpak dispatch status   <job_id>      [--json]
@@ -33,21 +33,39 @@ Design notes:
   in the Decision Inbox when approval/clarification is required).
 * The **Decision Inbox MVP** is the ``decisions`` / ``approve`` / ``reject``
   verbs over ``DispatchDecision`` records. Cards render human-readable with a
-  ``--json`` fallback for scripting (§13 item 17).
+  ``--json`` fallback for scripting.
 * User-facing output uses plain **Worker / Route / Station** terminology. The
-  literal string "Fleet Worker" never appears (§11 verification gate).
+  legacy worker-alias bigram is excluded by the verification gate.
 * Receipt + Delivery output is run through the public-safe sanitizer
   (:func:`tokenpak.orchestration.dispatch.public_safe.sanitize_public_text`)
-  before display — these surfaces are public-export-eligible (§10).
+  before display — these surfaces are public-export-eligible.
 """
 
 from __future__ import annotations
 
+import functools
+import importlib.util
 import json
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+# ---------------------------------------------------------------------------
+# Preview-honesty boundary (v0.1-alpha)
+# ---------------------------------------------------------------------------
+# Station execution — the LLM execution boundary — is intentionally NOT wired
+# into the CLI in this preview build, so ``dispatch run`` stops at the dispatch
+# decision and no station runs execute. Delivery packages and receipts are
+# therefore never produced through the CLI alone in this build. That absence is
+# expected for the preview; it is not a failed or incomplete job. The receipt /
+# delivery / inspect verbs surface this note so an empty receipt does not read
+# as a defect. (Wiring station execution is a separate, post-alpha scope.)
+_ALPHA_PREVIEW_NO_RECEIPT_NOTE = (
+    "Preview build (v0.1-alpha): station execution is not wired into the CLI, "
+    "so no station runs execute and no receipt is produced in this build. "
+    "This is expected for the preview — not a failed job."
+)
 
 # ---------------------------------------------------------------------------
 # Parser registration
@@ -78,7 +96,7 @@ def build_dispatch_parser(sub: Any) -> None:
     p_run.add_argument(
         "--autonomy", dest="autonomy", default=None,
         choices=["advisory", "draft", "dispatch_with_approval", "auto_dispatch_limited"],
-        help="Autonomy mode override (default depends on caller — §14.2)",
+        help="Autonomy mode override (default depends on caller)",
     )
     p_run.add_argument(
         "--ci", dest="ci", action="store_true",
@@ -86,7 +104,10 @@ def build_dispatch_parser(sub: Any) -> None:
     )
     p_run.add_argument(
         "--dry-run", dest="dry_run", action="store_true",
-        help="Draft only; default autonomy = draft",
+        help=(
+            "Draft only; default autonomy = draft. Performs intake + route "
+            "selection without persisting anything (no ledger writes)"
+        ),
     )
     p_run.add_argument(
         "--confirm", dest="confirm", action="store_true",
@@ -219,12 +240,72 @@ def _err(msg: str, as_json: bool, *, code: str = "error") -> int:
 
 
 # ---------------------------------------------------------------------------
+# Runtime availability gate (Dispatch v0.1-alpha: runtime is source/main-only)
+# ---------------------------------------------------------------------------
+#
+# The Dispatch *runtime engine* (DispatchRuntime / FrontDock / Run Ledger) is
+# excluded from the released wheel for v0.1-alpha — only the CLI command file and
+# the registry/schema DATA ship under ``tokenpak/orchestration/dispatch/``. Those
+# data files make that directory a PEP 420 *namespace package*, so probing the
+# package directory (``find_spec("tokenpak.orchestration.dispatch")``) is NOT a
+# reliable presence check — it resolves non-``None`` even when no runtime module
+# is installed. We therefore sentinel on a real runtime module. The runtime
+# package is build-excluded as a unit, so a single sentinel is sufficient.
+
+_DISPATCH_RUNTIME_SENTINEL = "tokenpak.orchestration.dispatch.dispatch"
+
+_DISPATCH_RUNTIME_UNAVAILABLE_MSG = (
+    "Dispatch runtime is source/main-only in TokenPak v0.1-alpha. This build "
+    "ships the Dispatch CLI and registry/schema data but not the runtime engine. "
+    "The optional `[dispatch]` extra installs preview dependencies for running "
+    "Dispatch from a source checkout — it does not bundle a packaged runtime. "
+    "Run Dispatch from a source/main install to use this verb."
+)
+
+
+def _dispatch_runtime_available() -> bool:
+    """Return ``True`` when the Dispatch runtime engine is importable.
+
+    Checks the real runtime module rather than the namespace-package directory,
+    so a slim/data-only install (where ``tokenpak/orchestration/dispatch/`` exists
+    only as a PEP 420 namespace package of registry/schema data) reports the
+    runtime as absent instead of falsely present.
+    """
+    try:
+        return importlib.util.find_spec(_DISPATCH_RUNTIME_SENTINEL) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _needs_runtime(fn):
+    """Degrade a runtime-touching dispatch verb to an actionable message.
+
+    When the Dispatch runtime engine is absent (e.g. the slim released wheel),
+    invoking a runtime verb returns a concise, nonzero "source/main-only" notice
+    instead of raising a raw ``ModuleNotFoundError`` traceback (B1). The message
+    also explains the truthful ``[dispatch]`` extra contract (B2).
+    """
+
+    @functools.wraps(fn)
+    def _wrapper(args: Any) -> int:
+        if not _dispatch_runtime_available():
+            return _err(
+                _DISPATCH_RUNTIME_UNAVAILABLE_MSG,
+                getattr(args, "as_json", False),
+                code="dispatch_runtime_unavailable",
+            )
+        return fn(args)
+
+    return _wrapper
+
+
+# ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
 
 
 def _default_autonomy(args: Any) -> str:
-    """Resolve the default autonomy mode for the caller (Standards Delta v0 §14.2).
+    """Resolve the default autonomy mode for the caller.
 
     Precedence: explicit ``--autonomy`` > ``--dry-run`` (draft) > ``--ci``
     (auto_dispatch_limited) > bare CLI default (dispatch_with_approval).
@@ -238,29 +319,36 @@ def _default_autonomy(args: Any) -> str:
     return "dispatch_with_approval"
 
 
+@_needs_runtime
 def cmd_dispatch_run(args: Any) -> int:
     from tokenpak.orchestration.dispatch.dispatch import DispatchRuntime
     from tokenpak.orchestration.dispatch.frontdock import FrontDock
 
     as_json = getattr(args, "as_json", False)
     autonomy = _default_autonomy(args)
+    dry_run = bool(getattr(args, "dry_run", False))
 
     intake = FrontDock().intake(args.request, autonomy_mode=autonomy)
     runtime = DispatchRuntime()
     outcome = runtime.select_route(intake, explicit_route=getattr(args, "route", None))
 
-    ledger = _ledger()
-    try:
-        ledger.write_job(intake.job)
-        ledger.write_manifest(intake.manifest)
-        if outcome.route is not None:
-            ledger.write_route(outcome.route)
-        # Decisions come from FrontDock (blocking gap) and/or route selection.
-        decisions = [d for d in (intake.decision, outcome.decision) if d is not None]
-        for decision in decisions:
-            ledger.write_decision(decision)
-    finally:
-        ledger.close()
+    # Decisions come from FrontDock (blocking gap) and/or route selection.
+    decisions = [d for d in (intake.decision, outcome.decision) if d is not None]
+
+    # A dry run is WRITE-FREE: intake + route selection happen in memory only.
+    # The ledger is not even opened (opening creates the DB file and applies
+    # migrations), so a dry run leaves the on-disk ledger byte-identical.
+    if not dry_run:
+        ledger = _ledger()
+        try:
+            ledger.write_job(intake.job)
+            ledger.write_manifest(intake.manifest)
+            if outcome.route is not None:
+                ledger.write_route(outcome.route)
+            for decision in decisions:
+                ledger.write_decision(decision)
+        finally:
+            ledger.close()
 
     payload = {
         "job_id": intake.job.id,
@@ -277,11 +365,19 @@ def cmd_dispatch_run(args: Any) -> int:
         "missing_info": list(intake.job.missing_info),
         "risk_flags": list(intake.job.risk_flags),
         "confirm": bool(getattr(args, "confirm", False)),
+        "dry_run": dry_run,
     }
+    if dry_run:
+        payload["note"] = (
+            "Dry run: nothing was persisted (no job, manifest, route, or "
+            "decision records were written)."
+        )
 
     def render(p: dict) -> int:
         print("Dispatch run")
         print("────────────")
+        if p.get("dry_run"):
+            print("  (dry run — nothing persisted)")
         print(f"  Job        : {p['job_id']}")
         print(f"  Intent     : {p['detected_intent']}")
         print(f"  Autonomy   : {p['autonomy_mode']}")
@@ -325,6 +421,7 @@ def cmd_dispatch_run(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_status(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     ledger = _ledger()
@@ -371,6 +468,7 @@ def cmd_dispatch_status(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_inspect(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     include_late = getattr(args, "late", False)
@@ -397,6 +495,8 @@ def cmd_dispatch_inspect(args: Any) -> int:
         ],
         "receipts": [r["id"] for r in receipts],
     }
+    if not receipts:
+        payload["note"] = _ALPHA_PREVIEW_NO_RECEIPT_NOTE
     if include_late:
         payload["late_results"] = [
             {"id": r["id"], "station_run_id": r.get("station_run_id")} for r in late
@@ -421,6 +521,8 @@ def cmd_dispatch_inspect(args: Any) -> int:
         if not p["decisions"]:
             print("    (none)")
         print(f"  Receipts   : {', '.join(p['receipts']) or '(none)'}")
+        if not p["receipts"]:
+            print(f"  Note       : {_ALPHA_PREVIEW_NO_RECEIPT_NOTE}")
         if include_late:
             print("  Late results:")
             for r in p.get("late_results", []):
@@ -437,6 +539,7 @@ def cmd_dispatch_inspect(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_decisions(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     job_filter = getattr(args, "job", None)
@@ -466,10 +569,12 @@ def cmd_dispatch_decisions(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_approve(args: Any) -> int:
     return _resolve_decision(args, approve=True)
 
 
+@_needs_runtime
 def cmd_dispatch_reject(args: Any) -> int:
     return _resolve_decision(args, approve=False)
 
@@ -536,17 +641,19 @@ def _resolve_decision(args: Any, *, approve: bool) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_pause(args: Any) -> int:
     return _set_control_state(args, "paused", verb="pause")
 
 
+@_needs_runtime
 def cmd_dispatch_resume(args: Any) -> int:
     return _set_control_state(args, "active", verb="resume")
 
 
 def _set_control_state(args: Any, control_state: str, *, verb: str) -> int:
     """Record a CLI control state (paused/active) WITHOUT mutating the job's
-    canonical ``status`` enum (§6 has no ``paused`` member). The flag lives in a
+    canonical ``status`` enum (which has no ``paused`` member). The flag lives in a
     sidecar control table so the canonical DispatchJob payload stays valid.
     """
     as_json = getattr(args, "as_json", False)
@@ -578,6 +685,7 @@ def _set_control_state(args: Any, control_state: str, *, verb: str) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_cancel(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     ledger = _ledger()
@@ -597,7 +705,7 @@ def cmd_dispatch_cancel(args: Any) -> int:
         "status": "cancelled",
         "note": (
             "New stations are prevented from starting. Late TIP output is "
-            "captured as a LateResult and never applied (§5.6). No token refund."
+            "captured as a LateResult and never applied. No token refund."
         ),
     }
 
@@ -609,6 +717,7 @@ def cmd_dispatch_cancel(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_discard_late(args: Any) -> int:
     as_json = getattr(args, "as_json", False)
     ledger = _ledger()
@@ -645,6 +754,7 @@ def cmd_dispatch_discard_late(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+@_needs_runtime
 def cmd_dispatch_receipt(args: Any) -> int:
     from tokenpak.orchestration.dispatch.public_safe import sanitize_public_obj
 
@@ -662,7 +772,7 @@ def cmd_dispatch_receipt(args: Any) -> int:
 
     if not receipts:
         return _err(
-            f"no receipt for job {args.job_id} (job not yet delivered)",
+            f"no receipt for job {args.job_id}. {_ALPHA_PREVIEW_NO_RECEIPT_NOTE}",
             as_json, code="no_receipt",
         )
 
@@ -697,6 +807,7 @@ def cmd_dispatch_receipt(args: Any) -> int:
     return _emit(payload, as_json, render)
 
 
+@_needs_runtime
 def cmd_dispatch_delivery(args: Any) -> int:
     """Show the Delivery Package view for a job.
 
@@ -729,9 +840,11 @@ def cmd_dispatch_delivery(args: Any) -> int:
         "summary": (
             f"Delivery for {job.detected_intent} job {job.id}: "
             f"{len(runs)} run(s), "
-            f"{'receipt available' if receipts else 'no receipt yet'}."
+            f"{'receipt available' if receipts else 'no receipt in this build'}."
         ),
     }
+    if not receipts:
+        raw["note"] = _ALPHA_PREVIEW_NO_RECEIPT_NOTE
     payload = sanitize_public_obj(raw)
 
     def render(p: dict) -> int:
@@ -746,6 +859,8 @@ def cmd_dispatch_delivery(args: Any) -> int:
             print(f"  Receipt  : {p['receipt_id']}  "
                   f"(tokenpak dispatch receipt {p['job_id']})")
         print(f"  Summary  : {p['summary']}")
+        if p.get("note"):
+            print(f"  Note     : {p['note']}")
         return 0
 
     return _emit(payload, as_json, render)
@@ -888,7 +1003,7 @@ def _update_job_status_row(ledger, job_id: str, status: str) -> None:
             )
 
 
-# -- CLI control-state sidecar (pause/resume; not part of the §6 enum) -------
+# -- CLI control-state sidecar (pause/resume; not part of the status enum) ---
 
 _CONTROL_TABLE_DDL = (
     "CREATE TABLE IF NOT EXISTS dispatch_job_control ("

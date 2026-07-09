@@ -18,11 +18,6 @@ import argparse
 import json
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
-
 import pytest
 
 from tokenpak.cli.commands import permissions as perms
@@ -137,6 +132,10 @@ def test_apply_tier_auto_codex(tmp_home, capsys):
     p = _seed_codex(tmp_home)
     rc = run_integrate(_args(client="codex", tier="auto"))
     assert rc == 0
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
 
     text = p.read_text()
     cfg = tomllib.loads(text)
@@ -211,6 +210,11 @@ def test_apply_tier_fleet_codex_no_bypass_leak(tmp_home):
     assert rc == 0
     text = codex_p.read_text()
     # Default tier persisted; never the bypass-shaped values
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+
     cfg = tomllib.loads(text)
     assert cfg["approval_policy"] == "on-request"
     assert cfg["sandbox_mode"] == "workspace-write"

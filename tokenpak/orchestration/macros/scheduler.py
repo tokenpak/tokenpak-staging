@@ -15,8 +15,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tokenpak.orchestration.macros.engine import _emit_trusted_user_code_notice
-
 DEFAULT_SCHEDULE_PATH = Path.home() / ".tokenpak" / "scheduled.json"
 CRON_COMMENT_TAG = "# tokenpak-schedule"
 
@@ -130,9 +128,6 @@ class MacroScheduler:
         Returns:
             ScheduledMacro record
         """
-        # A scheduled run later shell-executes the macro's command strings.
-        # Surface the trusted-user-code contract before persisting the schedule.
-        _emit_trusted_user_code_notice(f"scheduled macro '{name}'")
         schedule_id = str(uuid.uuid4())[:8]
         cmd = command or f"tokenpak macro run {name}"
         scheduled = ScheduledMacro(
@@ -167,9 +162,6 @@ class MacroScheduler:
         Returns:
             ScheduledMacro record
         """
-        # A scheduled run later shell-executes the macro's command strings.
-        # Surface the trusted-user-code contract before persisting the schedule.
-        _emit_trusted_user_code_notice(f"scheduled macro '{name}'")
         schedule_id = str(uuid.uuid4())[:8]
         cmd = command or f"tokenpak macro run {name}"
         scheduled = ScheduledMacro(

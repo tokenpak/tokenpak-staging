@@ -1,13 +1,12 @@
 "use strict";
 /**
  * TokenPak TelemetryCollector
- * Wraps experimental /telemetry/* HTTP endpoints when a custom server provides them.
+ * Wraps the /telemetry/* HTTP endpoints.
  * Tracks LLM usage, costs, and latency across your application.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TelemetryCollector = void 0;
 const client_1 = require("./client");
-const types_1 = require("./types");
 function fromRaw(raw) {
     return {
         eventType: raw.event_type,
@@ -20,12 +19,6 @@ function fromRaw(raw) {
 class TelemetryCollector {
     constructor(config) {
         this.client = new client_1.TokenPakHttpClient(config);
-        this.experimentalEndpoints = config?.experimentalEndpoints ?? false;
-    }
-    requireExperimentalEndpoint(path) {
-        if (!this.experimentalEndpoints) {
-            throw new types_1.TokenPakUnsupportedEndpointError('TelemetryCollector', path);
-        }
     }
     /**
      * Record a telemetry event.
@@ -39,7 +32,6 @@ class TelemetryCollector {
      * });
      */
     async record(event) {
-        this.requireExperimentalEndpoint('/telemetry');
         await this.client.post('/telemetry', {
             event_type: event.eventType,
             timestamp: (event.timestamp ?? new Date()).toISOString(),
@@ -58,7 +50,6 @@ class TelemetryCollector {
         const params = new URLSearchParams({ limit: String(limit) });
         if (model)
             params.set('model', model);
-        this.requireExperimentalEndpoint('/telemetry');
         const raws = await this.client.get(`/telemetry?${params}`);
         return raws.map(fromRaw);
     }
@@ -66,7 +57,6 @@ class TelemetryCollector {
      * Get aggregated statistics (total cost, token usage, latency, model breakdown).
      */
     async stats() {
-        this.requireExperimentalEndpoint('/telemetry/stats');
         const raw = await this.client.get('/telemetry/stats');
         return {
             totalEvents: raw.total_events,
@@ -89,7 +79,6 @@ class TelemetryCollector {
      * Reset all telemetry data (use with caution).
      */
     async reset() {
-        this.requireExperimentalEndpoint('/telemetry/reset');
         await this.client.post('/telemetry/reset', {});
     }
 }

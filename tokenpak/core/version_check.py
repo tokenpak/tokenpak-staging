@@ -23,11 +23,9 @@ import urllib.request
 from pathlib import Path
 from typing import List, Optional
 
-from tokenpak import _paths
-
 PROXY_URL = "http://localhost:8766"
-LOCK_FILE = _paths.under("tokenpak.lock.json")
-TOKENPAK_CFG = _paths.under("config.json")
+LOCK_FILE = Path.home() / "vault" / "System" / "tokenpak.lock.json"
+TOKENPAK_CFG = Path.home() / ".tokenpak" / "config.json"
 MEMORY_DIR = Path.home() / ".tokenpak" / "data" / "memory"
 
 # Fields that were removed in past versions

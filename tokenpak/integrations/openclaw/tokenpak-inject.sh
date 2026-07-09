@@ -539,7 +539,7 @@ def sync_codex_jwt():
 # 2026-04-28-openclaw-adapter-session-binding) writes
 # ``~/.openclaw/sessions/active.json`` on every ``message:received`` /
 # ``message:sent`` event so the tokenpak proxy can bind the session UUID
-# as ``journal.db.session_id``. Installing it on a host:
+# as ``journal.db.session_id``. Installing it on a fleet host:
 #   1. Copy bundle (``handler.js`` + ``HOOK.md`` + ``tests/test-active-json.js``)
 #      to ``~/.openclaw/hooks/openclaw-adapter/``.
 #   2. Add (or upgrade) ``hooks.internal.entries.openclaw-adapter`` in

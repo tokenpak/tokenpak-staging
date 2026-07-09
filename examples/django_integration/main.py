@@ -20,7 +20,7 @@ from typing import Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from tokenpak import HeuristicEngine, CacheManager
-from tokenpak.compression.engines.base import CompactionHints
+from tokenpak.engines.base import CompactionHints
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +44,7 @@ class LLMCompressionService:
         keep_recent_turns: int = 3,
     ):
         self.engine = HeuristicEngine()
-        self.cache = CacheManager()
-        self.cache_ttl = cache_ttl
+        self.cache = CacheManager(default_ttl=cache_ttl)
         self.target_tokens = target_tokens
         self.keep_recent_turns = keep_recent_turns
         self._total_saved = 0
@@ -60,8 +59,8 @@ class LLMCompressionService:
         cache_key = hashlib.sha256(text.encode()).hexdigest()[:20]
 
         if cache:
-            cached = self.cache.get(cache_key)
-            if cached is not None:
+            hit, cached = self.cache.get(cache_key)
+            if hit:
                 return cached, True
 
         hints = CompactionHints(
@@ -75,7 +74,7 @@ class LLMCompressionService:
         self._total_saved += saved
 
         if cache:
-            self.cache.set(cache_key, compressed, ttl=self.cache_ttl)
+            self.cache.set(cache_key, compressed, ttl=300)
 
         return compressed, False
 
