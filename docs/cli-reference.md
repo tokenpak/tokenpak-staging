@@ -445,9 +445,25 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
-- `--public` — Show public URL with token (accessible from any machine)
+- `--public` — Advanced: show public URL with token for non-tunneled access
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
+
+**Subcommands:**
+
+- `connect` — Open a remote dashboard through an SSH local tunnel.
+  - `HOST` — SSH host or user@host to connect to
+  - `--remote-port` — Remote dashboard port (default: 8766)
+  - `--local-port` — Local listener port, or 'auto' to start at 8766 and choose the next free port (default: auto)
+  - `--ssh-user` — SSH username when HOST does not include user@
+  - `--open` — Open the dashboard URL in the default browser
+  - `--no-open` — Print the dashboard URL without opening a browser
+  - `--health-timeout` — Seconds to wait for /health to report OK (default: 20.0)
+  - `--json` — Output connection result as JSON
+- `disconnect` — Close a dashboard SSH local tunnel.
+  - `HOST` — SSH host or user@host to disconnect
+  - `--ssh-user` — SSH username when HOST does not include user@
+  - `--json` — Output disconnect result as JSON
 
 ### `tokenpak timeline`
 
@@ -584,7 +600,7 @@ TokenPak Dispatch — scoped, station-based, resumable, gated work packages with
   - `--route` — Force an explicit Route (e.g. code_task); overrides auto-routing
   - `--autonomy` — Autonomy mode override (default depends on caller) — choices: `advisory`, `draft`, `dispatch_with_approval`, `auto_dispatch_limited`
   - `--ci` — CI/automation caller; default autonomy = auto_dispatch_limited
-  - `--dry-run` — Draft only; default autonomy = draft
+  - `--dry-run` — Draft only; default autonomy = draft. Performs intake + route selection without persisting anything (no ledger writes)
   - `--confirm` — Treat an approval-gated route as approved (record the bound route)
   - `--json` — Emit machine-readable JSON instead of human-readable output
 - `status`
@@ -948,11 +964,11 @@ Replay captured sessions
 
 ### `tokenpak audit`
 
-Audit log management
+Audit log surface (Pro/Enterprise)
 
 ### `tokenpak compliance`
 
-Compliance reports
+Compliance report surface (Pro/Enterprise)
 
 ### `tokenpak validate`
 
