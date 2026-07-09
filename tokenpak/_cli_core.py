@@ -2246,7 +2246,17 @@ def cmd_codex(args):
     import sys
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
-    forwarded = list(args.args)
+    forwarded, trailing_receipt_out, trailing_run_id = _extract_codex_accounting_flags(
+        list(args.args)
+    )
+    receipt_out = getattr(args, "receipt_out", None) or trailing_receipt_out
+    run_id = getattr(args, "run_id", None) or trailing_run_id
+    if bool(receipt_out) != bool(run_id):
+        print(
+            "tokenpak codex: --receipt-out and --run-id must be provided together",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if forwarded and forwarded[0] == "doctor":
         from .companion.codex.doctor import main as doctor_main
         sys.exit(doctor_main(forwarded[1:]))
@@ -2256,7 +2266,95 @@ def cmd_codex(args):
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     from .companion.codex import launch
-    launch(args=forwarded)
+    sys.exit(launch(args=forwarded, receipt_out=receipt_out, run_id=run_id))
+
+
+def _extract_codex_accounting_flags(
+    forwarded: list[str],
+) -> tuple[list[str], str | None, str | None]:
+    """Consume TokenPak accounting flags even when placed after Codex args."""
+    receipt_out: str | None = None
+    run_id: str | None = None
+    stripped: list[str] = []
+    index = 0
+    while index < len(forwarded):
+        token = forwarded[index]
+        if token == "--receipt-out":
+            if index + 1 >= len(forwarded):
+                print(
+                    "tokenpak codex: --receipt-out requires a path",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            receipt_out = forwarded[index + 1]
+            index += 2
+            continue
+        if token.startswith("--receipt-out="):
+            receipt_out = token.split("=", 1)[1]
+            index += 1
+            continue
+        if token == "--run-id":
+            if index + 1 >= len(forwarded):
+                print("tokenpak codex: --run-id requires an id", file=sys.stderr)
+                sys.exit(2)
+            run_id = forwarded[index + 1]
+            index += 2
+            continue
+        if token.startswith("--run-id="):
+            run_id = token.split("=", 1)[1]
+            index += 1
+            continue
+        stripped.append(token)
+        index += 1
+    return stripped, receipt_out, run_id
+
+
+def _codex_namespace_from_tail(tail: list[str]) -> argparse.Namespace:
+    """Parse TokenPak-owned ``codex`` flags while preserving Codex-native flags."""
+    budget = None
+    install_only = False
+    passthrough: list[str] = []
+    stripped, receipt_out, run_id = _extract_codex_accounting_flags(tail)
+
+    index = 0
+    while index < len(stripped):
+        token = stripped[index]
+        if token == "--budget":
+            if index + 1 >= len(stripped):
+                print("tokenpak codex: --budget requires USD", file=sys.stderr)
+                sys.exit(2)
+            try:
+                budget = float(stripped[index + 1])
+            except ValueError:
+                print("tokenpak codex: --budget must be numeric", file=sys.stderr)
+                sys.exit(2)
+            index += 2
+            continue
+        if token.startswith("--budget="):
+            try:
+                budget = float(token.split("=", 1)[1])
+            except ValueError:
+                print("tokenpak codex: --budget must be numeric", file=sys.stderr)
+                sys.exit(2)
+            index += 1
+            continue
+        if token == "--install-only":
+            install_only = True
+            index += 1
+            continue
+        passthrough.append(token)
+        index += 1
+
+    return argparse.Namespace(
+        command="codex",
+        func=cmd_codex,
+        budget=budget,
+        install_only=install_only,
+        receipt_out=receipt_out,
+        run_id=run_id,
+        args=passthrough,
+        db=".tokenpak/registry.db",
+    )
 
 
 def cmd_test(args):
@@ -2453,6 +2551,18 @@ def _build_codex_parser(sub):
         "--install-only",
         action="store_true",
         help="Run setup (MCP, hooks, AGENTS.md, skills) and exit without launching codex",
+    )
+    p.add_argument(
+        "--receipt-out",
+        default=None,
+        metavar="PATH",
+        help="Write a no-body accounting receipt for this Codex process",
+    )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        metavar="ID",
+        help="Stable run identifier to include in the accounting receipt",
     )
     p.add_argument(
         "args",
@@ -5147,8 +5257,8 @@ def main():
                 print("\n   (Use `tokenpak help` to see all commands)", file=_sys_err.stderr)
         sys.exit(1)
 
-    # For 'claude' subcommand, manually split argv so *all* arguments after
-    # tokenpak's own flags pass through verbatim to the claude binary.
+    # For companion launchers, manually split argv so *all* arguments after
+    # tokenpak's own flags pass through verbatim to the underlying binary.
     # parse_args()/parse_known_args() would mishandle flags like
     # permission-bypass flags or split --model <value> pairs.
     if raw_cmd == "claude":
@@ -5168,6 +5278,9 @@ def main():
         args = argparse.Namespace(
             command="claude", func=cmd_claude, budget=budget, args=passthrough, db=".tokenpak/registry.db"
         )
+    elif raw_cmd == "codex":
+        codex_idx = sys.argv.index("codex")
+        args = _codex_namespace_from_tail(sys.argv[codex_idx + 1:])
     else:
         args = parser.parse_args()
 
