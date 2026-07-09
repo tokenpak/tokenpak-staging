@@ -13,9 +13,10 @@ files:
   determinism.yml: 80eafcd8f0c3bc6f657c77e2d3f77cdde1e0ee9adcfb7ea16c888e2f60543e38
   forbidden-impl-vocab-check.yml: 4f620ec5241d07d184da7750b4010bddd5d4ea94013ac0e9768f926f3ab560ea
   gate-inventory-check.yml: faec5160d776bd7d57479ccfc35547d22c1101cc2bfd7ac69aa4ff62ae044787
-  identity-language-check.yml: 9cda9724e91e1dc8f9efa483880f10a2519e60721f0fefd2ca2eb15c548d22ae
+  identity-language-check.yml: 60953fb869d41c9e4da943eeee2da06a3766d46a249709ee842d4b34ccaff28c
   integration.yml: ed1490e5a1661de494ea46831633cc2c43054d8a58587d9d56bde92e6f012c4e
   license-check.yml: 1b089f06c6d443a69fb226080dd03fc506548434e5ca5b20b3ecd7408ea9a6c3
+  public-baseline-scan.yml: 9bb438330a6ae887734e385942b318aadc26247eb6c7c575bc68bacd806af587
   public-layout-check.yml: 1849dbab552186abe2a6eec32f86823f308cd690a0cd856b414a726e4edbb29b
   release-rehearsal.yml: f897b47b0d520b355fa771b441755353666ae1ae875f0a3dd6df51e96d5603cf
   release.yml: 16bde90972e40684573aa30be6b02b02451d237cfb31cfd6b6e083cf52f1f139
