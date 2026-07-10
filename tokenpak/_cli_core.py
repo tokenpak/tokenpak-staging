@@ -1925,44 +1925,9 @@ def cmd_timeline(args):
 
 def cmd_explain(args):
     """Explain what a named workflow profile sets."""
-    _PROFILE_PRESETS = {
-        "safe": {
-            "TOKENPAK_MODE": "strict",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "8000",
-            "TOKENPAK_SKELETON_ENABLED": "false",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "balanced": {
-            "TOKENPAK_MODE": "hybrid",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "4500",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "aggressive": {
-            "TOKENPAK_MODE": "aggressive",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "2000",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "true",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "agentic": {
-            "TOKENPAK_MODE": "hybrid",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "3000",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-    }
+    # Single source of truth for profile presets is the proxy config layer.
+    # Imported lazily to avoid an import cycle at module load time.
+    from tokenpak.proxy.config import _PROFILE_PRESETS
 
     profile = getattr(args, "profile", None)
 

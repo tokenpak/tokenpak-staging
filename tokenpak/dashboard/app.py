@@ -255,8 +255,14 @@ def _sdk_data(entries: list[dict[str, Any]]) -> dict[str, Any]:
         if status in {"error", "failed", "failure"} or entry.get("error"):
             error_count += 1
 
-    otlp_endpoint = os.environ.get("TOKENPAK_OTLP_ENDPOINT", "")
-    otlp_status = "active" if otlp_endpoint else "not configured"
+    # OTLP status must match the exporter, which is gated on TOKENPAK_OTEL_ENDPOINT.
+    try:
+        from tokenpak.telemetry.otel_exporter import is_enabled as _otel_enabled
+
+        otlp_active = _otel_enabled()
+    except Exception:
+        otlp_active = bool(os.environ.get("TOKENPAK_OTEL_ENDPOINT", "").strip())
+    otlp_status = "active" if otlp_active else "not configured"
 
     return {
         "model_usage": sorted(model_map.values(), key=lambda x: x["request_count"], reverse=True),
