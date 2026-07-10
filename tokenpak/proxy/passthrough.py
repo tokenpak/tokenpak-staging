@@ -34,10 +34,10 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
-# CCG-04: Per-route HTTP header forwarding allowlists
+# Per-route HTTP header forwarding allowlists
 # ---------------------------------------------------------------------------
 # These mirror the WS-path allowlist tuple onto the HTTP path as a per-route
-# allowlist.  LEGACY_HEADER_ALLOWLIST must never gain new entries — legacy
+# allowlist. LEGACY_HEADER_ALLOWLIST must never gain new entries — legacy
 # traffic must produce exactly the same forwarded headers as today (bit-for-bit).
 # CLAUDE_CODE_HEADER_ALLOWLIST extends it with Claude Code-specific headers.
 
@@ -64,7 +64,7 @@ def _classify_route(path: str, headers) -> str:
 
     Inspects headers only — no DB access, no network round-trips.
     Claude Code wins when both X-Claude-Code-Session-Id and X-TokenPak-Session
-    are present (matching CCG-03's resolver priority order).
+    are present (matching the resolver priority order).
 
     Returns:
         "claude-code"  if X-Claude-Code-Session-Id is present (case-insensitive)

@@ -68,6 +68,20 @@ def _set_max(d: TIPDirective, v: Optional[str]) -> None:
     except ValueError:
         pass
 
+def _set_ttl(d: TIPDirective, v: Optional[str]) -> None:
+    if not v:
+        return
+    v = v.strip().lower()
+    # Accept bare seconds ("300"), "<n>s", or "<n>m" (minutes).
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)(s|m)?$", v)
+    if not m:
+        return
+    n = float(m.group(1))
+    mult = {"m": 60, "s": 1}.get(m.group(2) or "", 1)
+    secs = int(n * mult)
+    if secs > 0:
+        d.ttl_seconds = secs
+
 def _set_estimate(d: TIPDirective, v: Optional[str]) -> None:
     if v is None or v in ("on", "true", "1", "yes"):
         d.estimate_only = True
@@ -89,6 +103,7 @@ DIRECTIVE_REGISTRY: dict = {
     "allow":    (_set_allow,    "Authorize the held request: once / 15m / session."),
     "bypass":   (_set_bypass,   "Skip Yes/No prompt; still subject to hard-block."),
     "max":      (_set_max,      "Cost ceiling ($N) or token ceiling (Nk_tokens / Nm_tokens)."),
+    "ttl":      (_set_ttl,      "Session-grant window length, seconds (e.g. 300, 5m). Pairs with allow=session."),
     "estimate": (_set_estimate, "Return RiskEstimate JSON, no provider call."),
     "cancel":   (_set_cancel,   "Discard any pending request for this session."),
     "reason":   (_set_reason,   "Free-text annotation for audit log."),

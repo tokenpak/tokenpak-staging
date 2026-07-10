@@ -135,12 +135,14 @@ def main(args: list[str] | None = None) -> int:
     # Pass through any user-provided args
     claude_args.extend(args)
 
-    # Set terminal tab title immediately so the 📦 is visible even before
-    # Claude Code finishes initialising and sets its own title.
-    sys.stderr.write("\033]0;📦 tokenpak claude\007")
-    sys.stderr.flush()
-
-    # Exec into claude — replaces this process
+    # Exec into claude — replaces this process. The session title is owned by
+    # Claude Code natively: the branded launch name is passed via ``--name``
+    # (see _prefix_session_name) — Claude Code uses it for the title bar,
+    # session picker, and terminal title — and the UserPromptSubmit hook
+    # renames it to a prompt-derived title after the first turn via the
+    # native ``sessionTitle`` field. We never emit OSC-0 escapes manually;
+    # Claude Code repaints the title on its own render loop and would clobber
+    # them (this was the root cause of the abandoned OSC-0 tab-title attempt).
     os.execvpe("claude", claude_args, env)
 
     # Only reached if exec fails
@@ -158,10 +160,15 @@ _LBL_TEAL = "\033[38;2;0;180;170m"   # "Pak" — TokenPak teal
 _LBL_WHITE = "\033[38;2;255;255;255m"  # "📦 Token"        — white
 _LBL_GRAY = "\033[38;2;90;94;105m"   # "Claude Companion" — muted gray
 _LBL_RESET = "\033[0m"
-# Default session label shown in the top-HR chat-header. Kept in sync
-# with ``hooks/session_start_name.sh`` so the post-/clear restore
-# matches the launcher's startup label exactly. Real ESC bytes here —
-# they pass through ``os.execvpe`` to ``--name`` as raw argv bytes.
+# Default session label passed to Claude Code via ``--name`` at launch and
+# kept in sync with ``hooks/session_start_name.sh`` so the post-/clear
+# restore matches exactly. The two-tone badge renders as a solid TokenPak
+# chip in the chat-header. Real ESC bytes here — they pass through
+# ``os.execvpe`` to ``--name`` as raw argv bytes. The intent flow is:
+# TokenPak owns the title *intent* (this branded launch name + the
+# prompt-derived rename in the UserPromptSubmit hook), Claude Code owns the
+# title *mechanism* (``--name`` at launch, native ``sessionTitle`` for the
+# dynamic rename, and its own ``aiTitle`` auto-naming thereafter).
 _DEFAULT_SESSION_LABEL = (
     f"{_LBL_BG_BLACK}"
     f"{_LBL_WHITE} {_SESSION_PREFIX} Token"
@@ -200,7 +207,11 @@ def _write_mcp_config(config: CompanionConfig) -> str:
             "tokenpak-companion": {
                 "type": "stdio",
                 "command": sys.executable,
-                "args": ["-m", "tokenpak.companion.mcp.server"],
+                # -P keeps the launch directory off sys.path so a ``tokenpak``
+                # dir/symlink in the cwd can't shadow the installed package
+                # (which would resolve it as a namespace package and drop
+                # ``__version__``, crashing the server on import).
+                "args": ["-P", "-m", "tokenpak.companion.mcp.server"],
             }
         }
     }
@@ -280,6 +291,11 @@ def _write_settings(config: CompanionConfig) -> str:
         f"bash {session_name_hook}" if session_name_hook.is_file() else None
     )
 
+    # PakLine statusline (live telemetry line). Same defensive
+    # missing-script pattern as the hooks above.
+    pakline_script = Path(__file__).parent / "statusline" / "pakline.sh"
+    pakline_cmd = f"bash {pakline_script}" if pakline_script.is_file() else None
+
     settings: dict = {}
     user_settings_path = Path.home() / ".claude" / "settings.json"
     if user_settings_path.is_file():
@@ -353,6 +369,17 @@ def _write_settings(config: CompanionConfig) -> str:
                     ],
                 }
             ]
+
+    # Install PakLine statusline — ADDITIVE ONLY. If the user already has a
+    # ``statusLine`` configured (here or in their global settings), theirs
+    # wins and we never overwrite it. Only injected when the bundled script
+    # is present on this host.
+    if config.hooks_enabled and pakline_cmd is not None:
+        if "statusLine" not in settings:
+            settings["statusLine"] = {
+                "type": "command",
+                "command": pakline_cmd,
+            }
 
     path = config.run_dir / "settings.json"
     path.write_text(json.dumps(settings, indent=2))
