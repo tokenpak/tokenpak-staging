@@ -5591,8 +5591,7 @@ def cmd_trigger_daemon(args):
 
 def cmd_trigger_fire(args):
     """Fire an event string immediately — executes all matching enabled triggers."""
-    import subprocess
-
+    from tokenpak.orchestration.commands import run_trigger_action
     from tokenpak.orchestration.triggers.matcher import match_event
 
     store = _trigger_store()
@@ -5604,18 +5603,14 @@ def cmd_trigger_fire(args):
     print(f"Firing event: {event} ({len(matched)} trigger(s))")
     for t in matched:
         print(f"  -> {t.id}  {t.action}")
-        cmd = t.action
-        if not cmd.startswith("/") and not cmd.startswith("./") and not cmd.startswith("~"):
-            cmd = f"tokenpak {cmd}"
-        try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-            output = (result.stdout + result.stderr).strip()
-            store.log_fire(t, result.returncode, output)
-            if output:
-                print(f"     {output[:200]}")
-        except subprocess.TimeoutExpired:
-            store.log_fire(t, -1, "timeout")
+        # Governed execution: shell=False by default; only ``shell:``-prefixed
+        # actions reach the host shell, so config payloads are not shell-interpreted.
+        result = run_trigger_action(t.action, timeout=30)
+        store.log_fire(t, result.returncode, result.output)
+        if result.timed_out:
             print("     [timeout]")
+        elif result.output:
+            print(f"     {result.output[:200]}")
 
 
 _GIT_POST_COMMIT = """#!/bin/sh
