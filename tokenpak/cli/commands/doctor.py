@@ -577,60 +577,49 @@ def run_doctor(
             "Recent error rate   monitor.db not found",
         )
 
-    # === Check 9: Token savings summary from last 100 requests ==================
-    if db_path.exists():
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT "
-                "  COUNT(*) as total, "
-                "  SUM(input_tokens) as total_input, "
-                "  SUM(compressed_tokens) as total_sent, "
-                "  SUM(input_tokens - compressed_tokens) as tokens_saved, "
-                "  SUM(estimated_cost) as total_cost "
-                "FROM ("
-                "  SELECT input_tokens, compressed_tokens, estimated_cost "
-                "  FROM requests "
-                "  WHERE compressed_tokens IS NOT NULL AND input_tokens > 0 "
-                "  ORDER BY id DESC LIMIT 100"
-                ")"
-            )
-            row = cur.fetchone()
-            conn.close()
-            if row and row[0] and row[0] > 0:
-                total, total_input, total_sent, tokens_saved, total_cost = row
-                tokens_saved = tokens_saved or 0
-                total_input = total_input or 0
-                pct_saved = (tokens_saved / total_input * 100) if total_input > 0 else 0
-                cost_str = f"${total_cost:.4f}" if total_cost else "$0.0000"
-                _record(
-                    "token_savings",
-                    "pass",
-                    f"Token savings       {tokens_saved:,} saved ({pct_saved:.1f}%) "
-                    f"— {total} reqs, cost {cost_str}",
-                    detail=(
-                        f"total_input={total_input:,} sent={total_sent:,} "
-                        f"saved={tokens_saved:,} ({pct_saved:.1f}%) cost={cost_str}"
-                    ),
-                )
-            else:
-                _record(
-                    "token_savings",
-                    "warn",
-                    "Token savings       no compressed request data yet",
-                )
-        except Exception as exc:
+    # === Check 9: Token savings summary — via the ONE unified helper ============
+    # This used to compute ``input_tokens - compressed_tokens`` over the last
+    # 100 rows with no cache_origin awareness, which is exactly how doctor came
+    # to report ~100% while ``status`` showed $0. It now routes through the
+    # single ``savings_report()`` helper so doctor reports the SAME two-plane
+    # figures as ``status`` / ``_cli_core`` / ``--json``. The two attribution
+    # planes (TokenPak-earned compression vs client-attributed cache) are shown
+    # SEPARATELY and never summed. No-data renders "not measured yet" — never
+    # $0 / 0% / 100%.
+    try:
+        from tokenpak.telemetry.unified_savings import savings_report
+
+        _report = savings_report(db_path=str(db_path) if db_path.exists() else None)
+        if not _report.has_data:
             _record(
                 "token_savings",
                 "warn",
-                f"Token savings       could not compute: {exc}",
+                "Token savings       not measured yet (no request data)",
             )
-    else:
+        else:
+            _comp = _report.compression_savings
+            _cache = _report.cache_savings
+            _record(
+                "token_savings",
+                "pass",
+                (
+                    f"Token savings       compression ${_comp.usd:.4f} (TokenPak) | "
+                    f"cache ${_cache.usd:.4f} (credited to you) "
+                    f"— {_report.request_count:,} reqs, cost ${_report.total_cost:.4f}"
+                ),
+                detail=(
+                    f"db_state={_report.db_state} window={_report.window} "
+                    f"compression_usd={_comp.usd:.6f} compressed_tokens={_comp.tokens:,} "
+                    f"cache_usd={_cache.usd:.6f} cache_tokens={_cache.tokens:,} "
+                    f"unattributable_usd={_report.unattributable.usd:.6f} "
+                    f"(planes are never summed)"
+                ),
+            )
+    except Exception as exc:
         _record(
             "token_savings",
             "warn",
-            "Token savings       monitor.db not found",
+            f"Token savings       could not compute: {exc}",
         )
 
     # === Check 10: Env var conflicts ============================================

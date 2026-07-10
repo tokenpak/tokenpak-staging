@@ -46,8 +46,8 @@ def test_proxy_server_import():
 # 2. Config
 # ---------------------------------------------------------------------------
 
-# WS-A residual import guard — TSR-01-followup. tokenpak._internal is the
-# closed-source namespace per Std 25 §1.1; tests below probe it. Skip
+# Optional-dependency import guard. tokenpak._internal is the
+# closed-source namespace; tests below probe it. Skip
 # them cleanly on slim OSS install — full installs exercise normally.
 @pytest.mark.quick
 def test_config_returns_dict():
@@ -198,14 +198,14 @@ def test_health_response_has_status_key():
 
 @pytest.mark.quick
 def test_savings_cmd_import():
+    # _query_by_model and the old attribution-blind SQL path were removed by
+    # D1; _query_savings now routes through the unified savings_report helper.
     from tokenpak.cli.commands.savings import (
-        _query_by_model,
         _query_savings,
         run_savings_cmd,
     )
     assert run_savings_cmd is not None
     assert _query_savings is not None
-    assert _query_by_model is not None
 
 
 @pytest.mark.quick

@@ -367,6 +367,13 @@ def _calculate_fleet_savings(
     # Smart routing savings = total_saved - cache - compression (remainder)
     routing_savings = max(0.0, total_saved - total_cache_savings - total_compression_savings)
 
+    # Canonical two-plane figures from the ONE unified helper. This surface used
+    # to compute compression/cache dollars inline; routing them through
+    # savings_report() keeps `status` byte-for-byte consistent with `doctor`,
+    # `_cli_core` and `--json`. The two planes are kept SEPARATE and never
+    # summed into a single "TokenPak saved you X".
+    unified = _unified_for_period(period, db_path)
+
     return {
         "period": period,
         "models": models,
@@ -376,13 +383,38 @@ def _calculate_fleet_savings(
             "with_cost": round(total_with, 2),
             "saved": round(total_saved, 2),
             "savings_pct": round(total_pct, 1),
-            "cache_savings": round(total_cache_savings, 2),
-            "compression_savings": round(total_compression_savings, 2),
+            # Authoritative two-plane dollars from the unified helper:
+            "cache_savings": round(unified.cache_savings.usd, 2),
+            "compression_savings": round(unified.compression_savings.usd, 2),
             "routing_savings": round(routing_savings, 2),
             "claude_code_cache_savings": round(total_claude_code_savings, 2),
         },
+        "unified": unified.to_json(),
         "db_rows": total_rows,
     }
+
+
+def _period_to_days_hours(period: Optional[str]) -> tuple[int, int]:
+    """Translate a status period string into ``(days, hours)`` for the helper."""
+    if not period:
+        return (0, 0)
+    mapping = {"1h": (0, 1), "24h": (1, 0), "7d": (7, 0), "30d": (30, 0)}
+    if period in mapping:
+        return mapping[period]
+    if period.endswith("h_custom"):
+        try:
+            return (0, int(period.replace("h_custom", "")))
+        except ValueError:
+            return (0, 0)
+    return (0, 0)
+
+
+def _unified_for_period(period: Optional[str], db_path: Optional[str]):
+    """Return the unified two-plane savings report for a status period."""
+    from tokenpak.telemetry.unified_savings import savings_report
+
+    days, hours = _period_to_days_hours(period)
+    return savings_report(db_path=db_path, days=days, hours=hours)
 
 
 # ---------------------------------------------------------------------------
@@ -999,6 +1031,12 @@ def _run_json(
     savings_1h = _calculate_fleet_savings(db_path=db_path, period="1h")
     savings_all = _calculate_fleet_savings(db_path=db_path, period=None)
 
+    # Canonical, two-plane savings object from the ONE unified helper, under a
+    # stable top-level key. Same object `status`/`doctor`/`_cli_core` render.
+    # compression_savings (TokenPak-earned) and cache_savings (client) live
+    # under separate keys and are intentionally never summed.
+    unified_all = _unified_for_period(None, db_path).to_json()
+
     output = {
         "version": _get_version(),
         "proxy": {
@@ -1007,6 +1045,7 @@ def _run_json(
             "stats": stats,
             "cache": cache,
         },
+        "savings_report": unified_all,
         "savings": {
             "last_24h": savings_24h if not savings_24h.get("error") else None,
             "last_1h": savings_1h if not savings_1h.get("error") else None,

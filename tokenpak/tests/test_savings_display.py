@@ -175,80 +175,72 @@ class TestStatusCommand:
 
 
 class TestSavingsCommand:
-    """Test the savings command with before/after comparison."""
+    """Test the savings analytics helper — now routed through the unified report.
 
-    @patch("tokenpak.cli.commands.savings._connect")
-    def test_savings_summary_with_before_after(self, mock_connect):
-        """Test savings summary includes before/after comparison."""
-        # Mock the database connection
-        mock_conn = MagicMock()
+    The old self-invented ``_query_savings`` SQL (``_connect``-based, with
+    ``cost_without_tokenpak`` / ``cost_reduction_pct`` fields) is gone. The
+    helper now delegates to ``telemetry.unified_savings.savings_report`` and
+    returns the two attribution planes SEPARATELY (compression vs cache),
+    never summed.
+    """
 
-        # Mock the query result
-        mock_row = MagicMock()
-        mock_row.__getitem__ = lambda self, key: {
-            "requests": 100,
-            "avg_raw": 50_000,
-            "avg_compressed": 47_500,
-            "total_raw": 5_000_000,
-            "total_compressed": 4_750_000,
-            "total_cost": 14.25,  # 4.75M tokens * $3/MTok
-        }[key]
+    def test_savings_two_planes_present(self):
+        """Helper returns compression (TokenPak) and cache (client) as separate keys."""
+        from tokenpak.telemetry.unified_savings import (
+            DB_STATE_ATTRIBUTED,
+            SavingsPlane,
+            UnifiedSavingsReport,
+        )
 
-        mock_conn.execute.return_value.fetchone.return_value = mock_row
-        mock_connect.return_value = mock_conn
+        fake = UnifiedSavingsReport(
+            compression_savings=SavingsPlane(label="compression", usd=2.5, credited_to="tokenpak"),
+            cache_savings=SavingsPlane(label="cache", usd=9.0, credited_to="client"),
+            db_state=DB_STATE_ATTRIBUTED,
+            request_count=100,
+        )
+        with patch("tokenpak.telemetry.unified_savings.savings_report", return_value=fake):
+            result = savings._query_savings(period="24h", db_path="/tmp/x.db")
 
-        result = savings._query_savings(period="24h")
+        assert result["compression_savings_usd"] == 2.5
+        assert result["cache_savings_usd"] == 9.0
+        # Never a single combined figure.
+        assert "savings_amount" not in result
+        assert "saved" not in result
 
-        # Check for before/after fields
-        assert "cost_without_tokenpak" in result
-        assert "cost_with_tokenpak" in result
-        assert "cost_reduction_pct" in result
+    def test_savings_no_data(self):
+        """No-data → db_state no_data; figures zero, not fabricated."""
+        from tokenpak.telemetry.unified_savings import (
+            DB_STATE_NO_DATA,
+            UnifiedSavingsReport,
+        )
 
-        # Verify the values are sensible
-        assert result["cost_without_tokenpak"] == pytest.approx(15.0, abs=0.1)
-        assert result["cost_with_tokenpak"] == pytest.approx(14.25, abs=0.1)
-        assert result["cost_reduction_pct"] > 0
+        fake = UnifiedSavingsReport(db_state=DB_STATE_NO_DATA)
+        with patch("tokenpak.telemetry.unified_savings.savings_report", return_value=fake):
+            result = savings._query_savings(period="24h", db_path="/tmp/missing.db")
 
-    @patch("tokenpak.cli.commands.savings._connect")
-    def test_savings_no_data(self, mock_connect):
-        """Test savings gracefully handles no data."""
-        mock_connect.return_value = None
+        assert result["db_state"] == "no_data"
+        assert result["compression_savings_usd"] == 0.0
+        assert result["cache_savings_usd"] == 0.0
 
-        result = savings._query_savings(period="24h")
+    def test_client_cache_not_credited_to_tokenpak(self):
+        """Client-origin cache stays on the cache plane, never compression."""
+        from tokenpak.telemetry.unified_savings import (
+            DB_STATE_ATTRIBUTED,
+            SavingsPlane,
+            UnifiedSavingsReport,
+        )
 
-        assert "error" in result
-        assert result["error"] == "DB not found"
+        # All value is client cache; TokenPak compression must be $0.
+        fake = UnifiedSavingsReport(
+            compression_savings=SavingsPlane(label="compression", usd=0.0, credited_to="tokenpak"),
+            cache_savings=SavingsPlane(label="cache", usd=42.0, credited_to="client"),
+            db_state=DB_STATE_ATTRIBUTED,
+        )
+        with patch("tokenpak.telemetry.unified_savings.savings_report", return_value=fake):
+            result = savings._query_savings(period="24h", db_path="/tmp/x.db")
 
-    @patch("tokenpak.cli.commands.savings._connect")
-    def test_savings_by_model(self, mock_connect):
-        """Test per-model breakdown includes cost reduction."""
-        mock_conn = MagicMock()
-
-        # Mock per-model rows
-        mock_rows = [
-            MagicMock(
-                **{
-                    "__getitem__": lambda self, key: {
-                        "model": "claude-sonnet-4-6",
-                        "requests": 50,
-                        "avg_raw": 40_000,
-                        "avg_compressed": 38_000,
-                        "total_raw": 2_000_000,
-                        "total_compressed": 1_900_000,
-                        "total_cost": 5.70,
-                    }[key]
-                }
-            )
-        ]
-
-        mock_conn.execute.return_value.fetchall.return_value = mock_rows
-        mock_connect.return_value = mock_conn
-
-        result = savings._query_by_model(period="24h")
-
-        assert len(result) > 0
-        assert "cost_reduction_pct" in result[0]
-        assert result[0]["model"] == "claude-sonnet-4-6"
+        assert result["compression_savings_usd"] == 0.0
+        assert result["cache_savings_usd"] == 42.0
 
 
 if __name__ == "__main__":

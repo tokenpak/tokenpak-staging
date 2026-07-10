@@ -76,11 +76,19 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# _query_savings / _query_by_model — savings analytics (used by tests)
+# Savings analytics — DELEGATED to the ONE unified helper.
+#
+# This module previously carried its own ``_query_savings`` /
+# ``_query_by_model`` SQL with a hard-coded ``_MONITOR_DB = ""`` default and a
+# bespoke ``input_tokens - compressed_tokens`` formula that was NOT
+# attribution-aware (it conflated client cache with TokenPak compression). That
+# was one of the ~4 independent savings computations D1 unifies. The dead path
+# is removed; these thin wrappers now route through
+# ``telemetry.unified_savings.savings_report`` so this surface can never invent
+# its own math or resurface the old formula. The two attribution planes
+# (TokenPak-earned compression vs client-attributed cache) are kept separate
+# and never summed.
 # ---------------------------------------------------------------------------
-import sqlite3 as _sqlite3
-
-_MONITOR_DB = ""
 
 
 def _period_to_days(period: str) -> int:
@@ -94,85 +102,27 @@ def _period_to_days(period: str) -> int:
     return 1
 
 
-def _query_savings(period: str = "24h", model: str | None = None) -> dict:
-    """Return aggregate savings summary from the monitor database."""
-    path = _MONITOR_DB
-    if not path:
-        return {"error": "DB not found", "requests": 0}
-    try:
-        days = _period_to_days(period)
-        con = _sqlite3.connect(path)
-        con.row_factory = _sqlite3.Row
-        clauses = ["date(timestamp) >= date('now', ?)"]
-        params: list = [f"-{days} days"]
-        if model:
-            clauses.append("model = ?")
-            params.append(model)
-        where = "WHERE " + " AND ".join(clauses)
-        sql = f"""
-            SELECT
-                COUNT(*) AS requests,
-                COALESCE(AVG(input_tokens), 0) AS avg_raw_tokens,
-                COALESCE(AVG(CASE WHEN compressed_tokens > 0
-                                  THEN compressed_tokens
-                                  ELSE input_tokens END), 0) AS avg_compressed_tokens,
-                COALESCE(SUM(input_tokens), 0) AS total_raw,
-                COALESCE(SUM(CASE WHEN compressed_tokens > 0
-                                  THEN compressed_tokens
-                                  ELSE input_tokens END), 0) AS total_compressed
-            FROM requests {where}
-        """
-        row = con.execute(sql, params).fetchone()
-        con.close()
-        if not row:
-            return {"requests": 0, "avg_raw_tokens": 0, "avg_compressed_tokens": 0,
-                    "tokens_saved_total": 0, "reduction_pct": 0.0}
-        total_raw = row["total_raw"] or 0
-        total_comp = row["total_compressed"] or 0
-        tokens_saved = total_raw - total_comp
-        reduction_pct = (tokens_saved / total_raw * 100.0) if total_raw > 0 else 0.0
-        return {
-            "requests": row["requests"],
-            "avg_raw_tokens": int(row["avg_raw_tokens"]),
-            "avg_compressed_tokens": int(row["avg_compressed_tokens"]),
-            "tokens_saved_total": int(tokens_saved),
-            "reduction_pct": reduction_pct,
-        }
-    except Exception:
-        return {"error": "query failed", "requests": 0}
+def _query_savings(period: str = "24h", model: str | None = None, db_path: str = "") -> dict:
+    """Return the unified two-plane savings summary from the canonical feed.
 
+    Routes through ``savings_report()``; the ``model`` filter is accepted for
+    backward compatibility but the helper aggregates across the window. Returns
+    a dict whose dollar figures are split into ``compression_savings_usd``
+    (TokenPak-earned) and ``cache_savings_usd`` (credited to the client) — never
+    a single combined number.
+    """
+    from tokenpak.telemetry.unified_savings import savings_report
 
-def _query_by_model(period: str = "24h", db_path: str = "") -> list:
-    """Return per-model savings rows from the monitor database."""
-    path = db_path or _MONITOR_DB
-    if not path:
-        return []
-    try:
-        days = _period_to_days(period)
-        con = _sqlite3.connect(path)
-        con.row_factory = _sqlite3.Row
-        sql = """
-            SELECT model,
-                   COUNT(*) AS requests,
-                   AVG(input_tokens) AS avg_raw_tokens,
-                   AVG(CASE WHEN compressed_tokens > 0
-                             THEN compressed_tokens
-                             ELSE input_tokens END) AS avg_compressed_tokens,
-                   SUM(input_tokens) - SUM(CASE WHEN compressed_tokens > 0
-                                                THEN compressed_tokens
-                                                ELSE input_tokens END) AS tokens_saved_total,
-                   CASE WHEN SUM(input_tokens) > 0
-                        THEN (SUM(input_tokens) - SUM(CASE WHEN compressed_tokens > 0
-                                                           THEN compressed_tokens
-                                                           ELSE input_tokens END))
-                             * 100.0 / SUM(input_tokens)
-                        ELSE 0.0 END AS reduction_pct
-            FROM requests
-            WHERE date(timestamp) >= date('now', ?)
-            GROUP BY model
-        """
-        rows = con.execute(sql, (f"-{days} days",)).fetchall()
-        con.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
+    days = _period_to_days(period)
+    report = savings_report(db_path=db_path or None, days=days)
+    return {
+        "requests": report.request_count,
+        "db_state": report.db_state,
+        "window": report.window,
+        "compression_savings_usd": report.compression_savings.usd,
+        "compressed_tokens": report.compression_savings.tokens,
+        "cache_savings_usd": report.cache_savings.usd,
+        "cache_tokens": report.cache_savings.tokens,
+        "unattributable_usd": report.unattributable.usd,
+        "total_cost": report.total_cost,
+    }

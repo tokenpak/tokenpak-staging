@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-# WS-A residual import guard — TSR-01-followup.
+# Optional-dependency import guard.
 # `tokenpak status` and the savings summary it produces transitively
 # pull in `fastapi` via the dashboard surface; on a slim [dev] install
 # fastapi is absent and the import chain raises ModuleNotFoundError
@@ -112,8 +112,39 @@ def _make_stats(today_requests=100,
     }
 
 
+def _mock_unified_report(compression_usd=0.0, cache_usd=0.0, has_data=True):
+    """Build a UnifiedSavingsReport stand-in for the one savings helper.
+
+    D1 routes every surface through ``telemetry.unified_savings.savings_report``.
+    The dollar figures are split into two planes that are NEVER summed:
+    ``compression_savings`` (TokenPak-earned) vs ``cache_savings`` (client).
+    ``has_data=False`` models the no-data state (must render "not measured yet").
+    """
+    from tokenpak.telemetry.unified_savings import (
+        DB_STATE_ATTRIBUTED,
+        DB_STATE_NO_DATA,
+        SavingsPlane,
+        UnifiedSavingsReport,
+    )
+
+    return UnifiedSavingsReport(
+        compression_savings=SavingsPlane(
+            label="compression", usd=compression_usd, credited_to="tokenpak"
+        ),
+        cache_savings=SavingsPlane(label="cache", usd=cache_usd, credited_to="client"),
+        db_state=DB_STATE_ATTRIBUTED if has_data else DB_STATE_NO_DATA,
+        window="last 1d",
+    )
+
+
 def _run_cmd_status(health, stats, cache=None, cost_saved_db=0.0):
-    """Run cmd_status with mocked proxy endpoints, return captured stdout."""
+    """Run the legacy status renderer with mocked proxy endpoints + unified helper.
+
+    The acceptance suite targets ``_cmd_status_legacy`` (the renderer that uses
+    ``_proxy_get`` and the unified ``savings_report``). ``cmd_status`` itself
+    delegates to the savings-first ``status.run`` for real CLI use, which reads
+    a live monitor.db and is not the unit under test here.
+    """
     from argparse import Namespace
 
     args = Namespace(
@@ -129,16 +160,10 @@ def _run_cmd_status(health, stats, cache=None, cost_saved_db=0.0):
 
     captured = StringIO()
 
-    from tokenpak.telemetry.query import SavingsReport
-    mock_savings = SavingsReport(
-        total_cost=0.0,
-        estimated_without_compression=0.0,
-        savings_amount=cost_saved_db,
-        savings_pct=(cost_saved_db * 10) if cost_saved_db else 0.0,
-    )
+    mock_report = _mock_unified_report(compression_usd=cost_saved_db, has_data=True)
 
     with patch("tokenpak._cli_core._proxy_get") as mock_get, \
-         patch("tokenpak._cli_core.get_savings_report", mock_savings.__class__, create=True), \
+         patch("tokenpak.telemetry.unified_savings.savings_report", return_value=mock_report), \
          patch("sys.stdout", captured):
 
         def _side_effect(endpoint):
@@ -152,13 +177,11 @@ def _run_cmd_status(health, stats, cache=None, cost_saved_db=0.0):
 
         mock_get.side_effect = _side_effect
 
-        # Patch get_savings_report inside the function scope
-        with patch("tokenpak.telemetry.query.get_savings_report", return_value=mock_savings):
-            from tokenpak._cli_core import cmd_status
-            try:
-                cmd_status(args)
-            except SystemExit:
-                pass
+        from tokenpak._cli_core import _cmd_status_legacy
+        try:
+            _cmd_status_legacy(args)
+        except SystemExit:
+            pass
 
     return captured.getvalue()
 
@@ -296,7 +319,7 @@ class TestSavingsSummaryEdgeCases:
         assert "50K tokens saved today" in out
 
     def test_savings_db_exception_handled_gracefully(self):
-        """If telemetry DB errors out, savings line should still show without cost."""
+        """If the savings DB errors out, the renderer must not crash."""
         health = _make_health()
         stats = _make_stats(today_compressed=50_000, today_cache_read=200_000)
         captured = StringIO()
@@ -317,11 +340,15 @@ class TestSavingsSummaryEdgeCases:
 
             mock_get.side_effect = _side_effect
 
-            # Make get_savings_report raise
-            with patch("tokenpak.telemetry.query.get_savings_report", side_effect=Exception("DB error")):
-                from tokenpak._cli_core import cmd_status
+            # Make the unified savings helper raise; the renderer wraps it in a
+            # try/except and must degrade gracefully (no traceback).
+            with patch(
+                "tokenpak.telemetry.unified_savings.savings_report",
+                side_effect=Exception("DB error"),
+            ):
+                from tokenpak._cli_core import _cmd_status_legacy
                 try:
-                    cmd_status(args)
+                    _cmd_status_legacy(args)
                 except SystemExit:
                     pass
 

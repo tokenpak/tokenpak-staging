@@ -74,51 +74,34 @@ def _monitor_db_cost(period: str = "daily") -> float:
 
 
 def _monitor_db_savings(days: int = 30) -> dict:
-    """Return savings summary from monitor.db."""
-    import sqlite3
-    from datetime import date, timedelta
+    """Return a savings summary from monitor.db via the ONE unified helper.
 
-    db = _get_monitor_db_path()
-    if db is None:
+    This used to compute its own savings math. It now delegates to
+    ``telemetry.unified_savings.savings_report`` so this surface can never
+    disagree with ``status`` / ``doctor`` / ``--json`` again. The two
+    attribution planes are surfaced separately and never summed: only
+    ``compression_savings`` (``cache_origin='proxy'``) is TokenPak-earned;
+    ``cache_savings`` is credited to the client. Returns ``{}`` when there is
+    no measured data (db_state == no_data) so callers don't render a fake $0.
+    """
+    from .telemetry.unified_savings import savings_report
+
+    report = savings_report(days=days)
+    if not report.has_data:
         return {}
-
-    since = (date.today() - timedelta(days=days)).isoformat()
-    try:
-        conn = sqlite3.connect(str(db), timeout=2)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT
-                COALESCE(SUM(estimated_cost), 0)      AS actual_cost,
-                COALESCE(SUM(input_tokens), 0)         AS total_input,
-                COALESCE(SUM(output_tokens), 0)        AS total_output,
-                COALESCE(SUM(cache_read_tokens), 0)    AS cache_read,
-                COALESCE(SUM(cache_creation_tokens), 0) AS cache_created,
-                COALESCE(SUM(compressed_tokens), 0)    AS compressed,
-                COALESCE(SUM(protected_tokens), 0)     AS protected
-            FROM requests WHERE timestamp >= ? AND status_code < 400""",
-            (since,),
-        )
-        row = dict(cur.fetchone())
-        conn.close()
-
-        actual = row["actual_cost"]
-        cache_read = row["cache_read"]
-        total_in = row["total_input"] + cache_read
-
-        # Rough baseline: what it would cost without cache/compression
-        raw_input = row["total_input"] + row["compressed"]
-        return {
-            "actual_cost": actual,
-            "cache_read": cache_read,
-            "cache_hit_rate": cache_read / total_in if total_in else 0,
-            "compressed_tokens": row["compressed"],
-            "raw_input_tokens": raw_input,
-            "total_input": row["total_input"],
-            "total_output": row["total_output"],
-        }
-    except Exception:
-        return {}
+    return {
+        "db_state": report.db_state,
+        "total_cost": report.total_cost,
+        "request_count": report.request_count,
+        # TokenPak-earned plane (the only credit-to-us figure):
+        "compression_savings_usd": report.compression_savings.usd,
+        "compressed_tokens": report.compression_savings.tokens,
+        # Client-attributed plane (never credited to TokenPak):
+        "cache_savings_usd": report.cache_savings.usd,
+        "cache_read": report.cache_savings.tokens,
+        # Unattributable cache, credited conservatively to the client:
+        "unattributable_usd": report.unattributable.usd,
+    }
 
 
 def _monitor_db_models(days: int = 30) -> list:
@@ -3043,29 +3026,28 @@ def _cmd_status_legacy(args):
             print(f"  Cost saved:      ${cost_saved:.4f}")
         print()
 
-        # Savings summary — prominent 💰 line
-        # cache_read_tokens is in /stats session, not /health stats
-        _stats_session = (stats or {}).get("session", {})
-        cache_read = _stats_session.get("cache_read_tokens", s.get("cache_read_tokens", 0))
-        saved_tok = s.get("saved_tokens", 0)
-        _hits = s.get("cache_hits", 0)
-        _misses = s.get("cache_misses", 0)
-        _total_cache = _hits + _misses
-        _hit_rate = (_hits / _total_cache * 100) if _total_cache > 0 else 0
-        # Cache reads save (full_price - cache_read_price) per token.
-        # Using Anthropic claude-sonnet-4 rates: $3.00/MTok input, $0.30/MTok cache read.
-        _cache_savings = cache_read * 2.70 / 1_000_000
-        # Compression savings: tokens eliminated entirely, valued at input rate.
-        _compression_savings = saved_tok * 3.00 / 1_000_000
-        _total_saved = _cache_savings + _compression_savings
-        # Compact savings status bar — prefer today's stats over session stats
+        # Savings summary — prominent 💰 line.
+        #
+        # Routed through the ONE unified savings_report() so this surface can
+        # never disagree with `tokenpak status` / `doctor` / `--json`. Two
+        # attribution planes are shown SEPARATELY and never summed into a
+        # single "TokenPak saved you X":
+        #   * compression — TokenPak-earned (cache_origin='proxy')
+        #   * cache       — credited to you, not us (cache_origin='client')
+        # The token-count observability (compression %, tokens-handled today)
+        # comes from the live proxy session/today block; the dollar figures
+        # come from the unified report so the dollars are attribution-correct.
         _today = (stats or {}).get("today", {})
         _today_input = _today.get("input_tokens", 0)
         _today_compressed = _today.get("compressed_tokens", 0)
         _today_cache_read = _today.get("cache_read_tokens", 0)
+        # Observability token total handled today (count, not a dollar claim):
+        # compression (TokenPak-side) + cache reads (client-side) are distinct
+        # planes but both reduce what you pay, so the *token* tally is shown
+        # together while the dollars stay split below.
         _today_total_saved_tok = _today_compressed + _today_cache_read
 
-        # Compression % from today's data
+        # Compression % from today's data (wire-side observability)
         _avg_compression = (_today_compressed / _today_input * 100) if _today_input > 0 else 0.0
 
         # Token count formatter: K/M/raw
@@ -3076,22 +3058,25 @@ def _cmd_status_legacy(args):
                 return f"{n // 1_000}K"
             return str(n)
 
-        # Cost saved from DB (injected by get_savings_report, read below)
-        _db_cost_saved = 0.0
+        # Dollar figures from the unified, two-plane report (today's window).
+        _unified = None
         try:
-            from .telemetry.query import get_savings_report as _gsr
-            _db_report = _gsr(days=1)
-            _db_cost_saved = _db_report.savings_amount if _db_report else 0.0
+            from .telemetry.unified_savings import savings_report as _usr
+            _unified = _usr(days=1)
         except Exception:
-            pass
+            _unified = None
+
+        # TokenPak-earned dollars (compression plane ONLY — never the cache plane).
+        _tp_earned_usd = _unified.compression_savings.usd if _unified else 0.0
+        _client_cache_usd = _unified.cache_savings.usd if _unified else 0.0
 
         _savings_parts = []
         if _avg_compression > 0:
             _savings_parts.append(f"{_avg_compression:.1f}% avg compression")
         if _today_total_saved_tok > 0:
             _savings_parts.append(f"{_fmt_tokens(_today_total_saved_tok)} tokens saved today")
-        if _db_cost_saved > 0:
-            _savings_parts.append(f"~${_db_cost_saved:.2f} saved today")
+        if _tp_earned_usd > 0:
+            _savings_parts.append(f"~${_tp_earned_usd:.2f} saved today")
 
         if _savings_parts:
             print(f"  💰 Savings: {' | '.join(_savings_parts)}")
@@ -3099,20 +3084,18 @@ def _cmd_status_legacy(args):
             print("  💰 Savings: no data yet (run some requests first)")
         print()
 
-        # Today's savings (from telemetry DB)
-        try:
-            from .telemetry.query import get_savings_report
-
-            _daily = get_savings_report(days=1)
-            if _daily.savings_amount > 0 or _daily.total_cost > 0:
-                _daily_hit = f"{_daily.cache_hit_rate * 100:.0f}% cache hit" if _daily.cache_hit_rate > 0 else ""
-                _daily_suffix = f" ({_daily_hit})" if _daily_hit else ""
-                print(f"  📅 Today's savings: ${_daily.savings_amount:.2f}{_daily_suffix}")
-            else:
-                print("  📅 Today's savings: $0.00")
-            print()
-        except Exception:
-            pass
+        # Today's savings — split by plane, db_state honest.
+        # When there is no measured data we say so rather than printing a
+        # misleading $0 (HARD STOP: no-data must never render $0/0%/100%).
+        if _unified is None or not _unified.has_data:
+            print("  📅 Today's savings: not measured yet")
+        else:
+            print(
+                f"  📅 Today's savings: "
+                f"compression ${_tp_earned_usd:.2f} (TokenPak) | "
+                f"cache ${_client_cache_usd:.2f} (credited to you)"
+            )
+        print()
 
         # Cache (with NEW cache hit rate display)
         if cache:
@@ -3253,67 +3236,44 @@ def cmd_usage(args):
 
 
 def cmd_savings(args):
-    """Show compression savings summary."""
+    """Show the savings summary — routed through the ONE unified savings_report().
+
+    The two attribution planes (TokenPak-earned compression vs client-attributed
+    cache) are shown as SEPARATE lines and never summed into a single
+    "TokenPak saved you X". When there is no measured data the command says so
+    explicitly rather than rendering a misleading $0/0%.
+    """
+    from .telemetry.unified_savings import savings_report
+
     mode = resolve_mode(args)
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
 
-    # Try monitor.db first (proxy's live data source)
-    monitor_data = _monitor_db_savings(days=days)
-
-    if monitor_data and monitor_data.get("actual_cost", 0) > 0:
-        actual = monitor_data["actual_cost"]
-        cache_hit_rate = monitor_data["cache_hit_rate"]
-        compressed = monitor_data["compressed_tokens"]
-        cache_read = monitor_data["cache_read"]
-
-        total_input = monitor_data["total_input"] + monitor_data.get("total_output", 0)
-        avg_rate = actual / total_input if total_input > 0 else 0
-        savings_amount = (cache_read + compressed) * avg_rate
-        estimated_without = actual + savings_amount
-        savings_pct = (savings_amount / estimated_without * 100) if estimated_without > 0 else 0
-
-        if mode == OutputMode.RAW:
-            print(json.dumps({
-                "section": "savings", "days": days,
-                "actual_cost": actual, "savings_amount": savings_amount,
-                "savings_pct": savings_pct, "cache_hit_rate": cache_hit_rate,
-                "estimated_without_compression": estimated_without,
-            }))
-            return
-
-        if fmt.minimal:
-            print(fmt.minimal_line([f"{savings_pct:.1f}%", f"${savings_amount:.2f}", f"{days}d"]))
-            return
-
-        print(fmt.header())
-        print()
-        print(fmt.kv([
-            ("Actual Cost", f"${actual:.2f}"),
-            ("Est. Baseline", f"${estimated_without:.2f}"),
-            ("Est. Savings", f"${savings_amount:.2f} ({savings_pct:.1f}%)"),
-            ("Cache Hit Rate", f"{cache_hit_rate * 100:.1f}%"),
-            ("Compressed Tokens", f"{compressed:,}"),
-        ]))
-        return
-
-    # Fallback to telemetry.db
-    from .telemetry.query import get_savings_report
-    report = get_savings_report(days=days)
+    report = savings_report(days=days)
+    comp = report.compression_savings
+    cache = report.cache_savings
 
     if mode == OutputMode.RAW:
-        print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
+        print(fmt.raw({"section": "savings", "days": days, **report.to_json()}))
         return
 
-    # Check for empty database
-    if report.total_cost == 0.0 and report.savings_amount == 0.0:
-        print("No savings data yet. Run your first request through the proxy to start tracking.")
+    # db_state honesty: no measurement → say so, never render $0/0%/100%.
+    if not report.has_data:
+        msg = "No savings data measured yet. Run requests through the proxy to start tracking."
+        if fmt.minimal:
+            print(fmt.minimal_line(["not measured yet", f"{days}d"]))
+        else:
+            print(msg)
         return
 
     if fmt.minimal:
         print(
             fmt.minimal_line(
-                [f"{report.savings_pct:.1f}%", f"${report.savings_amount:.2f}", f"{days}d"]
+                [
+                    f"compression ${comp.usd:.2f} (TokenPak)",
+                    f"cache ${cache.usd:.2f} (client)",
+                    f"{days}d",
+                ]
             )
         )
         return
@@ -3323,11 +3283,12 @@ def cmd_savings(args):
     print(
         fmt.kv(
             [
-                ("Savings", f"${report.savings_amount:.2f}"),
-                ("Savings %", f"{report.savings_pct:.1f}%"),
+                ("Compression (TokenPak-earned)", f"${comp.usd:.2f}  {comp.tokens:,} tok"),
+                ("Cache (credited to you)", f"${cache.usd:.2f}  {cache.tokens:,} tok"),
+                ("Unattributable (→ client)", f"${report.unattributable.usd:.2f}"),
                 ("Actual Cost", f"${report.total_cost:.2f}"),
-                ("Baseline", f"${report.estimated_without_compression:.2f}"),
-                ("Cache Hit", f"{report.cache_hit_rate*100:.1f}%"),
+                ("Requests", f"{report.request_count:,}"),
+                ("Window", report.window),
             ]
         )
     )
