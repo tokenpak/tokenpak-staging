@@ -289,7 +289,7 @@ def load_settings_context(path: Path | None = None) -> dict[str, Any]:
 
     return {
         # Active profile
-        "active_profile": _s("TOKENPAK_ACTIVE_PROFILE") or _s("TOKENPAK_PROFILE", "claude-code-cli"),
+        "active_profile": _s("TOKENPAK_ACTIVE_PROFILE") or _s("TOKENPAK_PROFILE", "balanced"),
         "available_profiles": sorted(_PROFILES),
         # Vault injection
         "vault_inject_enabled": _b("TOKENPAK_VAULT_INJECT_ENABLED", "1"),
