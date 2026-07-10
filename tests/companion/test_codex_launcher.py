@@ -207,7 +207,6 @@ def test_main_execs_when_preflight_clear(monkeypatch, tmp_path):
         raise _Exec
 
     monkeypatch.setattr(launcher.os, "execvpe", _fake_exec)
-    import pytest
 
     with pytest.raises(_Exec):
         launcher.main([])
