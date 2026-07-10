@@ -572,7 +572,7 @@ def settings_claude_code(request: Request):
     ctx = load_settings_context()
     ctx["request"] = request
     ctx["page_title"] = "Claude Code Settings"
-    ctx["active_profile_display"] = ctx.get("active_profile", "claude-code-cli")
+    ctx["active_profile_display"] = ctx.get("active_profile", "balanced")
     return templates.TemplateResponse(request, "settings_claude_code.html", ctx)
 
 
