@@ -270,7 +270,7 @@ _COMMAND_GROUPS = {
         ("goals", "Track savings goals"),
         ("config", "View and edit config"),
         ("explain", "Explain workflow profiles"),
-        ("permissions", "Permission tiers (strict/standard/auto) + launcher fleet mode"),
+        ("permissions", "Persistent tiers + per-client launcher permission defaults"),
     ],
     "Versioning": [
         ("version", "Show current version"),
@@ -2774,91 +2774,168 @@ def _build_stub_parsers(sub):
         ),
     )
     p_integrate.add_argument(
-        "client", nargs="?", default=None,
+        "client",
+        nargs="?",
+        default=None,
         help="Client key: claude-code | cursor | cline | continue | aider | codex | openai-sdk | anthropic-sdk | litellm",
     )
     p_integrate.add_argument(
-        "--all", action="store_true",
+        "--all",
+        action="store_true",
         help="Show instructions for every supported client",
     )
     p_integrate.add_argument(
-        "--proxy-url", default=None,
+        "--proxy-url",
+        default=None,
         help="Override the printed proxy URL (default: $TOKENPAK_PROXY_URL or http://localhost:8766)",
     )
     p_integrate.add_argument(
-        "--apply", action="store_true",
+        "--apply",
+        action="store_true",
         help="Auto-write config files for the given client (headless / scripted path)",
     )
     p_integrate.add_argument(
-        "--revert", action="store_true",
+        "--revert",
+        action="store_true",
         help="Restore the most recent backup for the given client (undoes --apply)",
     )
     p_integrate.add_argument(
-        "--tier", choices=["strict", "standard", "auto", "fleet"], default=None,
+        "--tier",
+        choices=["strict", "standard", "auto", "fleet"],
+        default=None,
         help="Permission tier to apply with --apply (claude-code / codex only; "
-             "default: standard). 'fleet' is launcher-scoped and never persists "
-             "into client config — see `tokenpak permissions --help`.",
+        "default: standard). 'fleet' is the legacy full-bypass alias for "
+        "both TokenPak launchers and never persists into client config.",
     )
     p_integrate.add_argument(
-        "--yes", action="store_true",
-        help="Confirm dangerous choices non-interactively (required for --tier fleet without a TTY)",
+        "--yes",
+        action="store_true",
+        help="Confirm dangerous choices non-interactively (required for legacy --tier fleet)",
     )
 
     def _integrate_dispatch(args):
         from tokenpak.cli.commands.integrate import run_integrate
+
         return run_integrate(args)
 
     p_integrate.set_defaults(func=_integrate_dispatch)
 
-    # ── `permissions` — persistent tiers + launcher fleet mode ───────────────
+    # ── `permissions` — persistent tiers + launcher defaults ─────────────────
     p_permissions = sub.add_parser(
         "permissions",
-        help="View or set permission tiers (strict/standard/auto) and launcher fleet mode",
+        help="Manage persistent tiers and per-client launcher permission defaults",
         description=(
             "Manage the TokenPak permission tier system.\n\n"
             "Persistent tiers (strict/standard/auto) are written into the client's\n"
-            "own config (Claude Code settings.json / Codex config.toml). Fleet mode\n"
-            "is launcher-scoped only: `tokenpak claude` / `tokenpak codex` inject\n"
-            "bypass flags at launch and print a banner — client configs are never\n"
-            "modified by fleet mode.\n\n"
+            "own config (Claude Code settings.json / Codex config.toml). Launcher\n"
+            "defaults are TokenPak-scoped only: `tokenpak claude` / `tokenpak codex`\n"
+            "inject session arguments and print a warning — client configs are never\n"
+            "modified by launcher defaults.\n\n"
             "Examples:\n"
-            "  tokenpak permissions show                      # current tiers + fleet mode\n"
+            "  tokenpak permissions show                      # tiers + launcher defaults\n"
             "  tokenpak permissions set auto                  # both clients\n"
             "  tokenpak permissions set strict --client codex # one client\n"
-            "  tokenpak permissions set fleet                 # launcher fleet mode (opt-in)\n"
-            "  tokenpak permissions reset                     # scoped reset + fleet off"
+            "  tokenpak permissions launcher approval-bypass --client codex\n"
+            "  tokenpak permissions launcher sandbox-bypass --client codex\n"
+            "  tokenpak permissions launcher full-bypass --client both\n"
+            "  tokenpak permissions launcher inherit --client both\n"
+            "  tokenpak permissions set fleet                 # legacy full-bypass alias"
         ),
     )
     perm_sub = p_permissions.add_subparsers(dest="permissions_cmd")
-    perm_sub.add_parser(
-        "show", help="Show per-client persistent tier + launcher fleet status"
+    pp_show = perm_sub.add_parser(
+        "show", help="Show per-client persistent tiers and launcher defaults"
+    )
+    pp_show.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Output one schema-versioned JSON object",
+    )
+    pp_show.add_argument(
+        "--quiet", action="store_true",
+        help="Suppress normal output; safety warnings still go to stderr",
     )
     pp_set = perm_sub.add_parser(
-        "set", help="Set a permission tier (strict|standard|auto) or enable fleet mode"
+        "set", help="Set a persistent tier or the full-bypass compatibility alias"
     )
     pp_set.add_argument(
-        "tier", choices=["strict", "standard", "auto", "fleet"],
-        help="Tier to apply ('fleet' sets launcher state only)",
+        "tier",
+        choices=["strict", "standard", "auto", "fleet"],
+        help=(
+            "Tier to apply ('fleet' is a legacy full-bypass alias and requires "
+            "--client both)"
+        ),
     )
     pp_set.add_argument(
-        "--client", choices=["claude-code", "codex", "both"], default="both",
-        help="Which client to configure (default: both)",
+        "--client",
+        choices=["claude-code", "codex", "both"],
+        default="both",
+        help="Which client to configure",
     )
     pp_set.add_argument(
-        "--yes", action="store_true",
-        help="Skip the fleet-mode confirmation prompt (explicit opt-in)",
+        "--yes",
+        action="store_true",
+        help="Confirm the `permissions set fleet` full-bypass alias non-interactively",
     )
     pp_reset = perm_sub.add_parser(
         "reset",
-        help="Scoped reset: remove only TokenPak-managed tier keys + disable fleet mode",
+        help="Remove managed tier keys and reset every launcher default to inherit",
     )
     pp_reset.add_argument(
-        "--client", choices=["claude-code", "codex", "both"], default="both",
-        help="Which client to reset (default: both)",
+        "--client",
+        choices=["claude-code", "codex", "both"],
+        default="both",
+        help="Which client to reset",
+    )
+
+    pp_launcher = perm_sub.add_parser(
+        "launcher",
+        help="Set a TokenPak-launcher-only permission default",
+        description=(
+            "Set session-only permission defaults for `tokenpak claude` and\n"
+            "`tokenpak codex`. These settings never modify client config files.\n"
+            "Every bypass mode requires confirmation and prints a warning on each\n"
+            "affected launch. Managed administrator policy can still constrain or\n"
+            "reject the client launch.\n\n"
+            "Modes:\n"
+            "  inherit          inject nothing; use client and managed policy\n"
+            "  approval-bypass disable prompts; keep sandbox limits (Codex only)\n"
+            "  sandbox-bypass  disable sandbox; keep approvals (Codex only)\n"
+            "  full-bypass     disable local prompts and sandbox/permission checks\n\n"
+            "Use `launcher <mode> --client <client>` to configure. Choose `inherit`\n"
+            "to disable a launcher override. Use `permissions show` to inspect."
+        ),
+    )
+    pp_launcher.add_argument(
+        "launcher_mode",
+        choices=["inherit", "approval-bypass", "sandbox-bypass", "full-bypass"],
+        help=(
+            "inherit | approval-bypass | sandbox-bypass | full-bypass "
+            "(partial bypass modes are Codex-only)"
+        ),
+    )
+    pp_launcher.add_argument(
+        "--client",
+        choices=["claude-code", "codex", "both"],
+        required=True,
+        help="Client scope; explicit selection is required for safety",
+    )
+    pp_launcher.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm a bypass mode non-interactively; warnings still print",
+    )
+    pp_launcher.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Output one schema-versioned result object",
+    )
+    pp_launcher.add_argument(
+        "--quiet", action="store_true",
+        help="Suppress success output; safety warnings still go to stderr",
     )
 
     def _permissions_dispatch(args):
         from tokenpak.cli.commands.permissions import run_permissions
+
         return run_permissions(args)
 
     p_permissions.set_defaults(func=_permissions_dispatch)
@@ -5430,7 +5507,7 @@ def main():
     # ── First-run welcome ──────────────────────────────────────────────────────
     machine_output = any(
         bool(getattr(args, attr, False))
-        for attr in ("json", "json_export", "json_output", "as_json", "raw")
+        for attr in ("as_json", "json", "json_export", "json_output", "quiet", "raw")
     )
     if _is_first_run() and args.command not in ("help",) and not machine_output:
         print(
