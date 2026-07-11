@@ -474,17 +474,39 @@ class _ThreadedHTTPServer(HTTPServer):
     proxy_server: "ProxyServer"  # injected after construction
 
     def process_request(self, request, client_address):
-        t = threading.Thread(target=self._handle, args=(request, client_address))
+        # Keep control-plane endpoints responsive while bounding model traffic.
+        # Admission happens before a worker thread is created, so overload cannot
+        # turn into an unbounded thread/socket population.
+        first_line = b""
+        try:
+            request.settimeout(0.25)
+            first_line = request.recv(4096, socket.MSG_PEEK).split(b"\r\n", 1)[0]
+        except (OSError, ValueError):
+            pass
+        finally:
+            request.settimeout(None)
+        path = first_line.split(b" ", 2)[1].decode("latin-1", "ignore") if len(first_line.split(b" ", 2)) > 1 else ""
+        control = path == "/health" or path.startswith("/health?") or path in {"/status", "/metrics"} or path.startswith("/tpk/v1/") or path.startswith("/pak/v1/")
+        if not control and not self.proxy_server._admission.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 46\r\nConnection: close\r\n\r\n{\"error\":\"managed_admission_capacity\"}")
+            finally:
+                self.shutdown_request(request)
+            self.proxy_server._admission_rejected += 1
+            return
+        t = threading.Thread(target=self._handle, args=(request, client_address, control))
         t.daemon = True
         t.start()
 
-    def _handle(self, request, client_address):
+    def _handle(self, request, client_address, control=False):
         try:
             self.finish_request(request, client_address)
         except Exception:
             self.handle_error(request, client_address)
         finally:
             self.shutdown_request(request)
+            if not control:
+                self.proxy_server._admission.release()
 
 
 # ---------------------------------------------------------------------------
@@ -2948,6 +2970,9 @@ class ProxyServer:
         self._last_lock = threading.Lock()
         self._server: Optional[_ThreadedHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
+        self._admission_limit = max(1, int(os.environ.get("TOKENPAK_MANAGED_ADMISSION", "16")))
+        self._admission = threading.BoundedSemaphore(self._admission_limit)
+        self._admission_rejected = 0
         # Rolling window of per-request compression ratios (last 100)
         self._compression_ratios: deque = deque(maxlen=100)
         self._compression_lock = threading.Lock()
@@ -3172,6 +3197,11 @@ class ProxyServer:
             "is_degraded": is_degraded,
             "is_shutting_down": is_shutting_down,
             "in_flight_requests": self.shutdown.in_flight_count(),
+            "admission": {
+                "limit": self._admission_limit,
+                "available": self._admission._value,
+                "rejected": self._admission_rejected,
+            },
             "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "connection_pool": {
                 "http2_enabled": self._connection_pool.http2_enabled,
