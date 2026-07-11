@@ -52,3 +52,12 @@ def test_control_plane_is_not_admission_gated():
     finally:
         client.close()
         proxy._admission.release()
+
+
+def test_admission_recovers_after_capacity_is_released():
+    proxy = _Proxy()
+    assert proxy._admission.acquire(False)
+    assert not proxy._admission.acquire(False)
+    proxy._admission.release()
+    assert proxy._admission.acquire(False)
+    proxy._admission.release()
