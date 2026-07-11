@@ -480,32 +480,47 @@ class _ThreadedHTTPServer(HTTPServer):
         first_line = b""
         try:
             request.settimeout(0.25)
-            first_line = request.recv(4096, socket.MSG_PEEK).split(b"\r\n", 1)[0]
+            peeked = request.recv(8192, socket.MSG_PEEK)
+            first_line = peeked.split(b"\r\n", 1)[0]
         except (OSError, ValueError):
+            peeked = b""
             pass
         finally:
             request.settimeout(None)
-        path = first_line.split(b" ", 2)[1].decode("latin-1", "ignore") if len(first_line.split(b" ", 2)) > 1 else ""
+        parts = first_line.split(b" ", 2)
+        path = parts[1].decode("latin-1", "ignore") if len(parts) > 1 else ""
         control = path == "/health" or path.startswith("/health?") or path in {"/status", "/metrics"} or path.startswith("/tpk/v1/") or path.startswith("/pak/v1/")
-        if not control and not self.proxy_server._admission.acquire(blocking=False):
+        managed = False
+        if not control and path.startswith("/v1/messages"):
+            from tokenpak.proxy.spend_guard.classifier import MANAGED, classify
+            headers = {}
+            for line in peeked.split(b"\r\n")[1:]:
+                if not line:
+                    break
+                key, sep, value = line.partition(b":")
+                if sep:
+                    headers[key.decode("latin-1")] = value.decode("latin-1").strip()
+            managed = classify(headers).request_class == MANAGED
+        admitted = managed and self.proxy_server._admission.acquire(blocking=False)
+        if managed and not admitted:
             try:
                 request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 46\r\nConnection: close\r\n\r\n{\"error\":\"managed_admission_capacity\"}")
             finally:
                 self.shutdown_request(request)
             self.proxy_server._admission_rejected += 1
             return
-        t = threading.Thread(target=self._handle, args=(request, client_address, control))
+        t = threading.Thread(target=self._handle, args=(request, client_address, managed))
         t.daemon = True
         t.start()
 
-    def _handle(self, request, client_address, control=False):
+    def _handle(self, request, client_address, managed=False):
         try:
             self.finish_request(request, client_address)
         except Exception:
             self.handle_error(request, client_address)
         finally:
             self.shutdown_request(request)
-            if not control:
+            if managed:
                 self.proxy_server._admission.release()
 
 
