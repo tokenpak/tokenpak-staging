@@ -158,14 +158,19 @@ def _stub_setup(monkeypatch, tmp_path):
     )
 
     cfg = _FakeConfig(tmp_path / "journal")
-    monkeypatch.setattr(
-        launcher.CompanionConfig, "from_env", classmethod(lambda cls: cfg)
-    )
+    monkeypatch.setattr(launcher.CompanionConfig, "from_env", classmethod(lambda cls: cfg))
     monkeypatch.setattr(rates_snapshot, "refresh", lambda: tmp_path / "rates.json")
     monkeypatch.setattr(mcp_config, "get_env_vars", lambda config: {})
     monkeypatch.setattr(mcp_config, "register", lambda env_vars=None: True)
-    monkeypatch.setattr(agents_md, "install_agents_md", lambda target="global": tmp_path / "AGENTS.md")
+    monkeypatch.setattr(
+        agents_md, "install_agents_md", lambda target="global": tmp_path / "AGENTS.md"
+    )
     monkeypatch.setattr(skills_installer, "install_skills", lambda target_dir=None: [])
+    monkeypatch.setattr(
+        launcher,
+        "_launcher_mode_state",
+        lambda: ("inherit", None),
+    )
 
 
 def test_main_aborts_when_preflight_blocks(monkeypatch, tmp_path):
@@ -212,6 +217,38 @@ def test_main_execs_when_preflight_clear(monkeypatch, tmp_path):
         launcher.main([])
     assert captured["file"] == "codex"
     assert captured["argv"][0] == "codex"
+
+
+def test_main_applies_launcher_default_before_exec(monkeypatch, tmp_path, capsys):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
+    monkeypatch.setattr(
+        launcher,
+        "_launcher_mode_state",
+        lambda: ("sandbox-bypass", None),
+    )
+    captured = {}
+
+    class _Exec(Exception):
+        pass
+
+    def _fake_exec(file, argv, env):
+        captured["file"] = file
+        captured["argv"] = argv
+        raise _Exec
+
+    monkeypatch.setattr(launcher.os, "execvpe", _fake_exec)
+    with pytest.raises(_Exec):
+        launcher.main(["--foo"])
+    assert captured["argv"] == [
+        "codex",
+        "--sandbox",
+        "danger-full-access",
+        "--foo",
+    ]
+    stderr = capsys.readouterr().err
+    assert "codex launcher mode sandbox-bypass active" in stderr
+    assert "--sandbox danger-full-access" in stderr
 
 
 # ── explicit no-body accounting receipt mode ───────────────────────────
@@ -312,13 +349,9 @@ def test_codex_manual_namespace_preserves_receipt_only_flag():
     assert ns.args == ["--version"]
 
 
-def test_main_receipt_mode_runs_child_and_writes_no_body_receipt(
-    monkeypatch, tmp_path
-):
+def test_main_receipt_mode_runs_child_and_writes_no_body_receipt(monkeypatch, tmp_path):
     _stub_setup(monkeypatch, tmp_path)
     monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
-    monkeypatch.setattr(launcher, "_fleet_state_enabled", lambda: False)
-
     captured = {}
 
     def _fake_run(argv, env=None):
@@ -383,6 +416,7 @@ def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(
     monkeypatch.setattr(mcp_config, "register", _setup_must_not_run)
     monkeypatch.setattr(agents_md, "install_agents_md", _setup_must_not_run)
     monkeypatch.setattr(skills_installer, "install_skills", _setup_must_not_run)
+    monkeypatch.setattr(launcher, "_launcher_mode_state", _setup_must_not_run)
     monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
     monkeypatch.setenv("TOKENPAK_COMPANION_PROFILE", "aggressive")
     monkeypatch.setenv("TOKENPAK_MANAGED", "1")
