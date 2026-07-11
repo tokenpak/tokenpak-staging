@@ -289,6 +289,11 @@ class ConnectionPool:
         self._close_failures = 0
         self._cleanup_worker_start_failures = 0
         self._cleanup_shutdown = False
+        # Worker shutdown is safe only after close() has detached every pool
+        # map and handed every zero-reference client to the cleanup queue.
+        # A final lease release can race with that handoff, so ``_closed``
+        # alone is not a sufficient terminal signal.
+        self._cleanup_handoff_complete = False
         self._closed = False
         # Every constructed client owns one hard slot until close succeeds.
         # This bounds live + pooled + retired + cleanup-owned clients/FDs even
@@ -364,6 +369,11 @@ class ConnectionPool:
         Thread-safe — uses a double-checked lock pattern to avoid holding
         the global lock while constructing the client.
         """
+        # Normal traffic is also the liveness path after transient cleanup
+        # worker-start exhaustion. Kick before taking any pool lock so cleanup
+        # never introduces a reverse lock edge.
+        self._kick_cleanup()
+
         # Keep lookup/create and lease acquisition atomic with eviction. An
         # evicter cannot retire/reap the selected shared client between these
         # steps.
@@ -406,6 +416,7 @@ class ConnectionPool:
         now = time.monotonic() if hasattr(time, "monotonic") else time.time()
         key = (netloc, session_key)
         result: Optional[httpx.Client] = None
+        self._kick_cleanup()
         with self._session_lock:
             if self._closed:
                 raise RuntimeError("connection pool is closed")
@@ -535,6 +546,8 @@ class ConnectionPool:
             has_leases = any(refs > 0 for refs in self._session_client_refs.values())
         if not has_leases:
             with self._close_cv:
+                if not self._cleanup_handoff_complete:
+                    return
                 self._cleanup_shutdown = True
                 self._close_cv.notify_all()
 
@@ -565,6 +578,10 @@ class ConnectionPool:
 
     def _ensure_cleanup_workers_locked(self) -> None:
         """Start the fixed daemon cleanup set. Caller holds ``_close_cv``."""
+        # A worker removes itself under this same condition immediately before
+        # exit. Pruning is still required for unexpected thread termination and
+        # for historical dead entries created by older code/test doubles.
+        self._close_workers = [worker for worker in self._close_workers if worker.is_alive()]
         target = min(_CLOSE_WORKER_COUNT, self._client_slot_limit)
         while len(self._close_workers) < target:
             index = len(self._close_workers)
@@ -573,13 +590,25 @@ class ConnectionPool:
                 name=f"tokenpak-connection-close-{index}",
                 daemon=True,
             )
+            # Append before start while holding _close_cv. A newly started
+            # worker cannot enter its condition section until this lock is
+            # released, and a failed start is removed below.
+            self._close_workers.append(worker)
             try:
                 worker.start()
             except Exception:
+                self._close_workers.remove(worker)
                 self._cleanup_worker_start_failures += 1
                 logger.warning("connection-pool cleanup worker failed to start", exc_info=True)
                 break
-            self._close_workers.append(worker)
+
+    def _kick_cleanup(self) -> None:
+        """Recover cleanup capacity whenever owned backlog is observable."""
+        with self._close_cv:
+            if not self._close_backlog:
+                return
+            self._ensure_cleanup_workers_locked()
+            self._close_cv.notify_all()
 
     def _cleanup_worker(self) -> None:
         """Drain client closes without ever occupying a request-handler thread."""
@@ -588,6 +617,10 @@ class ConnectionPool:
                 while not self._close_backlog and not self._cleanup_shutdown:
                     self._close_cv.wait()
                 if not self._close_backlog and self._cleanup_shutdown:
+                    current = threading.current_thread()
+                    if current in self._close_workers:
+                        self._close_workers.remove(current)
+                    self._close_cv.notify_all()
                     return
                 client = self._close_backlog.popleft()
                 client_id = id(client)
@@ -865,6 +898,9 @@ class ConnectionPool:
 
     def metrics(self) -> dict:
         """Return a copy of the current pool metrics."""
+        # /health calls this surface, making health polling a safe recovery
+        # kick after a transient inability to start cleanup workers.
+        self._kick_cleanup()
         with self._metrics_lock:
             data = self._metrics.to_dict()
         with self._retired_lock:
@@ -963,11 +999,12 @@ class ConnectionPool:
         for client in {id(client): client for client in clients}.values():
             self._schedule_close(client, force=True)
 
-        # A request-path handoff may already own a client in _close_pending
-        # even if its first worker start failed under resource pressure. Such
-        # clients no longer appear in the pool maps, so shutdown must kick the
-        # coordinator independently of the detached-client list.
+        # Publish handoff completion only after all pool maps are detached and
+        # every eligible client is queued. A concurrent final lease release may
+        # observe _closed before this point, but cannot terminate idle cleanup
+        # workers until this flag becomes true.
         with self._close_cv:
+            self._cleanup_handoff_complete = True
             if self._close_pending:
                 self._ensure_cleanup_workers_locked()
                 self._close_cv.notify_all()

@@ -99,7 +99,7 @@ def _half_close_all(server: ThreadingHTTPServer) -> None:
             pass
 
 
-def _owned_tcp_states(pid: int) -> dict[str, int]:
+def _owned_tcp_states(pid: int, remote_port: int | None = None) -> dict[str, int]:
     socket_inodes: set[str] = set()
     for fd in Path(f"/proc/{pid}/fd").iterdir():
         try:
@@ -114,6 +114,10 @@ def _owned_tcp_states(pid: int) -> dict[str, int]:
         fields = raw.split()
         if len(fields) < 10 or fields[9] not in socket_inodes:
             continue
+        if remote_port is not None:
+            observed_port = int(fields[2].rsplit(":", 1)[1], 16)
+            if observed_port != remote_port:
+                continue
         state = fields[3]
         states[state] = states.get(state, 0) + 1
     return states
@@ -130,15 +134,37 @@ def _health(proxy: ProxyProc) -> dict:
         conn.close()
 
 
-def _wait_for_close_wait(pid: int, maximum: int, timeout: float = 2.0) -> int:
+def _wait_for_close_wait(pid: int, remote_port: int, maximum: int, timeout: float = 2.0) -> int:
     deadline = time.monotonic() + timeout
     count = 0
     while time.monotonic() < deadline:
-        count = _owned_tcp_states(pid).get("08", 0)  # Linux TCP_CLOSE_WAIT
+        count = _owned_tcp_states(pid, remote_port).get("08", 0)  # Linux TCP_CLOSE_WAIT
         if 0 < count <= maximum:
             return count
         time.sleep(0.01)
     return count
+
+
+def _wait_for_live_drain(proxy: ProxyProc, remote_port: int, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        health = _health(proxy)
+        metrics = health.get("connection_pool", health.get("pool", {}))
+        close_wait = _owned_tcp_states(proxy.proc.pid, remote_port).get("08", 0)
+        last = {
+            "close_wait": close_wait,
+            "cleanup_pending_close": metrics.get("cleanup_pending_close"),
+            "retired_pending_close": metrics.get("retired_pending_close"),
+        }
+        if last == {
+            "close_wait": 0,
+            "cleanup_pending_close": 0,
+            "retired_pending_close": 0,
+        }:
+            return health
+        time.sleep(0.02)
+    pytest.fail(f"proxy did not drain half-closed sockets while live: {last}")
 
 
 def test_half_closed_upstream_sockets_and_fds_plateau_at_session_cap():
@@ -161,7 +187,7 @@ def test_half_closed_upstream_sockets_and_fds_plateau_at_session_cap():
             statuses = [_post(proxy, index) for index in range(start, start + _CAP)]
             assert statuses == [200] * _CAP
             _half_close_all(upstream)
-            close_wait = _wait_for_close_wait(proxy.proc.pid, _CAP)
+            close_wait = _wait_for_close_wait(proxy.proc.pid, upstream.server_port, _CAP)
             fds = len(list(Path(f"/proc/{proxy.proc.pid}/fd").iterdir()))
             samples.append((close_wait, fds))
 
@@ -181,6 +207,19 @@ def test_half_closed_upstream_sockets_and_fds_plateau_at_session_cap():
         assert metrics["cleanup_pending_close"] == 0
         assert metrics["client_slots_used"] == _CAP
         assert metrics["client_capacity_rejections_total"] == 0
+
+        # Keep the proxy alive and replace the entire final half-closed
+        # generation with fresh sessions. Do not half-close these replacements:
+        # LRU cleanup must make both kernel CLOSE-WAIT and user-space pending
+        # ownership converge to zero without relying on process termination.
+        drain_start = _ROUNDS * _CAP
+        drain_statuses = [_post(proxy, index) for index in range(drain_start, drain_start + _CAP)]
+        assert drain_statuses == [200] * _CAP
+        drained_health = _wait_for_live_drain(proxy, upstream.server_port)
+        assert proxy.proc.poll() is None
+        assert drained_health["status"] == "ok"
+        drained_metrics = drained_health.get("connection_pool", drained_health.get("pool", {}))
+        assert drained_metrics["client_slots_used"] == _CAP
 
         started = time.monotonic()
         proxy.proc.terminate()
