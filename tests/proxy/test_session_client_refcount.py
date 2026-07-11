@@ -17,6 +17,7 @@ These tests pin the lease semantics that keep live clients safe:
 
 from __future__ import annotations
 
+import time
 from typing import Iterator
 
 import httpx
@@ -62,6 +63,13 @@ def _refs(pool: ConnectionPool, client: httpx.Client) -> int:
     return pool._session_client_refs.get(client, 0)
 
 
+def _wait_closed(pool: ConnectionPool, client: httpx.Client, timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not client.is_closed and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert client.is_closed is True
+
+
 # ---------------------------------------------------------------------------
 # Reap pass vs leases
 # ---------------------------------------------------------------------------
@@ -74,11 +82,13 @@ def test_leased_client_survives_idle_reap_pass():
     assert _refs(pool, held) == 1
 
     # Any later checkout triggers the idle reap pass (idle window is 0).
-    pool._get_session_client(NETLOC, "sess-other", checkout=True)
+    other = pool._get_session_client(NETLOC, "sess-other", checkout=True)
 
     assert (NETLOC, "sess-live") in pool._session_clients
     assert pool._session_clients[(NETLOC, "sess-live")][0] is held
     assert held.is_closed is False
+    pool._release_session_client(NETLOC, "sess-live", held)
+    pool._release_session_client(NETLOC, "sess-other", other)
     pool.close()
 
 
@@ -88,11 +98,12 @@ def test_idle_unleased_client_is_closed_promptly():
     pool._release_session_client(NETLOC, "sess-idle", client)
     assert _refs(pool, client) == 0
 
-    pool._get_session_client(NETLOC, "sess-trigger", checkout=True)
+    trigger = pool._get_session_client(NETLOC, "sess-trigger", checkout=True)
 
     assert (NETLOC, "sess-idle") not in pool._session_clients
-    assert client.is_closed is True
+    _wait_closed(pool, client)
     assert pool.metrics()["retired_pending_close"] == 0
+    pool._release_session_client(NETLOC, "sess-trigger", trigger)
     pool.close()
 
 
@@ -109,12 +120,14 @@ def test_idle_retirement_churn_does_not_accumulate_pending_clients():
         client = pool._get_session_client(NETLOC, f"sess-{index}", checkout=True)
         pool._release_session_client(NETLOC, f"sess-{index}", client)
         clients.append(client)
+        if index:
+            _wait_closed(pool, clients[-2])
         assert pool.metrics()["retired_pending_close"] == 0
 
     assert all(client.is_closed for client in clients[:-1])
     assert clients[-1].is_closed is False
     pool.close()
-    assert clients[-1].is_closed is True
+    _wait_closed(pool, clients[-1])
 
 
 def test_expired_retired_client_with_active_lease_is_not_reaped():
@@ -132,7 +145,7 @@ def test_expired_retired_client_with_active_lease_is_not_reaped():
     assert pool.metrics()["retired_pending_close"] == 1
 
     pool._release_session_client(NETLOC, "sess-live", held)
-    assert held.is_closed is True
+    _wait_closed(pool, held)
     assert pool.metrics()["retired_pending_close"] == 0
     pool.close()
 
@@ -152,7 +165,7 @@ def test_entered_stream_survives_retire_reap_until_context_exit():
         response.read()
 
     assert _refs(pool, held) == 0
-    assert held.is_closed is True
+    _wait_closed(pool, held)
     assert pool.metrics()["retired_pending_close"] == 0
     pool.close()
 
@@ -178,7 +191,7 @@ def test_lru_overflow_with_all_leased_does_not_close_live_clients():
 
     # Overflow client is create-and-close-after-use.
     pool._release_session_client(NETLOC, "sess-c", c)
-    assert c.is_closed is True
+    _wait_closed(pool, c)
     assert pool.session_client_snapshot()["overflow_active"] == 0
 
     # Pooled clients stay cached (open) after release.
@@ -194,14 +207,16 @@ def test_lru_evicts_unleased_entry_when_available():
     pool._release_session_client(NETLOC, "sess-a", a)  # unleased → evictable
     b = pool._get_session_client(NETLOC, "sess-b", checkout=True)
 
-    pool._get_session_client(NETLOC, "sess-c", checkout=True)
+    c = pool._get_session_client(NETLOC, "sess-c", checkout=True)
 
     assert (NETLOC, "sess-a") not in pool._session_clients
     assert (NETLOC, "sess-b") in pool._session_clients
     assert (NETLOC, "sess-c") in pool._session_clients
-    assert a.is_closed is True
+    _wait_closed(pool, a)
     assert b.is_closed is False
     assert pool.metrics()["retired_pending_close"] == 0
+    pool._release_session_client(NETLOC, "sess-b", b)
+    pool._release_session_client(NETLOC, "sess-c", c)
     pool.close()
 
 
@@ -265,8 +280,8 @@ def test_request_transport_error_closes_retired_client_after_release():
 
     assert pool._session_client_refs == {}
     assert (NETLOC, "sess-1") not in pool._session_clients
+    _wait_closed(pool, client)
     assert pool.metrics()["retired_pending_close"] == 0
-    assert client.is_closed is True
     pool.close()
 
 
@@ -298,8 +313,8 @@ def test_stream_transport_error_closes_retired_client_after_release():
 
     assert pool._session_client_refs == {}
     assert (NETLOC, "sess-1") not in pool._session_clients
+    _wait_closed(pool, client)
     assert pool.metrics()["retired_pending_close"] == 0
-    assert client.is_closed is True
     pool.close()
 
 
@@ -312,13 +327,19 @@ def test_stream_releases_lease_when_enter_fails():
     pool.close()
 
 
-def test_close_clears_leases_and_overflow():
+def test_close_defers_active_leases_until_final_release():
     pool = _pool(_ok_transport(), session_client_max=1)
     a = pool._get_session_client(NETLOC, "sess-a", checkout=True)
     overflow = pool._get_session_client(NETLOC, "sess-b", checkout=True)
     pool.close()
-    assert a.is_closed is True
-    assert overflow.is_closed is True
+    assert a.is_closed is False
+    assert overflow.is_closed is False
+    assert _refs(pool, a) == 1
+    assert _refs(pool, overflow) == 1
+    pool._release_session_client(NETLOC, "sess-a", a)
+    pool._release_session_client(NETLOC, "sess-b", overflow)
+    _wait_closed(pool, a)
+    _wait_closed(pool, overflow)
     assert pool._session_client_refs == {}
     assert pool._overflow_clients == set()
 
@@ -348,4 +369,5 @@ def test_stream_construction_failure_releases_lease_exactly_once(monkeypatch):
     # prematurely closed.
     assert _refs(pool, held) == 1
     assert held.is_closed is False
+    pool._release_session_client(NETLOC, "sess-1", held)
     pool.close()

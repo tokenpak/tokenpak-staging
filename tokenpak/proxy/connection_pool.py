@@ -54,15 +54,19 @@ With pooling (after first request):
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_CLOSE_WORKER_COUNT = 4
 
 # ---------------------------------------------------------------------------
 # HTTP/2 availability check
@@ -254,8 +258,8 @@ class ConnectionPool:
         # but retired here and closed once the grace period has passed.
         self._retired_clients: List[Tuple[httpx.Client, float]] = []
         self._retired_lock = threading.Lock()
-        # In-use lease counts per session client (identity-keyed, guarded by
-        # _session_lock). last_used is only a checkout stamp, so a client
+        # In-use lease counts for every pooled client (identity-keyed, guarded
+        # by _session_lock). last_used is only a checkout stamp, so a client
         # mid-way through a long stream (per-chunk read timeout is 300s — a
         # legal stream can far exceed the idle window) looks idle to the
         # reaper. The lease count makes in-use clients visible: the reaper
@@ -268,6 +272,38 @@ class ConnectionPool:
         # on release (create-and-close-after-use) instead of closing a live
         # pooled client.
         self._overflow_clients: set = set()
+        # Client.close() is normally fast, but it is transport code and can
+        # wedge. Request handlers therefore enqueue closes onto a small fixed
+        # daemon-worker set instead of running them inline. The outstanding
+        # set is capped during normal operation; once saturated, checkout
+        # fails fast instead of creating more clients/FDs. Shutdown may enqueue
+        # every already-owned client, but never creates one thread per client.
+        self._close_cv = threading.Condition()
+        self._close_backlog: Deque[Any] = deque()
+        self._close_pending: Dict[int, Any] = {}
+        self._close_pending_since: Dict[int, float] = {}
+        self._close_in_progress: set[int] = set()
+        self._close_attempts: Dict[int, int] = {}
+        self._close_workers: List[threading.Thread] = []
+        self._close_completed = 0
+        self._close_failures = 0
+        self._cleanup_worker_start_failures = 0
+        self._cleanup_shutdown = False
+        # Worker shutdown is safe only after close() has detached every pool
+        # map and handed every zero-reference client to the cleanup queue.
+        # A final lease release can race with that handoff, so ``_closed``
+        # alone is not a sufficient terminal signal.
+        self._cleanup_handoff_complete = False
+        self._closed = False
+        # Every constructed client owns one hard slot until close succeeds.
+        # This bounds live + pooled + retired + cleanup-owned clients/FDs even
+        # if all cleanup workers wedge. The close queue therefore always has
+        # room to take ownership of an existing client and never drops one.
+        self._client_slot_limit = max(8, self._config.session_client_max * 2)
+        self._client_slots = threading.BoundedSemaphore(self._client_slot_limit)
+        self._client_slot_lock = threading.Lock()
+        self._client_slot_clients: Dict[int, Any] = {}
+        self._client_slot_rejections = 0
 
     # ------------------------------------------------------------------
     # Client management
@@ -298,24 +334,59 @@ class ConnectionPool:
             verify=True,  # enforce TLS certificate validation
         )
 
-    def _get_client(self, netloc: str) -> httpx.Client:
+    def _new_client(self) -> httpx.Client:
+        """Construct one client under the pool-wide hard resource bound."""
+        if not self._client_slots.acquire(blocking=False):
+            with self._client_slot_lock:
+                self._client_slot_rejections += 1
+            raise httpx.PoolTimeout("connection client-slot cap is saturated")
+        try:
+            client = self._make_client()
+        except Exception:
+            self._client_slots.release()
+            raise
+        with self._client_slot_lock:
+            client_id = id(client)
+            if client_id in self._client_slot_clients:
+                # Test doubles may deliberately return the same object more
+                # than once; one object owns exactly one permit.
+                self._client_slots.release()
+            else:
+                self._client_slot_clients[client_id] = client
+        return client
+
+    def _release_client_slot(self, client: Any) -> None:
+        """Release a constructed client's permit exactly once after close."""
+        with self._client_slot_lock:
+            if self._client_slot_clients.pop(id(client), None) is None:
+                return
+        self._client_slots.release()
+
+    def _get_client(self, netloc: str, checkout: bool = False) -> httpx.Client:
         """
         Return (or lazily create) the ``httpx.Client`` for *netloc*.
 
         Thread-safe — uses a double-checked lock pattern to avoid holding
         the global lock while constructing the client.
         """
-        # Fast path — client already exists
-        client = self._clients.get(netloc)
-        if client is not None:
-            return client
+        # Normal traffic is also the liveness path after transient cleanup
+        # worker-start exhaustion. Kick before taking any pool lock so cleanup
+        # never introduces a reverse lock edge.
+        self._kick_cleanup()
 
-        # Slow path — create under lock
+        # Keep lookup/create and lease acquisition atomic with eviction. An
+        # evicter cannot retire/reap the selected shared client between these
+        # steps.
         with self._lock:
-            # Re-check after acquiring lock (another thread may have created it)
+            if self._closed:
+                raise RuntimeError("connection pool is closed")
             if netloc not in self._clients:
-                self._clients[netloc] = self._make_client()
-            return self._clients[netloc]
+                self._clients[netloc] = self._new_client()
+            client = self._clients[netloc]
+            if checkout:
+                with self._session_lock:
+                    self._lease_locked(client)
+            return client
 
     def _get_session_client(
         self, netloc: str, session_key: str, checkout: bool = False
@@ -344,9 +415,17 @@ class ConnectionPool:
         cfg = self._config
         now = time.monotonic() if hasattr(time, "monotonic") else time.time()
         key = (netloc, session_key)
-        close_after_unlock: List[httpx.Client] = []
         result: Optional[httpx.Client] = None
+        self._kick_cleanup()
         with self._session_lock:
+            if self._closed:
+                raise RuntimeError("connection pool is closed")
+            # Retry any overflow close that previously hit the bounded cleanup
+            # cap. Keeping it tracked here prevents an FD from being dropped.
+            for client in list(self._overflow_clients):
+                if self._session_client_refs.get(client, 0) <= 0 and self._schedule_close(client):
+                    self._overflow_clients.discard(client)
+
             # Reap idle clients. Leased clients are skipped outright:
             # "idle" plus an active lease means a long-running request, not
             # reclaimable garbage. A zero-reference client has no in-flight
@@ -358,8 +437,9 @@ class ConnectionPool:
                 if last < idle_cutoff and self._session_client_refs.get(c, 0) <= 0
             ]
             for k in stale_keys:
-                client, _ = self._session_clients.pop(k)
-                close_after_unlock.append(client)
+                client, _ = self._session_clients[k]
+                if self._schedule_close(client):
+                    self._session_clients.pop(k, None)
 
             entry = self._session_clients.get(key)
             if entry is not None:
@@ -383,28 +463,30 @@ class ConnectionPool:
                             # Every pooled client is mid-request. Hand out a
                             # temporary overflow client rather than closing a
                             # live one; release closes the overflow client.
-                            result = self._make_client()
+                            if len(self._overflow_clients) >= cfg.session_client_max:
+                                raise httpx.PoolTimeout("session overflow client cap is saturated")
+                            result = self._new_client()
                             self._overflow_clients.add(result)
                             self._lease_locked(result)
                             break
-                        # Legacy peek caller at cap with everything leased:
-                        # retire the LRU entry behind the lease-aware reaper.
-                        evictable = list(self._session_clients.items())
+                        # A non-leased private peek has no release callback and
+                        # therefore cannot safely displace a live client.
+                        raise httpx.PoolTimeout("all session clients are leased")
                     oldest_key = min(evictable, key=lambda kv: kv[1][1])[0]
-                    client, _ = self._session_clients.pop(oldest_key)
+                    client, _ = self._session_clients[oldest_key]
                     if self._session_client_refs.get(client, 0) > 0:
                         self._retire(client)
+                        self._session_clients.pop(oldest_key, None)
                     else:
-                        close_after_unlock.append(client)
+                        if not self._schedule_close(client):
+                            raise httpx.PoolTimeout("connection cleanup unavailable")
+                        self._session_clients.pop(oldest_key, None)
 
                 if result is None:
-                    result = self._make_client()
+                    result = self._new_client()
                     self._session_clients[key] = (result, now)
                     if checkout:
                         self._lease_locked(result)
-
-        for client in close_after_unlock:
-            self._close_client(client)
         assert result is not None
         return result
 
@@ -423,7 +505,6 @@ class ConnectionPool:
         evicted/retired clients are left to the retire/grace machinery.
         """
         key = (netloc, session_key)
-        close_now = False
         close_retired_now = False
         with self._session_lock:
             refs = self._session_client_refs.get(client, 0) - 1
@@ -435,14 +516,40 @@ class ConnectionPool:
             if entry is not None and entry[0] is client:
                 self._session_clients[key] = (client, time.monotonic())
             elif refs <= 0 and client in self._overflow_clients:
-                self._overflow_clients.discard(client)
-                close_now = True
+                if self._schedule_close(client):
+                    self._overflow_clients.discard(client)
             elif refs <= 0:
                 close_retired_now = True
-        if close_now:
-            self._close_client(client)
         if close_retired_now:
             self._close_retired_client_now(client)
+        self._maybe_finish_cleanup_shutdown()
+
+    def _release_client(self, client: httpx.Client) -> None:
+        """Release a lease on a non-session shared client."""
+        close_retired_now = False
+        with self._session_lock:
+            refs = self._session_client_refs.get(client, 0) - 1
+            if refs > 0:
+                self._session_client_refs[client] = refs
+            else:
+                self._session_client_refs.pop(client, None)
+                close_retired_now = True
+        if close_retired_now:
+            self._close_retired_client_now(client)
+        self._maybe_finish_cleanup_shutdown()
+
+    def _maybe_finish_cleanup_shutdown(self) -> None:
+        """Let fixed workers exit once a closed pool has no live leases."""
+        if not self._closed:
+            return
+        with self._session_lock:
+            has_leases = any(refs > 0 for refs in self._session_client_refs.values())
+        if not has_leases:
+            with self._close_cv:
+                if not self._cleanup_handoff_complete:
+                    return
+                self._cleanup_shutdown = True
+                self._close_cv.notify_all()
 
     def _touch_session(self, netloc: str, session_key: str) -> None:
         """Re-stamp a session client's last_used after a request completes,
@@ -457,29 +564,128 @@ class ConnectionPool:
     def _retire(self, client: httpx.Client) -> None:
         """Queue *client* to be closed after the in-flight grace period."""
         with self._retired_lock:
-            self._retired_clients.append((client, time.monotonic()))
+            if not any(retired is client for retired, _ in self._retired_clients):
+                self._retired_clients.append((client, time.monotonic()))
 
-    def _close_client(self, client: httpx.Client) -> None:
-        """Close one client without letting cleanup failure escape."""
+    def _close_client(self, client: httpx.Client) -> bool:
+        """Close one client and report success without raising."""
         try:
             client.close()
+            return True
         except Exception:
             logger.warning("connection-pool client close failed", exc_info=True)
+            return False
+
+    def _ensure_cleanup_workers_locked(self) -> None:
+        """Start the fixed daemon cleanup set. Caller holds ``_close_cv``."""
+        # A worker removes itself under this same condition immediately before
+        # exit. Pruning is still required for unexpected thread termination and
+        # for historical dead entries created by older code/test doubles.
+        self._close_workers = [worker for worker in self._close_workers if worker.is_alive()]
+        target = min(_CLOSE_WORKER_COUNT, self._client_slot_limit)
+        while len(self._close_workers) < target:
+            index = len(self._close_workers)
+            worker = threading.Thread(
+                target=self._cleanup_worker,
+                name=f"tokenpak-connection-close-{index}",
+                daemon=True,
+            )
+            # Append before start while holding _close_cv. A newly started
+            # worker cannot enter its condition section until this lock is
+            # released, and a failed start is removed below.
+            self._close_workers.append(worker)
+            try:
+                worker.start()
+            except Exception:
+                self._close_workers.remove(worker)
+                self._cleanup_worker_start_failures += 1
+                logger.warning("connection-pool cleanup worker failed to start", exc_info=True)
+                break
+
+    def _kick_cleanup(self) -> None:
+        """Recover cleanup capacity whenever owned backlog is observable."""
+        with self._close_cv:
+            if not self._close_backlog:
+                return
+            self._ensure_cleanup_workers_locked()
+            self._close_cv.notify_all()
+
+    def _cleanup_worker(self) -> None:
+        """Drain client closes without ever occupying a request-handler thread."""
+        while True:
+            with self._close_cv:
+                while not self._close_backlog and not self._cleanup_shutdown:
+                    self._close_cv.wait()
+                if not self._close_backlog and self._cleanup_shutdown:
+                    current = threading.current_thread()
+                    if current in self._close_workers:
+                        self._close_workers.remove(current)
+                    self._close_cv.notify_all()
+                    return
+                client = self._close_backlog.popleft()
+                client_id = id(client)
+                self._close_in_progress.add(client_id)
+                attempt = self._close_attempts.get(client_id, 0) + 1
+                self._close_attempts[client_id] = attempt
+            succeeded = self._close_client(client)
+            with self._close_cv:
+                self._close_in_progress.discard(client_id)
+                if succeeded:
+                    self._close_pending.pop(client_id, None)
+                    self._close_pending_since.pop(client_id, None)
+                    self._close_attempts.pop(client_id, None)
+                    self._close_completed += 1
+                    self._release_client_slot(client)
+                else:
+                    self._close_failures += 1
+                self._close_cv.notify_all()
+            if not succeeded:
+                time.sleep(min(1.0, 0.01 * (2 ** min(attempt - 1, 7))))
+                with self._close_cv:
+                    if client_id in self._close_pending:
+                        self._close_backlog.append(client)
+                        self._close_cv.notify()
+
+    def _schedule_close(self, client: httpx.Client, *, force: bool = False) -> bool:
+        """Enqueue one idempotent close on fixed workers.
+
+        Every existing client already owns a hard construction permit, so the
+        deduplicated cleanup registry can always accept it. ``force`` remains
+        accepted for compatibility with the shutdown caller but does not alter
+        lease eligibility.
+        """
+        try:
+            if client.is_closed:
+                self._release_client_slot(client)
+                return True
+        except Exception:
+            pass
+        with self._close_cv:
+            client_id = id(client)
+            if client_id in self._close_pending:
+                # A prior start attempt may have failed during thread/resource
+                # exhaustion. Every duplicate handoff is a recovery kick.
+                self._ensure_cleanup_workers_locked()
+                self._close_cv.notify()
+                return True
+            self._close_pending[client_id] = client
+            self._close_pending_since[client_id] = time.monotonic()
+            self._close_backlog.append(client)
+            self._ensure_cleanup_workers_locked()
+            self._close_cv.notify()
+            return True
 
     def _close_retired_client_now(self, client: httpx.Client) -> None:
         """Close *client* immediately if it is retired and no longer leased."""
-        close_now = False
         with self._retired_lock:
             keep: List[Tuple[httpx.Client, float]] = []
             for retired_client, retired_at in self._retired_clients:
                 if retired_client is client:
-                    close_now = True
+                    if not self._schedule_close(client):
+                        keep.append((retired_client, retired_at))
                 else:
                     keep.append((retired_client, retired_at))
-            if close_now:
-                self._retired_clients = keep
-        if close_now:
-            self._close_client(client)
+            self._retired_clients = keep
 
     def _evict_client(self, netloc: str, session_key: Optional[str], client: httpx.Client) -> bool:
         """
@@ -518,21 +724,17 @@ class ConnectionPool:
     def _reap_retired(self, force: bool = False) -> None:
         """Close retired clients whose in-flight grace period has passed."""
         cutoff = time.monotonic() - self._config.retire_close_grace_seconds
-        leased: set[httpx.Client] = set()
-        if not force:
-            with self._session_lock:
-                leased = {client for client, refs in self._session_client_refs.items() if refs > 0}
-        to_close: List[httpx.Client] = []
+        with self._session_lock:
+            leased = {client for client, refs in self._session_client_refs.items() if refs > 0}
         with self._retired_lock:
             keep: List[Tuple[httpx.Client, float]] = []
             for client, retired_at in self._retired_clients:
                 if (force or retired_at <= cutoff) and client not in leased:
-                    to_close.append(client)
+                    if not self._schedule_close(client, force=force):
+                        keep.append((client, retired_at))
                 else:
                     keep.append((client, retired_at))
             self._retired_clients = keep
-        for client in to_close:
-            self._close_client(client)
 
     # ------------------------------------------------------------------
     # Public request interface
@@ -574,7 +776,7 @@ class ConnectionPool:
         client = (
             self._get_session_client(netloc, session_key, checkout=True)
             if session_key
-            else self._get_client(netloc)
+            else self._get_client(netloc, checkout=True)
         )
 
         with self._metrics_lock:
@@ -613,6 +815,8 @@ class ConnectionPool:
             # last_used (subsumes the success-path _touch_session call).
             if session_key:
                 self._release_session_client(netloc, session_key, client)
+            else:
+                self._release_client(client)
 
     def stream(
         self,
@@ -646,8 +850,10 @@ class ConnectionPool:
             def on_release() -> None:
                 self._release_session_client(netloc, session_key, client)
         else:
-            client = self._get_client(netloc)
-            on_release = None
+            client = self._get_client(netloc, checkout=True)
+
+            def on_release() -> None:
+                self._release_client(client)
 
         with self._metrics_lock:
             self._metrics.total_requests += 1
@@ -692,10 +898,51 @@ class ConnectionPool:
 
     def metrics(self) -> dict:
         """Return a copy of the current pool metrics."""
+        # /health calls this surface, making health polling a safe recovery
+        # kick after a transient inability to start cleanup workers.
+        self._kick_cleanup()
         with self._metrics_lock:
             data = self._metrics.to_dict()
         with self._retired_lock:
-            data["retired_pending_close"] = len(self._retired_clients)
+            retired = len(self._retired_clients)
+        now = time.monotonic()
+        with self._close_cv:
+            cleanup_pending = len(self._close_pending)
+            cleanup_queued = len(self._close_backlog)
+            cleanup_in_progress = len(self._close_in_progress)
+            oldest = (
+                max(0.0, now - min(self._close_pending_since.values()))
+                if self._close_pending_since
+                else 0.0
+            )
+            data.update(
+                {
+                    "cleanup_pending_close": cleanup_pending,
+                    "cleanup_queued": cleanup_queued,
+                    "cleanup_in_progress": cleanup_in_progress,
+                    "cleanup_retrying": max(
+                        0, cleanup_pending - cleanup_queued - cleanup_in_progress
+                    ),
+                    "cleanup_failures_total": self._close_failures,
+                    "cleanup_worker_start_failures_total": (self._cleanup_worker_start_failures),
+                    "cleanup_completed_total": self._close_completed,
+                    "cleanup_oldest_pending_seconds": round(oldest, 3),
+                    "cleanup_workers_alive": sum(
+                        worker.is_alive() for worker in self._close_workers
+                    ),
+                }
+            )
+        with self._client_slot_lock:
+            slots_used = len(self._client_slot_clients)
+            data.update(
+                {
+                    "client_slots_used": slots_used,
+                    "client_slots_max": self._client_slot_limit,
+                    "client_capacity_rejections_total": self._client_slot_rejections,
+                    "cleanup_saturated": slots_used >= self._client_slot_limit,
+                }
+            )
+        data["retired_pending_close"] = retired + cleanup_pending
         return data
 
     def reset_metrics(self) -> None:
@@ -709,47 +956,72 @@ class ConnectionPool:
 
     def close(self) -> None:
         """Close all pooled clients within the configured shutdown bound."""
-        clients: List[httpx.Client] = []
+        started = time.monotonic()
+        configured_timeout = self._config.close_timeout_seconds
+        timeout = (
+            configured_timeout
+            if math.isfinite(configured_timeout) and configured_timeout > 0.0
+            else 0.0
+        )
+        deadline = started + timeout
+        self._closed = True
+
+        clients: List[Any] = []
+        # Selection, lease visibility, and active retirement are atomic with
+        # every checkout path. Active requests/streams are never force-closed;
+        # their final release performs the cleanup handoff.
         with self._lock:
-            clients.extend(self._clients.values())
-            self._clients.clear()
-        with self._session_lock:
-            clients.extend(client for client, _ in self._session_clients.values())
-            self._session_clients.clear()
-            clients.extend(self._overflow_clients)
-            self._overflow_clients.clear()
-            self._session_client_refs.clear()
+            with self._session_lock:
+                pooled = list(self._clients.values())
+                pooled.extend(client for client, _ in self._session_clients.values())
+                pooled.extend(self._overflow_clients)
+                leased = {client for client, refs in self._session_client_refs.items() if refs > 0}
+                for client in pooled:
+                    if client in leased:
+                        self._retire(client)
+                    else:
+                        clients.append(client)
+                self._clients.clear()
+                self._session_clients.clear()
+                self._overflow_clients.clear()
+
+        # Retired clients with no live lease move to cleanup; active ones stay
+        # visible until final release. Do not clear positive refcounts.
         with self._retired_lock:
-            clients.extend(client for client, _ in self._retired_clients)
-            self._retired_clients.clear()
+            keep: List[Tuple[httpx.Client, float]] = []
+            for client, retired_at in self._retired_clients:
+                if client in leased:
+                    keep.append((client, retired_at))
+                else:
+                    clients.append(client)
+            self._retired_clients = keep
 
-        # httpx close is normally local and immediate, but a wedged transport
-        # must not hold process shutdown past the service stop deadline. Detach
-        # pool state first, then let a daemon cleanup worker finish best-effort.
-        unique_clients = list({id(client): client for client in clients}.values())
-        if not unique_clients:
-            return
+        for client in {id(client): client for client in clients}.values():
+            self._schedule_close(client, force=True)
 
-        closers = [
-            threading.Thread(
-                target=self._close_client,
-                args=(client,),
-                name=f"tokenpak-connection-pool-close-{index}",
-                daemon=True,
-            )
-            for index, client in enumerate(unique_clients)
-        ]
-        for closer in closers:
-            closer.start()
-        deadline = time.monotonic() + max(0.0, self._config.close_timeout_seconds)
-        for closer in closers:
-            closer.join(timeout=max(0.0, deadline - time.monotonic()))
-        pending = sum(closer.is_alive() for closer in closers)
+        # Publish handoff completion only after all pool maps are detached and
+        # every eligible client is queued. A concurrent final lease release may
+        # observe _closed before this point, but cannot terminate idle cleanup
+        # workers until this flag becomes true.
+        with self._close_cv:
+            self._cleanup_handoff_complete = True
+            if self._close_pending:
+                self._ensure_cleanup_workers_locked()
+                self._close_cv.notify_all()
+
+        self._maybe_finish_cleanup_shutdown()
+        with self._close_cv:
+            while self._close_pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                self._close_cv.wait(timeout=remaining)
+            pending = len(self._close_pending)
         if pending:
             logger.warning(
                 "connection-pool close exceeded %.3fs for %d client(s); "
-                "cleanup continues in daemon threads",
-                self._config.close_timeout_seconds,
+                "fixed daemon cleanup continues",
+                timeout,
                 pending,
             )
 
