@@ -483,6 +483,8 @@ class _ThreadedHTTPServer(HTTPServer):
             first_line = request.recv(4096, socket.MSG_PEEK).split(b"\r\n", 1)[0]
         except (OSError, ValueError):
             pass
+        finally:
+            request.settimeout(None)
         path = first_line.split(b" ", 2)[1].decode("latin-1", "ignore") if len(first_line.split(b" ", 2)) > 1 else ""
         control = path == "/health" or path.startswith("/health?") or path in {"/status", "/metrics"} or path.startswith("/tpk/v1/") or path.startswith("/pak/v1/")
         if not control and not self.proxy_server._admission.acquire(blocking=False):
