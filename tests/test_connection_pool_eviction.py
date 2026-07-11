@@ -18,6 +18,8 @@ Covers:
 from __future__ import annotations
 
 import os
+import threading
+import time
 from typing import Iterator
 from unittest.mock import patch
 
@@ -74,6 +76,7 @@ def _pool_with_transport(transport: httpx.BaseTransport, **cfg_kwargs) -> Connec
 # ---------------------------------------------------------------------------
 # request() path
 # ---------------------------------------------------------------------------
+
 
 def test_request_transport_error_evicts_client():
     transport = _FlakyTransport(fail_times=1)
@@ -171,9 +174,56 @@ def test_stale_reference_does_not_evict_replacement():
     pool.close()
 
 
+def test_close_cannot_miss_concurrent_client_retirement(monkeypatch):
+    """Regression: shutdown and eviction cannot strand a post-close retire."""
+    pool = _pool_with_transport(
+        _FlakyTransport(fail_times=0),
+        retire_close_grace_seconds=3600.0,
+    )
+    client = pool._get_client(NETLOC)
+    retire_entered = threading.Event()
+    allow_retire = threading.Event()
+    original_retire = pool._retire
+
+    def paused_retire(retired_client):
+        retire_entered.set()
+        allow_retire.wait()
+        original_retire(retired_client)
+
+    monkeypatch.setattr(pool, "_retire", paused_retire)
+    evicter = threading.Thread(
+        target=pool._evict_client,
+        args=(NETLOC, None, client),
+        daemon=True,
+    )
+    closer = None
+    try:
+        evicter.start()
+        assert retire_entered.wait(timeout=1.0)
+
+        closer = threading.Thread(target=pool.close, daemon=True)
+        closer.start()
+        closer.join(timeout=0.05)
+        allow_retire.set()
+        evicter.join(timeout=1.0)
+        closer.join(timeout=1.0)
+    finally:
+        allow_retire.set()
+        evicter.join(timeout=1.0)
+        if closer is not None:
+            closer.join(timeout=1.0)
+
+    assert evicter.is_alive() is False
+    assert closer is not None
+    assert closer.is_alive() is False
+    assert client.is_closed is True
+    assert pool.metrics()["retired_pending_close"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Retire/close lifecycle
 # ---------------------------------------------------------------------------
+
 
 def test_retired_client_kept_open_during_grace_then_closed():
     transport = _FlakyTransport(fail_times=1)
@@ -210,6 +260,7 @@ def test_retired_client_closed_after_grace_expiry():
 # ---------------------------------------------------------------------------
 # Streaming path
 # ---------------------------------------------------------------------------
+
 
 def test_streaming_connect_failure_evicts():
     transport = _FlakyTransport(fail_times=1)
@@ -271,9 +322,9 @@ def test_streaming_downstream_error_does_not_evict():
 # Session reaper / LRU disposal safety
 # ---------------------------------------------------------------------------
 
-def test_idle_reap_retires_instead_of_closing():
-    """An idle-looking session client may be mid-way through a long stream
-    (last_used is a checkout stamp) — the reaper must retire, not close."""
+
+def test_idle_reap_closes_zero_reference_client_promptly():
+    """An idle client with no active lease must not wait for retire grace."""
     transport = _FlakyTransport(fail_times=0)
     pool = _pool_with_transport(
         transport, session_client_idle_seconds=0.0, retire_close_grace_seconds=3600.0
@@ -284,24 +335,79 @@ def test_idle_reap_retires_instead_of_closing():
     pool._get_session_client(NETLOC, "sess-new")
 
     assert (NETLOC, "sess-old") not in pool._session_clients
-    assert first.is_closed is False, "reaped client must stay open for in-flights"
-    assert pool.metrics()["retired_pending_close"] >= 1
-    pool.close()
     assert first.is_closed is True
+    assert pool.metrics()["retired_pending_close"] == 0
+    pool.close()
 
 
-def test_lru_eviction_retires_instead_of_closing():
+def test_lru_eviction_closes_zero_reference_client_promptly():
     transport = _FlakyTransport(fail_times=0)
-    pool = _pool_with_transport(
-        transport, session_client_max=1, retire_close_grace_seconds=3600.0
-    )
+    pool = _pool_with_transport(transport, session_client_max=1, retire_close_grace_seconds=3600.0)
     first = pool._get_session_client(NETLOC, "sess-a")
     pool._get_session_client(NETLOC, "sess-b")  # cap 1 → LRU-evicts sess-a
 
     assert (NETLOC, "sess-a") not in pool._session_clients
-    assert first.is_closed is False
-    pool.close()
     assert first.is_closed is True
+    assert pool.metrics()["retired_pending_close"] == 0
+    pool.close()
+
+
+def test_close_returns_within_configured_bound_when_client_close_hangs():
+    """Regression: pool shutdown must not inherit a stuck transport close."""
+    entered = threading.Event()
+    release = threading.Event()
+    blocking_done = threading.Event()
+    blocking_close_was_daemon = []
+
+    class _BlockingCloseClient:
+        def close(self):
+            blocking_close_was_daemon.append(threading.current_thread().daemon)
+            entered.set()
+            release.wait(timeout=5.0)
+            blocking_done.set()
+
+    class _FastCloseClient:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    pool = ConnectionPool(PoolConfig(http2=False, close_timeout_seconds=0.05))
+    pool._clients[NETLOC] = _BlockingCloseClient()  # type: ignore[assignment]
+    fast = _FastCloseClient()
+    pool._clients["other.test"] = fast  # type: ignore[assignment]
+    session_lock_acquired = []
+
+    class _SessionLockProbeClient:
+        def close(self):
+            acquired = pool._session_lock.acquire(timeout=0.1)
+            session_lock_acquired.append(acquired)
+            if acquired:
+                pool._session_lock.release()
+
+    probe = _SessionLockProbeClient()
+    pool._session_clients[(NETLOC, "probe")] = (probe, time.monotonic())  # type: ignore[assignment]
+
+    try:
+        started = time.monotonic()
+        pool.close()
+        elapsed = time.monotonic() - started
+
+        assert entered.is_set()
+        assert elapsed < 0.5
+        assert fast.closed is True, "one stuck client must not starve other closes"
+        assert blocking_close_was_daemon == [True]
+        assert session_lock_acquired == [True]
+        assert pool._clients == {}
+        assert pool._lock.acquire(timeout=0.1)
+        pool._lock.release()
+        assert pool._session_lock.acquire(timeout=0.1)
+        pool._session_lock.release()
+        assert pool._retired_lock.acquire(timeout=0.1)
+        pool._retired_lock.release()
+    finally:
+        release.set()
+        assert blocking_done.wait(timeout=1.0)
 
 
 def test_request_completion_restamps_session_last_used():
@@ -325,12 +431,14 @@ def test_request_completion_restamps_session_last_used():
 # Config / metrics surface
 # ---------------------------------------------------------------------------
 
+
 def test_from_env_parses_new_vars():
     env = {
         "TOKENPAK_POOL_CONNECT_TIMEOUT": "5",
         "TOKENPAK_POOL_READ_TIMEOUT": "120",
         "TOKENPAK_POOL_EVICT_ON_TRANSPORT_ERROR": "0",
         "TOKENPAK_POOL_RETIRE_CLOSE_GRACE_SECS": "60",
+        "TOKENPAK_POOL_CLOSE_TIMEOUT_SECS": "1.5",
     }
     with patch.dict(os.environ, env):
         cfg = PoolConfig.from_env()
@@ -338,6 +446,7 @@ def test_from_env_parses_new_vars():
     assert cfg.read_timeout == 120.0
     assert cfg.evict_on_transport_error is False
     assert cfg.retire_close_grace_seconds == 60.0
+    assert cfg.close_timeout_seconds == 1.5
 
 
 def test_from_env_defaults_for_new_vars():
@@ -348,6 +457,7 @@ def test_from_env_defaults_for_new_vars():
             "TOKENPAK_POOL_READ_TIMEOUT",
             "TOKENPAK_POOL_EVICT_ON_TRANSPORT_ERROR",
             "TOKENPAK_POOL_RETIRE_CLOSE_GRACE_SECS",
+            "TOKENPAK_POOL_CLOSE_TIMEOUT_SECS",
         )
     }
     try:
@@ -356,6 +466,7 @@ def test_from_env_defaults_for_new_vars():
         assert cfg.read_timeout == 300.0
         assert cfg.evict_on_transport_error is True
         assert cfg.retire_close_grace_seconds == 900.0
+        assert cfg.close_timeout_seconds == 1.0
     finally:
         for k, v in saved.items():
             if v is not None:

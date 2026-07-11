@@ -35,6 +35,8 @@ Env vars (all optional)
 ``TOKENPAK_POOL_RETIRE_CLOSE_GRACE_SECS``
     Seconds an evicted client is kept open for in-flight requests before
     being closed (default: ``900``).
+``TOKENPAK_POOL_CLOSE_TIMEOUT_SECS``
+    Maximum seconds pool shutdown waits for client close calls (default: ``1``).
 
 Performance impact
 ------------------
@@ -51,6 +53,7 @@ With pooling (after first request):
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -58,6 +61,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # HTTP/2 availability check
@@ -88,9 +93,7 @@ _EVICT_EXCLUDED_ERRORS: tuple = (httpx.PoolTimeout,)
 
 def _is_evictable_transport_error(exc: BaseException) -> bool:
     """True when *exc* suggests the client's pooled connection(s) may be dead."""
-    return isinstance(exc, httpx.TransportError) and not isinstance(
-        exc, _EVICT_EXCLUDED_ERRORS
-    )
+    return isinstance(exc, httpx.TransportError) and not isinstance(exc, _EVICT_EXCLUDED_ERRORS)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +127,8 @@ class PoolConfig:
     retire_close_grace_seconds : float
         How long an evicted client is retained (unclosed) so requests still
         in flight on it can finish before ``close()`` (default: 900).
+    close_timeout_seconds : float
+        Maximum time pool shutdown waits for client close calls (default: 1).
     """
 
     max_connections: int = 20
@@ -134,6 +139,7 @@ class PoolConfig:
     http2: bool = True
     evict_on_transport_error: bool = True
     retire_close_grace_seconds: float = 900.0
+    close_timeout_seconds: float = 1.0
     # Per-session upstream client pool — used when the caller passes a
     # session_key to stream()/request(). Each unique session_key gets its
     # own httpx.Client (and thus its own HTTP/2 connection to upstream),
@@ -160,6 +166,7 @@ class PoolConfig:
             retire_close_grace_seconds=float(
                 os.environ.get("TOKENPAK_POOL_RETIRE_CLOSE_GRACE_SECS", "900")
             ),
+            close_timeout_seconds=float(os.environ.get("TOKENPAK_POOL_CLOSE_TIMEOUT_SECS", "1")),
             session_client_max=int(os.environ.get("TOKENPAK_SESSION_CLIENTS_MAX", "32")),
             session_client_idle_seconds=float(
                 os.environ.get("TOKENPAK_SESSION_CLIENT_IDLE_SECS", "300")
@@ -337,12 +344,13 @@ class ConnectionPool:
         cfg = self._config
         now = time.monotonic() if hasattr(time, "monotonic") else time.time()
         key = (netloc, session_key)
+        close_after_unlock: List[httpx.Client] = []
+        result: Optional[httpx.Client] = None
         with self._session_lock:
-            # Reap idle clients. Retire instead of closing inline: last_used
-            # is a checkout stamp, so a client mid-way through a long stream
-            # can look idle — closing it here corrupts the live request.
-            # Leased clients are skipped outright: "idle" plus an active
-            # lease means a long-running request, not reclaimable garbage.
+            # Reap idle clients. Leased clients are skipped outright:
+            # "idle" plus an active lease means a long-running request, not
+            # reclaimable garbage. A zero-reference client has no in-flight
+            # user, so close it now instead of accumulating it for 900 seconds.
             idle_cutoff = now - cfg.session_client_idle_seconds
             stale_keys = [
                 k
@@ -351,7 +359,7 @@ class ConnectionPool:
             ]
             for k in stale_keys:
                 client, _ = self._session_clients.pop(k)
-                self._retire(client)
+                close_after_unlock.append(client)
 
             entry = self._session_clients.get(key)
             if entry is not None:
@@ -359,46 +367,52 @@ class ConnectionPool:
                 self._session_clients[key] = (client, now)
                 if checkout:
                     self._lease_locked(client)
-                return client
+                result = client
+            else:
+                # Enforce cap — LRU-evict the oldest UNLEASED entry. Leased
+                # entries are never closed; the legacy peek fallback retires
+                # one behind the active-lease guard instead.
+                while len(self._session_clients) >= cfg.session_client_max:
+                    evictable = [
+                        (k, e)
+                        for k, e in self._session_clients.items()
+                        if self._session_client_refs.get(e[0], 0) <= 0
+                    ]
+                    if not evictable:
+                        if checkout:
+                            # Every pooled client is mid-request. Hand out a
+                            # temporary overflow client rather than closing a
+                            # live one; release closes the overflow client.
+                            result = self._make_client()
+                            self._overflow_clients.add(result)
+                            self._lease_locked(result)
+                            break
+                        # Legacy peek caller at cap with everything leased:
+                        # retire the LRU entry behind the lease-aware reaper.
+                        evictable = list(self._session_clients.items())
+                    oldest_key = min(evictable, key=lambda kv: kv[1][1])[0]
+                    client, _ = self._session_clients.pop(oldest_key)
+                    if self._session_client_refs.get(client, 0) > 0:
+                        self._retire(client)
+                    else:
+                        close_after_unlock.append(client)
 
-            # Enforce cap — LRU-evict the oldest UNLEASED entry (retired,
-            # same mid-flight hazard). Leased entries are never evicted.
-            while len(self._session_clients) >= cfg.session_client_max:
-                evictable = [
-                    (k, e)
-                    for k, e in self._session_clients.items()
-                    if self._session_client_refs.get(e[0], 0) <= 0
-                ]
-                if not evictable:
+                if result is None:
+                    result = self._make_client()
+                    self._session_clients[key] = (result, now)
                     if checkout:
-                        # Every pooled client is mid-request. Hand out a
-                        # temporary overflow client rather than closing a
-                        # live one; _release_session_client closes it.
-                        client = self._make_client()
-                        self._overflow_clients.add(client)
-                        self._lease_locked(client)
-                        return client
-                    # Legacy peek caller at cap with everything leased:
-                    # fall back to retiring the LRU entry (grace-close
-                    # still protects any in-flight request on it).
-                    evictable = list(self._session_clients.items())
-                oldest_key = min(evictable, key=lambda kv: kv[1][1])[0]
-                client, _ = self._session_clients.pop(oldest_key)
-                self._retire(client)
+                        self._lease_locked(result)
 
-            client = self._make_client()
-            self._session_clients[key] = (client, now)
-            if checkout:
-                self._lease_locked(client)
-            return client
+        for client in close_after_unlock:
+            self._close_client(client)
+        assert result is not None
+        return result
 
     def _lease_locked(self, client: httpx.Client) -> None:
         """Increment *client*'s in-use lease count. Caller holds _session_lock."""
         self._session_client_refs[client] = self._session_client_refs.get(client, 0) + 1
 
-    def _release_session_client(
-        self, netloc: str, session_key: str, client: httpx.Client
-    ) -> None:
+    def _release_session_client(self, netloc: str, session_key: str, client: httpx.Client) -> None:
         """
         Release a lease taken by ``_get_session_client(..., checkout=True)``.
 
@@ -410,6 +424,7 @@ class ConnectionPool:
         """
         key = (netloc, session_key)
         close_now = False
+        close_retired_now = False
         with self._session_lock:
             refs = self._session_client_refs.get(client, 0) - 1
             if refs > 0:
@@ -422,11 +437,12 @@ class ConnectionPool:
             elif refs <= 0 and client in self._overflow_clients:
                 self._overflow_clients.discard(client)
                 close_now = True
+            elif refs <= 0:
+                close_retired_now = True
         if close_now:
-            try:
-                client.close()
-            except Exception:
-                pass
+            self._close_client(client)
+        if close_retired_now:
+            self._close_retired_client_now(client)
 
     def _touch_session(self, netloc: str, session_key: str) -> None:
         """Re-stamp a session client's last_used after a request completes,
@@ -443,9 +459,29 @@ class ConnectionPool:
         with self._retired_lock:
             self._retired_clients.append((client, time.monotonic()))
 
-    def _evict_client(
-        self, netloc: str, session_key: Optional[str], client: httpx.Client
-    ) -> bool:
+    def _close_client(self, client: httpx.Client) -> None:
+        """Close one client without letting cleanup failure escape."""
+        try:
+            client.close()
+        except Exception:
+            logger.warning("connection-pool client close failed", exc_info=True)
+
+    def _close_retired_client_now(self, client: httpx.Client) -> None:
+        """Close *client* immediately if it is retired and no longer leased."""
+        close_now = False
+        with self._retired_lock:
+            keep: List[Tuple[httpx.Client, float]] = []
+            for retired_client, retired_at in self._retired_clients:
+                if retired_client is client:
+                    close_now = True
+                else:
+                    keep.append((retired_client, retired_at))
+            if close_now:
+                self._retired_clients = keep
+        if close_now:
+            self._close_client(client)
+
+    def _evict_client(self, netloc: str, session_key: Optional[str], client: httpx.Client) -> bool:
         """
         Remove *client* from the pool after a transport error so the next
         checkout builds a fresh client (and therefore fresh connections).
@@ -465,14 +501,15 @@ class ConnectionPool:
                 entry = self._session_clients.get(key)
                 if entry is not None and entry[0] is client:
                     self._session_clients.pop(key)
+                    self._retire(client)
                     evicted = True
         else:
             with self._lock:
                 if self._clients.get(netloc) is client:
                     self._clients.pop(netloc)
+                    self._retire(client)
                     evicted = True
         if evicted:
-            self._retire(client)
             with self._metrics_lock:
                 self._metrics.evicted_clients += 1
         self._reap_retired()
@@ -481,20 +518,21 @@ class ConnectionPool:
     def _reap_retired(self, force: bool = False) -> None:
         """Close retired clients whose in-flight grace period has passed."""
         cutoff = time.monotonic() - self._config.retire_close_grace_seconds
+        leased: set[httpx.Client] = set()
+        if not force:
+            with self._session_lock:
+                leased = {client for client, refs in self._session_client_refs.items() if refs > 0}
         to_close: List[httpx.Client] = []
         with self._retired_lock:
             keep: List[Tuple[httpx.Client, float]] = []
             for client, retired_at in self._retired_clients:
-                if force or retired_at <= cutoff:
+                if (force or retired_at <= cutoff) and client not in leased:
                     to_close.append(client)
                 else:
                     keep.append((client, retired_at))
             self._retired_clients = keep
         for client in to_close:
-            try:
-                client.close()
-            except Exception:
-                pass
+            self._close_client(client)
 
     # ------------------------------------------------------------------
     # Public request interface
@@ -625,9 +663,7 @@ class ConnectionPool:
                 self._metrics_lock,
                 on_transport_error=lambda: self._evict_client(netloc, session_key, client),
                 on_complete=(
-                    (lambda: self._touch_session(netloc, session_key))
-                    if session_key
-                    else None
+                    (lambda: self._touch_session(netloc, session_key)) if session_key else None
                 ),
                 on_release=on_release,
             )
@@ -672,29 +708,50 @@ class ConnectionPool:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Close all pooled clients and release TCP/TLS resources."""
+        """Close all pooled clients within the configured shutdown bound."""
+        clients: List[httpx.Client] = []
         with self._lock:
-            for client in self._clients.values():
-                try:
-                    client.close()
-                except Exception:
-                    pass
+            clients.extend(self._clients.values())
             self._clients.clear()
         with self._session_lock:
-            for client, _ in self._session_clients.values():
-                try:
-                    client.close()
-                except Exception:
-                    pass
+            clients.extend(client for client, _ in self._session_clients.values())
             self._session_clients.clear()
-            for client in self._overflow_clients:
-                try:
-                    client.close()
-                except Exception:
-                    pass
+            clients.extend(self._overflow_clients)
             self._overflow_clients.clear()
             self._session_client_refs.clear()
-        self._reap_retired(force=True)
+        with self._retired_lock:
+            clients.extend(client for client, _ in self._retired_clients)
+            self._retired_clients.clear()
+
+        # httpx close is normally local and immediate, but a wedged transport
+        # must not hold process shutdown past the service stop deadline. Detach
+        # pool state first, then let a daemon cleanup worker finish best-effort.
+        unique_clients = list({id(client): client for client in clients}.values())
+        if not unique_clients:
+            return
+
+        closers = [
+            threading.Thread(
+                target=self._close_client,
+                args=(client,),
+                name=f"tokenpak-connection-pool-close-{index}",
+                daemon=True,
+            )
+            for index, client in enumerate(unique_clients)
+        ]
+        for closer in closers:
+            closer.start()
+        deadline = time.monotonic() + max(0.0, self._config.close_timeout_seconds)
+        for closer in closers:
+            closer.join(timeout=max(0.0, deadline - time.monotonic()))
+        pending = sum(closer.is_alive() for closer in closers)
+        if pending:
+            logger.warning(
+                "connection-pool close exceeded %.3fs for %d client(s); "
+                "cleanup continues in daemon threads",
+                self._config.close_timeout_seconds,
+                pending,
+            )
 
     def session_client_snapshot(self) -> Dict[str, Any]:
         """Return a diagnostic snapshot of the per-session client pool."""
