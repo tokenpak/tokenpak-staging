@@ -23,6 +23,7 @@ def test_model_admission_rejects_before_worker_creation():
     server = _server(proxy)
     client, request = socket.socketpair()
     try:
+        client.sendall(b"POST /v1/messages HTTP/1.1\r\nX-Tokenpak-Managed: 1\r\n\r\n")
         server.process_request(request, ("local", 0))
         response = client.recv(512)
         assert b"503 Service Unavailable" in response
