@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -106,6 +108,24 @@ def test_preflight_noninteractive_times_out(capsys):
     assert "still locked after" in err
 
 
+def test_preflight_wall_timeout_bounds_a_stuck_probe(capsys):
+    def stuck_probe():
+        time.sleep(0.25)
+        return _status(locked=False)
+
+    started = time.monotonic()
+    rc = launcher._preflight_state_lock(
+        prober=stuck_probe,
+        interactive=False,
+        timeout_s=0.05,
+    )
+    elapsed = time.monotonic() - started
+
+    assert rc == 1
+    assert elapsed < 0.15
+    assert "wall-time limit" in capsys.readouterr().err
+
+
 def test_preflight_tty_esc_cancels(capsys):
     clock = _Clock()
     rc = launcher._preflight_state_lock(
@@ -135,6 +155,32 @@ def test_preflight_stopped_holder_appears_mid_wait():
         monotonic=clock,
     )
     assert rc == 1
+
+
+def test_preflight_incomplete_result_mid_wait_short_circuits(capsys):
+    clock = _Clock()
+    incomplete = sl.LockStatus(
+        home="/h",
+        db_path="/h/state_5.sqlite",
+        exists=True,
+        locked=True,
+        detail="inspection incomplete",
+        diagnostics_complete=False,
+        incomplete_reasons=["probe_timeout"],
+    )
+    seq = iter([_status(locked=True), incomplete])
+
+    rc = launcher._preflight_state_lock(
+        prober=lambda: next(seq),
+        interactive=False,
+        timeout_s=30,
+        poll_interval_s=0.5,
+        sleep=clock.tick,
+        monotonic=clock,
+    )
+
+    assert rc == 1
+    assert "inspection incomplete" in capsys.readouterr().err
 
 
 # ── main() wires the preflight before exec, and --install-only skips it ─
@@ -179,10 +225,10 @@ def _stub_setup(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher.CompanionConfig, "from_env", classmethod(lambda cls: cfg))
     monkeypatch.setattr(rates_snapshot, "refresh", lambda: tmp_path / "rates.json")
     monkeypatch.setattr(mcp_config, "get_env_vars", lambda config: {})
-    monkeypatch.setattr(mcp_config, "register", lambda env_vars=None, codex_home=None: True)
+    monkeypatch.setattr(mcp_config, "_register", lambda env_vars=None, codex_home=None: True)
     monkeypatch.setattr(
         agents_md,
-        "install_agents_md",
+        "_install_agents_md",
         lambda target="global", codex_home=None: Path(codex_home) / "AGENTS.md",
     )
     monkeypatch.setattr(skills_installer, "install_skills", lambda target_dir=None: [])
@@ -217,11 +263,20 @@ def test_shared_mode_real_holder_probe_refuses_before_setup(monkeypatch, tmp_pat
     real_preflight = launcher._preflight_state_lock
 
     def fast_preflight(**kwargs):
+        clock = _Clock()
+
+        def probe_once():
+            status = sl.probe(kwargs["home"])
+            clock.t = 5.0
+            return status
+
         return real_preflight(
+            prober=probe_once,
             interactive=False,
-            timeout_s=0,
+            timeout_s=5,
             sleep=lambda _seconds: None,
-            **kwargs,
+            monotonic=clock,
+            home=kwargs["home"],
         )
 
     monkeypatch.setattr(launcher, "_preflight_state_lock", fast_preflight)
@@ -243,6 +298,40 @@ def test_shared_mode_real_holder_probe_refuses_before_setup(monkeypatch, tmp_pat
     finally:
         holder.execute("ROLLBACK")
         holder.close()
+
+
+@pytest.mark.parametrize("platform_id", ["darwin", "win32"])
+def test_shared_mode_existing_database_launches_with_portable_clear_probe(
+    monkeypatch, tmp_path, platform_id
+):
+    from tokenpak.companion.codex import state_lock
+
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    database = tmp_path / "user" / ".codex" / "state_77.sqlite"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE records (id INTEGER)")
+    connection.close()
+    monkeypatch.setattr(sys, "platform", platform_id)
+    monkeypatch.setattr(state_lock, "_portable_codex_processes", lambda *_args: ([], True))
+
+    assert launcher.main(["--install-only"]) == 0
+
+
+def test_shared_mode_gives_each_reusable_preflight_a_fresh_deadline(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    calls: list[dict[str, object]] = []
+
+    def clear_preflight(**kwargs):
+        calls.append(kwargs)
+        assert "deadline" not in kwargs
+        return None
+
+    monkeypatch.setattr(launcher, "_preflight_state_lock", clear_preflight)
+
+    assert launcher.main(["--install-only"]) == 0
+    assert len(calls) >= 3
 
 
 def test_invalid_mode_fails_before_preflight_or_filesystem_write(monkeypatch, tmp_path):
@@ -493,8 +582,8 @@ def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(monk
     _stub_session_env(monkeypatch, tmp_path)
     monkeypatch.setattr(launcher.CompanionConfig, "from_env", _setup_must_not_run)
     monkeypatch.setattr(rates_snapshot, "refresh", _setup_must_not_run)
-    monkeypatch.setattr(mcp_config, "register", _setup_must_not_run)
-    monkeypatch.setattr(agents_md, "install_agents_md", _setup_must_not_run)
+    monkeypatch.setattr(mcp_config, "_register", _setup_must_not_run)
+    monkeypatch.setattr(agents_md, "_install_agents_md", _setup_must_not_run)
     monkeypatch.setattr(skills_installer, "install_skills", _setup_must_not_run)
     monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
     monkeypatch.setenv("TOKENPAK_COMPANION_PROFILE", "aggressive")

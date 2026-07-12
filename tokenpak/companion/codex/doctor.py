@@ -49,6 +49,9 @@ _ACTIVE_CODEX_HOME: contextvars.ContextVar[Path | None] = contextvars.ContextVar
 _ACTIVE_SESSION_MODE: contextvars.ContextVar[str] = contextvars.ContextVar(
     "tokenpak_codex_doctor_mode", default="shared"
 )
+_ACTIVE_RETENTION_REPORT: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "tokenpak_codex_doctor_retention", default=None
+)
 
 
 def _selected_codex_home(explicit: Path | None = None) -> Path:
@@ -226,6 +229,49 @@ def _check_skills_legacy_orphans() -> "tuple[bool | str, str]":
     )
 
 
+def _retention_report():
+    from .session_home import inspect_isolated_homes
+
+    cached = _ACTIVE_RETENTION_REPORT.get()
+    if cached is None:
+        cached = inspect_isolated_homes()
+        _ACTIVE_RETENTION_REPORT.set(cached)
+    return cached
+
+
+def _check_orphaned_codex_homes() -> "tuple[bool | str, str]":
+    report = _retention_report()
+    detail = (
+        f"total={len(report.homes)}, active={len(report.active)}, "
+        f"orphaned={len(report.orphaned)}, protected={len(report.unsafe)}, "
+        f"quarantined={len(report.quarantines)}, "
+        f"inventory={'complete' if report.inventory_complete else 'incomplete'} at {report.root}"
+    )
+    if report.orphaned or report.unsafe or report.quarantines or not report.inventory_complete:
+        return _WARN, detail
+    return True, detail
+
+
+def _check_codex_home_disk_usage() -> "tuple[bool | str, str]":
+    from .session_home import (
+        RETENTION_MAX_AGE_S,
+        RETENTION_MAX_HOMES,
+        RETENTION_MAX_TOTAL_BYTES,
+    )
+
+    report = _retention_report()
+    used_mb = report.total_bytes / (1024 * 1024)
+    cap_mb = RETENTION_MAX_TOTAL_BYTES / (1024 * 1024)
+    detail = (
+        f"{used_mb:.1f}/{cap_mb:.0f} MB, {len(report.homes)}/{RETENTION_MAX_HOMES} homes, "
+        f"age cap={RETENTION_MAX_AGE_S // 86400} days, "
+        f"inventory={'complete' if report.inventory_complete else 'incomplete'}"
+    )
+    if report.over_size or report.over_count or report.over_age or not report.inventory_complete:
+        return _WARN, detail
+    return True, detail
+
+
 def check_databases() -> "tuple[bool, str]":
     config = CompanionConfig.from_env()
     journal = config.journal_dir / "journal.db"
@@ -318,6 +364,8 @@ CHECKS: list["tuple[str, CheckFn]"] = [
     ("skills installed", check_skills_installed),
     ("skills selected config", _check_skills_config),
     ("skills legacy orphans", _check_skills_legacy_orphans),
+    ("orphaned codex homes", _check_orphaned_codex_homes),
+    ("codex home disk usage", _check_codex_home_disk_usage),
     ("storage dbs", check_databases),
     ("rates snapshot", check_rates_snapshot),
     ("MCP import", check_mcp_import),
@@ -364,6 +412,7 @@ def _run_selected(
     results: list["tuple[str, str, str]"] = []
     active = _ACTIVE_CODEX_HOME.set(paths.home)
     active_mode = _ACTIVE_SESSION_MODE.set(paths.mode)
+    retention = _ACTIVE_RETENTION_REPORT.set(None)
     try:
         for name, fn in CHECKS:
             try:
@@ -374,6 +423,7 @@ def _run_selected(
     finally:
         _ACTIVE_SESSION_MODE.reset(active_mode)
         _ACTIVE_CODEX_HOME.reset(active)
+        _ACTIVE_RETENTION_REPORT.reset(retention)
 
     name_width = max(len(n) for n, _, _ in results)
     any_fail = False

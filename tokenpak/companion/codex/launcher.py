@@ -19,9 +19,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
@@ -181,6 +183,7 @@ def _preflight_state_lock(
     esc_pressed=None,
     sleep=None,
     monotonic=None,
+    deadline: float | None = None,
 ) -> "int | None":
     """Preflight Codex-owned SQLite databases before exec.
 
@@ -203,18 +206,73 @@ def _preflight_state_lock(
     """
     from . import state_lock
 
-    if prober is None:
-
-        def prober():
-            return state_lock.probe(home)
-
     esc_pressed = esc_pressed or _drain_esc_pressed
     sleep = sleep or time.sleep
     monotonic = monotonic or time.monotonic
+    deadline = deadline if deadline is not None else monotonic() + timeout_s
     if interactive is None:
         interactive = _stdin_is_tty()
 
-    status = prober()
+    def invoke_probe():
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return state_lock.LockStatus(
+                home=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"),
+                db_path=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+                / state_lock.STATE_DB_NAME,
+                exists=True,
+                locked=True,
+                detail="holder inspection wall-time limit is incomplete; refusing unsafe access",
+                diagnostics_complete=False,
+                incomplete_reasons=["probe_timeout"],
+            )
+
+        results: "queue.SimpleQueue[tuple[bool, object]]" = queue.SimpleQueue()
+
+        def run_probe() -> None:
+            try:
+                value = (
+                    state_lock.probe(home, deadline=deadline, clock=monotonic)
+                    if prober is None
+                    else prober()
+                )
+                results.put((True, value))
+            except BaseException as exc:  # fail closed; surfaced below
+                results.put((False, exc))
+
+        worker = threading.Thread(
+            target=run_probe,
+            name="tokenpak-codex-lock-probe",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=max(0.0, remaining))
+        if worker.is_alive():
+            return state_lock.LockStatus(
+                home=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"),
+                db_path=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+                / state_lock.STATE_DB_NAME,
+                exists=True,
+                locked=True,
+                detail="holder inspection wall-time limit is incomplete; refusing unsafe access",
+                diagnostics_complete=False,
+                incomplete_reasons=["probe_timeout"],
+            )
+        ok, value = results.get()
+        if ok:
+            return value
+        return state_lock.LockStatus(
+            home=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"),
+            db_path=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+            / state_lock.STATE_DB_NAME,
+            exists=True,
+            locked=True,
+            detail=(f"holder inspection raised {value.__class__.__name__}; refusing unsafe access"),
+            diagnostics_complete=False,
+            incomplete_reasons=["proc_inspection_incomplete"],
+        )
+
+    status = invoke_probe()
     if not status.locked:
         return None
     if not getattr(status, "diagnostics_complete", True):
@@ -240,7 +298,6 @@ def _preflight_state_lock(
             file=sys.stderr,
         )
 
-    deadline = monotonic() + timeout_s
     while monotonic() < deadline:
         if interactive and esc_pressed():
             print(
@@ -249,10 +306,15 @@ def _preflight_state_lock(
             )
             print(state_lock.remediation_hint(status), file=sys.stderr)
             return 130
-        sleep(poll_interval_s)
-        status = prober()
+        sleep(min(poll_interval_s, max(0.0, deadline - monotonic())))
+        if monotonic() >= deadline:
+            break
+        status = invoke_probe()
         if not status.locked:
             return None
+        if not getattr(status, "diagnostics_complete", True):
+            print(state_lock.remediation_hint(status), file=sys.stderr)
+            return 1
         if status.stopped_pids:
             print(state_lock.remediation_hint(status), file=sys.stderr)
             return 1
@@ -563,6 +625,20 @@ def main(
                 file=sys.stderr,
             )
 
+        if paths.mode == session_home.MODE_ISOLATED:
+            cleanup = session_home.cleanup_isolated_homes(preserve_home=paths.home)
+            if cleanup.removed:
+                print(
+                    f"tokenpak: isolated-home retention removed {len(cleanup.removed)} orphan(s)",
+                    file=sys.stderr,
+                )
+            if cleanup.errors:
+                print(
+                    "tokenpak: isolated-home retention preserved uncertain home(s): "
+                    + "; ".join(cleanup.errors),
+                    file=sys.stderr,
+                )
+
         if receipt_only:
             assert receipt_out is not None and run_id is not None
             setup = _receipt_only_setup_metadata()
@@ -619,13 +695,13 @@ def main(
         rates_path = refresh_rates()
         print(f"tokenpak: rates snapshot refreshed ({rates_path})", file=sys.stderr)
 
-        from .mcp_config import get_env_vars, register
+        from .mcp_config import _register, get_env_vars
 
         env_vars = get_env_vars(config)
         lease.assert_home_binding()
         if not reusable_home_is_clear():
             return 1
-        mcp_registered = register(env_vars=env_vars, codex_home=paths.home)
+        mcp_registered = _register(env_vars=env_vars, codex_home=paths.home)
         lease.assert_home_binding()
         print(
             "tokenpak: MCP server registered"
@@ -636,15 +712,15 @@ def main(
 
         hooks_installed = False
         if config.hooks_enabled:
-            from .hooks import ensure_hooks_feature_enabled, install_hooks
+            from .hooks import _ensure_hooks_feature_enabled, _install_hooks
 
             lease.assert_home_binding()
             if not reusable_home_is_clear():
                 return 1
-            if ensure_hooks_feature_enabled(codex_home=paths.home):
+            if _ensure_hooks_feature_enabled(codex_home=paths.home):
                 if not reusable_home_is_clear():
                     return 1
-                hooks_path = install_hooks(target="global", codex_home=paths.home)
+                hooks_path = _install_hooks(target="global", codex_home=paths.home)
                 lease.assert_home_binding()
                 hooks_installed = True
                 print(f"tokenpak: hooks installed ({hooks_path})", file=sys.stderr)
@@ -654,12 +730,12 @@ def main(
                     file=sys.stderr,
                 )
 
-        from .agents_md import install_agents_md
+        from .agents_md import _install_agents_md
 
         lease.assert_home_binding()
         if not reusable_home_is_clear():
             return 1
-        agents_path = install_agents_md(target="global", codex_home=paths.home)
+        agents_path = _install_agents_md(target="global", codex_home=paths.home)
         lease.assert_home_binding()
         print(f"tokenpak: AGENTS.md installed ({agents_path})", file=sys.stderr)
 

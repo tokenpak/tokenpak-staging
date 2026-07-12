@@ -89,13 +89,18 @@ def _selected_codex_home(codex_home: Path | None = None) -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".codex"
 
 
-def install_agents_md(target: str = "global", *, codex_home: Path | None = None) -> Path:
+def install_agents_md(target: str = "global") -> Path:
+    """Write AGENTS.md using the active public Codex configuration."""
+    return _install_agents_md(target)
+
+
+def _install_agents_md(target: str = "global", *, codex_home: Path | None = None) -> Path:
     """Write AGENTS.md to the appropriate Codex config directory.
 
     Args:
         target: "global" for $CODEX_HOME/AGENTS.md, or a repo path for
                 <repo>/AGENTS.md.
-        codex_home: Explicit selected Codex home for a global install.
+        codex_home: Internal explicit selected Codex home for a global install.
 
     Returns:
         Path to the written AGENTS.md file.

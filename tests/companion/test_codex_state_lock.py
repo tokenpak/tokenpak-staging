@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import select
 import signal
@@ -249,18 +250,47 @@ def test_foreign_owner_unreadable_fd_scan_does_not_fail_closed(codex_home, tmp_p
 def test_same_owner_known_non_codex_unreadable_fd_is_ignored(codex_home, tmp_path):
     db = _make_db(codex_home)
     proc_root = _complete_empty_proc(tmp_path)
-    _write_synthetic_process(
+    process = _write_synthetic_process(
         proc_root,
         4245,
         uid=db.stat().st_uid,
-        name="sd-pam",
-        with_fd_dir=False,
+        name="(sd-pam)",
     )
-
-    status = sl.probe(codex_home, proc_root=proc_root)
+    fd_dir = process / "fd"
+    fd_dir.chmod(0)
+    try:
+        status = sl.probe(codex_home, proc_root=proc_root)
+    finally:
+        fd_dir.chmod(0o700)
 
     assert status.locked is False
     assert status.diagnostics_complete is True
+
+
+def test_same_owner_benign_process_nonpermission_fd_error_fails_closed(
+    codex_home, tmp_path, monkeypatch
+):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    process = _write_synthetic_process(
+        proc_root,
+        4248,
+        uid=db.stat().st_uid,
+        name="(sd-pam)",
+    )
+    original = sl._bounded_directory_entries
+
+    def fail_fd(path, **kwargs):
+        if path == process / "fd":
+            return [], OSError(5, "fixture I/O failure")
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(sl, "_bounded_directory_entries", fail_fd)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert "proc_inspection_incomplete" in status.incomplete_reasons
 
 
 @pytest.mark.parametrize("name", ["node", "python", "sh", "env", "npx", "arbitrary-helper"])
@@ -461,3 +491,374 @@ def test_malformed_state_file_without_attachment_is_not_locked(codex_home, tmp_p
 
     assert status.exists is True
     assert status.locked is False
+
+
+@pytest.mark.parametrize("platform_id", ["darwin", "win32"])
+def test_portable_shared_existing_database_is_functional_when_no_codex_process(
+    codex_home, monkeypatch, platform_id
+):
+    _make_db(codex_home)
+    monkeypatch.setattr(sl, "_portable_codex_processes", lambda *_args: ([], True))
+
+    status = sl.probe(codex_home, platform_id=platform_id)
+
+    assert status.exists is True
+    assert status.locked is False
+    assert status.diagnostics_complete is True
+
+
+@pytest.mark.parametrize("platform_id", ["darwin", "win32"])
+@pytest.mark.parametrize("state", ["S", "T"])
+def test_portable_shared_conservatively_names_codex_process(
+    codex_home, monkeypatch, platform_id, state
+):
+    _make_db(codex_home)
+    candidate = sl._ProcessInfo(pid=8123, uid=-1, state=state, start_time=99)
+    monkeypatch.setattr(
+        sl,
+        "_portable_codex_processes",
+        lambda *_args: ([candidate], True),
+    )
+
+    status = sl.probe(codex_home, platform_id=platform_id)
+
+    assert status.locked is True
+    assert status.holder_pids == [8123]
+    expected = "stopped" if state == "T" else "running"
+    assert f"PID 8123 ({expected})" in status.detail
+
+
+@pytest.mark.parametrize("platform_id", ["darwin", "win32"])
+def test_portable_shared_inspection_failure_is_explicit_fail_closed(
+    codex_home, monkeypatch, platform_id
+):
+    _make_db(codex_home)
+
+    def incomplete(_platform, budget):
+        budget.add("portable_inspection_incomplete")
+        return [], False
+
+    monkeypatch.setattr(sl, "_portable_codex_processes", incomplete)
+    status = sl.probe(codex_home, platform_id=platform_id)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert status.incomplete_reasons == ["portable_inspection_incomplete"]
+
+
+def test_multiple_databases_scan_processes_once(codex_home, tmp_path, monkeypatch):
+    _make_db(codex_home, "state_5.sqlite")
+    _make_db(codex_home, "logs_2.sqlite")
+    proc_root = _complete_empty_proc(tmp_path)
+    calls = 0
+    original = sl._scan_fd_holders
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sl, "_scan_fd_holders", counted)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is False
+    assert calls == 1
+
+
+def test_target_inode_replacement_is_explicit_fail_closed(codex_home, tmp_path, monkeypatch):
+    db = _make_db(codex_home)
+    replacement = codex_home / "replacement.tmp"
+    replacement.write_bytes(b"replacement")
+    proc_root = _complete_empty_proc(tmp_path)
+    original = sl._scan_fd_holders
+
+    def replace_target(*args, **kwargs):
+        result = original(*args, **kwargs)
+        os.replace(replacement, db)
+        return result
+
+    monkeypatch.setattr(sl, "_scan_fd_holders", replace_target)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert "target_inode_replaced" in status.incomplete_reasons
+
+
+def test_new_database_during_probe_is_explicit_fail_closed(codex_home, tmp_path, monkeypatch):
+    _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    original = sl._scan_fd_holders
+
+    def add_database(*args, **kwargs):
+        result = original(*args, **kwargs)
+        (codex_home / "logs_99.sqlite").write_bytes(b"new")
+        return result
+
+    monkeypatch.setattr(sl, "_scan_fd_holders", add_database)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert "database_set_changed" in status.incomplete_reasons
+
+
+def test_pid_reuse_during_holder_revalidation_is_explicit(monkeypatch, tmp_path):
+    observed = sl._ProcessInfo(pid=9000, uid=os.getuid(), state="S", start_time=10)
+    scan = sl._FdScan(attachments={9000: (observed, {(1, 2)})})
+    budget = sl._ProbeBudget(deadline=10, clock=lambda: 0)
+    monkeypatch.setattr(
+        sl,
+        "_read_process_info",
+        lambda *_args, **_kwargs: sl._ProcessInfo(9000, os.getuid(), "S", 11),
+    )
+
+    holders = sl._revalidate_attachments(
+        scan,
+        proc_root=tmp_path,
+        budget=budget,
+    )
+
+    assert holders == {}
+    assert budget.reasons == ["pid_reuse"]
+
+
+def test_probe_deadline_and_database_limit_fail_closed(codex_home, tmp_path, monkeypatch):
+    _make_db(codex_home, "state_1.sqlite")
+    status = sl.probe(
+        codex_home,
+        proc_root=_complete_empty_proc(tmp_path),
+        deadline=0,
+        clock=lambda: 0,
+    )
+    assert status.locked is True
+    assert status.incomplete_reasons == ["probe_timeout"]
+
+    monkeypatch.setattr(sl, "_MAX_DATABASES", 1)
+    _make_db(codex_home, "logs_1.sqlite")
+    second = tmp_path / "second"
+    second.mkdir()
+    status = sl.probe(codex_home, proc_root=_complete_empty_proc(second))
+    assert status.locked is True
+    assert "database_limit" in status.incomplete_reasons
+
+
+def test_process_and_fd_limits_are_explicit_fail_closed(codex_home, tmp_path, monkeypatch):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    process = _write_synthetic_process(
+        proc_root,
+        9300,
+        uid=db.stat().st_uid,
+        name="codex",
+    )
+    first = process / "fd" / "1"
+    second = process / "fd" / "2"
+    first.symlink_to(db)
+    second.symlink_to(db)
+
+    monkeypatch.setattr(sl, "_MAX_FDS_PER_PROCESS", 1)
+    status = sl.probe(codex_home, proc_root=proc_root)
+    assert status.locked is True
+    assert "fd_limit" in status.incomplete_reasons
+
+    monkeypatch.setattr(sl, "_MAX_FDS_PER_PROCESS", 10)
+    monkeypatch.setattr(sl, "_MAX_PROCESSES", 1)
+    status = sl.probe(codex_home, proc_root=proc_root)
+    assert status.locked is True
+    assert "process_limit" in status.incomplete_reasons
+
+
+def test_deadline_expiring_after_snapshot_fails_closed_during_classification(
+    codex_home, tmp_path, monkeypatch
+):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    process = _write_synthetic_process(
+        proc_root,
+        9400,
+        uid=db.stat().st_uid,
+    )
+    (process / "fd" / "7").symlink_to(db)
+    now = [0.0]
+    original = sl._revalidate_database_snapshot
+
+    def expire_after_snapshot(*args, **kwargs):
+        original(*args, **kwargs)
+        now[0] = 2.0
+
+    monkeypatch.setattr(sl, "_revalidate_database_snapshot", expire_after_snapshot)
+    status = sl.probe(
+        codex_home,
+        proc_root=proc_root,
+        deadline=1.0,
+        clock=lambda: now[0],
+    )
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert "probe_timeout" in status.incomplete_reasons
+
+
+def test_pid_reuse_during_unreadable_fd_scan_is_explicit_fail_closed(
+    codex_home, tmp_path, monkeypatch
+):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    process = _write_synthetic_process(
+        proc_root,
+        9401,
+        uid=db.stat().st_uid,
+    )
+    original_entries = sl._bounded_directory_entries
+    original_info = sl._read_process_info
+    reads = 0
+
+    def unreadable_fd(path, **kwargs):
+        if path == process / "fd":
+            return [], PermissionError(errno.EACCES, "fixture permission denied")
+        return original_entries(path, **kwargs)
+
+    def reused_pid(pid, root=sl._PROC_ROOT):
+        nonlocal reads
+        info = original_info(pid, root)
+        if pid == 9401 and info is not None:
+            reads += 1
+            if reads > 1:
+                return sl._ProcessInfo(info.pid, info.uid, info.state, info.start_time + 1)
+        return info
+
+    monkeypatch.setattr(sl, "_bounded_directory_entries", unreadable_fd)
+    monkeypatch.setattr(sl, "_read_process_info", reused_pid)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert "pid_reuse" in status.incomplete_reasons
+
+
+def test_proc_lock_pid_is_attributed_without_fd_row(codex_home, tmp_path):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    _write_synthetic_process(proc_root, 9402, uid=db.stat().st_uid)
+    target = next(item for item in sl._target_files(db)[0] if item.role == "main")
+    major, minor = target.proc_device
+    (proc_root / "locks").write_text(
+        f"7: POSIX ADVISORY WRITE 9402 {major:02x}:{minor:02x}:"
+        f"{target.inode} {sl._SQLITE_PENDING_BYTE} {sl._SQLITE_PENDING_BYTE}\n"
+    )
+
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is True
+    assert status.holder_pids == [9402]
+    assert "PID 9402 (running)" in status.detail
+
+
+def test_proc_lock_pid_reuse_is_explicit_fail_closed(codex_home, tmp_path, monkeypatch):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    _write_synthetic_process(proc_root, 9403, uid=db.stat().st_uid)
+    target = next(item for item in sl._target_files(db)[0] if item.role == "main")
+    major, minor = target.proc_device
+    (proc_root / "locks").write_text(
+        f"7: POSIX ADVISORY WRITE 9403 {major:02x}:{minor:02x}:"
+        f"{target.inode} {sl._SQLITE_PENDING_BYTE} {sl._SQLITE_PENDING_BYTE}\n"
+    )
+    original = sl._read_process_info
+    reads = 0
+
+    def reused(pid, root=sl._PROC_ROOT):
+        nonlocal reads
+        info = original(pid, root)
+        if pid == 9403 and info is not None:
+            reads += 1
+            if reads > 2:
+                return sl._ProcessInfo(info.pid, info.uid, info.state, info.start_time + 1)
+        return info
+
+    monkeypatch.setattr(sl, "_read_process_info", reused)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert status.holder_pids == []
+    assert "pid_reuse" in status.incomplete_reasons
+
+
+def test_proc_lock_pid_reuse_during_fd_scan_is_explicit_fail_closed(
+    codex_home, tmp_path, monkeypatch
+):
+    db = _make_db(codex_home)
+    proc_root = _complete_empty_proc(tmp_path)
+    _write_synthetic_process(proc_root, 9500, uid=db.stat().st_uid)
+    target = next(item for item in sl._target_files(db)[0] if item.role == "main")
+    major, minor = target.proc_device
+    (proc_root / "locks").write_text(
+        f"7: POSIX ADVISORY WRITE 9500 {major:02x}:{minor:02x}:"
+        f"{target.inode} {sl._SQLITE_PENDING_BYTE} {sl._SQLITE_PENDING_BYTE}\n"
+    )
+    original_read = sl._read_process_info
+    original_scan = sl._scan_fd_holders
+    scan_finished = False
+
+    def reused_after_scan(pid, root=sl._PROC_ROOT):
+        info = original_read(pid, root)
+        if pid == 9500 and info is not None and scan_finished:
+            return sl._ProcessInfo(info.pid, info.uid, info.state, info.start_time + 1)
+        return info
+
+    def finish_scan(*args, **kwargs):
+        nonlocal scan_finished
+        result = original_scan(*args, **kwargs)
+        scan_finished = True
+        return result
+
+    monkeypatch.setattr(sl, "_read_process_info", reused_after_scan)
+    monkeypatch.setattr(sl, "_scan_fd_holders", finish_scan)
+    status = sl.probe(codex_home, proc_root=proc_root)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert status.holder_pids == []
+    assert "pid_reuse" in status.incomplete_reasons
+
+
+def test_toolhelp_eof_is_distinct_from_enumeration_failure():
+    assert sl._toolhelp_has_entry(True, 0) is True
+    assert sl._toolhelp_has_entry(False, sl._ERROR_NO_MORE_FILES) is False
+    with pytest.raises(OSError, match="Toolhelp process enumeration failed"):
+        sl._toolhelp_has_entry(False, errno.EIO)
+
+
+@pytest.mark.parametrize("platform_id", ["darwin", "win32"])
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("inode", "target_inode_replaced"),
+        ("database", "database_set_changed"),
+        ("shm", "target_inode_replaced"),
+    ],
+)
+def test_portable_probe_revalidates_database_targets(
+    codex_home, monkeypatch, platform_id, change, reason
+):
+    db = _make_db(codex_home)
+
+    def mutate_during_snapshot(*_args):
+        if change == "inode":
+            replacement = codex_home / "replacement.tmp"
+            replacement.write_bytes(b"replacement")
+            os.replace(replacement, db)
+        elif change == "database":
+            (codex_home / "logs_99.sqlite").write_bytes(b"new")
+        else:
+            Path(f"{db}-shm").write_bytes(b"new")
+        return [], True
+
+    monkeypatch.setattr(sl, "_portable_codex_processes", mutate_during_snapshot)
+    status = sl.probe(codex_home, platform_id=platform_id)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert reason in status.incomplete_reasons

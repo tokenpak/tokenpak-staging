@@ -8,6 +8,9 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -300,10 +303,15 @@ def test_auth_source_and_existing_target_links_must_be_exact_and_safe(
     assert paths.auth.resolve() == database
 
 
-def test_first_run_private_chain_and_existing_leaf_are_0700(
+def test_live_0700_tokenpak_and_0775_companion_create_private_codex_boundary(
     homes: tuple[Path, Path], tmp_path: Path
 ) -> None:
     source, tokenpak_home = homes
+    tokenpak_home.mkdir(mode=0o700)
+    companion = tokenpak_home / "companion"
+    companion.mkdir(mode=0o775)
+    tokenpak_home.chmod(0o700)
+    companion.chmod(0o775)
     paths = sh.select_paths(
         "isolated",
         workspace_dir=tmp_path,
@@ -317,9 +325,9 @@ def test_first_run_private_chain_and_existing_leaf_are_0700(
     finally:
         os.umask(old_umask)
 
+    assert tokenpak_home.stat().st_mode & 0o777 == 0o700
+    assert companion.stat().st_mode & 0o777 == 0o775
     for directory in (
-        tokenpak_home,
-        tokenpak_home / "companion",
         tokenpak_home / "companion" / "codex",
         tokenpak_home / "companion" / "codex" / "sessions",
         paths.home,
@@ -327,8 +335,28 @@ def test_first_run_private_chain_and_existing_leaf_are_0700(
         assert directory.stat().st_mode & 0o777 == 0o700
 
     paths.home.chmod(0o755)
-    sh.provision(paths)
-    assert paths.home.stat().st_mode & 0o777 == 0o700
+    with pytest.raises(sh.HomeInUseError, match="owned 0700 directory"):
+        sh.provision(paths)
+
+
+def test_existing_nonprivate_codex_boundary_fails_closed(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    (tokenpak_home / "companion" / "codex").mkdir(parents=True)
+    tokenpak_home.chmod(0o700)
+    (tokenpak_home / "companion").chmod(0o775)
+    (tokenpak_home / "companion" / "codex").chmod(0o775)
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="broad-codex-boundary",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+
+    with pytest.raises(sh.HomeInUseError, match="owned 0700 directory"):
+        sh.provision(paths)
 
 
 @pytest.mark.parametrize("name", ["hooks.json", "AGENTS.md"])
@@ -394,7 +422,7 @@ def test_selected_home_symlink_fails_closed(homes: tuple[Path, Path], tmp_path: 
         tokenpak_home=tokenpak_home,
         source_home=source,
     )
-    with pytest.raises(RuntimeError, match="private directory"):
+    with pytest.raises(RuntimeError, match="unsafe"):
         sh.provision(paths)
     assert list(target.iterdir()) == []
 
@@ -575,6 +603,95 @@ def test_stale_valid_sentinel_is_reclaimed_without_signalling(
         lease.release()
 
 
+def test_initial_sentinel_short_write_never_publishes_partial_canonical(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "workspace",
+        workspace_dir=tmp_path,
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(paths)
+    guard = paths.home / sh._LEASE_GUARD_NAME
+    guard.write_bytes(b"\0")
+    guard.chmod(0o600)
+    original = sh._write_all
+
+    def fail_sentinel(fd: int, data: bytes) -> None:
+        if data.startswith(b'{"home"'):
+            os.write(fd, data[:7])
+            raise OSError("injected partial sentinel write")
+        original(fd, data)
+
+    monkeypatch.setattr(sh, "_write_all", fail_sentinel)
+    with pytest.raises(OSError, match="injected partial"):
+        sh.SessionLease.acquire(paths)
+    assert not paths.pid_sentinel.exists()
+    assert not any(sh._SENTINEL_TEMP_RE.fullmatch(path.name) for path in paths.home.iterdir())
+
+    monkeypatch.setattr(sh, "_write_all", original)
+    lease = sh.SessionLease.acquire(paths)
+    lease.release()
+
+
+def test_partial_acquire_temp_is_recovered_but_partial_transfer_fails_closed(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "workspace",
+        workspace_dir=tmp_path,
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(paths)
+    acquire_temp = paths.home / f".codex.pid.acquire.{uuid.uuid4().hex}.tmp"
+    acquire_temp.write_text("partial", encoding="utf-8")
+    acquire_temp.chmod(0o600)
+
+    lease = sh.SessionLease.acquire(paths)
+    lease.release()
+    assert not acquire_temp.exists()
+
+    transfer_temp = paths.home / f".codex.pid.transfer.{uuid.uuid4().hex}.tmp"
+    transfer_temp.write_text("partial", encoding="utf-8")
+    transfer_temp.chmod(0o600)
+    with pytest.raises(sh.HomeInUseError, match="partial transfer sentinel"):
+        sh.SessionLease.acquire(paths)
+    assert transfer_temp.exists()
+
+
+def test_complete_stale_acquire_temp_is_reclaimed(homes: tuple[Path, Path], tmp_path: Path) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "workspace",
+        workspace_dir=tmp_path,
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(paths)
+    stale = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=2_000_000_000,
+        start_time_ticks=1,
+        session_id="crashed-acquire",
+        mode="workspace",
+        home=str(paths.home.resolve()),
+    )
+    temp = paths.home / f".codex.pid.acquire.{uuid.uuid4().hex}.tmp"
+    temp.write_text(json.dumps(asdict(stale)) + "\n", encoding="utf-8")
+    temp.chmod(0o600)
+
+    lease = sh.SessionLease.acquire(paths)
+    try:
+        assert not temp.exists()
+        assert sh.read_pid_sentinel(paths.pid_sentinel) == lease.sentinel
+    finally:
+        lease.release()
+
+
 def _write_proc_stat(
     proc_root: Path, pid: int, *, state: str = "S", start_ticks: int = 100
 ) -> None:
@@ -606,6 +723,30 @@ def test_portable_posix_identity_uses_locale_stable_start_time(monkeypatch) -> N
     assert first == second
     assert first is not None and first[0] == "S" and first[1] > 0
     assert captured["env"]["LC_ALL"] == "C"
+
+
+def test_shared_lease_path_backend_supports_platforms_without_directory_fds(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, _tokenpak_home = homes
+    paths = sh.select_paths(
+        "shared",
+        workspace_dir=tmp_path,
+        source_home=source,
+        selected_home=source,
+    )
+
+    def path_backend(selected: sh.SessionPaths):
+        selected.home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return None
+
+    monkeypatch.setattr(sh, "_open_selected_home", path_backend)
+    lease = sh.SessionLease.acquire(paths, session_id="path-backend")
+    try:
+        assert sh.read_pid_sentinel(paths.pid_sentinel) == lease.sentinel
+    finally:
+        lease.release()
+    assert not paths.pid_sentinel.exists()
 
 
 def test_stopped_lease_owner_is_still_live_and_refused(
@@ -708,3 +849,347 @@ def test_release_removes_only_exact_sentinel(homes: tuple[Path, Path], tmp_path:
 
     assert lease.release() is False
     assert sh.read_pid_sentinel(paths.pid_sentinel) == changed
+
+
+def _retention_home(
+    source: Path,
+    tokenpak_home: Path,
+    tmp_path: Path,
+    name: str,
+    *,
+    age_s: float = 120.0,
+    payload_bytes: int = 0,
+) -> sh.SessionPaths:
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id=name,
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(paths)
+    if payload_bytes:
+        (paths.home / "payload.bin").write_bytes(b"x" * payload_bytes)
+    timestamp = time.time() - age_s
+    os.utime(paths.home, (timestamp, timestamp))
+    return paths
+
+
+def test_retention_enforces_five_homes_oldest_first(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    created = [
+        _retention_home(source, tokenpak_home, tmp_path, f"session-{index}", age_s=600 - index)
+        for index in range(6)
+    ]
+
+    result = sh.cleanup_isolated_homes(tokenpak_home)
+
+    assert result.removed == (created[0].home,)
+    assert len(result.after.homes) == sh.RETENTION_MAX_HOMES
+    assert all(path.home.exists() for path in created[1:])
+
+
+def test_retention_age_and_size_thresholds(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    exact = _retention_home(
+        source,
+        tokenpak_home,
+        tmp_path,
+        "exact-age",
+        age_s=sh.RETENTION_MAX_AGE_S - 10,
+    )
+    old = _retention_home(
+        source,
+        tokenpak_home,
+        tmp_path,
+        "over-age",
+        age_s=sh.RETENTION_MAX_AGE_S + 10,
+    )
+    result = sh.cleanup_isolated_homes(tokenpak_home)
+    assert old.home in result.removed
+    assert exact.home.exists()
+
+    sized = _retention_home(source, tokenpak_home, tmp_path, "over-size", payload_bytes=4096)
+    monkeypatch.setattr(sh, "RETENTION_MAX_TOTAL_BYTES", 1)
+    result = sh.cleanup_isolated_homes(tokenpak_home)
+    assert sized.home in result.removed
+
+
+def test_retention_plan_exact_boundaries_do_not_evict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sh, "RETENTION_MAX_TOTAL_BYTES", 100)
+    info = sh._IsolatedHomeInfo(
+        path=tmp_path / "exact",
+        device=1,
+        inode=1,
+        mtime=1.0,
+        age_s=sh.RETENTION_MAX_AGE_S,
+        size_bytes=100,
+        size_complete=True,
+        state="orphan-stale",
+    )
+    report = sh._RetentionReport(tmp_path, (info,), 100, True)
+    assert sh._retention_plan(report, preserve_home=None, remove_all_orphans=False) == []
+
+    over = sh._IsolatedHomeInfo(
+        **{**info.__dict__, "path": tmp_path / "over", "age_s": info.age_s + 1}
+    )
+    report = sh._RetentionReport(tmp_path, (over,), 101, True)
+    assert sh._retention_plan(report, preserve_home=None, remove_all_orphans=False) == [
+        (over, "age")
+    ]
+    over_size = sh._IsolatedHomeInfo(
+        **{
+            **info.__dict__,
+            "path": tmp_path / "over-size",
+            "age_s": sh.RETENTION_MAX_AGE_S - 1,
+            "size_bytes": 101,
+        }
+    )
+    report = sh._RetentionReport(tmp_path, (over_size,), 101, True)
+    assert sh._retention_plan(report, preserve_home=None, remove_all_orphans=False) == [
+        (over_size, "size")
+    ]
+
+
+def test_retention_preserves_live_and_malformed_sentinel_homes(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    live = _retention_home(source, tokenpak_home, tmp_path, "live-retention")
+    malformed = _retention_home(source, tokenpak_home, tmp_path, "malformed-retention")
+    malformed.pid_sentinel.write_text("partial", encoding="utf-8")
+    malformed.pid_sentinel.chmod(0o600)
+    lease = sh.SessionLease.acquire(live, session_id="live-retention")
+    try:
+        result = sh.cleanup_isolated_homes(
+            tokenpak_home,
+            remove_all_orphans=True,
+        )
+        assert result.removed == ()
+        assert live.home.exists()
+        assert malformed.home.exists()
+        states = {home.path.name: home.state for home in result.after.homes}
+        assert states["live-retention"] == "active"
+        assert states["malformed-retention"] == "unsafe"
+    finally:
+        lease.release()
+
+
+def test_retention_never_touches_workspace_homes(homes: tuple[Path, Path], tmp_path: Path) -> None:
+    source, tokenpak_home = homes
+    workspace = sh.select_paths(
+        "workspace",
+        workspace_dir=tmp_path,
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(workspace)
+    isolated = _retention_home(source, tokenpak_home, tmp_path, "isolated-only")
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == (isolated.home,)
+    assert workspace.home.exists()
+
+
+def test_isolated_leaf_creation_and_sentinel_publication_hold_retention_guard(
+    homes: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="coordinated-publication",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    entered_leaf = threading.Event()
+    allow_publication = threading.Event()
+    cleanup_done = threading.Event()
+    original = sh._open_isolated_leaf_at
+    leases: list[sh.SessionLease] = []
+    cleanups: list[sh._CleanupResult] = []
+    errors: list[BaseException] = []
+    monkeypatch.setattr(sh, "_GUARD_LOCK_TIMEOUT_S", 30.0)
+
+    def paused_leaf(selected: sh.SessionPaths, root_fd: int) -> int:
+        entered_leaf.set()
+        if not allow_publication.wait(5):
+            raise RuntimeError("timed out waiting to publish isolated leaf")
+        return original(selected, root_fd)
+
+    def acquire() -> None:
+        try:
+            leases.append(sh.SessionLease.acquire(paths, session_id="coordinated-publication"))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def cleanup() -> None:
+        try:
+            cleanups.append(sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            cleanup_done.set()
+
+    monkeypatch.setattr(sh, "_open_isolated_leaf_at", paused_leaf)
+    acquire_thread = threading.Thread(target=acquire)
+    acquire_thread.start()
+    assert entered_leaf.wait(5)
+
+    cleanup_thread = threading.Thread(target=cleanup)
+    cleanup_thread.start()
+    assert not cleanup_done.wait(0.1)
+    allow_publication.set()
+    acquire_thread.join(30)
+    cleanup_thread.join(30)
+
+    assert not acquire_thread.is_alive()
+    assert not cleanup_thread.is_alive()
+    assert errors == []
+    assert len(leases) == 1
+    assert len(cleanups) == 1
+    assert cleanups[0].removed == ()
+    assert paths.home.is_dir()
+    assert sh.read_pid_sentinel(paths.pid_sentinel) == leases[0].sentinel
+    leases[0].release()
+
+
+def test_lifecycle_thread_guard_acquisition_is_bounded(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "workspace",
+        workspace_dir=tmp_path,
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(paths)
+    guard_file = tmp_path / "bounded-thread-guard"
+    guard_fd = os.open(guard_file, os.O_RDWR | os.O_CREAT, 0o600)
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_thread_guard() -> None:
+        with sh._THREAD_LEASE_LOCK:
+            held.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_thread_guard)
+    holder.start()
+    assert held.wait(5)
+    monkeypatch.setattr(sh, "_GUARD_LOCK_TIMEOUT_S", 0.05)
+    started = time.monotonic()
+    try:
+        with pytest.raises(sh.HomeInUseError, match="thread guard"):
+            with sh._bounded_guard_lock(guard_fd):
+                raise AssertionError("bounded guard unexpectedly acquired")
+        assert time.monotonic() - started < 0.25
+    finally:
+        os.close(guard_fd)
+        release.set()
+        holder.join(5)
+    assert not holder.is_alive()
+
+
+def test_cleanup_failure_leaves_quarantine_and_durable_receipt(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    isolated = _retention_home(source, tokenpak_home, tmp_path, "quarantine-crash")
+
+    def fail_cleanup(*_args, **_kwargs):
+        raise sh.HomeInUseError("injected cleanup crash")
+
+    original = sh._remove_tree_contents_at
+    monkeypatch.setattr(sh, "_remove_tree_contents_at", fail_cleanup)
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.errors and "injected cleanup crash" in result.errors[0]
+    assert not isolated.home.exists()
+    root = sh.sessions_root(tokenpak_home)
+    assert any(path.name.startswith(sh._RETENTION_QUARANTINE_PREFIX) for path in root.iterdir())
+    receipt = root / sh._RETENTION_RECEIPT_NAME
+    assert '"action": "planned"' in receipt.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(sh, "_remove_tree_contents_at", original)
+    recovered = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert recovered.errors == ()
+    assert recovered.removed == (isolated.home,)
+    assert not any(path.name.startswith(sh._RETENTION_QUARANTINE_PREFIX) for path in root.iterdir())
+    assert '"action": "completed"' in receipt.read_text(encoding="utf-8")
+
+
+def test_unproven_quarantine_is_preserved_with_explicit_error(
+    homes: tuple[Path, Path],
+) -> None:
+    _source, tokenpak_home = homes
+    opened = sh._open_managed_sessions_root(tokenpak_home, create=True)
+    assert opened is not None
+    _root, root_fd = opened
+    os.close(root_fd)
+    root = sh.sessions_root(tokenpak_home)
+    quarantine = root / f"{sh._RETENTION_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
+    quarantine.mkdir(mode=0o700)
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert quarantine.is_dir()
+    assert result.errors and "no planned retention receipt" in result.errors[0]
+
+
+def test_incomplete_retention_inventory_preserves_all_ordinary_homes(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "rechecked")
+    outside = tmp_path / "outside-retention"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    escape = sh.sessions_root(tokenpak_home) / "escape"
+    escape.symlink_to(outside, target_is_directory=True)
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert result.errors and "inventory incomplete" in result.errors[-1]
+    assert candidate.home.exists()
+    assert escape.is_symlink()
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_retention_rechecks_candidate_before_removal(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "rechecked")
+    original = sh._inspect_isolated_home_at
+    calls = 0
+
+    def becomes_active(*args, **kwargs):
+        nonlocal calls
+        info = original(*args, **kwargs)
+        if info.path == candidate.home:
+            calls += 1
+            if calls == 2:
+                return sh._IsolatedHomeInfo(
+                    **{**info.__dict__, "state": "active", "pid": os.getpid()}
+                )
+        return info
+
+    monkeypatch.setattr(sh, "_inspect_isolated_home_at", becomes_active)
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.errors and "changed before cleanup" in result.errors[0]
+    assert candidate.home.exists()

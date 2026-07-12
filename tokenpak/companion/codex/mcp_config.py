@@ -32,7 +32,12 @@ def _codex_env(codex_home: Path | None = None) -> dict[str, str]:
     return env
 
 
-def is_registered(codex_home: Path | None = None) -> bool:
+def is_registered() -> bool:
+    """Check registration using the active public Codex configuration."""
+    return _is_registered()
+
+
+def _is_registered(codex_home: Path | None = None) -> bool:
     """Check whether the companion MCP server is already registered."""
     try:
         result = subprocess.run(
@@ -49,6 +54,13 @@ def is_registered(codex_home: Path | None = None) -> bool:
 
 def register(
     env_vars: Optional[dict[str, str]] = None,
+) -> bool:
+    """Register using the active public Codex configuration."""
+    return _register(env_vars)
+
+
+def _register(
+    env_vars: Optional[dict[str, str]] = None,
     *,
     codex_home: Path | None = None,
 ) -> bool:
@@ -56,7 +68,7 @@ def register(
 
     Returns True if registration succeeded (or was already registered).
     """
-    if is_registered(codex_home):
+    if _is_registered(codex_home):
         return True
 
     cmd = [
@@ -98,9 +110,14 @@ def register(
         return False
 
 
-def unregister(codex_home: Path | None = None) -> bool:
+def unregister() -> bool:
+    """Remove registration using the active public Codex configuration."""
+    return _unregister()
+
+
+def _unregister(codex_home: Path | None = None) -> bool:
     """Remove the companion MCP server registration."""
-    if not is_registered(codex_home):
+    if not _is_registered(codex_home):
         return True
 
     try:

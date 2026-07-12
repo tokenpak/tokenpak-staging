@@ -129,13 +129,18 @@ def _codex_env(codex_home: Path | None = None) -> dict[str, str]:
     return env
 
 
-def install_hooks(target: str = "global", *, codex_home: Path | None = None) -> Path:
+def install_hooks(target: str = "global") -> Path:
+    """Write hooks.json using the active public Codex configuration."""
+    return _install_hooks(target)
+
+
+def _install_hooks(target: str = "global", *, codex_home: Path | None = None) -> Path:
     """Write hooks.json to the appropriate Codex config directory.
 
     Args:
         target: ``"global"`` for ``$CODEX_HOME/hooks.json``, or a repo path
                 for ``<repo>/.codex/hooks.json``.
-        codex_home: Explicit selected Codex home for a global install.
+        codex_home: Internal explicit selected Codex home for a global install.
 
     Returns:
         Path to the written hooks.json file.
@@ -212,7 +217,12 @@ def _merge_hooks(existing: dict, new: dict) -> dict:
     return {"hooks": merged_hooks}
 
 
-def ensure_hooks_feature_enabled(codex_home: Path | None = None) -> bool:
+def ensure_hooks_feature_enabled() -> bool:
+    """Enable hooks using the active public Codex configuration."""
+    return _ensure_hooks_feature_enabled()
+
+
+def _ensure_hooks_feature_enabled(codex_home: Path | None = None) -> bool:
     """Enable the ``hooks`` feature via ``codex features enable``.
 
     Uses the Codex-native command rather than hand-writing config.toml,
