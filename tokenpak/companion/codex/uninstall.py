@@ -11,19 +11,29 @@ Idempotent: running twice is safe.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 
 from .hooks import TOKENPAK_HOOK_MARKER
 from .mcp_config import SERVER_NAME
 from .mcp_config import unregister as mcp_unregister
 from .rates_snapshot import DEFAULT_SNAPSHOT_PATH
-from .skills_installer import uninstall_skills
+from .skills_installer import _clean_skills_config, uninstall_skills
+
+if _TYPE_CHECKING:
+    from .session_home import SessionPaths
 
 
-def remove_mcp() -> bool:
+def _selected_codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+
+
+def remove_mcp(codex_home: Path | None = None) -> bool:
     """Remove the MCP registration from Codex. Returns True if gone."""
-    return mcp_unregister()
+    return mcp_unregister(codex_home)
 
 
 def clean_hooks_json(path: Path | None = None) -> "tuple[bool, str]":
@@ -31,7 +41,7 @@ def clean_hooks_json(path: Path | None = None) -> "tuple[bool, str]":
 
     Returns (changed, detail).
     """
-    path = path or (Path.home() / ".codex" / "hooks.json")
+    path = path or (_selected_codex_home() / "hooks.json")
     if not path.exists():
         return False, "hooks.json absent"
     try:
@@ -56,8 +66,7 @@ def clean_hooks_json(path: Path | None = None) -> "tuple[bool, str]":
             non_tokenpak = [
                 c
                 for c in commands
-                if isinstance(c, dict)
-                and TOKENPAK_HOOK_MARKER not in c.get("command", "")
+                if isinstance(c, dict) and TOKENPAK_HOOK_MARKER not in c.get("command", "")
             ]
             if len(non_tokenpak) != len(commands):
                 changed = True
@@ -82,7 +91,7 @@ def clean_agents_md(path: Path | None = None) -> "tuple[bool, str]":
     Uses the same section-boundary logic as :func:`agents_md._merge_agents`:
     everything from the marker heading up to the next top-level ``# `` heading.
     """
-    path = path or (Path.home() / ".codex" / "AGENTS.md")
+    path = path or (_selected_codex_home() / "AGENTS.md")
     if not path.exists():
         return False, "AGENTS.md absent"
 
@@ -122,40 +131,107 @@ def clean_rates_snapshot() -> "tuple[bool, str]":
     return False, "rates snapshot absent"
 
 
-def run() -> int:
-    """Execute uninstall and print a report. Returns 0 on clean run."""
+def _clean_selected_skills_config(path: Path) -> "tuple[bool, str]":
+    """Remove TokenPak skill references from one selected config."""
+    changed = _clean_skills_config(path)
+    if changed:
+        return True, f"removed TokenPak skill references from {path}"
+    return False, f"no TokenPak skill references in {path}"
+
+
+def _run_selected(
+    *,
+    paths: "SessionPaths | None" = None,
+    codex_home: Path | None = None,
+    session_mode: str | None = None,
+    workspace_dir: Path | None = None,
+) -> int:
+    """Internal selected-home uninstall runner."""
+    if paths is None:
+        from .session_home import InvalidSessionMode, current_paths, select_paths
+
+        try:
+            if codex_home is not None:
+                paths = select_paths(
+                    session_mode,
+                    workspace_dir=workspace_dir,
+                    selected_home=codex_home,
+                )
+            else:
+                paths = current_paths(session_mode, workspace_dir=workspace_dir)
+        except (InvalidSessionMode, ValueError) as exc:
+            print(f"tokenpak codex uninstall: {exc}", file=sys.stderr)
+            return 2
+
+    from . import state_lock
+    from .session_home import HomeInUseError, SessionLease
+
+    status = state_lock.probe(paths.home)
+    if status.locked:
+        print(state_lock.remediation_hint(status), file=sys.stderr)
+        return 1
+
+    lease: SessionLease | None = None
+    if paths.home.exists():
+        try:
+            lease = SessionLease.acquire(paths)
+        except (OSError, RuntimeError, HomeInUseError) as exc:
+            print(
+                f"tokenpak codex uninstall: selected home is active or unsafe: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        # Native Codex does not participate in the lifecycle lease.  Sample
+        # attachments once more after acquiring it and immediately before any
+        # uninstall mutation to narrow the probe-to-cleanup race.
+        status = state_lock.probe(paths.home)
+        if status.locked:
+            lease.release()
+            print(state_lock.remediation_hint(status), file=sys.stderr)
+            return 1
+
     errors: list[str] = []
 
     print("tokenpak codex uninstall:")
+    for label, value in paths.report_rows():
+        print(f"  {label}: {value}")
+    print()
 
     try:
-        mcp_ok = remove_mcp()
-        print(f"  [{'ok' if mcp_ok else '—'}] MCP registration: {SERVER_NAME}")
-    except Exception as exc:
-        errors.append(f"MCP unregister: {exc}")
-        print(f"  [!!] MCP registration: {exc}")
-
-    for label, fn in (
-        ("hooks.json", clean_hooks_json),
-        ("AGENTS.md", clean_agents_md),
-        ("rates snapshot", clean_rates_snapshot),
-    ):
         try:
-            changed, detail = fn()
-            tag = "ok" if changed else "—"
-            print(f"  [{tag}] {label}: {detail}")
+            mcp_ok = remove_mcp(paths.home)
+            print(f"  [{'ok' if mcp_ok else '—'}] MCP registration: {SERVER_NAME}")
         except Exception as exc:
-            errors.append(f"{label}: {exc}")
-            print(f"  [!!] {label}: {exc}")
+            errors.append(f"MCP unregister: {exc}")
+            print(f"  [!!] MCP registration: {exc}")
 
-    try:
-        removed = uninstall_skills()
-        detail = f"removed {len(removed)}" if removed else "nothing to remove"
-        tag = "ok" if removed else "—"
-        print(f"  [{tag}] skills: {detail}")
-    except Exception as exc:
-        errors.append(f"skills: {exc}")
-        print(f"  [!!] skills: {exc}")
+        cleaners = [
+            ("hooks.json", lambda: clean_hooks_json(paths.hooks)),
+            ("AGENTS.md", lambda: clean_agents_md(paths.agents)),
+        ]
+        if paths.mode != "shared":
+            cleaners.append(("skills config", lambda: _clean_selected_skills_config(paths.config)))
+        cleaners.append(("rates snapshot", clean_rates_snapshot))
+        for label, fn in cleaners:
+            try:
+                changed, detail = fn()
+                tag = "ok" if changed else "—"
+                print(f"  [{tag}] {label}: {detail}")
+            except Exception as exc:
+                errors.append(f"{label}: {exc}")
+                print(f"  [!!] {label}: {exc}")
+
+        try:
+            removed = uninstall_skills()
+            detail = f"removed {len(removed)}" if removed else "nothing to remove"
+            tag = "ok" if removed else "—"
+            print(f"  [{tag}] skills: {detail}")
+        except Exception as exc:
+            errors.append(f"skills: {exc}")
+            print(f"  [!!] skills: {exc}")
+    finally:
+        if lease is not None:
+            lease.release()
 
     print()
     print("journal.db + budget.db retained (user data)")
@@ -163,6 +239,11 @@ def run() -> int:
         print(f"{len(errors)} errors during uninstall", file=sys.stderr)
         return 1
     return 0
+
+
+def run() -> int:
+    """Execute uninstall and print a report. Returns 0 on clean run."""
+    return _run_selected()
 
 
 def main(argv: list[str] | None = None) -> int:

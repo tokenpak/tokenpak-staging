@@ -12,10 +12,13 @@ input.  Scope note: this does not exercise the ``codex mcp`` / ``codex
 features`` probe-avoidance behavior — that lives in ``hooks.py`` /
 ``mcp_config.py``, outside this packet's ``expected_files_changed``.
 """
+
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+import os
+import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -148,6 +151,20 @@ class _FakeConfig:
         return None
 
 
+def _stub_session_env(monkeypatch, tmp_path: Path) -> None:
+    user_home = tmp_path / "user"
+    source_home = user_home / ".codex"
+    source_home.mkdir(parents=True)
+    (source_home / "config.toml").write_text('model = "gpt-test"\n')
+    (source_home / "auth.json").write_text('{"test": true}\n')
+    (source_home / "auth.json").chmod(0o600)
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "tokenpak-home"))
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "isolated")
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
 def _stub_setup(monkeypatch, tmp_path):
     """Stub the launcher's setup steps so main() reaches the preflight."""
     from tokenpak.companion.codex import (
@@ -157,61 +174,162 @@ def _stub_setup(monkeypatch, tmp_path):
         skills_installer,
     )
 
+    _stub_session_env(monkeypatch, tmp_path)
     cfg = _FakeConfig(tmp_path / "journal")
-    monkeypatch.setattr(
-        launcher.CompanionConfig, "from_env", classmethod(lambda cls: cfg)
-    )
+    monkeypatch.setattr(launcher.CompanionConfig, "from_env", classmethod(lambda cls: cfg))
     monkeypatch.setattr(rates_snapshot, "refresh", lambda: tmp_path / "rates.json")
     monkeypatch.setattr(mcp_config, "get_env_vars", lambda config: {})
-    monkeypatch.setattr(mcp_config, "register", lambda env_vars=None: True)
-    monkeypatch.setattr(agents_md, "install_agents_md", lambda target="global": tmp_path / "AGENTS.md")
+    monkeypatch.setattr(mcp_config, "register", lambda env_vars=None, codex_home=None: True)
+    monkeypatch.setattr(
+        agents_md,
+        "install_agents_md",
+        lambda target="global", codex_home=None: Path(codex_home) / "AGENTS.md",
+    )
     monkeypatch.setattr(skills_installer, "install_skills", lambda target_dir=None: [])
+    monkeypatch.setattr(
+        skills_installer,
+        "_configure_skills",
+        lambda config_path, skills_root=None: [],
+    )
 
 
 def test_main_aborts_when_preflight_blocks(monkeypatch, tmp_path):
     _stub_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: 7)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: 7)
 
-    def _no_exec(*a, **k):
-        raise AssertionError("must not exec when preflight blocks")
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("must not launch when preflight blocks")
 
-    monkeypatch.setattr(launcher.os, "execvpe", _no_exec)
+    monkeypatch.setattr(launcher, "_run_codex_process", _must_not_run)
     assert launcher.main([]) == 7
+    assert not (tmp_path / "user" / ".codex" / "codex.pid").exists()
+    assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
 
 
-def test_main_install_only_skips_preflight(monkeypatch, tmp_path):
+def test_shared_mode_real_holder_probe_refuses_before_setup(monkeypatch, tmp_path, capsys):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    database = tmp_path / "user" / ".codex" / "state_77.sqlite"
+    holder = sqlite3.connect(database, isolation_level=None)
+    holder.execute("CREATE TABLE records (id INTEGER)")
+    holder.execute("BEGIN EXCLUSIVE")
+    real_preflight = launcher._preflight_state_lock
+
+    def fast_preflight(**kwargs):
+        return real_preflight(
+            interactive=False,
+            timeout_s=0,
+            sleep=lambda _seconds: None,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(launcher, "_preflight_state_lock", fast_preflight)
+    monkeypatch.setattr(
+        launcher.CompanionConfig,
+        "from_env",
+        classmethod(
+            lambda cls: (_ for _ in ()).throw(
+                AssertionError("shared contention must block before setup")
+            )
+        ),
+    )
+    try:
+        assert launcher.main(["--install-only"]) == 1
+        stderr = capsys.readouterr().err
+        assert f"PID {os.getpid()} (running)" in stderr
+        assert "holder PID unavailable" not in stderr
+        assert not (database.parent / "codex.pid").exists()
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_invalid_mode_fails_before_preflight_or_filesystem_write(monkeypatch, tmp_path):
+    _stub_session_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "automatic")
+    monkeypatch.setattr(
+        launcher,
+        "_preflight_state_lock",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid mode must fail before preflight")
+        ),
+    )
+
+    assert launcher.main([]) == 2
+    assert not (tmp_path / "tokenpak-home").exists()
+
+
+def test_main_install_only_preflights_and_releases_lease(monkeypatch, tmp_path):
     _stub_setup(monkeypatch, tmp_path)
     called = {"n": 0}
 
-    def _preflight():
+    def _preflight(**_kwargs):
         called["n"] += 1
         return None
 
     monkeypatch.setattr(launcher, "_preflight_state_lock", _preflight)
     rc = launcher.main(["--install-only"])
     assert rc == 0
-    assert called["n"] == 0, "install-only must not run the lock preflight"
+    assert called["n"] == 1
+    assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
 
 
-def test_main_execs_when_preflight_clear(monkeypatch, tmp_path):
+def test_shared_install_preserves_existing_config_and_skips_skill_refs(monkeypatch, tmp_path):
+    from tokenpak.companion.codex import skills_installer
+
     _stub_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+    config = tmp_path / "user" / ".codex" / "config.toml"
+    original = config.read_bytes()
+    monkeypatch.setattr(
+        skills_installer,
+        "_configure_skills",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("shared mode must not mutate config for skill discovery")
+        ),
+    )
+
+    assert launcher.main(["--install-only"]) == 0
+    assert config.read_bytes() == original
+
+
+def test_main_supervises_when_preflight_clear(monkeypatch, tmp_path, capsys):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
     captured = {}
 
-    class _Exec(Exception):
-        pass
-
-    def _fake_exec(file, argv, env):
-        captured["file"] = file
+    def _fake_run(argv, env, *, on_start=None):
         captured["argv"] = argv
-        raise _Exec
+        captured["env"] = env
+        assert on_start is not None
+        on_start(os.getpid())
+        return 0, launcher.empty_usage()
 
-    monkeypatch.setattr(launcher.os, "execvpe", _fake_exec)
-
-    with pytest.raises(_Exec):
-        launcher.main([])
-    assert captured["file"] == "codex"
+    monkeypatch.setattr(launcher, "_run_codex_process", _fake_run)
+    assert launcher.main([]) == 0
     assert captured["argv"][0] == "codex"
+    assert captured["env"]["TOKENPAK_CODEX_SESSION_MODE"] == "isolated"
+    assert captured["env"]["CODEX_HOME"].startswith(
+        str(tmp_path / "tokenpak-home" / "companion" / "codex" / "sessions")
+    )
+    assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
+    stderr = capsys.readouterr().err
+    for label in (
+        "session mode:",
+        "workspace:",
+        "CODEX_HOME:",
+        "source home:",
+        "config:",
+        "auth:",
+        "MCP config:",
+        "hooks:",
+        "AGENTS.md:",
+        "skills:",
+        "PID sentinel:",
+    ):
+        assert label in stderr
 
 
 # ── explicit no-body accounting receipt mode ───────────────────────────
@@ -312,25 +430,21 @@ def test_codex_manual_namespace_preserves_receipt_only_flag():
     assert ns.args == ["--version"]
 
 
-def test_main_receipt_mode_runs_child_and_writes_no_body_receipt(
-    monkeypatch, tmp_path
-):
+def test_main_receipt_mode_runs_child_and_writes_no_body_receipt(monkeypatch, tmp_path):
     _stub_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
     monkeypatch.setattr(launcher, "_fleet_state_enabled", lambda: False)
 
     captured = {}
 
-    def _fake_run(argv, env=None):
+    def _fake_run(argv, env, *, on_start=None):
         captured["argv"] = list(argv)
         captured["env"] = dict(env or {})
-        return SimpleNamespace(returncode=0)
+        assert on_start is not None
+        on_start(os.getpid())
+        return 0, launcher.empty_usage()
 
-    def _no_exec(*_a, **_k):
-        raise AssertionError("receipt mode must not exec-replace")
-
-    monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
-    monkeypatch.setattr(launcher.os, "execvpe", _no_exec)
+    monkeypatch.setattr(launcher, "_run_codex_process", _fake_run)
 
     receipt_path = tmp_path / "receipt.json"
     prompt_body = "BODY_SENTINEL_PROMPT_MUST_NOT_BE_STORED"
@@ -365,9 +479,7 @@ def test_main_receipt_mode_runs_child_and_writes_no_body_receipt(
     assert receipt["attribution"]["tokenpak_mechanism_active"] is True
 
 
-def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(
-    monkeypatch, tmp_path
-):
+def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(monkeypatch, tmp_path):
     from tokenpak.companion.codex import (
         agents_md,
         mcp_config,
@@ -378,30 +490,26 @@ def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(
     def _setup_must_not_run(*_a, **_k):
         raise AssertionError("receipt-only mode must not run companion setup")
 
+    _stub_session_env(monkeypatch, tmp_path)
     monkeypatch.setattr(launcher.CompanionConfig, "from_env", _setup_must_not_run)
     monkeypatch.setattr(rates_snapshot, "refresh", _setup_must_not_run)
     monkeypatch.setattr(mcp_config, "register", _setup_must_not_run)
     monkeypatch.setattr(agents_md, "install_agents_md", _setup_must_not_run)
     monkeypatch.setattr(skills_installer, "install_skills", _setup_must_not_run)
-    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
     monkeypatch.setenv("TOKENPAK_COMPANION_PROFILE", "aggressive")
     monkeypatch.setenv("TOKENPAK_MANAGED", "1")
 
     captured = {}
 
-    def _fake_run(argv, env=None):
+    def _fake_run(argv, env, *, on_start=None):
         captured["argv"] = list(argv)
         captured["env"] = dict(env or {})
-        return SimpleNamespace(returncode=0)
+        assert on_start is not None
+        on_start(os.getpid())
+        return 0, launcher.empty_usage()
 
-    monkeypatch.setattr(launcher.subprocess, "run", _fake_run)
-    monkeypatch.setattr(
-        launcher.os,
-        "execvpe",
-        lambda *_a, **_k: (_ for _ in ()).throw(
-            AssertionError("receipt-only mode must not exec-replace")
-        ),
-    )
+    monkeypatch.setattr(launcher, "_run_codex_process", _fake_run)
 
     receipt_path = tmp_path / "receipt-only.json"
     prompt_body = "BODY_SENTINEL_PROMPT_MUST_NOT_BE_STORED"
@@ -417,6 +525,10 @@ def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(
     assert captured["env"]["TOKENPAK_CODEX_RECEIPT_OUT"] == str(receipt_path)
     assert "TOKENPAK_COMPANION_PROFILE" not in captured["env"]
     assert "TOKENPAK_MANAGED" not in captured["env"]
+    assert captured["env"]["TOKENPAK_CODEX_SESSION_MODE"] == "isolated"
+    assert captured["env"]["CODEX_HOME"].startswith(
+        str(tmp_path / "tokenpak-home" / "companion" / "codex" / "sessions")
+    )
 
     raw = receipt_path.read_text(encoding="utf-8")
     assert prompt_body not in raw
@@ -440,12 +552,12 @@ def test_receipt_only_mode_skips_companion_setup_and_writes_no_body_receipt(
 
 def test_json_receipt_mode_extracts_usage_without_storing_body(monkeypatch, tmp_path):
     _stub_setup(monkeypatch, tmp_path)
-    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda: None)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
     monkeypatch.setattr(launcher, "_fleet_state_enabled", lambda: False)
 
     class _FakeStdout:
-        def __iter__(self):
-            return iter(
+        def __init__(self):
+            self._lines = iter(
                 [
                     '{"type":"message","text":"BODY_SENTINEL_COMPLETION"}\n',
                     (
@@ -455,14 +567,21 @@ def test_json_receipt_mode_extracts_usage_without_storing_body(monkeypatch, tmp_
                 ]
             )
 
+        def readline(self):
+            return next(self._lines, "")
+
     class _FakePopen:
         stdout = _FakeStdout()
+        pid = os.getpid()
 
         def __init__(self, *_a, **_k):
             return None
 
         def wait(self):
             return 0
+
+        def poll(self):
+            return None
 
     monkeypatch.setattr(launcher.subprocess, "Popen", _FakePopen)
 
@@ -483,3 +602,117 @@ def test_json_receipt_mode_extracts_usage_without_storing_body(monkeypatch, tmp_
     assert receipt["metrics"]["output_tokens"] == 6
     assert receipt["metrics"]["total_tokens"] == 16
     assert receipt["attribution"]["provider_native_caching_involved"] is True
+
+
+def test_process_supervision_uses_fast_child_result_when_transfer_is_too_late(monkeypatch):
+    class FastProcess:
+        pid = 12345
+        stdout = None
+        waited = False
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            self.waited = True
+            return 0
+
+    process = FastProcess()
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda *_a, **_k: process)
+
+    result, _usage = launcher._run_codex_process(
+        ["codex", "--version"],
+        {},
+        on_start=lambda _pid: (_ for _ in ()).throw(RuntimeError("already exited")),
+    )
+
+    assert result == 0
+    assert process.waited
+
+
+def test_json_supervision_continues_after_interrupts_and_reaps(monkeypatch, capsys):
+    class InterruptingStdout:
+        def __init__(self):
+            self.calls = 0
+
+        def readline(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise KeyboardInterrupt
+            if self.calls == 2:
+                return '{"type":"usage","usage":{"input_tokens":2,"output_tokens":3}}\n'
+            return ""
+
+    class InterruptingProcess:
+        pid = 12346
+        stdout = InterruptingStdout()
+
+        def __init__(self, *_args, **_kwargs):
+            self.wait_calls = 0
+
+        def wait(self):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise KeyboardInterrupt
+            return 0
+
+    process = InterruptingProcess()
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda *_a, **_k: process)
+
+    result, usage = launcher._run_codex_process(["codex", "exec", "--json"], {})
+
+    assert result == 0
+    assert usage["input_tokens"] == 2
+    assert usage["output_tokens"] == 3
+    assert process.wait_calls == 2
+    assert '"type":"usage"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "write_error",
+    [
+        BrokenPipeError(),
+        UnicodeEncodeError("ascii", "é", 0, 1, "ordinal not in range"),
+    ],
+    ids=["broken-pipe", "encoding-error"],
+)
+def test_json_output_failure_is_drained_and_child_reaped(monkeypatch, write_error):
+    class Output:
+        def __init__(self):
+            self.lines = iter(["one\n", "two\n", ""])
+            self.read_count = 0
+
+        def readline(self):
+            self.read_count += 1
+            return next(self.lines)
+
+    class Process:
+        pid = 12347
+        stdout = Output()
+
+        def __init__(self, *_args, **_kwargs):
+            self.waited = False
+
+        def wait(self):
+            self.waited = True
+            return 0
+
+    class BrokenOutput:
+        def write(self, _line):
+            raise write_error
+
+        def flush(self):
+            raise AssertionError("flush must not follow failed write")
+
+    process = Process()
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(launcher.sys, "stdout", BrokenOutput())
+
+    result, _usage = launcher._run_codex_process(["codex", "exec", "--json"], {})
+
+    assert result == 0
+    assert process.waited
+    assert process.stdout.read_count == 3
