@@ -31,6 +31,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -73,6 +74,10 @@ _MAX_SENTINEL_BYTES = 16 * 1024
 _SENTINEL_TEMP_RE = re.compile(
     rf"^\.{re.escape(PID_SENTINEL_NAME)}\.(acquire|transfer)\.([0-9a-f]{{32}})\.tmp$"
 )
+_PROCESS_LIVE = "live"
+_PROCESS_DEAD = "dead-or-reused"
+_PROCESS_UNKNOWN = "unknown"
+_PROCESS_OBSERVED = "observed"
 
 RETENTION_MAX_HOMES = 5
 RETENTION_MAX_AGE_S = 7 * 24 * 60 * 60
@@ -86,6 +91,14 @@ _RETENTION_RECEIPT_NAME = ".tokenpak-retention.jsonl"
 _RETENTION_QUARANTINE_PREFIX = ".tokenpak-quarantine."
 _RETENTION_QUARANTINE_RE = re.compile(rf"^{re.escape(_RETENTION_QUARANTINE_PREFIX)}[0-9a-f]{{32}}$")
 _RETENTION_MAX_RECEIPT_BYTES = 16 * 1024 * 1024
+
+
+def _is_sentinel_temp_candidate(name: str) -> bool:
+    """Recognize the full wildcard family, including unusual filenames."""
+    return any(
+        name.startswith(f".{PID_SENTINEL_NAME}.{phase}.") and name.endswith(".tmp")
+        for phase in ("acquire", "transfer")
+    )
 
 
 class InvalidSessionMode(ValueError):
@@ -135,7 +148,9 @@ class _RetentionReport:
 
     @property
     def unsafe(self) -> tuple[_IsolatedHomeInfo, ...]:
-        return tuple(home for home in self.homes if home.state in {"unsafe", "creating"})
+        return tuple(
+            home for home in self.homes if home.state in {"unsafe", "creating", "handoff"}
+        )
 
     @property
     def over_count(self) -> bool:
@@ -219,6 +234,15 @@ class PidSentinel:
     session_id: str
     mode: str
     home: str
+
+
+@dataclass(frozen=True)
+class _SentinelArtifactInspection:
+    """Fail-closed retention view of lifecycle publication artifacts."""
+
+    state: str | None = None
+    pid: int | None = None
+    complete: bool = True
 
 
 def resolve_mode(raw: str | None = None) -> str:
@@ -610,7 +634,7 @@ def _replace_private_at(dir_fd: int, name: str, data: bytes) -> None:
     try:
         os.replace(tmp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     finally:
-        with contextlib.suppress(FileNotFoundError):
+        with contextlib.suppress(OSError):
             os.unlink(tmp_name, dir_fd=dir_fd)
 
 
@@ -809,9 +833,14 @@ def _proc_identity(pid: int, proc_root: Path = Path("/proc")) -> tuple[str, int]
     try:
         raw = (proc_root / str(pid) / "stat").read_text(encoding="utf-8")
     except OSError:
-        if proc_root == Path("/proc"):
+        if proc_root == Path("/proc") and not sys.platform.startswith("linux"):
             return _portable_process_identity(pid)
         return None
+    return _parse_proc_stat_identity(raw)
+
+
+def _parse_proc_stat_identity(raw: str) -> tuple[str, int] | None:
+    """Parse one Linux proc stat row without performing fallback I/O."""
     rparen = raw.rfind(")")
     if rparen < 0:
         return None
@@ -865,6 +894,72 @@ def read_pid_sentinel(path: Path, *, dir_fd: int | None = None) -> PidSentinel |
         return None
 
 
+def _process_identity_evidence(
+    pid: int,
+    *,
+    proc_root: Path = Path("/proc"),
+) -> tuple[str, tuple[str, int] | None]:
+    """Separate proven absence from incomplete process inspection."""
+    if pid <= 0:
+        return _PROCESS_DEAD, None
+    use_proc = proc_root != Path("/proc") or sys.platform.startswith("linux")
+    if use_proc:
+        try:
+            root_info = proc_root.stat()
+        except OSError:
+            return _PROCESS_UNKNOWN, None
+        if not stat.S_ISDIR(root_info.st_mode):
+            return _PROCESS_UNKNOWN, None
+        stat_path = proc_root / str(pid) / "stat"
+        try:
+            stat_path.stat()
+        except FileNotFoundError:
+            # Distinguish a proven-absent PID from procfs disappearing or
+            # becoming unreadable between the root and PID observations.
+            try:
+                if not stat.S_ISDIR(proc_root.stat().st_mode):
+                    return _PROCESS_UNKNOWN, None
+            except OSError:
+                return _PROCESS_UNKNOWN, None
+            return _PROCESS_DEAD, None
+        except OSError:
+            return _PROCESS_UNKNOWN, None
+        try:
+            raw = stat_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return _PROCESS_UNKNOWN, None
+        except OSError:
+            return _PROCESS_UNKNOWN, None
+        identity = _parse_proc_stat_identity(raw)
+    else:
+        identity = _proc_identity(pid, proc_root)
+    if identity is None:
+        return _PROCESS_UNKNOWN, None
+    return _PROCESS_OBSERVED, identity
+
+
+def _sentinel_liveness(
+    sentinel: PidSentinel,
+    *,
+    expected_home: Path | None = None,
+    proc_root: Path = Path("/proc"),
+) -> str:
+    """Return live, proven-dead/reused, or unknown incarnation evidence."""
+    if expected_home is not None:
+        try:
+            if Path(sentinel.home).resolve() != expected_home.resolve():
+                return _PROCESS_UNKNOWN
+        except OSError:
+            return _PROCESS_UNKNOWN
+    evidence, identity = _process_identity_evidence(sentinel.pid, proc_root=proc_root)
+    if evidence != _PROCESS_OBSERVED or identity is None:
+        return evidence
+    state, start_ticks = identity
+    if state in {"Z", "X", "x"} or start_ticks != sentinel.start_time_ticks:
+        return _PROCESS_DEAD
+    return _PROCESS_LIVE
+
+
 def sentinel_is_live(
     sentinel: PidSentinel,
     *,
@@ -872,17 +967,14 @@ def sentinel_is_live(
     proc_root: Path = Path("/proc"),
 ) -> bool:
     """Validate process incarnation and selected-home binding."""
-    if expected_home is not None:
-        try:
-            if Path(sentinel.home).resolve() != expected_home.resolve():
-                return False
-        except OSError:
-            return False
-    identity = _proc_identity(sentinel.pid, proc_root)
-    if identity is None:
-        return False
-    state, start_ticks = identity
-    return state not in {"Z", "X", "x"} and start_ticks == sentinel.start_time_ticks
+    return (
+        _sentinel_liveness(
+            sentinel,
+            expected_home=expected_home,
+            proc_root=proc_root,
+        )
+        == _PROCESS_LIVE
+    )
 
 
 def _open_managed_sessions_root(
@@ -1040,6 +1132,78 @@ def _tree_allocated_size(
     return walk(directory_fd)
 
 
+def _inspect_sentinel_temp_artifacts(
+    home_fd: int,
+    path: Path,
+    *,
+    deadline: float,
+    proc_root: Path,
+) -> _SentinelArtifactInspection:
+    """Inspect every acquire/transfer temp; ambiguity always protects."""
+    getuid = getattr(os, "geteuid", None)
+    artifacts = 0
+    live_pid: int | None = None
+    handoff = False
+    unsafe = False
+    try:
+        with os.scandir(home_fd) as entries:
+            for entry_count, entry in enumerate(entries, start=1):
+                if time.monotonic() >= deadline or entry_count > _RETENTION_MAX_ENTRIES:
+                    return _SentinelArtifactInspection("unsafe", None, False)
+                name = entry.name
+                if not _is_sentinel_temp_candidate(name):
+                    continue
+                artifacts += 1
+                match = _SENTINEL_TEMP_RE.fullmatch(name)
+                if match is None:
+                    unsafe = True
+                    continue
+                try:
+                    info = os.stat(name, dir_fd=home_fd, follow_symlinks=False)
+                except OSError:
+                    unsafe = True
+                    continue
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_nlink != 1
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                    or (getuid is not None and info.st_uid != getuid())
+                ):
+                    unsafe = True
+                    continue
+                candidate = read_pid_sentinel(Path(name), dir_fd=home_fd)
+                if candidate is None or candidate.mode != MODE_ISOLATED:
+                    unsafe = True
+                    continue
+                liveness = _sentinel_liveness(
+                    candidate,
+                    expected_home=path,
+                    proc_root=proc_root,
+                )
+                if liveness == _PROCESS_UNKNOWN:
+                    unsafe = True
+                elif liveness == _PROCESS_LIVE:
+                    if live_pid is not None and live_pid != candidate.pid:
+                        unsafe = True
+                    live_pid = candidate.pid
+                elif match.group(1) == "transfer":
+                    # A complete but interrupted transfer is still a handoff,
+                    # not proof that no child inherited this home.
+                    handoff = True
+    except OSError:
+        return _SentinelArtifactInspection("unsafe", None, False)
+
+    if artifacts > 1:
+        unsafe = True
+    if unsafe:
+        return _SentinelArtifactInspection("unsafe", live_pid, False)
+    if live_pid is not None:
+        return _SentinelArtifactInspection("active", live_pid, True)
+    if handoff:
+        return _SentinelArtifactInspection("handoff", None, True)
+    return _SentinelArtifactInspection()
+
+
 def _inspect_isolated_home_at(
     root_fd: int,
     root: Path,
@@ -1047,6 +1211,7 @@ def _inspect_isolated_home_at(
     *,
     now: float,
     deadline: float,
+    proc_root: Path = Path("/proc"),
 ) -> _IsolatedHomeInfo:
     getuid = getattr(os, "geteuid", None)
     owner_uid = getuid() if getuid is not None else None
@@ -1087,6 +1252,24 @@ def _inspect_isolated_home_at(
             owner_uid=owner_uid,
             deadline=deadline,
         )
+        artifacts = _inspect_sentinel_temp_artifacts(
+            home_fd,
+            path,
+            deadline=deadline,
+            proc_root=proc_root,
+        )
+        if artifacts.state is not None:
+            return _IsolatedHomeInfo(
+                path,
+                entry.st_dev,
+                entry.st_ino,
+                entry.st_mtime,
+                age,
+                size,
+                size_complete and artifacts.complete,
+                artifacts.state,
+                artifacts.pid,
+            )
         sentinel_entry = _entry_stat(PID_SENTINEL_NAME, home_fd)
         if sentinel_entry is None:
             state = "creating" if age < _RETENTION_CREATION_GRACE_S else "orphan-absent"
@@ -1104,11 +1287,14 @@ def _inspect_isolated_home_at(
         if sentinel is None:
             state = "unsafe"
             pid = None
-        elif sentinel_is_live(sentinel):
-            state = "active" if sentinel_is_live(sentinel, expected_home=path) else "unsafe"
-            pid = sentinel.pid
         else:
-            state = "orphan-stale"
+            liveness = _sentinel_liveness(sentinel, expected_home=path, proc_root=proc_root)
+            if liveness == _PROCESS_LIVE:
+                state = "active"
+            elif liveness == _PROCESS_DEAD:
+                state = "orphan-stale"
+            else:
+                state = "unsafe"
             pid = sentinel.pid
         return _IsolatedHomeInfo(
             path,
@@ -1130,6 +1316,7 @@ def inspect_isolated_homes(
     *,
     now: float | None = None,
     deadline: float | None = None,
+    proc_root: Path = Path("/proc"),
 ) -> _RetentionReport:
     """Read-only isolated-home inventory for doctor and retention planning."""
     root = sessions_root(tokenpak_home)
@@ -1164,6 +1351,7 @@ def inspect_isolated_homes(
                             name,
                             now=now,
                             deadline=deadline,
+                            proc_root=proc_root,
                         )
                         total += quarantine_info.size_bytes
                         complete = False
@@ -1174,10 +1362,15 @@ def inspect_isolated_homes(
                         name,
                         now=now,
                         deadline=deadline,
+                        proc_root=proc_root,
                     )
                     homes.append(info)
                     total += info.size_bytes
-                    complete = complete and info.size_complete and info.state != "unsafe"
+                    complete = (
+                        complete
+                        and info.size_complete
+                        and info.state not in {"unsafe", "handoff"}
+                    )
         except OSError:
             complete = False
     finally:
@@ -1300,6 +1493,16 @@ def _lease_guard(home: Path, *, home_fd: int | None = None) -> Iterator[None]:
 
 
 @contextlib.contextmanager
+def _existing_lease_guard(home: Path, *, home_fd: int) -> Iterator[None]:
+    """Join an existing home lease without creating state in a bare orphan."""
+    if _entry_stat(_LEASE_GUARD_NAME, home_fd) is None:
+        yield
+        return
+    with _lease_guard(home, home_fd=home_fd):
+        yield
+
+
+@contextlib.contextmanager
 def _retention_guard(root: Path, root_fd: int) -> Iterator[None]:
     """Serialize isolated-home publication and cleanup across processes."""
     entry = _entry_stat(_RETENTION_GUARD_NAME, root_fd)
@@ -1418,6 +1621,7 @@ def _read_retention_receipts(root_fd: int) -> tuple[dict[str, object], ...]:
         inode = record.get("inode")
         size_bytes = record.get("size_bytes")
         timestamp_ns = record.get("timestamp_ns")
+        reason = record.get("reason")
         if (
             record.get("schema") != "tokenpak.codex.retention.v1"
             or record.get("action") not in {"planned", "completed"}
@@ -1437,6 +1641,8 @@ def _read_retention_receipts(root_fd: int) -> tuple[dict[str, object], ...]:
             or not isinstance(timestamp_ns, int)
             or isinstance(timestamp_ns, bool)
             or timestamp_ns <= 0
+            or not isinstance(reason, str)
+            or _SESSION_ID_RE.fullmatch(reason) is None
         ):
             raise HomeInUseError(f"invalid retention receipt at line {line_number}")
         records.append(record)
@@ -1452,11 +1658,16 @@ def _remove_tree_contents_at(
 ) -> None:
     """Delete a quarantined tree through pinned descriptors only."""
     try:
-        names = os.listdir(directory_fd)
+        names: list[str] = []
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                if time.monotonic() >= deadline:
+                    raise HomeInUseError("quarantined isolated-home cleanup timed out")
+                if len(names) + counter[0] >= _RETENTION_MAX_NODES:
+                    raise HomeInUseError("quarantined isolated home exceeds cleanup node limit")
+                names.append(entry.name)
     except OSError as exc:
         raise HomeInUseError("cannot enumerate quarantined isolated home") from exc
-    if len(names) + counter[0] > _RETENTION_MAX_NODES:
-        raise HomeInUseError("quarantined isolated home exceeds cleanup node limit")
     for name in names:
         if time.monotonic() >= deadline:
             raise HomeInUseError("quarantined isolated-home cleanup timed out")
@@ -1547,9 +1758,19 @@ def _recover_quarantines_at(
     deadline: float,
 ) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """Resume receipt-proven quarantines; preserve and report all others."""
-    names = sorted(
-        name for name in os.listdir(root_fd) if name.startswith(_RETENTION_QUARANTINE_PREFIX)
-    )
+    names: list[str] = []
+    try:
+        with os.scandir(root_fd) as entries:
+            for entry_count, entry in enumerate(entries, start=1):
+                if time.monotonic() >= deadline:
+                    return (), ("quarantine recovery wall-time limit reached",)
+                if entry_count > _RETENTION_MAX_ENTRIES:
+                    return (), ("quarantine inventory exceeds retention entry limit",)
+                if entry.name.startswith(_RETENTION_QUARANTINE_PREFIX):
+                    names.append(entry.name)
+    except OSError as exc:
+        return (), (f"cannot inspect quarantine inventory: {exc}",)
+    names.sort()
     if not names:
         return (), ()
     if len(names) > _RETENTION_MAX_ENTRIES:
@@ -1561,6 +1782,7 @@ def _recover_quarantines_at(
 
     planned: dict[str, dict[str, object]] = {}
     completed: set[str] = set()
+    conflicted: set[str] = set()
     errors: list[str] = []
     for record in records:
         quarantine = str(record["quarantine"])
@@ -1569,9 +1791,14 @@ def _recover_quarantines_at(
             continue
         prior = planned.get(quarantine)
         if prior is not None and any(
-            prior[field] != record[field] for field in ("home", "device", "inode")
+            prior[field] != record[field]
+            for field in ("home", "device", "inode", "size_bytes", "reason")
         ):
             errors.append(f"{quarantine}: conflicting planned retention receipts")
+            conflicted.add(quarantine)
+            planned.pop(quarantine, None)
+            continue
+        if quarantine in conflicted:
             continue
         planned[quarantine] = record
 
@@ -1580,6 +1807,8 @@ def _recover_quarantines_at(
         if time.monotonic() >= deadline:
             errors.append("quarantine recovery wall-time limit reached")
             break
+        if quarantine in conflicted:
+            continue
         receipt = planned.get(quarantine)
         if receipt is None:
             errors.append(f"{quarantine}: no planned retention receipt")
@@ -1616,47 +1845,87 @@ def _retire_isolated_home_at(
     *,
     reason: str,
     deadline: float,
+    proc_root: Path = Path("/proc"),
 ) -> Path:
     """Revalidate, receipt, quarantine, and delete exactly one orphan."""
-    current = _inspect_isolated_home_at(
-        root_fd,
-        root,
+    home_fd = os.open(
         expected.path.name,
-        now=time.time(),
-        deadline=deadline,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=root_fd,
     )
-    if (
-        not current.orphaned
-        or not current.size_complete
-        or (current.device, current.inode) != (expected.device, expected.inode)
-    ):
-        raise HomeInUseError(f"isolated home changed before cleanup: {expected.path}")
+    try:
+        pinned = os.fstat(home_fd)
+        if (pinned.st_dev, pinned.st_ino) != (expected.device, expected.inode):
+            raise HomeInUseError(f"isolated home changed before cleanup: {expected.path}")
+        # cleanup already holds the root retention guard.  Joining any
+        # pre-existing home guard closes races with older launchers that did
+        # not yet coordinate transfer publication through the root guard.
+        with _existing_lease_guard(expected.path, home_fd=home_fd):
+            current = _inspect_isolated_home_at(
+                root_fd,
+                root,
+                expected.path.name,
+                now=time.time(),
+                deadline=deadline,
+                proc_root=proc_root,
+            )
+            if (
+                not current.orphaned
+                or not current.size_complete
+                or (current.device, current.inode) != (expected.device, expected.inode)
+            ):
+                raise HomeInUseError(f"isolated home changed before cleanup: {expected.path}")
 
-    from . import state_lock
+            from . import state_lock
 
-    status = state_lock.probe(
-        current.path,
-        deadline=deadline,
-    )
-    if status.locked or not status.diagnostics_complete:
-        raise HomeInUseError(
-            f"isolated home has live or incomplete holder evidence: {current.path}"
-        )
-    quarantine = f"{_RETENTION_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
-    receipt = {
-        "schema": "tokenpak.codex.retention.v1",
-        "action": "planned",
-        "home": current.path.name,
-        "device": current.device,
-        "inode": current.inode,
-        "size_bytes": current.size_bytes,
-        "reason": reason,
-        "quarantine": quarantine,
-        "timestamp_ns": time.time_ns(),
-    }
-    _append_retention_receipt(root_fd, receipt)
-    os.rename(current.path.name, quarantine, src_dir_fd=root_fd, dst_dir_fd=root_fd)
-    _fsync_directory(root_fd)
+            status = state_lock.probe(
+                current.path,
+                deadline=deadline,
+            )
+            if status.locked or not status.diagnostics_complete:
+                raise HomeInUseError(
+                    f"isolated home has live or incomplete holder evidence: {current.path}"
+                )
+            final = _inspect_isolated_home_at(
+                root_fd,
+                root,
+                expected.path.name,
+                now=time.time(),
+                deadline=deadline,
+                proc_root=proc_root,
+            )
+            stable_fields = (
+                "device",
+                "inode",
+                "mtime",
+                "size_bytes",
+                "size_complete",
+                "state",
+                "pid",
+            )
+            if not final.orphaned or any(
+                getattr(final, field) != getattr(current, field) for field in stable_fields
+            ):
+                raise HomeInUseError(
+                    f"isolated home changed after holder inspection: {expected.path}"
+                )
+            quarantine = f"{_RETENTION_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
+            receipt = {
+                "schema": "tokenpak.codex.retention.v1",
+                "action": "planned",
+                "home": current.path.name,
+                "device": current.device,
+                "inode": current.inode,
+                "size_bytes": current.size_bytes,
+                "reason": reason,
+                "quarantine": quarantine,
+                "timestamp_ns": time.time_ns(),
+            }
+            _append_retention_receipt(root_fd, receipt)
+            os.rename(current.path.name, quarantine, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+            _fsync_directory(root_fd)
+    finally:
+        os.close(home_fd)
     _purge_quarantine_at(
         root_fd,
         quarantine,
@@ -1680,6 +1949,7 @@ def _retention_plan(
     *,
     preserve_home: Path | None,
     remove_all_orphans: bool,
+    remove_all_reason: str = "explicit-orphan-cleanup",
 ) -> list[tuple[_IsolatedHomeInfo, str]]:
     preserve = str(preserve_home.resolve()) if preserve_home is not None else None
     eligible = [
@@ -1691,7 +1961,7 @@ def _retention_plan(
     ]
     eligible.sort(key=lambda home: (home.mtime, home.path.name))
     if remove_all_orphans:
-        return [(home, "explicit-orphan-cleanup") for home in eligible]
+        return [(home, remove_all_reason) for home in eligible]
 
     planned: list[tuple[_IsolatedHomeInfo, str]] = []
     selected: set[Path] = set()
@@ -1730,13 +2000,15 @@ def cleanup_isolated_homes(
     preserve_home: Path | None = None,
     remove_all_orphans: bool = False,
     dry_run: bool = False,
+    orphan_cleanup_reason: str = "explicit-orphan-cleanup",
+    proc_root: Path = Path("/proc"),
 ) -> _CleanupResult:
     """Apply the isolated-home policy without touching live/unknown homes."""
     if tokenpak_home is None and preserve_home is not None:
         tokenpak_home = _generated_tokenpak_root(preserve_home)
     opened = _open_managed_sessions_root(tokenpak_home)
     if opened is None:
-        empty = inspect_isolated_homes(tokenpak_home)
+        empty = inspect_isolated_homes(tokenpak_home, proc_root=proc_root)
         return _CleanupResult(empty, empty, (), (), ())
     root, root_fd = opened
     removed: list[Path] = []
@@ -1752,7 +2024,11 @@ def cleanup_isolated_homes(
                 )
                 removed.extend(recovered)
                 errors.extend(recovery_errors)
-            before = inspect_isolated_homes(tokenpak_home, deadline=deadline)
+            before = inspect_isolated_homes(
+                tokenpak_home,
+                deadline=deadline,
+                proc_root=proc_root,
+            )
             if not before.inventory_complete:
                 errors.append("isolated-home inventory incomplete; preserving all ordinary homes")
                 plan: list[tuple[_IsolatedHomeInfo, str]] = []
@@ -1761,6 +2037,7 @@ def cleanup_isolated_homes(
                     before,
                     preserve_home=preserve_home,
                     remove_all_orphans=remove_all_orphans,
+                    remove_all_reason=orphan_cleanup_reason,
                 )
             if not dry_run:
                 for home, reason in plan:
@@ -1775,6 +2052,7 @@ def cleanup_isolated_homes(
                                 home,
                                 reason=reason,
                                 deadline=deadline,
+                                proc_root=proc_root,
                             )
                         )
                     except (OSError, RuntimeError) as exc:
@@ -1784,7 +2062,8 @@ def cleanup_isolated_homes(
                 if dry_run
                 else inspect_isolated_homes(
                     tokenpak_home,
-                    deadline=time.monotonic() + _RETENTION_SCAN_TIMEOUT_S,
+                    deadline=deadline,
+                    proc_root=proc_root,
                 )
             )
             return _CleanupResult(
@@ -1811,6 +2090,54 @@ def _sentinel_payload(sentinel: PidSentinel) -> bytes:
     return (json.dumps(asdict(sentinel), sort_keys=True) + "\n").encode("utf-8")
 
 
+def _create_sentinel_temp(
+    path: Path,
+    sentinel: PidSentinel,
+    *,
+    dir_fd: int | None,
+    phase: str,
+) -> tuple[str, tuple[int, int]]:
+    """Durably create and verify one private lifecycle temp artifact."""
+    if phase not in {"acquire", "transfer"}:
+        raise ValueError("invalid sentinel publication phase")
+    payload = _sentinel_payload(sentinel)
+    tmp_name = f".{PID_SENTINEL_NAME}.{phase}.{uuid.uuid4().hex}.tmp"
+    tmp_target = tmp_name if dir_fd is not None else str(path.parent / tmp_name)
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp_target, flags, 0o600, dir_fd=dir_fd)
+    try:
+        os.fchmod(fd, 0o600)
+        _write_all(fd, payload)
+        os.fsync(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        persisted = os.read(fd, _MAX_SENTINEL_BYTES + 1)
+        try:
+            parsed = _sentinel_from_data(json.loads(persisted))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            parsed = None
+        info = os.fstat(fd)
+        if parsed != sentinel:
+            raise OSError("sentinel verification failed before publication")
+        identity = (info.st_dev, info.st_ino)
+        os.close(fd)
+        fd = -1
+        if dir_fd is not None:
+            _fsync_directory(dir_fd)
+        return tmp_name, identity
+    except BaseException:
+        if fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(OSError):
+            if dir_fd is None:
+                os.unlink(path.parent / tmp_name)
+            else:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+                with contextlib.suppress(OSError):
+                    _fsync_directory(dir_fd)
+        raise
+
+
 def _write_sentinel_atomic(
     path: Path,
     sentinel: PidSentinel,
@@ -1820,28 +2147,14 @@ def _write_sentinel_atomic(
     replace_existing: bool,
 ) -> None:
     """Publish a complete private sentinel with fsync + atomic rename."""
-    if phase not in {"acquire", "transfer"}:
-        raise ValueError("invalid sentinel publication phase")
-    payload = _sentinel_payload(sentinel)
-    tmp_name = f".{PID_SENTINEL_NAME}.{phase}.{uuid.uuid4().hex}.tmp"
-    tmp_target = tmp_name if dir_fd is not None else str(path.parent / tmp_name)
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(tmp_target, flags, 0o600, dir_fd=dir_fd)
+    tmp_name, _identity = _create_sentinel_temp(
+        path,
+        sentinel,
+        dir_fd=dir_fd,
+        phase=phase,
+    )
+    published = False
     try:
-        try:
-            os.fchmod(fd, 0o600)
-            _write_all(fd, payload)
-            os.fsync(fd)
-            os.lseek(fd, 0, os.SEEK_SET)
-            persisted = os.read(fd, _MAX_SENTINEL_BYTES + 1)
-            try:
-                parsed = _sentinel_from_data(json.loads(persisted))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                parsed = None
-            if parsed != sentinel:
-                raise OSError("sentinel verification failed before publication")
-        finally:
-            os.close(fd)
         existing = (
             _entry_stat(PID_SENTINEL_NAME, dir_fd)
             if dir_fd is not None
@@ -1853,6 +2166,7 @@ def _write_sentinel_atomic(
             raise FileExistsError(PID_SENTINEL_NAME)
         if dir_fd is None:
             os.replace(path.parent / tmp_name, path)
+            published = True
         else:
             os.replace(
                 tmp_name,
@@ -1860,13 +2174,62 @@ def _write_sentinel_atomic(
                 src_dir_fd=dir_fd,
                 dst_dir_fd=dir_fd,
             )
+            published = True
             _fsync_directory(dir_fd)
+    except BaseException:
+        # Initial publication has no predecessor to restore.  If durability
+        # confirmation fails after rename, remove only the exact record just
+        # written so a bounded ENOSPC/EDQUOT retry cannot collide with itself.
+        if published and not replace_existing:
+            current = read_pid_sentinel(path, dir_fd=dir_fd)
+            if current == sentinel:
+                with contextlib.suppress(OSError):
+                    _unlink_sentinel(path, dir_fd)
+        raise
     finally:
-        with contextlib.suppress(FileNotFoundError):
+        with contextlib.suppress(OSError):
             if dir_fd is None:
                 os.unlink(path.parent / tmp_name)
             else:
                 os.unlink(tmp_name, dir_fd=dir_fd)
+
+
+def _unlink_owned_sentinel_temp(
+    path: Path,
+    *,
+    name: str,
+    expected_identity: tuple[int, int],
+    expected_sentinel: PidSentinel,
+    dir_fd: int | None,
+) -> None:
+    """Remove only the exact durable handoff marker this lease created."""
+    entry = (
+        _entry_stat(name, dir_fd)
+        if dir_fd is not None
+        else (path.parent / name).lstat()
+        if (path.parent / name).exists() or (path.parent / name).is_symlink()
+        else None
+    )
+    if entry is None:
+        return
+    if (
+        not stat.S_ISREG(entry.st_mode)
+        or entry.st_nlink != 1
+        or stat.S_IMODE(entry.st_mode) != 0o600
+        or (entry.st_dev, entry.st_ino) != expected_identity
+    ):
+        raise HomeInUseError(f"handoff marker changed during launch: {path.parent / name}")
+    current = read_pid_sentinel(
+        Path(name) if dir_fd is not None else path.parent / name,
+        dir_fd=dir_fd,
+    )
+    if current != expected_sentinel:
+        raise HomeInUseError(f"handoff marker content changed during launch: {path.parent / name}")
+    if dir_fd is None:
+        os.unlink(path.parent / name)
+    else:
+        os.unlink(name, dir_fd=dir_fd)
+        _fsync_directory(dir_fd)
 
 
 def _recover_sentinel_temps(
@@ -1877,10 +2240,22 @@ def _recover_sentinel_temps(
 ) -> None:
     """Recover only positively identified crash artifacts under the guard."""
     getuid = getattr(os, "geteuid", None)
-    for name in os.listdir(dir_fd if dir_fd is not None else path.parent):
+    location = dir_fd if dir_fd is not None else path.parent
+    try:
+        entries = os.scandir(location)
+    except OSError as exc:
+        raise HomeInUseError(f"cannot inspect sentinel recovery artifacts: {path.parent}") from exc
+    with entries:
+        names: list[str] = []
+        for entry_count, entry in enumerate(entries, start=1):
+            if entry_count > _RETENTION_MAX_ENTRIES:
+                raise HomeInUseError("sentinel recovery artifact inventory exceeds limit")
+            if _is_sentinel_temp_candidate(entry.name):
+                names.append(entry.name)
+    for name in names:
         match = _SENTINEL_TEMP_RE.fullmatch(name)
         if match is None:
-            continue
+            raise HomeInUseError(f"unsafe sentinel recovery artifact: {path.parent / name}")
         if dir_fd is not None:
             entry = _entry_stat(name, dir_fd)
         else:
@@ -1911,17 +2286,23 @@ def _recover_sentinel_temps(
             if dir_fd is not None:
                 _fsync_directory(dir_fd)
             continue
-        if sentinel_is_live(candidate, proc_root=proc_root):
-            if not sentinel_is_live(
-                candidate,
-                expected_home=path.parent,
-                proc_root=proc_root,
-            ):
-                raise HomeInUseError(
-                    f"live sentinel recovery artifact is bound elsewhere: {path.parent / name}"
-                )
+        liveness = _sentinel_liveness(
+            candidate,
+            expected_home=path.parent,
+            proc_root=proc_root,
+        )
+        if liveness == _PROCESS_LIVE:
             raise HomeInUseError(
                 f"live sentinel recovery artifact claims PID {candidate.pid}: {path.parent / name}"
+            )
+        if liveness == _PROCESS_UNKNOWN:
+            raise HomeInUseError(
+                f"incomplete sentinel recovery evidence for PID {candidate.pid}: "
+                f"{path.parent / name}"
+            )
+        if phase == "transfer":
+            raise HomeInUseError(
+                f"interrupted transfer sentinel requires manual inspection: {path.parent / name}"
             )
         os.unlink(name if dir_fd is not None else path.parent / name, dir_fd=dir_fd)
         if dir_fd is not None:
@@ -1974,6 +2355,7 @@ class SessionLease:
         self.proc_root = proc_root
         self.home_fd = home_fd
         self._released = False
+        self._handoff_temp: tuple[str, tuple[int, int], PidSentinel] | None = None
 
     def assert_home_binding(self) -> None:
         """Fail if the selected pathname no longer names the pinned home."""
@@ -1989,6 +2371,26 @@ class SessionLease:
             pinned.st_ino,
         ):
             raise HomeInUseError("selected CODEX_HOME changed during launch")
+
+    @contextlib.contextmanager
+    def _mutation_guard(self) -> Iterator[None]:
+        """Serialize isolated lifecycle mutation in retention→home order."""
+        managed_root = _generated_tokenpak_root(self.paths.home)
+        if self.paths.mode != MODE_ISOLATED or managed_root is None:
+            with _lease_guard(self.paths.home, home_fd=self.home_fd):
+                yield
+            return
+        opened = _open_managed_sessions_root(managed_root)
+        if opened is None:
+            raise HomeInUseError("managed sessions root disappeared during launch")
+        root, root_fd = opened
+        try:
+            with _retention_guard(root, root_fd):
+                self.assert_home_binding()
+                with _lease_guard(self.paths.home, home_fd=self.home_fd):
+                    yield
+        finally:
+            os.close(root_fd)
 
     @classmethod
     def acquire(
@@ -2022,16 +2424,28 @@ class SessionLease:
                         raise HomeInUseError(
                             f"invalid {paths.pid_sentinel}; refusing unsafe replacement"
                         )
-                    if sentinel_is_live(existing, proc_root=proc_root):
-                        if not sentinel_is_live(
-                            existing, expected_home=paths.home, proc_root=proc_root
-                        ):
-                            raise HomeInUseError(
-                                f"live {paths.pid_sentinel} is bound to another home; "
-                                "refusing unsafe replacement"
-                            )
+                    process_liveness = _sentinel_liveness(
+                        existing,
+                        proc_root=proc_root,
+                    )
+                    liveness = _sentinel_liveness(
+                        existing,
+                        expected_home=paths.home,
+                        proc_root=proc_root,
+                    )
+                    if process_liveness == _PROCESS_LIVE and liveness != _PROCESS_LIVE:
+                        raise HomeInUseError(
+                            f"live {paths.pid_sentinel} is bound to another home; "
+                            "refusing unsafe replacement"
+                        )
+                    if liveness == _PROCESS_LIVE:
                         raise HomeInUseError(
                             f"{paths.home} is already claimed by PID {existing.pid}"
+                        )
+                    if liveness == _PROCESS_UNKNOWN:
+                        raise HomeInUseError(
+                            f"incomplete {paths.pid_sentinel} process evidence; "
+                            "refusing unsafe replacement"
                         )
                     _unlink_sentinel(paths.pid_sentinel, home_fd)
                 _write_sentinel_exclusive(paths.pid_sentinel, sentinel, dir_fd=home_fd)
@@ -2077,8 +2491,28 @@ class SessionLease:
                 os.close(home_fd)
             raise
 
+    def begin_transfer(self) -> None:
+        """Publish a durable handoff marker before spawning the child."""
+        if self._handoff_temp is not None:
+            raise HomeInUseError("PID sentinel handoff is already in progress")
+        with self._mutation_guard():
+            current = read_pid_sentinel(self.paths.pid_sentinel, dir_fd=self.home_fd)
+            if current != self.sentinel:
+                raise HomeInUseError("PID sentinel ownership changed before child launch")
+            name, identity = _create_sentinel_temp(
+                self.paths.pid_sentinel,
+                self.sentinel,
+                dir_fd=self.home_fd,
+                phase="transfer",
+            )
+            self._handoff_temp = (name, identity, self.sentinel)
+
     def transfer_to(self, pid: int) -> None:
         """Transfer the lease to the spawned child process incarnation."""
+        if self._handoff_temp is None:
+            # Compatibility for direct callers; the launcher calls
+            # begin_transfer() before Popen to close the spawn window.
+            self.begin_transfer()
         identity = _proc_identity(pid, self.proc_root)
         if identity is None:
             raise RuntimeError(f"cannot validate Codex child PID {pid}")
@@ -2093,33 +2527,80 @@ class SessionLease:
             mode=self.sentinel.mode,
             home=self.sentinel.home,
         )
-        with _lease_guard(self.paths.home, home_fd=self.home_fd):
-            current = read_pid_sentinel(self.paths.pid_sentinel, dir_fd=self.home_fd)
-            if current != self.sentinel:
-                raise HomeInUseError("PID sentinel ownership changed during launch")
-            _write_sentinel_atomic(
-                self.paths.pid_sentinel,
-                replacement,
-                dir_fd=self.home_fd,
-                phase="transfer",
-                replace_existing=True,
-            )
-        self.sentinel = replacement
+        published = False
+        try:
+            with self._mutation_guard():
+                current = read_pid_sentinel(self.paths.pid_sentinel, dir_fd=self.home_fd)
+                if current != self.sentinel:
+                    raise HomeInUseError("PID sentinel ownership changed during launch")
+                revalidated = _proc_identity(pid, self.proc_root)
+                if revalidated != identity or revalidated is None or revalidated[0] in {
+                    "Z",
+                    "X",
+                    "x",
+                }:
+                    raise HomeInUseError("Codex child PID changed during handoff")
+                try:
+                    _write_sentinel_atomic(
+                        self.paths.pid_sentinel,
+                        replacement,
+                        dir_fd=self.home_fd,
+                        phase="transfer",
+                        replace_existing=True,
+                    )
+                except BaseException:
+                    # Rename may have succeeded before directory durability
+                    # reported ENOSPC/EDQUOT.  Bind this lease to the exact
+                    # replacement so supervised closeout can remove it later.
+                    if (
+                        read_pid_sentinel(self.paths.pid_sentinel, dir_fd=self.home_fd)
+                        == replacement
+                    ):
+                        published = True
+                        self.sentinel = replacement
+                    raise
+                published = True
+                self.sentinel = replacement
+                assert self._handoff_temp is not None
+                name, marker_identity, marker_sentinel = self._handoff_temp
+                _unlink_owned_sentinel_temp(
+                    self.paths.pid_sentinel,
+                    name=name,
+                    expected_identity=marker_identity,
+                    expected_sentinel=marker_sentinel,
+                    dir_fd=self.home_fd,
+                )
+                self._handoff_temp = None
+        finally:
+            if published:
+                self.sentinel = replacement
 
     def release(self) -> bool:
         """Remove only the still-matching sentinel owned by this session."""
         if self._released:
             return False
         removed = False
-        with _lease_guard(self.paths.home, home_fd=self.home_fd):
-            current = read_pid_sentinel(self.paths.pid_sentinel, dir_fd=self.home_fd)
-            if current == self.sentinel:
-                with contextlib.suppress(FileNotFoundError):
-                    _unlink_sentinel(self.paths.pid_sentinel, self.home_fd)
-                removed = True
-        self._released = True
-        if self.home_fd is not None:
-            os.close(self.home_fd)
+        try:
+            with self._mutation_guard():
+                if self._handoff_temp is not None:
+                    name, marker_identity, marker_sentinel = self._handoff_temp
+                    _unlink_owned_sentinel_temp(
+                        self.paths.pid_sentinel,
+                        name=name,
+                        expected_identity=marker_identity,
+                        expected_sentinel=marker_sentinel,
+                        dir_fd=self.home_fd,
+                    )
+                    self._handoff_temp = None
+                current = read_pid_sentinel(self.paths.pid_sentinel, dir_fd=self.home_fd)
+                if current == self.sentinel:
+                    with contextlib.suppress(FileNotFoundError):
+                        _unlink_sentinel(self.paths.pid_sentinel, self.home_fd)
+                    removed = True
+        finally:
+            self._released = True
+            if self.home_fd is not None:
+                os.close(self.home_fd)
         return removed
 
     def __enter__(self) -> "SessionLease":

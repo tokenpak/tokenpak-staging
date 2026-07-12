@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sqlite3
@@ -636,6 +637,102 @@ def test_initial_sentinel_short_write_never_publishes_partial_canonical(
     lease.release()
 
 
+def test_initial_sentinel_post_rename_enospc_rolls_back_exact_owner_for_retry(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="post-rename-enospc",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    original = sh._fsync_directory
+    calls = 0
+
+    def fail_canonical_fsync(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError(errno.ENOSPC, "injected post-rename fsync pressure")
+        original(fd)
+
+    monkeypatch.setattr(sh, "_fsync_directory", fail_canonical_fsync)
+    with pytest.raises(OSError, match="post-rename fsync pressure"):
+        sh.SessionLease.acquire(paths, session_id="post-rename-enospc")
+    assert not paths.pid_sentinel.exists()
+
+    lease = sh.SessionLease.acquire(paths, session_id="post-rename-enospc-retry")
+    try:
+        assert sh.read_pid_sentinel(paths.pid_sentinel) == lease.sentinel
+    finally:
+        lease.release()
+
+
+def test_initial_sentinel_temp_fsync_enospc_leaves_no_untracked_artifact(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="temp-fsync-enospc",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    original = sh._fsync_directory
+
+    def no_space(_fd: int) -> None:
+        raise OSError(errno.ENOSPC, "injected temp directory fsync pressure")
+
+    monkeypatch.setattr(sh, "_fsync_directory", no_space)
+    with pytest.raises(OSError, match="temp directory fsync pressure"):
+        sh.SessionLease.acquire(paths, session_id="temp-fsync-enospc")
+    assert not paths.pid_sentinel.exists()
+    assert not any(sh._is_sentinel_temp_candidate(path.name) for path in paths.home.iterdir())
+
+    monkeypatch.setattr(sh, "_fsync_directory", original)
+    lease = sh.SessionLease.acquire(paths, session_id="temp-fsync-enospc-retry")
+    lease.release()
+
+
+def test_transfer_post_rename_enospc_remains_exactly_owned_for_release(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="transfer-fsync-enospc",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    lease = sh.SessionLease.acquire(paths, session_id="transfer-fsync-enospc")
+    lease.begin_transfer()
+    original = sh._fsync_directory
+    calls = 0
+
+    def fail_canonical_fsync(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError(errno.ENOSPC, "injected transfer canonical fsync pressure")
+        original(fd)
+
+    monkeypatch.setattr(sh, "_fsync_directory", fail_canonical_fsync)
+    with pytest.raises(OSError, match="transfer canonical fsync pressure"):
+        lease.transfer_to(os.getpid())
+    current = sh.read_pid_sentinel(paths.pid_sentinel)
+    assert current == lease.sentinel
+    assert current is not None and current.pid == os.getpid()
+
+    monkeypatch.setattr(sh, "_fsync_directory", original)
+    assert lease.release() is True
+    assert not paths.pid_sentinel.exists()
+    assert not any(sh._is_sentinel_temp_candidate(path.name) for path in paths.home.iterdir())
+
+
 def test_partial_acquire_temp_is_recovered_but_partial_transfer_fails_closed(
     homes: tuple[Path, Path], tmp_path: Path
 ) -> None:
@@ -723,6 +820,75 @@ def test_portable_posix_identity_uses_locale_stable_start_time(monkeypatch) -> N
     assert first == second
     assert first is not None and first[0] == "S" and first[1] > 0
     assert captured["env"]["LC_ALL"] == "C"
+
+
+def test_proc_stat_read_failure_is_unknown_without_portable_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proc_root = tmp_path / "proc"
+    _write_proc_stat(proc_root, 123, start_ticks=77)
+    target = proc_root / "123" / "stat"
+    original = Path.read_text
+
+    def unreadable(path: Path, *args, **kwargs):
+        if path == target:
+            raise PermissionError(errno.EACCES, "injected unreadable proc stat")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+
+    evidence, identity = sh._process_identity_evidence(123, proc_root=proc_root)
+
+    assert evidence == sh._PROCESS_UNKNOWN
+    assert identity is None
+
+
+def test_linux_proc_read_failure_never_publishes_portable_lease_identity(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="linux-proc-read-failure",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    target = Path("/proc") / str(os.getpid()) / "stat"
+    original = Path.read_text
+
+    def unreadable(path: Path, *args, **kwargs):
+        if path == target:
+            raise PermissionError(errno.EACCES, "injected Linux proc stat failure")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    monkeypatch.setattr(
+        sh,
+        "_portable_process_identity",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("Linux lease publication must not cross identity domains")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="cannot validate launcher PID"):
+        sh.SessionLease.acquire(paths)
+
+    assert not paths.home.exists()
+    assert not paths.pid_sentinel.exists()
+
+
+def test_nonlinux_default_proc_absence_uses_portable_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    pid = 2_000_000_000
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        sh,
+        "_portable_process_identity",
+        lambda candidate: ("S", 77) if candidate == pid else None,
+    )
+
+    assert sh._proc_identity(pid) == ("S", 77)
 
 
 def test_shared_lease_path_backend_supports_platforms_without_directory_fds(
@@ -981,6 +1147,290 @@ def test_retention_preserves_live_and_malformed_sentinel_homes(
         lease.release()
 
 
+def _write_private_sentinel(path: Path, sentinel: sh.PidSentinel) -> None:
+    path.write_text(json.dumps(asdict(sentinel)) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+
+
+@pytest.mark.parametrize("phase", ["acquire", "transfer"])
+def test_retention_partial_temp_artifact_protects_home(
+    homes: tuple[Path, Path], tmp_path: Path, phase: str
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, f"partial-{phase}")
+    artifact = candidate.home / f".codex.pid.{phase}.{uuid.uuid4().hex}.tmp"
+    artifact.write_text("partial", encoding="utf-8")
+    artifact.chmod(0o600)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert artifact.is_file()
+    state = {home.path: home.state for home in result.after.homes}
+    assert state[candidate.home] == "unsafe"
+    assert result.errors and "inventory incomplete" in result.errors[-1]
+
+
+@pytest.mark.parametrize("suffix", ["not-a-publisher-uuid", "contains\nnewline"])
+def test_retention_invalid_temp_pattern_is_recognized_and_protected(
+    homes: tuple[Path, Path], tmp_path: Path, suffix: str
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "invalid-temp-pattern")
+    artifact = candidate.home / f".codex.pid.acquire.{suffix}.tmp"
+    artifact.write_text("partial", encoding="utf-8")
+    artifact.chmod(0o600)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert artifact.is_file()
+    assert result.after.homes[0].state == "unsafe"
+
+
+@pytest.mark.parametrize("phase", ["acquire", "transfer"])
+def test_retention_live_temp_artifact_protects_before_sqlite_open(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    from tokenpak.companion.codex import state_lock
+
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, f"live-{phase}")
+    identity = sh._proc_identity(os.getpid())
+    assert identity is not None
+    live = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=os.getpid(),
+        start_time_ticks=identity[1],
+        session_id=f"live-{phase}",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    artifact = candidate.home / f".codex.pid.{phase}.{uuid.uuid4().hex}.tmp"
+    _write_private_sentinel(artifact, live)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+    assert not list(candidate.home.glob("*.sqlite*"))
+    monkeypatch.setattr(
+        state_lock,
+        "probe",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("temp-protected home must not reach SQLite holder probing")
+        ),
+    )
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    info = next(home for home in result.after.homes if home.path == candidate.home)
+    assert info.state == "active"
+    assert info.pid == os.getpid()
+
+
+def test_retention_dead_parent_and_live_child_transfer_temp_preserves_home(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tokenpak.companion.codex import state_lock
+
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "dead-parent-live-child")
+    dead_parent = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=2_000_000_000,
+        start_time_ticks=1,
+        session_id="dead-parent-live-child",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    _write_private_sentinel(candidate.pid_sentinel, dead_parent)
+    identity = sh._proc_identity(os.getpid())
+    assert identity is not None
+    live_child = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=os.getpid(),
+        start_time_ticks=identity[1],
+        session_id=dead_parent.session_id,
+        mode="isolated",
+        home=dead_parent.home,
+    )
+    transfer = candidate.home / f".codex.pid.transfer.{uuid.uuid4().hex}.tmp"
+    _write_private_sentinel(transfer, live_child)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+    assert not list(candidate.home.glob("*.sqlite*"))
+    monkeypatch.setattr(
+        state_lock,
+        "probe",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("live transfer temp must protect before SQLite probing")
+        ),
+    )
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert sh.read_pid_sentinel(candidate.pid_sentinel) == dead_parent
+    assert sh.read_pid_sentinel(transfer) == live_child
+    info = next(home for home in result.after.homes if home.path == candidate.home)
+    assert info.state == "active"
+    assert info.pid == os.getpid()
+
+
+def test_retention_unknown_temp_pid_evidence_fails_closed(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "unknown-temp-pid")
+    identity = sh._proc_identity(os.getpid())
+    assert identity is not None
+    live = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=os.getpid(),
+        start_time_ticks=identity[1],
+        session_id="unknown-temp-pid",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    artifact = candidate.home / f".codex.pid.acquire.{uuid.uuid4().hex}.tmp"
+    _write_private_sentinel(artifact, live)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+    monkeypatch.setattr(
+        sh,
+        "_process_identity_evidence",
+        lambda *_a, **_k: (sh._PROCESS_UNKNOWN, None),
+    )
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert result.after.homes[0].state == "unsafe"
+
+
+def test_retention_unknown_canonical_pid_evidence_fails_closed(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "unknown-canonical-pid")
+    identity = sh._proc_identity(os.getpid())
+    assert identity is not None
+    canonical = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=os.getpid(),
+        start_time_ticks=identity[1],
+        session_id="unknown-canonical-pid",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    _write_private_sentinel(candidate.pid_sentinel, canonical)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+    monkeypatch.setattr(
+        sh,
+        "_process_identity_evidence",
+        lambda *_a, **_k: (sh._PROCESS_UNKNOWN, None),
+    )
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert result.after.homes[0].state == "unsafe"
+
+
+def test_retention_pid_reuse_is_proven_stale_and_reclaimable(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "reused-canonical-pid")
+    proc_root = tmp_path / "reuse-proc"
+    _write_proc_stat(proc_root, 4242, start_ticks=22)
+    reused = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=4242,
+        start_time_ticks=11,
+        session_id="reused-canonical-pid",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    _write_private_sentinel(candidate.pid_sentinel, reused)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+
+    result = sh.cleanup_isolated_homes(
+        tokenpak_home,
+        remove_all_orphans=True,
+        proc_root=proc_root,
+    )
+
+    assert result.removed == (candidate.home,)
+    assert not candidate.home.exists()
+
+
+def test_missing_proc_root_is_unknown_and_never_reclaimable(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "missing-proc-root")
+    canonical = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=4242,
+        start_time_ticks=11,
+        session_id="missing-proc-root",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    _write_private_sentinel(candidate.pid_sentinel, canonical)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+    missing_proc = tmp_path / "proc-not-mounted"
+
+    result = sh.cleanup_isolated_homes(
+        tokenpak_home,
+        remove_all_orphans=True,
+        proc_root=missing_proc,
+    )
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert result.after.homes[0].state == "unsafe"
+
+
+def test_retention_complete_dead_transfer_remains_protected_handoff(
+    homes: tuple[Path, Path], tmp_path: Path
+) -> None:
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "dead-handoff")
+    handoff = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=2_000_000_000,
+        start_time_ticks=1,
+        session_id="dead-handoff",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    artifact = candidate.home / f".codex.pid.transfer.{uuid.uuid4().hex}.tmp"
+    _write_private_sentinel(artifact, handoff)
+    old = time.time() - 300
+    os.utime(candidate.home, (old, old))
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert result.after.homes[0].state == "handoff"
+    assert result.errors and "inventory incomplete" in result.errors[-1]
+
+
 def test_retention_never_touches_workspace_homes(homes: tuple[Path, Path], tmp_path: Path) -> None:
     source, tokenpak_home = homes
     workspace = sh.select_paths(
@@ -1149,6 +1599,81 @@ def test_unproven_quarantine_is_preserved_with_explicit_error(
     assert result.errors and "no planned retention receipt" in result.errors[0]
 
 
+def test_conflicting_quarantine_receipts_never_purge(
+    homes: tuple[Path, Path],
+) -> None:
+    _source, tokenpak_home = homes
+    opened = sh._open_managed_sessions_root(tokenpak_home, create=True)
+    assert opened is not None
+    root, root_fd = opened
+    quarantine_name = f"{sh._RETENTION_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
+    quarantine = root / quarantine_name
+    quarantine.mkdir(mode=0o700)
+    (quarantine / "keep.txt").write_text("preserve", encoding="utf-8")
+    info = quarantine.stat()
+    base = {
+        "schema": "tokenpak.codex.retention.v1",
+        "action": "planned",
+        "home": "receipt-victim",
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "size_bytes": 1,
+        "reason": "count",
+        "quarantine": quarantine_name,
+        "timestamp_ns": time.time_ns(),
+    }
+    try:
+        sh._append_retention_receipt(root_fd, base)
+        sh._append_retention_receipt(
+            root_fd,
+            {**base, "home": "different-home", "inode": info.st_ino + 1},
+        )
+    finally:
+        os.close(root_fd)
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert quarantine.is_dir()
+    assert (quarantine / "keep.txt").read_text(encoding="utf-8") == "preserve"
+    assert any("conflicting planned retention receipts" in error for error in result.errors)
+
+
+def test_malformed_quarantine_reason_is_preserved_as_invalid_receipt(
+    homes: tuple[Path, Path],
+) -> None:
+    _source, tokenpak_home = homes
+    opened = sh._open_managed_sessions_root(tokenpak_home, create=True)
+    assert opened is not None
+    root, root_fd = opened
+    os.close(root_fd)
+    quarantine_name = f"{sh._RETENTION_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
+    quarantine = root / quarantine_name
+    quarantine.mkdir(mode=0o700)
+    (quarantine / "keep.txt").write_text("preserve", encoding="utf-8")
+    info = quarantine.stat()
+    malformed = {
+        "schema": "tokenpak.codex.retention.v1",
+        "action": "planned",
+        "home": "receipt-victim",
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "size_bytes": 1,
+        "quarantine": quarantine_name,
+        "timestamp_ns": time.time_ns(),
+    }
+    receipt = root / sh._RETENTION_RECEIPT_NAME
+    receipt.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+    receipt.chmod(0o600)
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert quarantine.is_dir()
+    assert (quarantine / "keep.txt").read_text(encoding="utf-8") == "preserve"
+    assert any("invalid retention receipt" in error for error in result.errors)
+
+
 def test_incomplete_retention_inventory_preserves_all_ordinary_homes(
     homes: tuple[Path, Path], tmp_path: Path
 ) -> None:
@@ -1193,3 +1718,42 @@ def test_retention_rechecks_candidate_before_removal(
 
     assert result.errors and "changed before cleanup" in result.errors[0]
     assert candidate.home.exists()
+
+
+def test_retention_rechecks_sentinel_artifacts_after_holder_probe(
+    homes: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tokenpak.companion.codex import state_lock
+
+    source, tokenpak_home = homes
+    candidate = _retention_home(source, tokenpak_home, tmp_path, "post-probe-race")
+    identity = sh._proc_identity(os.getpid())
+    assert identity is not None
+    live = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=os.getpid(),
+        start_time_ticks=identity[1],
+        session_id="post-probe-race",
+        mode="isolated",
+        home=str(candidate.home.resolve()),
+    )
+    transfer = candidate.home / f".codex.pid.transfer.{uuid.uuid4().hex}.tmp"
+
+    def raced_probe(home, *, deadline=None):
+        assert home == candidate.home
+        _write_private_sentinel(transfer, live)
+        return state_lock.LockStatus(
+            home=home,
+            db_path=home / "state.sqlite",
+            exists=False,
+            locked=False,
+        )
+
+    monkeypatch.setattr(state_lock, "probe", raced_probe)
+
+    result = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+
+    assert result.removed == ()
+    assert candidate.home.is_dir()
+    assert transfer.is_file()
+    assert result.errors and "changed after holder inspection" in result.errors[0]

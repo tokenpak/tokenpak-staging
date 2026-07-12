@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from tokenpak.companion.codex import session_home as sh
 from tokenpak.companion.codex import state_lock as sl
 
 
@@ -539,6 +540,36 @@ def test_portable_shared_inspection_failure_is_explicit_fail_closed(
         return [], False
 
     monkeypatch.setattr(sl, "_portable_codex_processes", incomplete)
+    status = sl.probe(codex_home, platform_id=platform_id)
+
+    assert status.locked is True
+    assert status.diagnostics_complete is False
+    assert status.incomplete_reasons == ["portable_inspection_incomplete"]
+
+
+@pytest.mark.parametrize("platform_id", ["darwin", "win32"])
+def test_portable_shared_unknown_sentinel_identity_is_explicit_fail_closed(
+    codex_home, monkeypatch, platform_id
+):
+    _make_db(codex_home)
+    sentinel = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=8124,
+        start_time_ticks=99,
+        session_id="portable-unknown",
+        mode="shared",
+        home=str(codex_home.resolve()),
+    )
+    path = codex_home / "codex.pid"
+    path.write_bytes(sh._sentinel_payload(sentinel))
+    path.chmod(0o600)
+    monkeypatch.setattr(
+        sh,
+        "_sentinel_liveness",
+        lambda *_a, **_k: sh._PROCESS_UNKNOWN,
+    )
+    monkeypatch.setattr(sl, "_portable_codex_processes", lambda *_args: ([], True))
+
     status = sl.probe(codex_home, platform_id=platform_id)
 
     assert status.locked is True

@@ -919,7 +919,13 @@ def _portable_probe(
     budget: _ProbeBudget,
 ) -> LockStatus:
     """Conservatively gate non-Linux shared homes without relying on procfs."""
-    from .session_home import read_pid_sentinel, sentinel_is_live
+    from .session_home import (
+        _PROCESS_LIVE,
+        _PROCESS_UNKNOWN,
+        _proc_identity,
+        _sentinel_liveness,
+        read_pid_sentinel,
+    )
 
     db_path = dbs[0]
     holders: dict[int, _ProcessInfo] = {}
@@ -935,12 +941,11 @@ def _portable_probe(
         sentinel = read_pid_sentinel(sentinel_path)
         if sentinel is None:
             budget.add("portable_inspection_incomplete")
-        elif sentinel.pid != os.getpid() and sentinel_is_live(sentinel):
-            if not sentinel_is_live(sentinel, expected_home=home):
+        elif sentinel.pid != os.getpid():
+            liveness = _sentinel_liveness(sentinel, expected_home=home)
+            if liveness == _PROCESS_UNKNOWN:
                 budget.add("portable_inspection_incomplete")
-            else:
-                from .session_home import _proc_identity
-
+            elif liveness == _PROCESS_LIVE:
                 identity = _proc_identity(sentinel.pid)
                 if identity is None:
                     budget.add("portable_inspection_incomplete")

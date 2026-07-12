@@ -17,6 +17,7 @@ configures MCP, hooks, and AGENTS.md — the launcher is convenience.
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import queue
@@ -51,6 +52,7 @@ _TOKENPAK_CHATGPT_BASE_URL = "http://127.0.0.1:8766/v1"
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
 _TRUTHY = {"1", "true", "yes"}
+_STORAGE_PRESSURE_ERRNOS = {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 
 
 def _bypass_env_enabled(env: dict[str, str] | None = None) -> bool:
@@ -450,6 +452,86 @@ def _print_session_paths(paths: "SessionPaths") -> None:
         print(f"  {label}: {value}", file=sys.stderr)
 
 
+def _is_storage_pressure(exc: BaseException) -> bool:
+    """Recognize nested ENOSPC/EDQUOT without retrying unrelated failures."""
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, OSError) and current.errno in _STORAGE_PRESSURE_ERRNOS:
+            return True
+        for linked in (current.__cause__, current.__context__):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+    return False
+
+
+def _run_isolated_retention(
+    session_home,
+    paths: "SessionPaths",
+    *,
+    phase: str,
+    preserve_home: Path | None,
+    remove_all_orphans: bool = False,
+) -> object | None:
+    """Run the receipt-governed engine without masking launch results."""
+    tokenpak_home = session_home._generated_tokenpak_root(paths.home)
+    try:
+        cleanup = session_home.cleanup_isolated_homes(
+            tokenpak_home,
+            preserve_home=preserve_home,
+            remove_all_orphans=remove_all_orphans,
+            orphan_cleanup_reason="storage-pressure" if remove_all_orphans else phase,
+        )
+    except Exception as exc:
+        print(
+            f"tokenpak: isolated-home retention {phase} preserved all homes ({exc})",
+            file=sys.stderr,
+        )
+        return None
+    if cleanup.removed:
+        print(
+            f"tokenpak: isolated-home retention {phase} removed "
+            f"{len(cleanup.removed)} orphan(s)",
+            file=sys.stderr,
+        )
+    if cleanup.errors:
+        print(
+            f"tokenpak: isolated-home retention {phase} preserved uncertain home(s): "
+            + "; ".join(cleanup.errors),
+            file=sys.stderr,
+        )
+    return cleanup
+
+
+@contextlib.contextmanager
+def _lease_with_post_retention(lease, session_home, paths: "SessionPaths"):
+    """Release the exact lease before the final isolated-home sweep."""
+    try:
+        yield lease
+    finally:
+        try:
+            lease.release()
+        except Exception as exc:
+            # A failed exact-owner unlink leaves the sentinel/artifact in
+            # place, which retention treats as protected.  Do not replace an
+            # already-known child result with a cleanup-only exception.
+            print(
+                f"tokenpak: PID sentinel cleanup preserved for inspection ({exc})",
+                file=sys.stderr,
+            )
+        if paths.mode == session_home.MODE_ISOLATED:
+            _run_isolated_retention(
+                session_home,
+                paths,
+                phase="post-session",
+                preserve_home=None,
+            )
+
+
 def _vanilla_receipt_env() -> dict[str, str]:
     """Return a child environment with TokenPak companion state stripped."""
     return {key: value for key, value in os.environ.items() if not key.startswith("TOKENPAK_")}
@@ -541,6 +623,17 @@ def main(
         return 2
     _print_session_paths(paths)
 
+    # This sweep is deliberately before preflight, lease acquisition, and
+    # selected-home creation.  It therefore remains reachable after switching
+    # to shared/workspace mode and can recover receipt-proven quarantines even
+    # when the selected launch later blocks or runs out of storage.
+    _run_isolated_retention(
+        session_home,
+        paths,
+        phase="pre-launch",
+        preserve_home=paths.home,
+    )
+
     # Kernel-only inspection happens before provisioning, MCP registration,
     # hooks, AGENTS.md, skills config, or the lifecycle sentinel is written.
     # Linux can attribute native Codex attachments through procfs before the
@@ -583,12 +676,24 @@ def main(
         return lock_exit
 
     try:
-        lease = session_home.SessionLease.acquire(paths)
+        try:
+            lease = session_home.SessionLease.acquire(paths)
+        except (OSError, RuntimeError) as exc:
+            if not _is_storage_pressure(exc):
+                raise
+            _run_isolated_retention(
+                session_home,
+                paths,
+                phase="storage-pressure",
+                preserve_home=paths.home,
+                remove_all_orphans=True,
+            )
+            lease = session_home.SessionLease.acquire(paths)
     except (OSError, RuntimeError) as exc:
         print(f"tokenpak: selected-home setup refused: {exc}", file=sys.stderr)
         return 1
 
-    with lease:
+    with _lease_with_post_retention(lease, session_home, paths):
 
         def reusable_home_is_clear() -> bool:
             if paths.mode == session_home.MODE_ISOLATED:
@@ -606,9 +711,23 @@ def main(
             return 1
 
         try:
-            lease.assert_home_binding()
-            provisioned = session_home.provision(paths, home_fd=lease.home_fd)
-            lease.assert_home_binding()
+            try:
+                lease.assert_home_binding()
+                provisioned = session_home.provision(paths, home_fd=lease.home_fd)
+                lease.assert_home_binding()
+            except (OSError, RuntimeError) as exc:
+                if not _is_storage_pressure(exc):
+                    raise
+                _run_isolated_retention(
+                    session_home,
+                    paths,
+                    phase="storage-pressure",
+                    preserve_home=paths.home,
+                    remove_all_orphans=True,
+                )
+                lease.assert_home_binding()
+                provisioned = session_home.provision(paths, home_fd=lease.home_fd)
+                lease.assert_home_binding()
         except (OSError, RuntimeError) as exc:
             print(f"tokenpak: selected-home provisioning refused: {exc}", file=sys.stderr)
             return 1
@@ -626,18 +745,12 @@ def main(
             )
 
         if paths.mode == session_home.MODE_ISOLATED:
-            cleanup = session_home.cleanup_isolated_homes(preserve_home=paths.home)
-            if cleanup.removed:
-                print(
-                    f"tokenpak: isolated-home retention removed {len(cleanup.removed)} orphan(s)",
-                    file=sys.stderr,
-                )
-            if cleanup.errors:
-                print(
-                    "tokenpak: isolated-home retention preserved uncertain home(s): "
-                    + "; ".join(cleanup.errors),
-                    file=sys.stderr,
-                )
+            _run_isolated_retention(
+                session_home,
+                paths,
+                phase="post-provision",
+                preserve_home=paths.home,
+            )
 
         if receipt_only:
             assert receipt_out is not None and run_id is not None
@@ -653,6 +766,7 @@ def main(
                 lease.assert_home_binding()
                 if not reusable_home_is_clear():
                     return 1
+                lease.begin_transfer()
                 exit_code, usage = _run_codex_process(codex_args, env, on_start=lease.transfer_to)
                 status = (
                     "completed"
@@ -829,6 +943,7 @@ def main(
             lease.assert_home_binding()
             if not reusable_home_is_clear():
                 return 1
+            lease.begin_transfer()
             exit_code, usage = _run_codex_process(codex_args, env, on_start=lease.transfer_to)
             status = (
                 "completed" if exit_code == 0 else "interrupted" if exit_code == 130 else "failed"

@@ -15,10 +15,12 @@ features`` probe-avoidance behavior — that lives in ``hooks.py`` /
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -26,6 +28,7 @@ import pytest
 
 from tokenpak import _cli_core
 from tokenpak.companion.codex import launcher
+from tokenpak.companion.codex import session_home as sh
 from tokenpak.companion.codex import state_lock as sl
 
 
@@ -419,6 +422,345 @@ def test_main_supervises_when_preflight_clear(monkeypatch, tmp_path, capsys):
         "PID sentinel:",
     ):
         assert label in stderr
+
+
+@pytest.mark.parametrize("mode", ["shared", "workspace", "isolated"])
+def test_retention_sweep_precedes_selected_home_creation_for_every_mode(
+    monkeypatch, tmp_path, mode
+):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", mode)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+    events: list[str] = []
+
+    class Cleanup:
+        removed = ()
+        errors = ()
+
+    def cleanup(*_args, preserve_home=None, **_kwargs):
+        events.append("cleanup")
+        if mode in {"workspace", "isolated"}:
+            assert preserve_home is not None
+            assert not Path(preserve_home).exists()
+        return Cleanup()
+
+    def refuse(paths):
+        events.append("acquire")
+        raise RuntimeError("stop after ordering assertion")
+
+    monkeypatch.setattr(sh, "cleanup_isolated_homes", cleanup)
+    monkeypatch.setattr(sh.SessionLease, "acquire", staticmethod(refuse))
+
+    assert launcher.main(["--install-only"]) == 1
+    assert events == ["cleanup", "acquire"]
+
+
+@pytest.mark.parametrize("mode", ["shared", "workspace"])
+def test_switching_modes_runs_retention_without_another_isolated_launch(
+    monkeypatch, tmp_path, mode
+):
+    _stub_setup(monkeypatch, tmp_path)
+    source = tmp_path / "user" / ".codex"
+    tokenpak_home = tmp_path / "tokenpak-home"
+    orphan = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id=f"orphan-before-{mode}",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(orphan)
+    old = time.time() - sh.RETENTION_MAX_AGE_S - 60
+    os.utime(orphan.home, (old, old))
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", mode)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+
+    assert launcher.main(["--install-only"]) == 0
+    assert not orphan.home.exists()
+
+
+def test_storage_pressure_sweep_precedes_failed_provision_retry(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+    source = tmp_path / "user" / ".codex"
+    tokenpak_home = tmp_path / "tokenpak-home"
+    orphan = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="pressure-orphan",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(orphan)
+    old = time.time() - 300
+    os.utime(orphan.home, (old, old))
+    original = sh.provision
+    calls = 0
+
+    def no_space(paths, *, home_fd=None):
+        nonlocal calls
+        calls += 1
+        if paths == orphan:
+            return original(paths, home_fd=home_fd)
+        raise OSError(errno.ENOSPC, "injected storage pressure")
+
+    monkeypatch.setattr(sh, "provision", no_space)
+
+    assert launcher.main(["--install-only"]) == 1
+    assert calls == 2
+    assert not orphan.home.exists()
+
+
+def test_storage_pressure_during_home_creation_sweeps_and_retries_once(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+    source = tmp_path / "user" / ".codex"
+    tokenpak_home = tmp_path / "tokenpak-home"
+    orphan = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="acquire-pressure-orphan",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(orphan)
+    old = time.time() - 300
+    os.utime(orphan.home, (old, old))
+    original_acquire = sh.SessionLease.acquire
+    calls = 0
+
+    def acquire(paths):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError(errno.EDQUOT, "injected selected-home quota pressure")
+        return original_acquire(paths)
+
+    monkeypatch.setattr(sh.SessionLease, "acquire", staticmethod(acquire))
+
+    assert launcher.main(["--install-only"]) == 0
+    assert calls == 2
+    assert not orphan.home.exists()
+
+
+def test_shared_mode_pre_sweep_recovers_receipted_quarantine(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    source = tmp_path / "user" / ".codex"
+    tokenpak_home = tmp_path / "tokenpak-home"
+    orphan = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="quarantine-before-shared",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(orphan)
+    old = time.time() - 300
+    os.utime(orphan.home, (old, old))
+    original_remove = sh._remove_tree_contents_at
+
+    def fail_once(*_args, **_kwargs):
+        raise sh.HomeInUseError("injected resumable quarantine")
+
+    monkeypatch.setattr(sh, "_remove_tree_contents_at", fail_once)
+    failed = sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+    assert failed.errors and "injected resumable quarantine" in failed.errors[0]
+    root = sh.sessions_root(tokenpak_home)
+    assert any(path.name.startswith(sh._RETENTION_QUARANTINE_PREFIX) for path in root.iterdir())
+
+    monkeypatch.setattr(sh, "_remove_tree_contents_at", original_remove)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+
+    assert launcher.main(["--install-only"]) == 0
+    assert not any(path.name.startswith(sh._RETENTION_QUARANTINE_PREFIX) for path in root.iterdir())
+    assert '"action": "completed"' in (root / sh._RETENTION_RECEIPT_NAME).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_post_session_sweep_removes_orphan_created_during_last_child(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+    source = tmp_path / "user" / ".codex"
+    tokenpak_home = tmp_path / "tokenpak-home"
+    created: list[sh.SessionPaths] = []
+
+    def fake_run(_argv, _env, *, on_start=None):
+        assert on_start is not None
+        on_start(os.getpid())
+        orphan = sh.select_paths(
+            "isolated",
+            workspace_dir=tmp_path,
+            session_id="created-during-final-child",
+            tokenpak_home=tokenpak_home,
+            source_home=source,
+        )
+        sh.provision(orphan)
+        old = time.time() - sh.RETENTION_MAX_AGE_S - 60
+        os.utime(orphan.home, (old, old))
+        created.append(orphan)
+        return 0, launcher.empty_usage()
+
+    monkeypatch.setattr(launcher, "_run_codex_process", fake_run)
+
+    assert launcher.main([]) == 0
+    assert len(created) == 1
+    assert not created[0].home.exists()
+
+
+def test_retention_failure_never_masks_child_exit_code(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+    calls = 0
+
+    def broken_cleanup(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise KeyError("malformed governed-cleanup metadata")
+
+    def fake_run(_argv, _env, *, on_start=None):
+        assert on_start is not None
+        on_start(os.getpid())
+        return 7, launcher.empty_usage()
+
+    monkeypatch.setattr(sh, "cleanup_isolated_homes", broken_cleanup)
+    monkeypatch.setattr(launcher, "_run_codex_process", fake_run)
+
+    assert launcher.main([]) == 7
+    assert calls == 3
+
+
+def test_sentinel_release_failure_never_masks_child_exit_code(monkeypatch, tmp_path, capsys):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: None)
+
+    def fake_run(_argv, _env, *, on_start=None):
+        assert on_start is not None
+        on_start(os.getpid())
+        return 7, launcher.empty_usage()
+
+    def preserve_sentinel(_self):
+        _self._released = True
+        if _self.home_fd is not None:
+            os.close(_self.home_fd)
+            _self.home_fd = None
+        raise RuntimeError("injected exact-owner cleanup failure")
+
+    monkeypatch.setattr(launcher, "_run_codex_process", fake_run)
+    monkeypatch.setattr(sh.SessionLease, "release", preserve_sentinel)
+
+    assert launcher.main([]) == 7
+    assert "PID sentinel cleanup preserved for inspection" in capsys.readouterr().err
+
+
+def test_launcher_live_child_transfer_temp_is_preserved_during_concurrent_retention(
+    monkeypatch, tmp_path
+):
+    user_home = tmp_path / "user"
+    source = user_home / ".codex"
+    source.mkdir(parents=True)
+    tokenpak_home = tmp_path / "tokenpak-home"
+    monkeypatch.setenv("HOME", str(user_home))
+    paths = sh.select_paths(
+        "isolated",
+        workspace_dir=tmp_path,
+        session_id="concurrent-live-handoff",
+        tokenpak_home=tokenpak_home,
+        source_home=source,
+    )
+    sh.provision(paths)
+    lease = sh.SessionLease.acquire(paths, session_id="concurrent-live-handoff")
+    lease.begin_transfer()
+    dead_parent = sh.PidSentinel(
+        schema="tokenpak.codex.pid.v1",
+        pid=2_000_000_000,
+        start_time_ticks=1,
+        session_id=lease.sentinel.session_id,
+        mode="isolated",
+        home=str(paths.home.resolve()),
+    )
+    paths.pid_sentinel.write_text(json.dumps(dead_parent.__dict__) + "\n", encoding="utf-8")
+    paths.pid_sentinel.chmod(0o600)
+    lease.sentinel = dead_parent
+
+    transfer_temp_ready = threading.Event()
+    allow_transfer = threading.Event()
+    cleanup_done = threading.Event()
+    release_child = tmp_path / "release-child"
+    original_replace = sh.os.replace
+    child_temp: list[tuple[str, sh.PidSentinel]] = []
+    launch_results: list[tuple[int, dict[str, int | None]]] = []
+    cleanup_results: list[sh._CleanupResult] = []
+    errors: list[BaseException] = []
+
+    def paused_replace(src, dst, *args, **kwargs):
+        if isinstance(src, str) and sh._SENTINEL_TEMP_RE.fullmatch(src):
+            candidate = sh.read_pid_sentinel(Path(src), dir_fd=lease.home_fd)
+            assert candidate is not None
+            child_temp.append((src, candidate))
+            transfer_temp_ready.set()
+            if not allow_transfer.wait(5):
+                raise RuntimeError("timed out waiting for concurrent retention")
+        return original_replace(src, dst, *args, **kwargs)
+
+    def run_launcher_child() -> None:
+        code = (
+            "import pathlib,time\n"
+            f"flag=pathlib.Path({str(release_child)!r})\n"
+            "deadline=time.time()+10\n"
+            "while not flag.exists() and time.time()<deadline: time.sleep(0.01)\n"
+        )
+        try:
+            launch_results.append(
+                launcher._run_codex_process(
+                    [sys.executable, "-c", code],
+                    os.environ.copy(),
+                    on_start=lease.transfer_to,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def cleanup() -> None:
+        try:
+            cleanup_results.append(
+                sh.cleanup_isolated_homes(tokenpak_home, remove_all_orphans=True)
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+        finally:
+            cleanup_done.set()
+
+    monkeypatch.setattr(sh.os, "replace", paused_replace)
+    launch_thread = threading.Thread(target=run_launcher_child)
+    cleanup_thread = threading.Thread(target=cleanup)
+    try:
+        launch_thread.start()
+        assert transfer_temp_ready.wait(5)
+        assert sh.read_pid_sentinel(paths.pid_sentinel) == dead_parent
+        assert child_temp and sh.sentinel_is_live(child_temp[0][1], expected_home=paths.home)
+        assert not list(paths.home.glob("*.sqlite*"))
+
+        cleanup_thread.start()
+        assert not cleanup_done.wait(0.1)
+        allow_transfer.set()
+        cleanup_thread.join(10)
+        assert not cleanup_thread.is_alive()
+        assert cleanup_results and cleanup_results[0].removed == ()
+        assert paths.home.is_dir()
+        current = sh.read_pid_sentinel(paths.pid_sentinel)
+        assert current is not None and current.pid == child_temp[0][1].pid
+    finally:
+        allow_transfer.set()
+        release_child.touch()
+        launch_thread.join(15)
+        if cleanup_thread.is_alive():
+            cleanup_thread.join(15)
+        lease.release()
+
+    assert errors == []
+    assert launch_results and launch_results[0][0] == 0
 
 
 # ── explicit no-body accounting receipt mode ───────────────────────────
