@@ -2,15 +2,24 @@
 """Internal request traffic classifier.
 
 Attributes every proxied request to exactly one of three canonical classes
-(``managed`` / ``raw_claude_observed`` / ``external_untagged``) using the strict
-Defined detection precedence drives spend-guard accounting and audit attribution.
+(``managed`` / ``raw_claude_observed`` / ``external_untagged``) using the
+strict detection precedence defined in :func:`classify`.
+
+The attributed class has exactly two consumers wired today:
+
+- the listener admission gate in ``tokenpak.proxy.server``, which bounds
+  managed model-endpoint requests with an admission lease before a worker
+  thread is created; and
+- the upstream forwarding boundary in ``tokenpak.proxy.headers``, which uses
+  :func:`is_internal_header` to keep internal markers from leaving the proxy.
+
+No other consumer (accounting, attribution, persistence) is wired to this
+classification in this tree.
 
 The classifier is read-only on the request: the only output is the attributed
 class + detection reason + agent attribution. It NEVER mutates the body, NEVER
 reads OS process env at request time, and NEVER infers the class from
-URL / port / remote IP. Env-derived markers reach the classifier only via a
-launcher-synthesised internal header, never by reading
-``os.environ`` here.
+URL / port / remote IP.
 
 ``__all__`` is intentionally empty: this is internal proxy plumbing, not released
 public API. Every consumer imports the specific name it needs function-locally so
@@ -29,9 +38,11 @@ EXTERNAL_UNTAGGED = "external_untagged"
 
 REQUEST_CLASSES = frozenset({MANAGED, RAW_CLAUDE_OBSERVED, EXTERNAL_UNTAGGED})
 
-# ── Canonical detection reasons. One per precedence rung; persisted
-#    alongside the class on every audit row for forensic reconstruction. No
-#    synonyms (``header-agent`` / ``agentHeader`` are forbidden).
+# ── Canonical detection reasons. Persisted alongside the class on audit rows
+#    for forensic reconstruction. No synonyms (``header-agent`` /
+#    ``agentHeader`` are forbidden). ``env_launcher`` is a reserved literal for
+#    the launcher-synthesised process-env marker; no header grammar for it is
+#    ratified in this tree, so :func:`classify` never returns it today.
 HEADER_AGENT = "header_agent"
 HEADER_MANAGED = "header_managed"
 ENV_LAUNCHER = "env_launcher"
@@ -45,30 +56,27 @@ DETECTION_REASONS = frozenset(
 # ── Header names (lowercase for case-insensitive matching).
 HEADER_NAME_AGENT = "x-tokenpak-agent"
 HEADER_NAME_MANAGED = "x-tokenpak-managed"
-# The launcher synthesises this internal header from ``TOKENPAK_MANAGED=1`` in
-# the producer's process env. The classifier reads the header; it never reads
-# ``os.environ`` itself.
-HEADER_NAME_MANAGED_ENV = "x-tokenpak-managed-env"
 
-# TokenPak-internal markers that MUST be stripped before upstream forwarding
-# (re-synthesised at each
-# hop, never passed through, even to a TokenPak-managed downstream proxy).
-INTERNAL_MANAGED_HEADERS = frozenset(
-    {HEADER_NAME_AGENT, HEADER_NAME_MANAGED, HEADER_NAME_MANAGED_ENV}
-)
+# The managed marker grammar is exact: ``X-Tokenpak-Managed: 1``. No other
+# value (including truthy-looking tokens such as ``true`` / ``yes`` / ``on``)
+# marks a request managed. Surrounding whitespace is tolerated because header
+# values are stripped before comparison.
+MANAGED_MARKER_VALUE = "1"
+
+# TokenPak-internal header namespace. Any header whose name starts with one of
+# these prefixes is internal proxy plumbing and MUST be stripped before
+# upstream forwarding (re-synthesised at each hop, never passed through, even
+# to a TokenPak-managed downstream proxy).
+INTERNAL_HEADER_PREFIXES = ("x-tokenpak-", "x-tpk-")
 
 # Canonical Claude Code CLI User-Agent substring.
 # Matched case-insensitively, and ONLY after every higher-precedence marker has
 # failed. Single source of truth — do not duplicate this literal elsewhere.
 CLAUDE_CODE_UA_SUBSTRING = "claude-cli"
 
-# "managed marker present, but no agent name to attribute" sentinel (rung 2
-# and rung 3). Empty string, never fabricated.
+# "managed marker present, but no agent name to attribute" sentinel.
+# Empty string, never fabricated.
 UNKNOWN_MANAGED_AGENT = ""
-
-# Tokens that count as an opt-in "on" for the markerless managed headers. An
-# explicit ``0`` / ``false`` (or absence) does NOT mark a request managed.
-_TRUTHY_MARKERS = frozenset({"1", "true", "yes", "on"})
 
 # Intentionally empty — keeps every name above off the public-API snapshot.
 __all__: list[str] = []
@@ -103,9 +111,14 @@ def _header(headers, name: str) -> str:
     return ""
 
 
-def _is_truthy_marker(value: str) -> bool:
-    """A managed marker is opt-in: present and set to a truthy token."""
-    return value.strip().lower() in _TRUTHY_MARKERS
+def is_internal_header(name) -> bool:
+    """True when *name* is in the TokenPak-internal header namespace.
+
+    Internal headers MUST never be forwarded to a provider upstream — every
+    forwarding strategy strips them at the upstream boundary
+    (``tokenpak.proxy.headers``).
+    """
+    return str(name).lower().startswith(INTERNAL_HEADER_PREFIXES)
 
 
 def classify(headers) -> Classification:
@@ -116,12 +129,11 @@ def classify(headers) -> Classification:
       1. ``X-Tokenpak-Agent: <name>``  → ``managed`` (reason ``header_agent``),
          agent attribution = the lower-cased header value.
       2. ``X-Tokenpak-Managed: 1``     → ``managed`` (reason ``header_managed``),
-         agent attribution = unknown-managed.
-      3. ``X-Tokenpak-Managed-Env: 1`` → ``managed`` (reason ``env_launcher``),
-         agent attribution = launcher-managed.
-      4. Claude Code UA substring      → ``raw_claude_observed`` (reason
+         agent attribution = unknown-managed. The marker value must be exactly
+         ``1`` after whitespace stripping; no alternate values are recognised.
+      3. Claude Code UA substring      → ``raw_claude_observed`` (reason
          ``ua_claude_code``) when no higher marker matched.
-      5. otherwise                     → ``external_untagged`` (reason
+      4. otherwise                     → ``external_untagged`` (reason
          ``no_marker``).
 
     Read-only: never mutates ``headers``, never consults ``os.environ``, never
@@ -131,11 +143,8 @@ def classify(headers) -> Classification:
     if agent:
         return Classification(MANAGED, HEADER_AGENT, agent.lower())
 
-    if _is_truthy_marker(_header(headers, HEADER_NAME_MANAGED)):
+    if _header(headers, HEADER_NAME_MANAGED) == MANAGED_MARKER_VALUE:
         return Classification(MANAGED, HEADER_MANAGED, UNKNOWN_MANAGED_AGENT)
-
-    if _is_truthy_marker(_header(headers, HEADER_NAME_MANAGED_ENV)):
-        return Classification(MANAGED, ENV_LAUNCHER, UNKNOWN_MANAGED_AGENT)
 
     ua = _header(headers, "user-agent").lower()
     if ua and CLAUDE_CODE_UA_SUBSTRING in ua:
@@ -145,13 +154,14 @@ def classify(headers) -> Classification:
 
 
 def strip_managed_headers(headers) -> list[str]:
-    """Remove TokenPak-internal managed markers from a forward-bound header map.
+    """Remove TokenPak-internal headers from a forward-bound header map.
 
-    Mutates ``headers`` in place (case-insensitive) and returns the list of
-    header names actually removed. These
-    markers are re-synthesised at each hop and MUST NEVER be forwarded upstream —
-    even to a TokenPak-managed downstream proxy. A no-op (returns ``[]``) when
-    none are present or ``headers`` is not a mutable mapping.
+    Removes every header in the internal namespace (see
+    :func:`is_internal_header`). Mutates ``headers`` in place
+    (case-insensitive) and returns the list of header names actually removed.
+    These markers are re-synthesised at each hop and MUST NEVER be forwarded
+    upstream — even to a TokenPak-managed downstream proxy. A no-op (returns
+    ``[]``) when none are present or ``headers`` is not a mutable mapping.
     """
     removed: list[str] = []
     try:
@@ -159,7 +169,7 @@ def strip_managed_headers(headers) -> list[str]:
     except AttributeError:
         return removed
     for key in keys:
-        if str(key).lower() in INTERNAL_MANAGED_HEADERS:
+        if is_internal_header(key):
             try:
                 del headers[key]
             except (KeyError, TypeError):

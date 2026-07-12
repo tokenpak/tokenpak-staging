@@ -337,8 +337,11 @@ class VaultIndex:
         """Load metadata and build compact BM25 postings.
 
         Block text is consumed one document at a time and is not retained in
-        the index. Selected results are fetched through the bounded content
-        cache, so steady-state memory is independent of total block bytes.
+        the index, and selected results are hydrated through the bounded
+        content cache, so steady-state memory does not hold the full block
+        text. Postings, vocabulary, and per-block index metadata still scale
+        with corpus size (block count and distinct terms), so index memory
+        grows with the corpus even though raw block bytes are not retained.
         """
         try:
             data = json.loads(index_path.read_text(encoding="utf-8"))
