@@ -190,16 +190,28 @@ def test_six_generations_preserve_search_cache_and_injection_bytes(tmp_path, mon
     reason="RSS return assertion requires Linux /proc and glibc malloc_trim",
 )
 def test_linux_glibc_reload_rss_has_no_positive_ratchet():
-    """Six measured reloads stay within an 8 MiB allocator noise envelope."""
+    """Six measured reloads stay inside bounds frozen from no-change controls."""
     script = textwrap.dedent(
         """
+        import gc
+        import hashlib
         import json
         import os
         import tempfile
         import time
+        import tracemalloc
         from pathlib import Path
 
         from tokenpak.proxy import vault_bridge
+
+        CONTROL_RUNS = 3
+        TREATMENT_RELOADS = 6
+        # Fixed before treatment: /proc RSS is page-accounted and allocator
+        # scheduling can move a few MiB without retained Python objects.
+        RSS_FIXED_MARGIN_KIB = 4 * 1024
+        # Fixed before treatment: tracemalloc bookkeeping and retained evidence
+        # records can vary slightly even when the indexed generation is unchanged.
+        TRACED_FIXED_MARGIN_BYTES = 512 * 1024
 
         def rss_kib():
             for line in Path("/proc/self/status").read_text().splitlines():
@@ -207,20 +219,43 @@ def test_linux_glibc_reload_rss_has_no_positive_ratchet():
                     return int(line.split()[1])
             raise RuntimeError("VmRSS missing from /proc/self/status")
 
+        def sample():
+            rss = rss_kib()
+            traced_current, traced_peak = tracemalloc.get_traced_memory()
+            return {
+                "rss_kib": rss,
+                "traced_current_bytes": traced_current,
+                "traced_peak_bytes": traced_peak,
+            }
+
+        def settle_and_sample():
+            gc.collect()
+            time.sleep(0.01)
+            return sample()
+
+        def jitter(values):
+            return max(values) - min(values)
+
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             blocks_dir = root / "blocks"
             blocks_dir.mkdir()
             metadata = {}
-            for block_number in range(96):
+            fixture_hasher = hashlib.sha256()
+            for block_number in range(64):
                 block_id = f"block-{block_number}"
                 content = " ".join(
-                    f"term_{block_number}_{term_number}" for term_number in range(700)
+                    f"term_{block_number}_{term_number}" for term_number in range(500)
                 )
-                (blocks_dir / f"{block_id}.txt").write_text(content, encoding="utf-8")
+                content_bytes = content.encode()
+                (blocks_dir / f"{block_id}.txt").write_bytes(content_bytes)
+                fixture_hasher.update(block_id.encode())
+                fixture_hasher.update(b"\\0")
+                fixture_hasher.update(content_bytes)
                 metadata[block_id] = {
                     "source_path": f"docs/{block_id}.md",
-                    "raw_tokens": 700,
+                    "content_hash": hashlib.sha256(content_bytes).hexdigest(),
+                    "raw_tokens": 500,
                 }
 
             index_path = root / "index.json"
@@ -229,16 +264,77 @@ def test_linux_glibc_reload_rss_has_no_positive_ratchet():
             vault_bridge._VAULT_CACHE_MAX_BYTES = 0
             vault_bridge._VAULT_CACHE_PRELOAD = 0
             index = vault_bridge.VaultIndex(str(root))
-            generation_ids = []
-            rss_samples = []
-            for generation in range(1, 8):
-                stamp = time.time() + generation + 10
-                os.utime(index_path, (stamp, stamp))
-                index.maybe_reload()
-                generation_ids.append(index._snapshot_generation().generation_id)
-                rss_samples.append(rss_kib())
 
-            print(json.dumps({"generation_ids": generation_ids, "rss_kib": rss_samples}))
+            tracemalloc.start()
+            before_load = sample()
+            tracemalloc.reset_peak()
+            warmup_stamp = time.time() + 10
+            os.utime(index_path, (warmup_stamp, warmup_stamp))
+            index.maybe_reload()
+            warmup = {
+                "generation_id": index._snapshot_generation().generation_id,
+                "after_reload": sample(),
+                "settled": settle_and_sample(),
+            }
+
+            controls = []
+            for control_number in range(1, CONTROL_RUNS + 1):
+                # Force the loader while keeping every fixture byte unchanged,
+                # so controls measure reload allocator jitter rather than idle noise.
+                control_stamp = time.time() + control_number + 20
+                os.utime(index_path, (control_stamp, control_stamp))
+                tracemalloc.reset_peak()
+                index.maybe_reload()
+                controls.append(
+                    {
+                        "generation_id": index._snapshot_generation().generation_id,
+                        "after_no_change_reload": sample(),
+                        "settled": settle_and_sample(),
+                    }
+                )
+
+            control_rss = [entry["settled"]["rss_kib"] for entry in controls]
+            control_traced = [
+                entry["settled"]["traced_current_bytes"] for entry in controls
+            ]
+            # Freeze both tolerances before any treatment reload is observed.
+            frozen_bounds = {
+                "rss_control_jitter_kib": jitter(control_rss),
+                "rss_fixed_margin_kib": RSS_FIXED_MARGIN_KIB,
+                "rss_no_ratchet_bound_kib": jitter(control_rss) + RSS_FIXED_MARGIN_KIB,
+                "traced_control_jitter_bytes": jitter(control_traced),
+                "traced_fixed_margin_bytes": TRACED_FIXED_MARGIN_BYTES,
+                "traced_no_ratchet_bound_bytes": (
+                    jitter(control_traced) + TRACED_FIXED_MARGIN_BYTES
+                ),
+            }
+
+            treatments = []
+            for treatment_number in range(1, TREATMENT_RELOADS + 1):
+                stamp = time.time() + treatment_number + 40
+                os.utime(index_path, (stamp, stamp))
+                tracemalloc.reset_peak()
+                index.maybe_reload()
+                treatments.append(
+                    {
+                        "generation_id": index._snapshot_generation().generation_id,
+                        "after_reload": sample(),
+                        "settled": settle_and_sample(),
+                    }
+                )
+
+            print(
+                json.dumps(
+                    {
+                        "fixture_sha256": fixture_hasher.hexdigest(),
+                        "before_load": before_load,
+                        "warmup": warmup,
+                        "controls": controls,
+                        "frozen_bounds": frozen_bounds,
+                        "treatments": treatments,
+                    }
+                )
+            )
         """
     )
     completed = subprocess.run(
@@ -250,10 +346,31 @@ def test_linux_glibc_reload_rss_has_no_positive_ratchet():
         timeout=25,
     )
     payload = json.loads(completed.stdout.strip().splitlines()[-1])
-    measured_rss_kib = payload["rss_kib"][1:]
-    noise_bound_kib = 8 * 1024
+    controls = payload["controls"]
+    bounds = payload["frozen_bounds"]
+    treatments = payload["treatments"]
+    control_rss = [entry["settled"]["rss_kib"] for entry in controls]
+    control_traced = [entry["settled"]["traced_current_bytes"] for entry in controls]
+    treatment_rss = [entry["settled"]["rss_kib"] for entry in treatments]
+    treatment_traced = [entry["settled"]["traced_current_bytes"] for entry in treatments]
 
-    assert payload["generation_ids"] == list(range(1, 8))
-    assert len(measured_rss_kib) == 6
-    assert measured_rss_kib[-1] <= measured_rss_kib[0] + noise_bound_kib
-    assert max(measured_rss_kib) - min(measured_rss_kib) <= noise_bound_kib
+    assert payload["fixture_sha256"] == (
+        "d926d9af61c17509e771d0bd202f07e3bc1062099178a9db316bdb7e83c1dcd8"
+    )
+    assert payload["warmup"]["generation_id"] == 1
+    assert [entry["generation_id"] for entry in controls] == list(range(2, 5))
+    assert [entry["generation_id"] for entry in treatments] == list(range(5, 11))
+    assert bounds["rss_control_jitter_kib"] == max(control_rss) - min(control_rss)
+    assert bounds["rss_fixed_margin_kib"] == 4 * 1024
+    assert bounds["rss_no_ratchet_bound_kib"] == (
+        bounds["rss_control_jitter_kib"] + bounds["rss_fixed_margin_kib"]
+    )
+    assert bounds["traced_control_jitter_bytes"] == max(control_traced) - min(control_traced)
+    assert bounds["traced_fixed_margin_bytes"] == 512 * 1024
+    assert bounds["traced_no_ratchet_bound_bytes"] == (
+        bounds["traced_control_jitter_bytes"] + bounds["traced_fixed_margin_bytes"]
+    )
+    assert treatment_rss[-1] <= treatment_rss[0] + bounds["rss_no_ratchet_bound_kib"]
+    assert max(treatment_rss) - min(treatment_rss) <= bounds["rss_no_ratchet_bound_kib"]
+    assert treatment_traced[-1] <= (treatment_traced[0] + bounds["traced_no_ratchet_bound_bytes"])
+    assert max(treatment_traced) - min(treatment_traced) <= bounds["traced_no_ratchet_bound_bytes"]
