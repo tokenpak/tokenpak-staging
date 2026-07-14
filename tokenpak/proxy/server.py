@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Generator, List, Optional
 from urllib.parse import urlparse
 
+import httpx
+
 from tokenpak import __version__ as _tokenpak_version
 from tokenpak import _paths  # scoped-home path resolver (honors TOKENPAK_HOME)
 from tokenpak.cache.telemetry import CacheMetrics
@@ -1695,6 +1697,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # CLI it's no longer safe to retry (would cause `Unterminated
                 # string` JSON parse errors in the client's SSE reader).
                 sse_buffer = b""
+                sse_content_encoding = ""
                 _stream_wrote_to_client = False
                 for _ustream_attempt in range(_retry_policy.max_attempts):
                     _stream_retry = False
@@ -1733,7 +1736,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 has_cache_control = False
                                 for h_key, h_val in resp.headers.items():
                                     h_lower = h_key.lower()
-                                    if h_lower in ("connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding"):
+                                    if h_lower in (
+                                        "connection",
+                                        "keep-alive",
+                                        "transfer-encoding",
+                                        "content-length",
+                                    ):
                                         continue
                                     if h_lower == "content-type":
                                         has_content_type = True
@@ -1751,7 +1759,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.send_header("X-Request-ID", _req_id)
                                 self.end_headers()
 
-                                for chunk in resp.iter_bytes(chunk_size=4096):
+                                sse_content_encoding = resp.headers.get("content-encoding", "")
+                                for chunk in resp.iter_raw():
                                     if not chunk:
                                         continue
                                     try:
@@ -1779,10 +1788,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     break
 
                 if should_log and is_messages and sse_buffer:
-                    sse_usage = extract_sse_tokens(sse_buffer)
+                    # Forwarding stays raw so entity bytes and Content-Encoding
+                    # remain paired. Decode only this isolated telemetry copy.
+                    sse_observation_buffer = sse_buffer
+                    if sse_content_encoding:
+                        try:
+                            sse_observation_buffer = httpx.Response(
+                                200,
+                                headers={"Content-Encoding": sse_content_encoding},
+                                content=sse_buffer,
+                            ).content
+                        except Exception:
+                            sse_observation_buffer = b""
+                    sse_usage = extract_sse_tokens(sse_observation_buffer)
                     # stop_reason from message_delta (read-only on the buffered
                     # copy - forwarded stream bytes already went out unmodified).
-                    stop_reason = _extract_sse_stop_reason(sse_buffer)
+                    stop_reason = _extract_sse_stop_reason(sse_observation_buffer)
                     output_tokens = sse_usage.get("output_tokens", 0)
                     cache_read_tokens = sse_usage.get("cache_read_input_tokens", 0)
                     cache_creation_tokens = sse_usage.get("cache_creation_input_tokens", 0)
