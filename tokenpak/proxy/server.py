@@ -71,6 +71,7 @@ from .headers import (
     CLAUDE_CODE_HEADER_ALLOWLIST,
     forward_headers,
 )
+from .memory_guard import create_memory_guard as _create_memory_guard
 from .passthrough import (
     LEGACY_HEADER_ALLOWLIST,
     PassthroughConfig,
@@ -3027,6 +3028,12 @@ class ProxyServer:
         )
         # Graceful shutdown coordinator
         self.shutdown = GracefulShutdown()
+        # Explicit opt-in guard. Configuration is parsed during construction,
+        # but its thread starts only after the listener binds successfully.
+        self._memory_guard = _create_memory_guard()
+        self._stop_lock = threading.Lock()
+        self._signal_stop_thread: Optional[threading.Thread] = None
+        self._lifecycle_state = "created"
 
         # Connection pool — shared across all handler threads
         self._connection_pool = ConnectionPool(PoolConfig.from_env())
@@ -3109,41 +3116,136 @@ class ProxyServer:
 
     def start(self, blocking: bool = True) -> None:
         """Start the proxy server."""
-        # --- Startup self-test ---
-        _all_ok, _warnings = run_startup_checks(self.port)
-        if _warnings:
-            report = format_startup_report(_warnings, _all_ok)
-            print(report)
-            # Track non-fatal startup warnings in the degradation log
-            for w in _warnings:
-                get_degradation_tracker().record(
-                    DegradationEventType.STARTUP_WARNING, w, recovered=_all_ok
+        previous_signal_handlers: dict[int, Any] = {}
+
+        def _restore_start_signals() -> None:
+            for signum, previous in previous_signal_handlers.items():
+                try:
+                    signal.signal(signum, previous)
+                except (OSError, RuntimeError, ValueError):
+                    pass
+
+        # Serialize bind/guard/thread setup with stop(). The lock is released
+        # before a blocking serve loop so a signal-owned stop thread can run.
+        with self._stop_lock:
+            if self._lifecycle_state != "created":
+                raise RuntimeError(
+                    f"proxy server is single-use and cannot start from "
+                    f"{self._lifecycle_state!r} state"
                 )
-        # --------------------------
+            self._lifecycle_state = "starting"
 
-        server = _ThreadedHTTPServer((self.host, self.port), _ProxyHandler)
-        server.proxy_server = self  # inject back-reference
-        self._server = server
+            try:
+                if blocking and threading.current_thread() is threading.main_thread():
+                    for signum in (signal.SIGTERM, signal.SIGINT):
+                        previous_signal_handlers[signum] = signal.getsignal(signum)
+                        signal.signal(signum, self._handle_signal)
+                _all_ok, _warnings = run_startup_checks(self.port)
+                if _warnings:
+                    report = format_startup_report(_warnings, _all_ok)
+                    print(report)
+                    for warning in _warnings:
+                        get_degradation_tracker().record(
+                            DegradationEventType.STARTUP_WARNING,
+                            warning,
+                            recovered=_all_ok,
+                        )
+                server = _ThreadedHTTPServer((self.host, self.port), _ProxyHandler)
+            except Exception:
+                self._lifecycle_state = "start_failed"
+                _restore_start_signals()
+                raise
+            server.proxy_server = self  # inject back-reference
+            self._server = server
 
-        if blocking:
-            # Install signal handlers only in the main thread (signal module restriction)
-            if threading.current_thread() is threading.main_thread():
-                signal.signal(signal.SIGTERM, self._handle_signal)
-                signal.signal(signal.SIGINT, self._handle_signal)
+            try:
+                if self._memory_guard is not None:
+                    self._memory_guard.start()
+            except Exception:
+                # An explicitly enabled guard is enforcement, not telemetry.
+                # Roll back even a partially-started custom implementation and
+                # never leave its listener live.
+                self._lifecycle_state = "start_failed"
+                _restore_start_signals()
+                try:
+                    if self._memory_guard is not None:
+                        self._memory_guard.stop()
+                except Exception as cleanup_exc:
+                    self._lifecycle_state = "start_cleanup_failed"
+                    print(
+                        f"TokenPak: MemoryGuard startup cleanup error: {cleanup_exc}",
+                        flush=True,
+                    )
+                try:
+                    server.server_close()
+                except Exception as cleanup_exc:
+                    self._lifecycle_state = "start_cleanup_failed"
+                    print(
+                        f"TokenPak: listener startup cleanup error: {cleanup_exc}",
+                        flush=True,
+                    )
+                else:
+                    self._server = None
+                raise
 
-            print(f"TokenPak proxy listening on {self.host}:{self.port} [{self.compilation_mode}]")
-            print("  ✓ Zero-config mode enabled (auto-detecting upstream from request headers)")
+            if not blocking:
+                server_thread = threading.Thread(
+                    target=server.serve_forever,
+                    name="tokenpak-proxy-server",
+                    daemon=True,
+                )
+                self._server_thread = server_thread
+                try:
+                    server_thread.start()
+                except Exception:
+                    self._server_thread = None
+                    self._lifecycle_state = "start_failed"
+                    _restore_start_signals()
+                    try:
+                        if self._memory_guard is not None:
+                            self._memory_guard.stop()
+                    except Exception as cleanup_exc:
+                        self._lifecycle_state = "start_cleanup_failed"
+                        print(
+                            f"TokenPak: proxy startup cleanup error: {cleanup_exc}",
+                            flush=True,
+                        )
+                    try:
+                        server.server_close()
+                    except Exception as cleanup_exc:
+                        self._lifecycle_state = "start_cleanup_failed"
+                        print(
+                            f"TokenPak: listener startup cleanup error: {cleanup_exc}",
+                            flush=True,
+                        )
+                    else:
+                        self._server = None
+                    raise
+                self._lifecycle_state = "running"
+                return
+
+            self._lifecycle_state = "running"
+
+        try:
+            for startup_message in (
+                f"TokenPak proxy listening on {self.host}:{self.port} [{self.compilation_mode}]",
+                "  ✓ Zero-config mode enabled (auto-detecting upstream from request headers)",
+            ):
+                try:
+                    print(startup_message)
+                except Exception:
+                    # A closed supervising terminal must not strand an owned
+                    # listener before serve_forever has entered.
+                    pass
             try:
                 server.serve_forever()
             except KeyboardInterrupt:
                 pass  # SIGINT handled via _handle_signal → stop()
-            finally:
-                # Ensure stop is called even if serve_forever exits unexpectedly
-                if self._server is not None:
-                    self.stop()
-        else:
-            self._server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-            self._server_thread.start()
+        finally:
+            # Signal-install and serve-loop failures share the same owned cleanup.
+            if self._server is not None:
+                self.stop()
+            _restore_start_signals()
 
     def _handle_signal(self, signum: int, frame: Any) -> None:
         """Signal handler for SIGTERM/SIGINT — triggers graceful shutdown."""
@@ -3151,48 +3253,122 @@ class ProxyServer:
         print(f"\nTokenPak: {sig_name} received — starting graceful shutdown "
               f"(drain timeout: {self.shutdown_timeout:.0f}s)...", flush=True)
         # Run stop() in a background thread so the signal handler returns quickly
-        t = threading.Thread(target=self.stop, daemon=True)
-        t.start()
+        if self._signal_stop_thread is not None and self._signal_stop_thread.is_alive():
+            return
+
+        def _signal_stop() -> None:
+            try:
+                self.stop()
+            finally:
+                self._signal_stop_thread = None
+
+        stop_thread = threading.Thread(
+            target=_signal_stop,
+            name="tokenpak-proxy-signal-stop",
+            daemon=True,
+        )
+        self._signal_stop_thread = stop_thread
+        stop_thread.start()
 
     def stop(self) -> None:
+        """Serialize repeated/concurrent stop calls around the owned lifecycle."""
+        with self._stop_lock:
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
         """
         Gracefully shut down the proxy server.
 
         Sequence:
           1. Stop accepting new requests (return 503 for any new proxied calls)
-          2. Drain in-flight requests (up to ``shutdown_timeout`` seconds)
-          3. Flush telemetry buffer to disk
-          4. Close the HTTP connection pool
-          5. Stop the HTTP server
+          2. Stop and join the MemoryGuard
+          3. Drain in-flight requests (up to ``shutdown_timeout`` seconds)
+          4. Flush telemetry buffer to disk
+          5. Close the HTTP connection pool
+          6. Stop, close, and join the HTTP server
         """
+        guard_error: Exception | None = None
+        prior_state = self._lifecycle_state
+        self._lifecycle_state = "stopping"
+
+        # A startup rollback may retain a listener solely because close failed.
+        # It was never served, so retry close directly rather than calling
+        # HTTPServer.shutdown(), which requires a live serve_forever loop.
+        if prior_state == "start_cleanup_failed" and self._server is not None:
+            if self._memory_guard is not None:
+                try:
+                    self._memory_guard.stop()
+                except Exception as exc:
+                    guard_error = exc
+            try:
+                self._server.server_close()
+            except Exception as exc:
+                if guard_error is None:
+                    guard_error = exc
+            else:
+                self._server = None
+            try:
+                self._connection_pool.close()
+            except Exception:
+                pass
+            self._lifecycle_state = (
+                "stopped" if guard_error is None else "start_cleanup_failed"
+            )
+            if guard_error is not None:
+                raise guard_error
+            return
+
         # Never started (or already stopped): nothing is in flight, so just
-        # release pool resources and return. For a RUNNING server the pool
+        # stop any partially-started guard, release pool resources, and return.
+        # For a RUNNING server the pool
         # must NOT be closed here — closing it before the drain below kills
         # every in-flight request's upstream connection, turning a graceful
         # SIGTERM into a mid-stream connection reset for every active
         # request. The pool is closed at step 4, after the drain completes.
         if self._server is None:
+            if self._memory_guard is not None:
+                try:
+                    self._memory_guard.stop()
+                except Exception as exc:
+                    guard_error = exc
             if self._connection_pool is not None:
                 try:
                     self._connection_pool.close()
                 except Exception:
                     pass
+            if guard_error is not None:
+                self._lifecycle_state = "stop_failed"
+                raise guard_error
+            self._lifecycle_state = "stopped"
             return
 
         # ── Step 1: Stop accepting new proxy requests ─────────────────────
         self.shutdown.begin()
-        print("TokenPak: shutdown step 1/5 — rejecting new requests (503)", flush=True)
+        print("TokenPak: shutdown step 1/6 — rejecting new requests (503)", flush=True)
 
-        # ── Step 2: Drain in-flight requests ──────────────────────────────
+        # ── Step 2: Stop MemoryGuard before request/cache teardown ───────────
+        if self._memory_guard is not None:
+            print("TokenPak: shutdown step 2/6 — stopping MemoryGuard...", flush=True)
+            try:
+                self._memory_guard.stop()
+                print("TokenPak: shutdown step 2/6 — MemoryGuard stopped ✓", flush=True)
+            except Exception as exc:
+                guard_error = exc
+                print(
+                    f"TokenPak: shutdown step 2/6 — MemoryGuard stop error: {exc}",
+                    flush=True,
+                )
+
+        # ── Step 3: Drain in-flight requests ──────────────────────────────
         in_flight = self.shutdown.in_flight_count()
         if in_flight > 0:
             print(
-                f"TokenPak: shutdown step 2/5 — draining {in_flight} in-flight request(s) "
+                f"TokenPak: shutdown step 3/6 — draining {in_flight} in-flight request(s) "
                 f"(timeout: {self.shutdown_timeout:.0f}s)...",
                 flush=True,
             )
         else:
-            print("TokenPak: shutdown step 2/5 — no in-flight requests, proceeding", flush=True)
+            print("TokenPak: shutdown step 3/6 — no in-flight requests, proceeding", flush=True)
 
         drained = self.shutdown.wait_for_drain(timeout=self.shutdown_timeout)
         if not drained:
@@ -3203,38 +3379,65 @@ class ProxyServer:
                 flush=True,
             )
         else:
-            print("TokenPak: shutdown step 2/5 — all requests drained ✓", flush=True)
+            print("TokenPak: shutdown step 3/6 — all requests drained ✓", flush=True)
 
-        # ── Step 3: Flush telemetry buffer to disk ─────────────────────────
-        print("TokenPak: shutdown step 3/5 — flushing telemetry...", flush=True)
+        # ── Step 4: Flush telemetry buffer to disk ─────────────────────────
+        print("TokenPak: shutdown step 4/6 — flushing telemetry...", flush=True)
         try:
             self._flush_telemetry()
-            print("TokenPak: shutdown step 3/5 — telemetry flushed ✓", flush=True)
+            print("TokenPak: shutdown step 4/6 — telemetry flushed ✓", flush=True)
         except Exception as exc:
-            print(f"TokenPak: shutdown step 3/5 — telemetry flush error (non-fatal): {exc}",
+            print(f"TokenPak: shutdown step 4/6 — telemetry flush error (non-fatal): {exc}",
                   flush=True)
 
-        # ── Step 4: Close HTTP connection pool ────────────────────────────
-        print("TokenPak: shutdown step 4/5 — closing connection pool...", flush=True)
+        # ── Step 5: Close HTTP connection pool ────────────────────────────
+        print("TokenPak: shutdown step 5/6 — closing connection pool...", flush=True)
         try:
             self._connection_pool.close()
-            print("TokenPak: shutdown step 4/5 — connection pool closed ✓", flush=True)
+            print("TokenPak: shutdown step 5/6 — connection pool closed ✓", flush=True)
         except Exception as exc:
-            print(f"TokenPak: shutdown step 4/5 — pool close error (non-fatal): {exc}",
+            print(f"TokenPak: shutdown step 5/6 — pool close error (non-fatal): {exc}",
                   flush=True)
 
-        # ── Step 5: Stop HTTP server ───────────────────────────────────────
-        print("TokenPak: shutdown step 5/5 — stopping HTTP server...", flush=True)
+        # ── Step 6: Stop HTTP server and release its listener ──────────────
+        print("TokenPak: shutdown step 6/6 — stopping HTTP server...", flush=True)
         srv = self._server
-        self._server = None
+        server_thread = self._server_thread
+        server_error: Exception | None = None
         try:
             srv.shutdown()
-            print("TokenPak: shutdown step 5/5 — HTTP server stopped ✓", flush=True)
         except Exception as exc:
-            print(f"TokenPak: shutdown step 5/5 — server stop error (non-fatal): {exc}",
+            server_error = exc
+        try:
+            srv.server_close()
+        except Exception as exc:
+            if server_error is None:
+                server_error = exc
+        try:
+            if server_thread is not None and server_thread is not threading.current_thread():
+                server_thread.join(timeout=5.0)
+                if server_thread.is_alive():
+                    raise RuntimeError("proxy server thread did not stop within 5 seconds")
+            if server_thread is None or not server_thread.is_alive():
+                self._server_thread = None
+        except Exception as exc:
+            if server_error is None:
+                server_error = exc
+
+        if server_error is None:
+            self._server = None
+            print("TokenPak: shutdown step 6/6 — HTTP server stopped ✓", flush=True)
+        else:
+            print(f"TokenPak: shutdown step 6/6 — server stop error: {server_error}",
                   flush=True)
+            if guard_error is None:
+                guard_error = server_error
 
         print("TokenPak: graceful shutdown complete.", flush=True)
+        if guard_error is not None:
+            self._lifecycle_state = "stop_failed"
+            raise guard_error
+        self._lifecycle_state = "stopped"
 
     def _flush_telemetry(self) -> None:
         """
@@ -3272,7 +3475,23 @@ class ProxyServer:
         self.compression_stats.flush_shutdown_record(shutdown_record)
 
     def is_running(self) -> bool:
-        return self._server is not None
+        return self._lifecycle_state == "running" and self._server is not None
+
+    def _memory_guard_snapshot(self) -> dict:
+        """Return lifecycle/config truth without creating or starting a guard."""
+        if self._memory_guard is None:
+            return {
+                "enabled": False,
+                "state": "disabled",
+                "thread_alive": False,
+                "callback_policy": "disabled",
+                "callbacks": {
+                    "compact": False,
+                    "token": False,
+                    "semantic": False,
+                },
+            }
+        return self._memory_guard.stats
 
     # ------------------------------------------------------------------
     # Status endpoints (also used by handler GET routes)
@@ -3288,7 +3507,14 @@ class ProxyServer:
         compression_ratio_avg = round(sum(ratios) / len(ratios), 4) if ratios else 0.0
         pool_metrics = self._connection_pool.metrics()
         deg = get_degradation_tracker()
-        is_degraded = deg.is_degraded()
+        guard_snapshot = self._memory_guard_snapshot()
+        guard_state = guard_snapshot.get("state")
+        guard_degraded = bool(
+            guard_snapshot.get("enabled")
+            and self._lifecycle_state == "running"
+            and not (guard_state == "running" and guard_snapshot.get("thread_alive"))
+        )
+        is_degraded = deg.is_degraded() or guard_degraded
         is_shutting_down = self.shutdown.is_shutting_down
         # Circuit breaker summary
         cb_registry = get_circuit_breaker_registry()
@@ -3307,6 +3533,7 @@ class ProxyServer:
             "is_degraded": is_degraded,
             "is_shutting_down": is_shutting_down,
             "in_flight_requests": self.shutdown.in_flight_count(),
+            "memory_guard": guard_snapshot,
             "admission": {
                 "limit": self._admission_limit,
                 "available": self._admission._value,
@@ -3407,6 +3634,7 @@ class ProxyServer:
         return {
             "session": s,
             "compilation_mode": self.compilation_mode,
+            "memory_guard": self._memory_guard_snapshot(),
             "cache_read_by_origin": {
                 "client": s.get("cache_read_client", 0),
                 "proxy": s.get("cache_read_proxy", 0),
