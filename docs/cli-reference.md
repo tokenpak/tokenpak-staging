@@ -672,7 +672,7 @@ Examples:
   tokenpak codex
   tokenpak codex --install-only    # set up without launching Codex
   tokenpak codex doctor            # verify installation
-  tokenpak codex uninstall         # reverse installation
+  tokenpak codex uninstall         # clean selected home; preserve shared skills in use
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
@@ -681,6 +681,9 @@ Examples:
 
 - `--budget` — Daily spend cap in USD; sets TOKENPAK_COMPANION_BUDGET env var
 - `--install-only` — Run setup (MCP, hooks, AGENTS.md, skills) and exit without launching codex
+- `--receipt-only` — Launch vanilla Codex and write a no-body receipt without installing or activating companion setup
+- `--receipt-out` — Write a no-body accounting receipt for this Codex process
+- `--run-id` — Stable run identifier to include in the accounting receipt
 - `ARGS` — Arguments forwarded verbatim to codex (or `doctor` / `uninstall`)
 
 ### `tokenpak creds`
