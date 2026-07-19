@@ -165,3 +165,11 @@ release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (r
 	$(PYTHON) -m pip install --quiet build
 	$(PYTHON) -m build
 	$(PYTHON) scripts/release_gate/check_release_leaks.py --dist dist/
+
+# Always-on baseline of cheap, deterministic, public-safety gates (maturity /
+# license / leak / help-verbs / tokenpak-literal) that must pass on every
+# release regardless of tier. Deliberately narrow: the Std 10 §5 A1-A7 / B1 /
+# B3 / C5 / C6 umbrella is owned by separate packets and NOT claimed here.
+.PHONY: release-check-baseline
+release-check-baseline:  ## Std 10 five-gate always-on baseline (adapted from staging PR #208)
+	$(PYTHON) scripts/release_check/release_check.py
