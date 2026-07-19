@@ -136,6 +136,19 @@ def test_each_heavy_dep_lives_in_its_named_extra(extra: str, heavy_pkg: str):
     )
 
 
+def test_serve_extra_covers_dashboard_runtime_imports():
+    """The advertised server install must be able to create the dashboard."""
+    extras = _load()["project"].get("optional-dependencies", {})
+    names = _dep_names(extras.get("serve", []))
+    required = {"fastapi", "jinja2", "python-multipart"}
+    missing = required - names
+    assert not missing, (
+        "The `serve` extra is missing dashboard runtime dependencies: "
+        f"{sorted(missing)}. A clean `tokenpak[serve]` install must render "
+        "Jinja templates and register FastAPI Form routes."
+    )
+
+
 def test_core_imports_under_slim_install():
     """The slim top-level package and canonical proxy surfaces import cleanly.
 
