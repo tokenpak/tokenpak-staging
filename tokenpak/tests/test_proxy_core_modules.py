@@ -773,6 +773,7 @@ class TestMemoryGuardInit:
 class TestCreateMemoryGuard:
     _ENV_NAMES = (
         "TOKENPAK_MEMORY_GUARD",
+        "TOKENPAK_MEMORY_MODE",
         "TOKENPAK_MEMORY_TARGET_MB",
         "TOKENPAK_MEMORY_CEILING_MB",
         "TOKENPAK_MEMORY_CHECK_SECS",
@@ -783,6 +784,10 @@ class TestCreateMemoryGuard:
     def _clear(self, monkeypatch):
         for name in self._ENV_NAMES:
             monkeypatch.delenv(name, raising=False)
+
+    @pytest.fixture(autouse=True)
+    def _isolated_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path))
 
     def test_default_is_disabled(self, monkeypatch):
         self._clear(monkeypatch)
@@ -829,6 +834,72 @@ class TestCreateMemoryGuard:
         from tokenpak.proxy.memory_guard import create_memory_guard
 
         with pytest.raises(ValueError, match="explicit boolean"):
+            create_memory_guard()
+
+    def test_managed_plan_is_used_when_memory_env_is_absent(self, monkeypatch, tmp_path):
+        self._clear(monkeypatch)
+        from tokenpak.services.memory_optimization import (
+            MIB,
+            HostFacts,
+            apply_plan,
+        )
+
+        facts = HostFacts(
+            platform="linux",
+            cpu_count=4,
+            physical_memory_bytes=4096 * MIB,
+            cgroup_memory_limit_bytes=None,
+            effective_memory_bytes=4096 * MIB,
+            memory_limit_source="physical",
+        )
+        apply_plan(home=tmp_path, facts=facts, mode="observe")
+
+        from tokenpak.proxy.memory_guard import create_memory_guard
+
+        guard = create_memory_guard()
+        assert guard is not None
+        assert guard.action_mode == "observe"
+        assert guard.configuration["source"] == "managed"
+        assert guard.configuration["plan_sha256"]
+
+    def test_corrupt_managed_plan_fails_off_with_warning(self, monkeypatch, tmp_path):
+        self._clear(monkeypatch)
+        (tmp_path / "memory-optimization.json").write_text("not-json\n")
+        from tokenpak.proxy.memory_guard import (
+            create_memory_guard,
+            memory_guard_configuration_status,
+        )
+
+        assert create_memory_guard() is None
+        status = memory_guard_configuration_status()
+        assert status["source"] == "managed_error"
+        assert "ignored" in status["warning"]
+
+    def test_any_memory_env_ignores_managed_file(self, monkeypatch, tmp_path):
+        self._clear(monkeypatch)
+        (tmp_path / "memory-optimization.json").write_text("not-consumed\n")
+        monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "0")
+        from tokenpak.proxy.memory_guard import (
+            create_memory_guard,
+            memory_guard_configuration_status,
+        )
+
+        assert create_memory_guard() is None
+        status = memory_guard_configuration_status()
+        assert status["source"] == "environment"
+        assert status["managed_file_ignored"] is True
+        assert status["triggering_env"] == ["TOKENPAK_MEMORY_GUARD"]
+
+    def test_unknown_and_empty_memory_env_fail_loudly(self, monkeypatch):
+        self._clear(monkeypatch)
+        from tokenpak.proxy.memory_guard import create_memory_guard
+
+        monkeypatch.setenv("TOKENPAK_MEMORY_MOD", "observe")
+        with pytest.raises(ValueError, match="unknown TOKENPAK_MEMORY"):
+            create_memory_guard()
+        monkeypatch.delenv("TOKENPAK_MEMORY_MOD")
+        monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "")
+        with pytest.raises(ValueError, match="empty TOKENPAK_MEMORY"):
             create_memory_guard()
 
 
