@@ -165,3 +165,68 @@ release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (r
 	$(PYTHON) -m pip install --quiet build
 	$(PYTHON) -m build
 	$(PYTHON) scripts/release_gate/check_release_leaks.py --dist dist/
+
+# ── Std 10 §5 Release Check (A1-A7 / B1 / B3 / C5 / C6) ──────────────────────
+# `make release-check` automates the Std 10 §5 step-2 gate set. Mapping:
+#   A1-A7 → check + api-snapshot-check + workflow-steps-check + telemetry-check
+#           + taxonomy-check + release-gate-check + migration-multihop
+#           (per Std 10 §4; gates with no standalone local target — A3 mypy,
+#           A5 fresh-machine install, A6 bench — remain manual §5 checklist
+#           items and are NOT silently claimed by this target)
+#   B1    → audit                       (Std 10 B1)
+#   B3    → marketing-filler-check      (Std 10 B3 / Constitution §8)
+#   C5    → docs-check                  (Std 10 C5)
+#   C6    → release-docs-pattern-check  (Std 10 C6)
+# Ceiling: C9 / C10 / C16 and coverage are deliberately excluded — coverage is
+# advisory per Std 66 §11.2; C9/C10/C16 run via the release master checklist.
+.PHONY: audit docs-check marketing-filler-check release-docs-pattern-check release-check
+
+audit:  ## Std 10 B1 — doc-drift audit (advisory) + strict dependency audit (blocking)
+	-bash scripts/audit-docs.sh
+	@echo "note: audit-docs.sh findings above are advisory (soft warning gate per its own header + CI continue-on-error); Std 10 B1 blocks only on Critical/High"
+	$(VENV_BIN)/python -m pip install --quiet pip-audit
+	$(VENV_BIN)/python -m pip_audit --strict .
+	@echo "✅  B1 audit clean (no known vulnerabilities in declared dependency tree)"
+# NOTE: `make deps-audit` cannot pass inside the editable dev venv: with
+# --strict, pip-audit escalates the --skip-editable skip of the local tokenpak
+# dist to an error. B1 therefore audits the declared dependency tree in
+# project mode with the same tool and the same --strict severity floor.
+
+docs-check:  ## Std 10 C5 — strict MkDocs build (links resolve) + CLI reference freshness
+	$(PIP) install --quiet "mkdocs>=1.5.0" "mkdocs-material>=9.5.0"
+	$(MKDOCS) build --strict
+	PATH="$(abspath $(VENV_BIN)):$$PATH" bash scripts/check-cli-docs.sh
+
+marketing-filler-check:  ## Std 10 B3 — no marketing filler in README/docs/site/dashboard
+	@! git grep -n -i -E '\b(revolutionary|game-changing|cutting-edge|industry-leading|next-gen|best-in-class|simply|easily)\b' -- README.md docs site tokenpak/dashboard \
+		|| { echo "❌  B3 FAIL: marketing filler found (Std 10 B3 / Constitution §8)"; exit 1; }
+	@git grep -n -i -E '\bjust\b' -- README.md docs site tokenpak/dashboard \
+		| sed 's/^/  B3 ADVISORY (\"just\"-as-qualifier requires human judgment): /' || true
+	@echo "✅  B3 clean (all mechanically-checkable filler terms absent)"
+
+# Public-baseline ref that defines "docs touched by this release" (Std 10 C6).
+# The release workbench names the public remote `github`; ad-hoc clones may
+# carry it as `public`. Override: make release-check RELEASE_BASE_REF=<ref>
+RELEASE_BASE_REF ?= $(shell git rev-parse -q --verify github/main 2>/dev/null || git rev-parse -q --verify public/main 2>/dev/null)
+
+release-docs-pattern-check:  ## Std 10 C6 — no TODO / "coming soon" / stale updated dates in release-touched docs
+	@base='$(RELEASE_BASE_REF)'; \
+	if [ -z "$$base" ]; then \
+		echo "❌  C6: cannot resolve public baseline ref; run with RELEASE_BASE_REF=<public-main-ref>"; exit 1; fi; \
+	echo "C6 baseline: $$base"; \
+	files=$$(git diff --name-only "$$base"...HEAD -- docs README.md); \
+	if [ -z "$$files" ]; then echo "✅  C6: no release-touched docs vs baseline"; exit 0; fi; \
+	base_date=$$(git log -1 --format=%cs "$$base"); fail=0; \
+	for f in $$files; do \
+		[ -f "$$f" ] || continue; \
+		if grep -n -E '\bTODO\b' "$$f" || grep -n -i 'coming soon' "$$f"; then \
+			echo "❌  C6 FAIL: forbidden pattern in $$f"; fail=1; fi; \
+		stale=$$(grep -o -i -E '(last +)?updated[:* ]+20[0-9]{2}-[0-9]{2}-[0-9]{2}' "$$f" | grep -o -E '20[0-9]{2}-[0-9]{2}-[0-9]{2}' | awk -v d="$$base_date" '$$0 < d' || true); \
+		if [ -n "$$stale" ]; then \
+			echo "❌  C6 FAIL: stale updated date(s) in $$f (predate baseline $$base_date): $$stale"; fail=1; fi; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "✅  C6 clean over release-touched docs"
+
+release-check: check api-snapshot-check workflow-steps-check telemetry-check taxonomy-check release-gate-check migration-multihop audit marketing-filler-check docs-check release-docs-pattern-check  ## Std 10 §5 step 2 — automate gates A1-A7 / B1 / B3 / C5 / C6
+	@echo "✅  release-check: A1-A7 / B1 / B3 / C5 / C6 gate targets all executed"
