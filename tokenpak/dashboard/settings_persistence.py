@@ -20,11 +20,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tokenpak import _paths
+
 # Default env-file location (loaded by systemd EnvironmentFile=).
 ENV_FILE_PATH = Path.home() / ".config" / "tokenpak.env"
 
 # Settings the proxy's SIGHUP handler can pick up without a full restart.
 _SIGHUP_RELOADABLE = frozenset({"TOKENPAK_MODE"})
+
+
+def _proxy_pid_path() -> Path:
+    return _paths.under("proxy.pid")
 
 
 # ---------------------------------------------------------------------------
@@ -65,10 +71,25 @@ def get_setting(key: str, default: str = "", path: Path | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 _BOOL_VALUES = frozenset({"0", "1", "true", "false", "yes", "no", "on", "off"})
-_PROFILES = frozenset({
+_LEGACY_PROFILES = frozenset({
     "claude-code-cli", "claude-code-tui", "claude-code-tmux",
     "claude-code-sdk", "claude-code-ide", "claude-code-cron",
 })
+
+
+def _valid_profiles() -> frozenset:
+    """Profile names accepted for TOKENPAK_ACTIVE_PROFILE writes.
+
+    Unions the proxy's canonical preset names with the legacy consumption-mode
+    labels. Imported lazily: tokenpak.proxy.config applies preset env defaults
+    at import time, which must not happen as a side effect of loading this
+    module.
+    """
+    try:
+        from tokenpak.proxy.config import _PROFILE_PRESETS
+        return frozenset(_PROFILE_PRESETS) | _LEGACY_PROFILES
+    except Exception:
+        return _LEGACY_PROFILES
 
 # Local-admin writes only. Sensitive credentials, provider/remote endpoints,
 # and remote alert destinations must not be created or updated through the
@@ -116,7 +137,7 @@ def _validate_pct(key: str, value: str) -> None:
 
 
 _VALIDATORS: dict[str, Any] = {
-    "TOKENPAK_ACTIVE_PROFILE": lambda k, v: None if v in _PROFILES else (_ for _ in ()).throw(ValueError(f"{k}: unknown profile {v!r}")),
+    "TOKENPAK_ACTIVE_PROFILE": lambda k, v: None if v in _valid_profiles() else (_ for _ in ()).throw(ValueError(f"{k}: unknown profile {v!r}")),
     "TOKENPAK_VAULT_INJECT_ENABLED": _validate_bool,
     "TOKENPAK_INJECT_BUDGET":        _validate_positive_int,
     "TOKENPAK_INJECT_TOP_K":         _validate_positive_int,
@@ -238,7 +259,7 @@ def _try_sighup_proxy(updates: dict[str, str]) -> None:
     """Send SIGHUP to the proxy if at least one updated key is hot-reloadable."""
     if not any(k in _SIGHUP_RELOADABLE for k in updates):
         return
-    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
+    pid_path = _proxy_pid_path()
     if not pid_path.exists():
         return
     try:
@@ -283,8 +304,8 @@ def load_settings_context(path: Path | None = None) -> dict[str, Any]:
 
     return {
         # Active profile
-        "active_profile": _s("TOKENPAK_ACTIVE_PROFILE") or _s("TOKENPAK_PROFILE", "claude-code-cli"),
-        "available_profiles": sorted(_PROFILES),
+        "active_profile": _s("TOKENPAK_ACTIVE_PROFILE") or _s("TOKENPAK_PROFILE", "balanced"),
+        "available_profiles": sorted(_valid_profiles()),
         # Vault injection
         "vault_inject_enabled": _b("TOKENPAK_VAULT_INJECT_ENABLED", "1"),
         "inject_budget":        _i("TOKENPAK_INJECT_BUDGET", 4000),
@@ -310,7 +331,7 @@ def load_settings_context(path: Path | None = None) -> dict[str, Any]:
 
 
 def _get_proxy_pid() -> int | None:
-    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
+    pid_path = _proxy_pid_path()
     if not pid_path.exists():
         return None
     try:

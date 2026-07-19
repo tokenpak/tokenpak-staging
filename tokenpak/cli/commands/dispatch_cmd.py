@@ -105,7 +105,10 @@ def build_dispatch_parser(sub: Any) -> None:
     )
     p_run.add_argument(
         "--dry-run", dest="dry_run", action="store_true",
-        help="Draft only; default autonomy = draft",
+        help=(
+            "Draft only; default autonomy = draft. Performs intake + route "
+            "selection without persisting anything (no ledger writes)"
+        ),
     )
     p_run.add_argument(
         "--confirm", dest="confirm", action="store_true",
@@ -430,8 +433,8 @@ def cmd_dispatch_run(args: Any) -> int:
     from tokenpak.orchestration.dispatch.frontdock import FrontDock
 
     as_json = getattr(args, "as_json", False)
-    dry_run = bool(getattr(args, "dry_run", False))
     autonomy = _default_autonomy(args)
+    dry_run = bool(getattr(args, "dry_run", False))
 
     intake = FrontDock().intake(args.request, autonomy_mode=autonomy)
     runtime = DispatchRuntime()
@@ -440,12 +443,9 @@ def cmd_dispatch_run(args: Any) -> int:
     # Decisions come from FrontDock (blocking gap) and/or route selection.
     decisions = [d for d in (intake.decision, outcome.decision) if d is not None]
 
-    # --dry-run is a DRAFT preview: it must never create or mutate the Run Ledger
-    # (no runs.db file, no job / manifest / route / decision rows). Constructing
-    # the ledger alone creates runs.db, so the persistence block — including the
-    # ``_ledger()`` open — is skipped entirely under dry-run. Intake and route
-    # selection are pure in-memory computations, so the outcome below is fully
-    # rendered from the draft without any write.
+    # A dry run is WRITE-FREE: intake + route selection happen in memory only.
+    # The ledger is not even opened (opening creates the DB file and applies
+    # migrations), so a dry run leaves the on-disk ledger byte-identical.
     if not dry_run:
         ledger = _ledger()
         try:
@@ -475,11 +475,19 @@ def cmd_dispatch_run(args: Any) -> int:
         "missing_info": list(intake.job.missing_info),
         "risk_flags": list(intake.job.risk_flags),
         "confirm": bool(getattr(args, "confirm", False)),
+        "dry_run": dry_run,
     }
+    if dry_run:
+        payload["note"] = (
+            "Dry run: nothing was persisted (no job, manifest, route, or "
+            "decision records were written)."
+        )
 
     def render(p: dict) -> int:
         print("Dispatch run" + ("  (dry-run — nothing persisted)" if p["dry_run"] else ""))
         print("────────────")
+        if p.get("dry_run"):
+            print("  (dry run — nothing persisted)")
         print(f"  Job        : {p['job_id']}")
         print(f"  Intent     : {p['detected_intent']}")
         print(f"  Autonomy   : {p['autonomy_mode']}")

@@ -25,13 +25,55 @@ import os
 import time
 import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-PROXY_PORT = int(os.environ.get("TOKENPAK_PORT", "8766"))
-AUTH_PROFILES_FILE = Path.home() / ".tokenpak" / "auth-profiles.json"
-FLEET_CONFIG_FILE = Path.home() / ".tokenpak" / "fleet.yaml"
+from tokenpak import _paths
+from tokenpak.platform.capabilities import _detect_dashboard_capabilities
+
+try:
+    PROXY_PORT = int(os.environ.get("TOKENPAK_PORT", "8766"))
+except (TypeError, ValueError):
+    PROXY_PORT = 8766
+
+SCHEMA_VERSION = "dashboard.v2.0"
 REFRESH_INTERVAL = 5  # seconds
+LAYOUTS = ("home", "dispatch", "spend", "debug", "fleet")
+
+__all__ = [
+    "LAYOUTS",
+    "PROXY_PORT",
+    "REFRESH_INTERVAL",
+    "collect_fleet_data",
+    "collect_local_data",
+    "run_dashboard",
+]
+
+
+def _proxy_port() -> int:
+    try:
+        return int(os.environ.get("TOKENPAK_PORT", str(PROXY_PORT)))
+    except (TypeError, ValueError):
+        return PROXY_PORT
+
+
+def _auth_profiles_file():
+    return _paths.under("auth-profiles.json")
+
+
+def _fleet_config_file():
+    return _paths.under("fleet.yaml")
+
+
+def _proxy_pid_file():
+    return _paths.under("proxy.pid")
+
+
+def _dispatch_runs_db():
+    return _paths.under("dispatch", "runs.db")
+
+
+def _companion_journal_db():
+    return _paths.under("companion", "journal.db")
 
 
 # ---------------------------------------------------------------------------
@@ -39,8 +81,9 @@ REFRESH_INTERVAL = 5  # seconds
 # ---------------------------------------------------------------------------
 
 
-def _http_get(path: str, port: int = PROXY_PORT, timeout: float = 3.0) -> Optional[Dict]:
+def _http_get(path: str, port: int | None = None, timeout: float = 3.0) -> Optional[Dict]:
     """Fetch JSON from proxy management endpoint. Returns None on failure."""
+    port = _proxy_port() if port is None else port
     try:
         url = f"http://127.0.0.1:{port}{path}"
         with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -50,14 +93,11 @@ def _http_get(path: str, port: int = PROXY_PORT, timeout: float = 3.0) -> Option
 
 
 def _proxy_start_time() -> Optional[float]:
-    """Estimate proxy start time from PID file or process info."""
-    pid_file = Path.home() / ".tokenpak" / "proxy.pid"
+    """Best-effort proxy start time from the canonical pid-file mtime."""
+    pid_file = _proxy_pid_file()
     if pid_file.exists():
         try:
-            pid = int(pid_file.read_text().strip())
-            stat_file = Path(f"/proc/{pid}/stat")
-            if stat_file.exists():
-                return stat_file.stat().st_mtime
+            return pid_file.stat().st_mtime
         except Exception:
             pass
     return None
@@ -73,10 +113,11 @@ def _uptime_str(start_time: Optional[float]) -> str:
 
 
 def _load_auth_profiles() -> Dict[str, Any]:
-    if not AUTH_PROFILES_FILE.exists():
+    auth_profiles_file = _auth_profiles_file()
+    if not auth_profiles_file.exists():
         return {}
     try:
-        data = json.loads(AUTH_PROFILES_FILE.read_text())
+        data = json.loads(auth_profiles_file.read_text())
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
@@ -100,80 +141,537 @@ def _profile_status(profile: Dict[str, Any]) -> tuple[str, str]:
     return "✓", "active (no expiry)"
 
 
-def collect_local_data() -> Dict[str, Any]:
-    """Gather all data for the local dashboard view."""
-    health = _http_get("/health")
-    stats = _http_get("/stats")
-    stats_session = _http_get("/stats/session")
-    degradation = _http_get("/degradation")
+def _source(kind: str, ref: str, *, available: bool, detail: str | None = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "kind": kind,
+        "ref": ref,
+        "state": "available" if available else "unavailable",
+    }
+    if detail:
+        payload["detail"] = detail
+    return payload
 
-    proxy_running = health is not None and health.get("status") in ("ok", "degraded")
 
-    # Request stats (best-effort from /stats or /stats/session)
-    req_data = stats or stats_session or {}
-    requests = req_data.get("requests", req_data.get("total_requests", 0))
-    errors = req_data.get("errors", req_data.get("total_errors", 0))
-    avg_latency_ms = req_data.get("avg_latency_ms", req_data.get("latency_avg_ms", 0))
-    tokens_in = req_data.get("tokens_in", req_data.get("prompt_tokens", 0))
-    tokens_out = req_data.get("tokens_out", req_data.get("completion_tokens", 0))
-    saved_tokens = req_data.get("saved_tokens", 0)
-    saved_dollars = req_data.get("saved_dollars", req_data.get("cost_saved_usd", 0.0))
+def _measure(
+    value: Any,
+    *,
+    state: str,
+    source: str,
+    unit: str | None = None,
+    detail: str | None = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"state": state, "value": value, "source": source}
+    if unit:
+        payload["unit"] = unit
+    if detail:
+        payload["detail"] = detail
+    return payload
 
-    # Compression
-    compression_ratio = req_data.get(
-        "avg_compression_ratio", req_data.get("compression_ratio", 0.0)
+
+def _layout_item(
+    label: str,
+    *,
+    state: str,
+    source: str,
+    value: Any = None,
+    unit: str | None = None,
+    detail: str | None = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"label": label, "state": state, "value": value, "source": source}
+    if unit:
+        payload["unit"] = unit
+    if detail:
+        payload["detail"] = detail
+    return payload
+
+
+def _measure_item(label: str, measure: Dict[str, Any]) -> Dict[str, Any]:
+    return _layout_item(
+        label,
+        state=str(measure.get("state", "unknown")),
+        value=measure.get("value"),
+        source=str(measure.get("source", "unknown")),
+        unit=measure.get("unit"),
+        detail=measure.get("detail"),
     )
-    if isinstance(compression_ratio, float) and compression_ratio > 1.0:
-        compression_pct = f"{(1.0 - 1.0/compression_ratio)*100:.0f}%"
-    elif isinstance(compression_ratio, (int, float)) and 0 < compression_ratio < 1:
-        compression_pct = f"{compression_ratio*100:.0f}%"
+
+
+def _source_item(label: str, source: Dict[str, Any]) -> Dict[str, Any]:
+    return _layout_item(
+        label,
+        state=str(source.get("state", "unknown")),
+        value=source.get("ref"),
+        source=str(source.get("kind", "source")),
+        detail=source.get("detail"),
+    )
+
+
+def _layout_section(name: str, title: str, items: list[Dict[str, Any]]) -> Dict[str, Any]:
+    return {"name": name, "title": title, "items": items}
+
+
+def _read_only_commands(layout: str) -> list[Dict[str, Any]]:
+    peers = [name for name in LAYOUTS if name != layout]
+    return [
+        {
+            "label": f"{name.title()} JSON",
+            "command": f"tokenpak dashboard --layout {name} --json",
+            "executes_mutation": False,
+        }
+        for name in peers[:4]
+    ]
+
+
+def _field_measure(
+    data: Dict[str, Any] | None,
+    keys: tuple[str, ...],
+    *,
+    source: str,
+    unit: str | None = None,
+    missing_state: str = "not_measured",
+) -> Dict[str, Any]:
+    if not data:
+        return _measure(None, state=missing_state, source=source, unit=unit)
+    for key in keys:
+        if key in data and data[key] is not None:
+            return _measure(data[key], state="measured", source=source, unit=unit)
+    return _measure(None, state=missing_state, source=source, unit=unit)
+
+
+def _compression_percent(data: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not data:
+        return _measure(None, state="not_measured", source="proxy_stats", unit="percent")
+    ratio = data.get("avg_compression_ratio", data.get("compression_ratio"))
+    if not isinstance(ratio, (int, float)) or ratio <= 0:
+        return _measure(None, state="not_measured", source="proxy_stats", unit="percent")
+    if ratio > 1.0:
+        value = (1.0 - 1.0 / ratio) * 100
     else:
-        compression_pct = "n/a"
+        value = ratio * 100
+    return _measure(round(value, 1), state="measured", source="proxy_stats", unit="percent")
 
-    # Auth profiles
-    profiles = _load_auth_profiles()
 
-    # Recent errors from degradation endpoint
-    recent_errors: List[str] = []
-    if degradation:
-        for ev in degradation.get("recent_events", [])[:3]:
-            recent_errors.append(ev.get("detail", str(ev))[:80])
+def _normalize_layout(layout: str | None) -> str:
+    name = (layout or "home").strip().lower()
+    if name not in LAYOUTS:
+        raise ValueError(f"unknown dashboard layout {layout!r}; expected one of {', '.join(LAYOUTS)}")
+    return name
 
-    error_rate_pct = (errors / max(requests, 1)) * 100
+
+def _build_layout_payload(snapshot: Dict[str, Any], layout: str) -> Dict[str, Any]:
+    summary = snapshot["summary"]
+    sources = snapshot["sources"]
+    spend = snapshot["spend"]
+    capabilities = snapshot["capabilities"]
+    dispatch = snapshot["dispatch"]
+    companion = snapshot["companion"]
+
+    if layout == "dispatch":
+        title = "Dispatch Cockpit"
+        sections = [
+            _layout_section(
+                "dispatch_state",
+                "Dispatch State",
+                [
+                    _layout_item(
+                        "Dispatch runtime",
+                        state=dispatch["state"],
+                        source=dispatch["source"],
+                        value="read-only",
+                        detail="Dispatch jobs and receipts are projected when the runtime DB exists.",
+                    ),
+                    _source_item("Dispatch runs DB", sources["dispatch_runs"]),
+                    _layout_item(
+                        "Decision Inbox",
+                        state="not_measured",
+                        source="dispatch_runs",
+                        value=None,
+                        detail="No Decision Inbox read model is exposed in the current source contract.",
+                    ),
+                ],
+            ),
+            _layout_section(
+                "freshness",
+                "Freshness",
+                [
+                    _measure_item("Recent errors", summary["recent_errors"]),
+                    _measure_item("Proxy start time", summary["proxy_start_time"]),
+                ],
+            ),
+        ]
+    elif layout == "spend":
+        title = "Spend Cockpit"
+        sections = [
+            _layout_section(
+                "spend",
+                "Measured Spend",
+                [
+                    _measure_item("Cost", spend["cost_usd"]),
+                    _measure_item("Saved dollars", spend["saved_usd"]),
+                    _measure_item("Saved tokens", spend["saved_tokens"]),
+                    _measure_item("Compression", spend["compression_percent"]),
+                    _measure_item("Compression mode", spend["compression_mode"]),
+                ],
+            ),
+            _layout_section(
+                "traffic",
+                "Traffic",
+                [
+                    _measure_item("Requests", summary["requests"]),
+                    _measure_item("Tokens in", summary["tokens_in"]),
+                    _measure_item("Tokens out", summary["tokens_out"]),
+                ],
+            ),
+        ]
+    elif layout == "debug":
+        title = "Debug Cockpit"
+        sections = [
+            _layout_section(
+                "capabilities",
+                "Capabilities",
+                [
+                    _layout_item(
+                        "Terminal UI",
+                        state=capabilities["terminal_ui"]["state"],
+                        source=capabilities["terminal_ui"]["source"],
+                        value=capabilities["terminal_ui"].get("rich"),
+                        detail=capabilities["terminal_ui"].get("detail"),
+                    ),
+                    _layout_item(
+                        "Process inspection",
+                        state=capabilities["process_inspection"]["state"],
+                        source=capabilities["process_inspection"]["source"],
+                        detail=capabilities["process_inspection"].get("detail"),
+                    ),
+                    _layout_item(
+                        "Service status source",
+                        state=capabilities["service_control"]["state"],
+                        source=capabilities["service_control"]["source"],
+                        detail=capabilities["service_control"].get("detail"),
+                    ),
+                ],
+            ),
+            _layout_section(
+                "sources",
+                "Source Availability",
+                [_source_item(label, source) for label, source in sources.items()],
+            ),
+        ]
+    elif layout == "fleet":
+        title = "Fleet Cockpit"
+        fleet_capability = capabilities["fleet_projection"]
+        sections = [
+            _layout_section(
+                "fleet",
+                "Fleet Projection",
+                [
+                    _layout_item(
+                        "Fleet config",
+                        state=fleet_capability["state"],
+                        source=fleet_capability["source"],
+                        value="opt-in",
+                        detail=fleet_capability.get("detail"),
+                    ),
+                    _source_item("fleet.yaml", sources["fleet_config"]),
+                    _layout_item(
+                        "Default behavior",
+                        state="disabled",
+                        source="dashboard_policy",
+                        value=False,
+                        detail="The local dashboard never assumes fleet mode by default.",
+                    ),
+                ],
+            )
+        ]
+    else:
+        title = "Home Cockpit"
+        sections = [
+            _layout_section(
+                "status",
+                "Status",
+                [
+                    _layout_item(
+                        "Proxy",
+                        state=summary["proxy"]["state"],
+                        source=summary["proxy"]["source"],
+                        value=summary["proxy"]["status"],
+                        detail=f"port {summary['proxy']['port']}",
+                    ),
+                    _measure_item("Requests", summary["requests"]),
+                    _measure_item("Auth profiles", summary["auth_profiles"]),
+                ],
+            ),
+            _layout_section(
+                "value",
+                "Local Value",
+                [
+                    _measure_item("Saved dollars", spend["saved_usd"]),
+                    _measure_item("Saved tokens", spend["saved_tokens"]),
+                    _measure_item("Compression", spend["compression_percent"]),
+                ],
+            ),
+            _layout_section(
+                "state_sources",
+                "State Sources",
+                [
+                    _layout_item(
+                        "Dispatch",
+                        state=dispatch["state"],
+                        source=dispatch["source"],
+                        value="read-only",
+                    ),
+                    _layout_item(
+                        "Companion",
+                        state=companion["state"],
+                        source=companion["source"],
+                        value="read-only",
+                    ),
+                    _source_item("monitor.db", sources["monitor_db"]),
+                ],
+            ),
+        ]
 
     return {
-        "proxy_running": proxy_running,
-        "proxy_status": health.get("status", "unknown") if health else "stopped",
-        "proxy_port": PROXY_PORT,
-        "start_time": _proxy_start_time(),
-        "requests": requests,
-        "errors": errors,
-        "error_rate_pct": error_rate_pct,
-        "avg_latency_ms": avg_latency_ms,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        "saved_tokens": saved_tokens,
-        "saved_dollars": saved_dollars,
-        "compression_pct": compression_pct,
-        "compression_mode": req_data.get("compression_mode", "hybrid"),
-        "auth_profiles": profiles,
-        "recent_errors": recent_errors,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "name": layout,
+        "title": title,
+        "read_only": True,
+        "default": layout == "home",
+        "sections": sections,
+        "warnings": snapshot["warnings"],
+        "next_commands": _read_only_commands(layout),
+        "mutation_controls": [],
     }
 
 
+def collect_dashboard_snapshot(layout: str = "home") -> Dict[str, Any]:
+    """Return the stable read-only ``tokenpak dashboard --json`` contract."""
+    layout = _normalize_layout(layout)
+    port = _proxy_port()
+    health = _http_get("/health", port=port)
+    stats = _http_get("/stats", port=port)
+    stats_session = _http_get("/stats/session", port=port)
+    degradation = _http_get("/degradation", port=port)
+    req_data = stats or stats_session
+
+    auth_profiles_path = _auth_profiles_file()
+    fleet_config_path = _fleet_config_file()
+    dispatch_runs_db = _dispatch_runs_db()
+    companion_journal_db = _companion_journal_db()
+    monitor_db = _paths.monitor_db(mode="read")
+
+    sources: Dict[str, Any] = {
+        "proxy_health": _source("http", "/health", available=health is not None),
+        "proxy_stats": _source(
+            "http",
+            "/stats" if stats is not None else "/stats/session",
+            available=req_data is not None,
+        ),
+        "proxy_degradation": _source("http", "/degradation", available=degradation is not None),
+        "auth_profiles": _source(
+            "file",
+            "tokenpak-home/auth-profiles.json",
+            available=auth_profiles_path.exists(),
+        ),
+        "monitor_db": _source(
+            "sqlite",
+            "tokenpak._paths.monitor_db(mode='read')",
+            available=monitor_db is not None,
+        ),
+        "dispatch_runs": _source(
+            "sqlite",
+            "tokenpak-home/dispatch/runs.db",
+            available=dispatch_runs_db.exists(),
+        ),
+        "companion_journal": _source(
+            "sqlite",
+            "tokenpak-home/companion/journal.db",
+            available=companion_journal_db.exists(),
+        ),
+        "fleet_config": _source(
+            "file",
+            "tokenpak-home/fleet.yaml",
+            available=fleet_config_path.exists(),
+        ),
+    }
+
+    warnings: list[str] = []
+    if health is None:
+        warnings.append("proxy health unavailable; proxy state is unknown")
+    if req_data is None:
+        warnings.append("proxy stats unavailable; spend and request values are not measured")
+    if monitor_db is None:
+        warnings.append("monitor.db unavailable; historical receipt values are not measured")
+
+    proxy_status = health.get("status") if isinstance(health, dict) else None
+    if proxy_status in {"ok", "degraded"}:
+        proxy_state = "running"
+    elif proxy_status:
+        proxy_state = str(proxy_status)
+    else:
+        proxy_state = "unknown"
+
+    recent_errors: List[str] = []
+    if isinstance(degradation, dict):
+        for ev in degradation.get("recent_events", [])[:3]:
+            recent_errors.append(ev.get("detail", str(ev))[:80])
+
+    profiles = _load_auth_profiles()
+    capabilities = _detect_dashboard_capabilities(
+        monitor_db_available=monitor_db is not None,
+        dispatch_state_available=dispatch_runs_db.exists(),
+        companion_state_available=companion_journal_db.exists(),
+        fleet_config_exists=fleet_config_path.exists(),
+    )
+
+    proxy_start_time = _proxy_start_time()
+
+    snapshot = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "capabilities": capabilities,
+        "sources": sources,
+        "summary": {
+            "proxy": {
+                "state": proxy_state,
+                "status": proxy_status or "unknown",
+                "source": "proxy_health",
+                "port": port,
+            },
+            "requests": _field_measure(
+                req_data, ("requests", "total_requests"), source="proxy_stats", unit="count"
+            ),
+            "errors": _field_measure(
+                req_data, ("errors", "total_errors"), source="proxy_stats", unit="count"
+            ),
+            "avg_latency_ms": _field_measure(
+                req_data, ("avg_latency_ms", "latency_avg_ms"), source="proxy_stats", unit="ms"
+            ),
+            "tokens_in": _field_measure(
+                req_data, ("tokens_in", "prompt_tokens"), source="proxy_stats", unit="tokens"
+            ),
+            "tokens_out": _field_measure(
+                req_data,
+                ("tokens_out", "completion_tokens"),
+                source="proxy_stats",
+                unit="tokens",
+            ),
+            "auth_profiles": _measure(
+                len(profiles) if auth_profiles_path.exists() else None,
+                state="measured" if auth_profiles_path.exists() else "not_configured",
+                source="auth_profiles",
+                unit="count",
+            ),
+            "recent_errors": _measure(
+                recent_errors,
+                state="measured" if degradation is not None else "unknown",
+                source="proxy_degradation",
+            ),
+            "proxy_start_time": _measure(
+                datetime.fromtimestamp(proxy_start_time, timezone.utc).isoformat()
+                if proxy_start_time
+                else None,
+                state="inferred" if proxy_start_time else "unknown",
+                source="tokenpak-home/proxy.pid.mtime",
+            ),
+        },
+        "dispatch": {
+            "state": "available" if dispatch_runs_db.exists() else "not_configured",
+            "source": "dispatch_runs",
+            "read_only": True,
+        },
+        "companion": {
+            "state": "available" if companion_journal_db.exists() else "not_configured",
+            "source": "companion_journal",
+            "read_only": True,
+        },
+        "spend": {
+            "cost_usd": _field_measure(
+                req_data,
+                ("cost_usd", "estimated_cost", "total_cost_usd"),
+                source="proxy_stats",
+                unit="usd",
+            ),
+            "saved_tokens": _field_measure(
+                req_data, ("saved_tokens",), source="proxy_stats", unit="tokens"
+            ),
+            "saved_usd": _field_measure(
+                req_data,
+                ("saved_dollars", "cost_saved_usd", "saved_usd"),
+                source="proxy_stats",
+                unit="usd",
+            ),
+            "compression_percent": _compression_percent(req_data),
+            "compression_mode": _field_measure(
+                req_data, ("compression_mode",), source="proxy_stats", missing_state="unknown"
+            ),
+        },
+        "debug": {
+            "tokenpak_home": str(_paths.home()),
+            "legacy_home_active": _paths.is_legacy(),
+            "proxy_pid_file": "tokenpak-home/proxy.pid",
+            "fleet_default_enabled": False,
+        },
+        "warnings": warnings,
+    }
+    snapshot["layout"] = _build_layout_payload(snapshot, layout)
+    return snapshot
+
+
+def _legacy_value(measure: Dict[str, Any], fallback: Any = "not measured") -> Any:
+    return measure.get("value") if measure.get("state") in {"measured", "inferred"} else fallback
+
+
+def _legacy_view_from_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    summary = snapshot["summary"]
+    spend = snapshot["spend"]
+    requests = _legacy_value(summary["requests"], None)
+    errors = _legacy_value(summary["errors"], None)
+    if isinstance(requests, (int, float)) and isinstance(errors, (int, float)) and requests > 0:
+        error_rate_pct: Any = (errors / requests) * 100
+    elif isinstance(requests, (int, float)) and isinstance(errors, (int, float)):
+        error_rate_pct = 0.0
+    else:
+        error_rate_pct = None
+    compression_pct = _legacy_value(spend["compression_percent"], None)
+    return {
+        "proxy_running": summary["proxy"]["state"] == "running",
+        "proxy_status": summary["proxy"]["status"],
+        "proxy_port": summary["proxy"]["port"],
+        "start_time": None,
+        "requests": requests,
+        "errors": errors,
+        "error_rate_pct": error_rate_pct,
+        "avg_latency_ms": _legacy_value(summary["avg_latency_ms"], None),
+        "tokens_in": _legacy_value(summary["tokens_in"], None),
+        "tokens_out": _legacy_value(summary["tokens_out"], None),
+        "saved_tokens": _legacy_value(spend["saved_tokens"], None),
+        "saved_dollars": _legacy_value(spend["saved_usd"], None),
+        "compression_pct": f"{compression_pct:.0f}%" if isinstance(compression_pct, (int, float)) else "not measured",
+        "compression_mode": _legacy_value(spend["compression_mode"], "unknown"),
+        "auth_profiles": _load_auth_profiles(),
+        "recent_errors": _legacy_value(summary["recent_errors"], []),
+        "timestamp": snapshot["generated_at"],
+    }
+
+
+def collect_local_data() -> Dict[str, Any]:
+    """Gather all data for the local dashboard view."""
+    return _legacy_view_from_snapshot(collect_dashboard_snapshot())
+
+
 def collect_fleet_data() -> List[Dict[str, Any]]:
-    """Gather data from all fleet agents via SSH."""
+    """Gather data from configured hosts via SSH."""
     import concurrent.futures
     import subprocess
 
-    if not FLEET_CONFIG_FILE.exists():
+    fleet_config_file = _fleet_config_file()
+    if not fleet_config_file.exists():
         return [collect_local_data()]
 
     try:
         import yaml
 
-        with open(FLEET_CONFIG_FILE) as f:
+        with open(fleet_config_file) as f:
             fleet_cfg = yaml.safe_load(f)
     except Exception:
         return [collect_local_data()]
@@ -204,23 +702,25 @@ def collect_fleet_data() -> List[Dict[str, Any]]:
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
+                if data.get("schema_version") == SCHEMA_VERSION:
+                    data = _legacy_view_from_snapshot(data)
                 data["agent_name"] = name
                 return data
-        except Exception as exc:
+        except Exception:
             pass
         return {
             "agent_name": name,
             "proxy_running": False,
             "proxy_status": "unreachable",
-            "proxy_port": PROXY_PORT,
-            "requests": 0,
-            "errors": 0,
-            "error_rate_pct": 0,
-            "avg_latency_ms": 0,
-            "tokens_in": 0,
-            "tokens_out": 0,
-            "saved_dollars": 0.0,
-            "compression_pct": "n/a",
+            "proxy_port": _proxy_port(),
+            "requests": None,
+            "errors": None,
+            "error_rate_pct": None,
+            "avg_latency_ms": None,
+            "tokens_in": None,
+            "tokens_out": None,
+            "saved_dollars": None,
+            "compression_pct": "not measured",
             "auth_profiles": {},
             "recent_errors": ["SSH unreachable"],
         }
@@ -232,6 +732,22 @@ def collect_fleet_data() -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Rendering (rich-based)
 # ---------------------------------------------------------------------------
+
+
+def _fmt_count(value: Any) -> str:
+    return f"{int(value):,}" if isinstance(value, (int, float)) else "not measured"
+
+
+def _fmt_ms(value: Any) -> str:
+    return f"{float(value):.0f}ms" if isinstance(value, (int, float)) else "not measured"
+
+
+def _fmt_cost(value: Any) -> str:
+    return f"${float(value):.2f}" if isinstance(value, (int, float)) else "not measured"
+
+
+def _fmt_error_rate(value: Any) -> str:
+    return f"{float(value):.1f}%" if isinstance(value, (int, float)) else "not measured"
 
 
 def _render_dashboard(data: Dict[str, Any]) -> None:
@@ -271,16 +787,21 @@ def _render_dashboard(data: Dict[str, Any]) -> None:
     stats_table.add_column("Value", justify="right")
 
     err_rate = data.get("error_rate_pct", 0)
-    err_color = "red" if err_rate > 5 else "yellow" if err_rate > 1 else "green"
-    stats_table.add_row("Requests", f"{data.get('requests', 0):,}")
+    if isinstance(err_rate, (int, float)):
+        err_color = "red" if err_rate > 5 else "yellow" if err_rate > 1 else "green"
+    else:
+        err_color = "yellow"
+    stats_table.add_row("Requests", _fmt_count(data.get("requests")))
     stats_table.add_row(
-        "Errors", f"[{err_color}]{data.get('errors', 0):,} ({err_rate:.1f}%)[/{err_color}]"
+        "Errors",
+        f"[{err_color}]{_fmt_count(data.get('errors'))} "
+        f"({_fmt_error_rate(err_rate)})[/{err_color}]",
     )
-    stats_table.add_row("Avg Latency", f"{data.get('avg_latency_ms', 0):.0f}ms")
-    stats_table.add_row("Tokens in", f"{data.get('tokens_in', 0):,}")
-    stats_table.add_row("Tokens out", f"{data.get('tokens_out', 0):,}")
-    stats_table.add_row("Saved tokens", f"[green]{data.get('saved_tokens', 0):,}[/green]")
-    stats_table.add_row("Saved $", f"[green]${data.get('saved_dollars', 0.0):.2f}[/green]")
+    stats_table.add_row("Avg Latency", _fmt_ms(data.get("avg_latency_ms")))
+    stats_table.add_row("Tokens in", _fmt_count(data.get("tokens_in")))
+    stats_table.add_row("Tokens out", _fmt_count(data.get("tokens_out")))
+    stats_table.add_row("Saved tokens", f"[green]{_fmt_count(data.get('saved_tokens'))}[/green]")
+    stats_table.add_row("Saved $", f"[green]{_fmt_cost(data.get('saved_dollars'))}[/green]")
     console.print(stats_table)
     console.print()
 
@@ -334,18 +855,85 @@ def _render_fleet_dashboard(fleet_data: List[Dict[str, Any]]) -> None:
         name = d.get("agent_name", "?")
         running = d.get("proxy_running", False)
         status_str = "[green]✓ running[/green]" if running else "[red]✗ down[/red]"
-        err_rate = d.get("error_rate_pct", 0)
-        err_color = "red" if err_rate > 5 else "yellow" if err_rate > 1 else "green"
+        err_rate = d.get("error_rate_pct")
+        if isinstance(err_rate, (int, float)):
+            err_color = "red" if err_rate > 5 else "yellow" if err_rate > 1 else "green"
+        else:
+            err_color = "yellow"
         t.add_row(
             name,
             status_str,
-            f"{d.get('requests', 0):,}",
-            f"[{err_color}]{d.get('errors', 0):,}[/{err_color}]",
-            f"{d.get('avg_latency_ms', 0):.0f}ms",
-            f"[green]${d.get('saved_dollars', 0.0):.2f}[/green]",
+            _fmt_count(d.get("requests")),
+            f"[{err_color}]{_fmt_count(d.get('errors'))}[/{err_color}]",
+            _fmt_ms(d.get("avg_latency_ms")),
+            f"[green]{_fmt_cost(d.get('saved_dollars'))}[/green]",
         )
 
     console.print(t)
+
+
+def _display_value(item: Dict[str, Any]) -> str:
+    value = item.get("value")
+    if value is None:
+        return str(item.get("state", "unknown"))
+    unit = item.get("unit")
+    return f"{value} {unit}" if unit else str(value)
+
+
+def _render_layout_snapshot(snapshot: Dict[str, Any]) -> None:
+    """Print one read-only cockpit layout frame."""
+    layout = snapshot["layout"]
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        _render_layout_plain(snapshot)
+        return
+
+    console = Console()
+    console.print(f"[bold cyan]TokenPak {layout['title']}[/bold cyan]")
+    console.print("[dim]read-only dashboard layout[/dim]")
+    console.print()
+
+    for section in layout["sections"]:
+        table = Table(box=box.ROUNDED, expand=True, title=section["title"])
+        table.add_column("Signal", style="bold")
+        table.add_column("State")
+        table.add_column("Value")
+        table.add_column("Source", style="dim")
+        for item in section["items"]:
+            table.add_row(
+                str(item["label"]),
+                str(item["state"]),
+                _display_value(item),
+                str(item["source"]),
+            )
+        console.print(table)
+        console.print()
+
+    if layout["warnings"]:
+        console.print("[yellow]Warnings[/yellow]")
+        for warning in layout["warnings"]:
+            console.print(f"  - {warning}")
+
+
+def _render_layout_plain(snapshot: Dict[str, Any]) -> None:
+    layout = snapshot["layout"]
+    print(f"\nTokenPak {layout['title']}")
+    print("read-only dashboard layout")
+    print("-" * 50)
+    for section in layout["sections"]:
+        print(f"\n{section['title']}")
+        for item in section["items"]:
+            print(
+                f"  {item['label']}: {_display_value(item)} "
+                f"({item['state']}; source={item['source']})"
+            )
+    if layout["warnings"]:
+        print("\nWarnings")
+        for warning in layout["warnings"]:
+            print(f"  - {warning}")
 
 
 def _render_plain(data: Dict[str, Any]) -> None:
@@ -354,10 +942,13 @@ def _render_plain(data: Dict[str, Any]) -> None:
     print(f"\nTokenPak Dashboard  [{now_str}]")
     print("─" * 50)
     proxy_status = "running" if data.get("proxy_running") else "stopped"
-    print(f"Proxy: {proxy_status} on :{data.get('proxy_port', PROXY_PORT)}")
-    print(f"Requests: {data.get('requests', 0)}  Errors: {data.get('errors', 0)}")
-    print(f"Tokens in: {data.get('tokens_in', 0)}  Tokens out: {data.get('tokens_out', 0)}")
-    print(f"Saved: ${data.get('saved_dollars', 0.0):.2f}")
+    print(f"Proxy: {proxy_status} on :{data.get('proxy_port', _proxy_port())}")
+    print(f"Requests: {_fmt_count(data.get('requests'))}  Errors: {_fmt_count(data.get('errors'))}")
+    print(
+        f"Tokens in: {_fmt_count(data.get('tokens_in'))}  "
+        f"Tokens out: {_fmt_count(data.get('tokens_out'))}"
+    )
+    print(f"Saved: {_fmt_cost(data.get('saved_dollars'))}")
 
 
 # ---------------------------------------------------------------------------
@@ -365,11 +956,12 @@ def _render_plain(data: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_dashboard(fleet: bool = False, json_export: bool = False) -> None:
+def run_dashboard(fleet: bool = False, json_export: bool = False, layout: str = "home") -> None:
     """Run the dashboard (interactive TUI or one-shot JSON)."""
+    layout = _normalize_layout(layout)
     if json_export:
-        data = collect_local_data()
-        print(json.dumps(data, indent=2))
+        data = collect_dashboard_snapshot(layout=layout)
+        print(json.dumps(data, indent=2, sort_keys=True))
         return
 
     if fleet:
@@ -380,6 +972,18 @@ def run_dashboard(fleet: bool = False, json_export: bool = False) -> None:
                 fleet_data = collect_fleet_data()
                 _render_fleet_dashboard(fleet_data)
                 print(f"\n[Refreshing every {REFRESH_INTERVAL}s — Ctrl-C to quit]")
+                time.sleep(REFRESH_INTERVAL)
+        except KeyboardInterrupt:
+            print("\nDashboard closed.")
+        return
+
+    if layout != "home":
+        try:
+            while True:
+                _clear_screen()
+                data = collect_dashboard_snapshot(layout=layout)
+                _render_layout_snapshot(data)
+                print(f"[Refreshing every {REFRESH_INTERVAL}s — press Ctrl-C to quit]")
                 time.sleep(REFRESH_INTERVAL)
         except KeyboardInterrupt:
             print("\nDashboard closed.")
@@ -419,7 +1023,14 @@ try:
         is_flag=True,
         help="Export dashboard data as JSON (non-interactive)",
     )
-    def dashboard_cmd(fleet: bool, json_export: bool) -> None:
+    @click.option(
+        "--layout",
+        type=click.Choice(LAYOUTS),
+        default="home",
+        show_default=True,
+        help="Select the read-only dashboard layout",
+    )
+    def dashboard_cmd(fleet: bool, json_export: bool, layout: str) -> None:
         """Real-time TokenPak health dashboard.
 
         Shows proxy status, request stats, compression savings, and auth profiles.
@@ -429,10 +1040,11 @@ try:
 
         \\b
           tokenpak dashboard            # local TUI
+          tokenpak dashboard --layout spend --json
           tokenpak dashboard --fleet    # fleet-wide summary
           tokenpak dashboard --json     # one-shot JSON export
         """
-        run_dashboard(fleet=fleet, json_export=json_export)
+        run_dashboard(fleet=fleet, json_export=json_export, layout=layout)
 
 except ImportError:
 

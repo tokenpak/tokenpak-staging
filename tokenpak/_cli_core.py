@@ -312,8 +312,8 @@ _COMMAND_GROUPS = {
         ("lock", "File lock management"),
         ("run", "Schedule macro runs"),
         ("replay", "Replay captured sessions"),
-        ("audit", "Audit log management"),
-        ("compliance", "Compliance reports"),
+        ("audit", "Audit log surface (Pro/Enterprise)"),
+        ("compliance", "Compliance report surface (Pro/Enterprise)"),
         ("validate", "Validate JSON files"),
         ("config-check", "Validate config"),
         ("diff", "Show context changes"),
@@ -1925,44 +1925,9 @@ def cmd_timeline(args):
 
 def cmd_explain(args):
     """Explain what a named workflow profile sets."""
-    _PROFILE_PRESETS = {
-        "safe": {
-            "TOKENPAK_MODE": "strict",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "8000",
-            "TOKENPAK_SKELETON_ENABLED": "false",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "balanced": {
-            "TOKENPAK_MODE": "hybrid",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "4500",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "aggressive": {
-            "TOKENPAK_MODE": "aggressive",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "2000",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "true",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "agentic": {
-            "TOKENPAK_MODE": "hybrid",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "3000",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-    }
+    # Single source of truth for profile presets is the proxy config layer.
+    # Imported lazily to avoid an import cycle at module load time.
+    from tokenpak.proxy.config import _PROFILE_PRESETS
 
     profile = getattr(args, "profile", None)
 
@@ -2081,6 +2046,11 @@ def cmd_dashboard(args):
 
     from .telemetry.token_manager import load_or_create_token, regenerate_token
 
+    if getattr(args, "dashboard_action", None) in {"connect", "disconnect"}:
+        from .cli.commands.dashboard_tunnel import cmd_dashboard_tunnel
+
+        return cmd_dashboard_tunnel(args)
+
     # --show-token: display current token
     if getattr(args, "show_token", False):
         try:
@@ -2099,7 +2069,7 @@ def cmd_dashboard(args):
         print("Old token is now invalid.")
         return
 
-    # --public: show public URL with token
+    # --public: advanced public URL with token
     if getattr(args, "public", False):
         from tokenpak.core.config_loader import get as _cfg  # noqa: F401
 
@@ -2111,11 +2081,12 @@ def cmd_dashboard(args):
         except Exception:
             ip = "localhost"
         url = f"http://{ip}:{port}/dashboard?token={token}"
-        print("\n✅ TokenPak Dashboard (Public)")
+        print("\n✅ TokenPak Dashboard (Advanced Public Mode)")
         print("─────────────────────────────────")
         print(f"URL:   {url}")
         print(f"Token: {token}")
         print("\n⚠️  Share this URL only with trusted users.")
+        print("Default remote access: tokenpak dashboard connect <host>")
         print("Regenerate token: tokenpak dashboard --new-token\n")
         webbrowser.open(url)
         return
@@ -2127,6 +2098,7 @@ def cmd_dashboard(args):
     run_dashboard(
         fleet=getattr(args, "fleet", False),
         json_export=getattr(args, "json_export", False),
+        layout=getattr(args, "layout", "home"),
     )
 
 
@@ -2238,9 +2210,39 @@ def cmd_codex(args):
     """
     import os
     import sys
-    if getattr(args, "budget", None) is not None:
+    forwarded, trailing_receipt_out, trailing_run_id = _extract_codex_accounting_flags(
+        list(args.args)
+    )
+    forwarded, trailing_receipt_only = _extract_codex_receipt_only_flag(forwarded)
+    receipt_out = getattr(args, "receipt_out", None) or trailing_receipt_out
+    run_id = getattr(args, "run_id", None) or trailing_run_id
+    receipt_only = bool(getattr(args, "receipt_only", False) or trailing_receipt_only)
+    if bool(receipt_out) != bool(run_id):
+        print(
+            "tokenpak codex: --receipt-out and --run-id must be provided together",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if receipt_only and getattr(args, "budget", None) is not None:
+        print(
+            "tokenpak codex: --receipt-only cannot be combined with --budget",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not receipt_only and getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
-    forwarded = list(args.args)
+    if receipt_only and not (receipt_out and run_id):
+        print(
+            "tokenpak codex: --receipt-only requires --receipt-out and --run-id",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if receipt_only and getattr(args, "install_only", False):
+        print(
+            "tokenpak codex: --receipt-only cannot be combined with --install-only",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if forwarded and forwarded[0] == "doctor":
         from .companion.codex.doctor import main as doctor_main
         sys.exit(doctor_main(forwarded[1:]))
@@ -2249,8 +2251,112 @@ def cmd_codex(args):
         sys.exit(uninstall_main(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
+    if receipt_only:
+        forwarded = ["--receipt-only", *forwarded]
     from .companion.codex import launch
-    launch(args=forwarded)
+    sys.exit(launch(args=forwarded, receipt_out=receipt_out, run_id=run_id))
+
+
+def _extract_codex_accounting_flags(
+    forwarded: list[str],
+) -> tuple[list[str], str | None, str | None]:
+    """Consume TokenPak accounting flags even when placed after Codex args."""
+    receipt_out: str | None = None
+    run_id: str | None = None
+    stripped: list[str] = []
+    index = 0
+    while index < len(forwarded):
+        token = forwarded[index]
+        if token == "--receipt-out":
+            if index + 1 >= len(forwarded):
+                print(
+                    "tokenpak codex: --receipt-out requires a path",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            receipt_out = forwarded[index + 1]
+            index += 2
+            continue
+        if token.startswith("--receipt-out="):
+            receipt_out = token.split("=", 1)[1]
+            index += 1
+            continue
+        if token == "--run-id":
+            if index + 1 >= len(forwarded):
+                print("tokenpak codex: --run-id requires an id", file=sys.stderr)
+                sys.exit(2)
+            run_id = forwarded[index + 1]
+            index += 2
+            continue
+        if token.startswith("--run-id="):
+            run_id = token.split("=", 1)[1]
+            index += 1
+            continue
+        stripped.append(token)
+        index += 1
+    return stripped, receipt_out, run_id
+
+
+def _extract_codex_receipt_only_flag(forwarded: list[str]) -> tuple[list[str], bool]:
+    """Consume TokenPak's Vanilla receipt-only flag wherever it appears."""
+    stripped: list[str] = []
+    receipt_only = False
+    for token in forwarded:
+        if token == "--receipt-only":
+            receipt_only = True
+            continue
+        stripped.append(token)
+    return stripped, receipt_only
+
+
+def _codex_namespace_from_tail(tail: list[str]) -> argparse.Namespace:
+    """Parse TokenPak-owned ``codex`` flags while preserving Codex-native flags."""
+    budget = None
+    install_only = False
+    passthrough: list[str] = []
+    stripped, receipt_out, run_id = _extract_codex_accounting_flags(tail)
+    stripped, receipt_only = _extract_codex_receipt_only_flag(stripped)
+
+    index = 0
+    while index < len(stripped):
+        token = stripped[index]
+        if token == "--budget":
+            if index + 1 >= len(stripped):
+                print("tokenpak codex: --budget requires USD", file=sys.stderr)
+                sys.exit(2)
+            try:
+                budget = float(stripped[index + 1])
+            except ValueError:
+                print("tokenpak codex: --budget must be numeric", file=sys.stderr)
+                sys.exit(2)
+            index += 2
+            continue
+        if token.startswith("--budget="):
+            try:
+                budget = float(token.split("=", 1)[1])
+            except ValueError:
+                print("tokenpak codex: --budget must be numeric", file=sys.stderr)
+                sys.exit(2)
+            index += 1
+            continue
+        if token == "--install-only":
+            install_only = True
+            index += 1
+            continue
+        passthrough.append(token)
+        index += 1
+
+    return argparse.Namespace(
+        command="codex",
+        func=cmd_codex,
+        budget=budget,
+        install_only=install_only,
+        receipt_only=receipt_only,
+        receipt_out=receipt_out,
+        run_id=run_id,
+        args=passthrough,
+        db=".tokenpak/registry.db",
+    )
 
 
 def cmd_test(args):
@@ -2429,7 +2535,7 @@ def _build_codex_parser(sub):
             "  tokenpak codex\n"
             "  tokenpak codex --install-only    # set up without launching Codex\n"
             "  tokenpak codex doctor            # verify installation\n"
-            "  tokenpak codex uninstall         # reverse installation\n"
+            "  tokenpak codex uninstall         # clean selected home; preserve shared skills in use\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
@@ -2447,6 +2553,26 @@ def _build_codex_parser(sub):
         "--install-only",
         action="store_true",
         help="Run setup (MCP, hooks, AGENTS.md, skills) and exit without launching codex",
+    )
+    p.add_argument(
+        "--receipt-only",
+        action="store_true",
+        help=(
+            "Launch vanilla Codex and write a no-body receipt without installing "
+            "or activating companion setup"
+        ),
+    )
+    p.add_argument(
+        "--receipt-out",
+        default=None,
+        metavar="PATH",
+        help="Write a no-body accounting receipt for this Codex process",
+    )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        metavar="ID",
+        help="Stable run identifier to include in the accounting receipt",
     )
     p.add_argument(
         "args",
@@ -2574,8 +2700,14 @@ def _build_stub_parsers(sub):
     instead of a traceback.
     """
     _STUBS = {
-        "audit": "Enterprise audit log management (available in TokenPak Pro)",
-        "compliance": "Generate compliance reports (available in TokenPak Pro)",
+        "audit": (
+            "Enterprise audit log surface (Pro/Enterprise); see "
+            "docs/guides/enterprise/security-architecture.md"
+        ),
+        "compliance": (
+            "Compliance report surface (Pro/Enterprise); see "
+            "docs/guides/enterprise/compliance-mapping.md"
+        ),
         "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
     }
 
@@ -3101,9 +3233,15 @@ def build_parser():
         help="Export dashboard as JSON (non-interactive)",
     )
     p_dashboard.add_argument(
+        "--layout",
+        choices=("home", "dispatch", "spend", "debug", "fleet"),
+        default="home",
+        help="Select read-only cockpit layout for terminal or JSON output",
+    )
+    p_dashboard.add_argument(
         "--public",
         action="store_true",
-        help="Show public URL with token (accessible from any machine)",
+        help="Advanced: show public URL with token for non-tunneled access",
     )
     p_dashboard.add_argument(
         "--show-token",
@@ -3113,6 +3251,71 @@ def build_parser():
     )
     p_dashboard.add_argument(
         "--new-token", dest="new_token", action="store_true", help="Regenerate dashboard token"
+    )
+    p_dashboard_sub = p_dashboard.add_subparsers(dest="dashboard_action", metavar="<action>")
+    p_dashboard_connect = p_dashboard_sub.add_parser(
+        "connect",
+        help="Open a remote dashboard through an SSH local tunnel",
+        description="Open a remote dashboard through an SSH local tunnel.",
+    )
+    p_dashboard_connect.add_argument("host", help="SSH host or user@host to connect to")
+    p_dashboard_connect.add_argument(
+        "--remote-port",
+        type=int,
+        default=8766,
+        help="Remote dashboard port",
+    )
+    p_dashboard_connect.add_argument(
+        "--local-port",
+        default="auto",
+        help="Local listener port, or 'auto' to start at 8766 and choose the next free port",
+    )
+    p_dashboard_connect.add_argument(
+        "--ssh-user",
+        default=None,
+        help="SSH username when HOST does not include user@",
+    )
+    p_dashboard_connect.add_argument(
+        "--open",
+        dest="open_browser",
+        action="store_true",
+        default=True,
+        help="Open the dashboard URL in the default browser",
+    )
+    p_dashboard_connect.add_argument(
+        "--no-open",
+        dest="open_browser",
+        action="store_false",
+        help="Print the dashboard URL without opening a browser",
+    )
+    p_dashboard_connect.add_argument(
+        "--health-timeout",
+        type=float,
+        default=20.0,
+        help="Seconds to wait for /health to report OK",
+    )
+    p_dashboard_connect.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Output connection result as JSON",
+    )
+    p_dashboard_disconnect = p_dashboard_sub.add_parser(
+        "disconnect",
+        help="Close a dashboard SSH local tunnel",
+        description="Close a dashboard SSH local tunnel.",
+    )
+    p_dashboard_disconnect.add_argument("host", help="SSH host or user@host to disconnect")
+    p_dashboard_disconnect.add_argument(
+        "--ssh-user",
+        default=None,
+        help="SSH username when HOST does not include user@",
+    )
+    p_dashboard_disconnect.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Output disconnect result as JSON",
     )
 
     p_dashboard.set_defaults(func=cmd_dashboard)
@@ -3634,11 +3837,10 @@ def cmd_savings(args):
     try:
         from .services.optimization.attribution_stage import is_attribution_v2_enabled
         if is_attribution_v2_enabled():
-            import pathlib
-
+            from .core.paths import get_db_path as _get_db_path
             from .telemetry.savings import format_savings_by_source
             from .telemetry.storage import TelemetryDB
-            _db_path = pathlib.Path.home() / ".tokenpak" / "telemetry.db"
+            _db_path = _get_db_path("telemetry.db")
             if _db_path.exists():
                 _db = TelemetryDB(_db_path)
                 _rows = _db.query_savings_by_source(days=days)
@@ -5071,8 +5273,8 @@ def main():
                 print("\n   (Use `tokenpak help` to see all commands)", file=_sys_err.stderr)
         sys.exit(1)
 
-    # For 'claude' subcommand, manually split argv so *all* arguments after
-    # tokenpak's own flags pass through verbatim to the claude binary.
+    # For companion launchers, manually split argv so *all* arguments after
+    # tokenpak's own flags pass through verbatim to the underlying binary.
     # parse_args()/parse_known_args() would mishandle flags like
     # permission-bypass flags or split --model <value> pairs.
     if raw_cmd == "claude":
@@ -5092,6 +5294,9 @@ def main():
         args = argparse.Namespace(
             command="claude", func=cmd_claude, budget=budget, args=passthrough, db=".tokenpak/registry.db"
         )
+    elif raw_cmd == "codex":
+        codex_idx = sys.argv.index("codex")
+        args = _codex_namespace_from_tail(sys.argv[codex_idx + 1:])
     else:
         args = parser.parse_args()
 
@@ -5153,7 +5358,11 @@ def main():
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    if _is_first_run() and args.command not in ("help",):
+    machine_output = any(
+        bool(getattr(args, attr, False))
+        for attr in ("json", "json_export", "json_output", "as_json", "raw")
+    )
+    if _is_first_run() and args.command not in ("help",) and not machine_output:
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
             "   Run `tokenpak demo` to see compression in action.\n"
@@ -5550,8 +5759,7 @@ def cmd_trigger_daemon(args):
 
 def cmd_trigger_fire(args):
     """Fire an event string immediately — executes all matching enabled triggers."""
-    import subprocess
-
+    from tokenpak.orchestration.commands import run_trigger_action
     from tokenpak.orchestration.triggers.matcher import match_event
 
     store = _trigger_store()
@@ -5563,18 +5771,14 @@ def cmd_trigger_fire(args):
     print(f"Firing event: {event} ({len(matched)} trigger(s))")
     for t in matched:
         print(f"  -> {t.id}  {t.action}")
-        cmd = t.action
-        if not cmd.startswith("/") and not cmd.startswith("./") and not cmd.startswith("~"):
-            cmd = f"tokenpak {cmd}"
-        try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-            output = (result.stdout + result.stderr).strip()
-            store.log_fire(t, result.returncode, output)
-            if output:
-                print(f"     {output[:200]}")
-        except subprocess.TimeoutExpired:
-            store.log_fire(t, -1, "timeout")
+        # Governed execution: shell=False by default; only ``shell:``-prefixed
+        # actions reach the host shell, so config payloads are not shell-interpreted.
+        result = run_trigger_action(t.action, timeout=30)
+        store.log_fire(t, result.returncode, result.output)
+        if result.timed_out:
             print("     [timeout]")
+        elif result.output:
+            print(f"     {result.output[:200]}")
 
 
 _GIT_POST_COMMIT = """#!/bin/sh
@@ -7204,7 +7408,7 @@ def _build_demo_parser(sub):
 
 
 def _run_compression_demo():
-    """Show live compression on a realistic DevOps agent conversation fixture."""
+    """Show offline compression on a realistic DevOps agent conversation fixture."""
     from tokenpak.compression.pipeline import CompressionPipeline
 
     # Fixture: DevOps agent diagnosing a startup failure.
@@ -7331,15 +7535,17 @@ def _run_compression_demo():
 
     print()
     print("┌" + "─" * (W - 2) + "┐")
-    _row("TokenPak — Live Compression Demo", "")
+    _row("TokenPak — Offline Fixture Demo", "")
     print("├" + "─" * (W - 2) + "┤")
     _row("Scenario", "DevOps agent (config + logs)")
+    _row("Data source", "built-in sample fixture")
     _row("Savings drivers", "dedup + alias")
     print("├" + "─" * (W - 2) + "┤")
     _row("Original", f"{raw:,} tokens")
     _row("Compressed", f"{after:,} tokens")
-    _row("Saved", f"{saved:,} tokens  ({pct:.1f}%)")
-    _row("Cost saved (est.)", f"${cost_saved:.5f} per call")
+    _row("Fixture delta", f"{saved:,} tokens  ({pct:.1f}%)")
+    _row("Fixture cost delta", f"${cost_saved:.5f} per fixture")
+    _row("Receipt status", "not a savings receipt")
     print("├" + "─" * (W - 2) + "┤")
     stages_str = ", ".join(result.stages_run)
     print("│  Stages: " + stages_str + " " * (W - 12 - len(stages_str)) + "│")
@@ -7347,7 +7553,7 @@ def _run_compression_demo():
     print()
     print("  Try it with your own traffic:")
     print("    tokenpak serve        → start the proxy (zero-config)")
-    print("    tokenpak cost         → track your real savings")
+    print("    tokenpak cost         → track receipt-backed savings")
     print("    tokenpak demo --list  → browse 50 built-in compression recipes")
     print()
 
@@ -7409,7 +7615,7 @@ def cmd_demo(args):
             print("   Dashboard is now empty (ready for real traffic)")
         return
 
-    # ── Default: live compression demo on sample prompt
+    # ── Default: offline compression demo on sample prompt
     if (
         not getattr(args, "list", False)
         and not getattr(args, "category", None)

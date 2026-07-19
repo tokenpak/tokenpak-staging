@@ -6,6 +6,202 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-07-10
+
+### Added
+- **Codex receipt-only launch mode.** `--receipt-only` (requiring
+  `--receipt-out` and `--run-id`, mutually exclusive with `--budget` and
+  `--install-only`) lets a launch emit accounting receipts without installing
+  the TokenPak mechanism, and launches without a request body now produce
+  **no-body accounting receipts** so accounting stays truthful instead of
+  silently dropping those events.
+- **Canonical staging-to-public promotion tooling.**
+  `scripts/promote-staging-to-public.sh` and
+  `scripts/promotion-drift-report.sh` codify the promotion train between the
+  staging and public repositories, with a path hold-list at
+  `.github/public-promotion-hold.txt`.
+
+### Fixed
+- **The no-picker menu fallback is interactive.** On terminals without the
+  arrow-key picker (Windows consoles without a `termios` backend, pipes, dumb
+  terminals), `tokenpak` with no arguments now prompts for a numbered
+  selection instead of printing an inoperable menu and returning to the shell.
+- **Trigger and macro command actions no longer run through the host shell.**
+  Config- and user-provided command strings are shlex-parsed into an argv
+  vector and executed with `shell=False`; shell metacharacters are passed
+  literally rather than interpreted, closing a quoting/injection hazard. An
+  explicit `shell:` prefix remains available for trusted commands and emits a
+  warning, bare TokenPak subcommands are resolved against the live CLI
+  registry, and command failures and timeouts are handled structurally so
+  trigger daemons and CLI callers never crash.
+
+### Docs
+- Add a value-proof guide for `tokenpak prove` and remove stale lifetime
+  savings examples from current docs.
+
+## [1.11.3] — 2026-07-08
+
+> **Release note:** version **1.11.2 was tagged but never published to PyPI.**
+> Its release run stopped fail-closed at the test gate on a concurrency safety
+> check for the Codex skills installer — no build, GitHub Release, or PyPI
+> artifact was produced and the last published release remained 1.11.1. 1.11.3
+> carries the intended 1.11.2 changes (below), plus the installer fix.
+
+### Fixed
+- **Codex skills installer never exposes an empty skill directory under
+  concurrent installs.** A replaced skill is now retired as a timestamped
+  generation and reclaimed only once it is old enough that no reader can still
+  be enumerating it, instead of being deleted the instant it is superseded.
+  Because `os.replace` only rebinds a name, a reader (Codex scanning the skills
+  directory) that opened the old directory just before the swap could otherwise
+  observe it emptied mid-scan; retaining the prior generation until it ages out
+  closes that window.
+
+## [1.11.2] — 2026-07-08
+
+> Patch release: tighten the runnable examples guidance, repair user recipe
+> overlay loading, and keep release validation stable for the packaged branch.
+
+### Fixed
+- **Runnable examples path clarified.** README and examples documentation now
+  explain that top-level example files are delivered through the public source
+  tree rather than bundled inside the PyPI wheel, with clone/archive paths and a
+  credential-free `examples/basic_compression.py` smoke path.
+- **User recipe overlays load from the TokenPak home.** The compression recipe
+  engine now loads optional user recipes from the resolved TokenPak home
+  `recipes/` directory and allows those recipes to intentionally shadow bundled
+  defaults.
+- **Companion guide tool reference corrected.** The companion guide now matches
+  the shipped MCP tool registry and documents vault search/retrieval as indexed
+  vault block lookup rather than structured Pak recall.
+
+### CI
+- **Release validation branch checks stabilized.** Release workflow artifact
+  labels now tolerate slash-containing branch names, and release rehearsal
+  snapshot validation uses the same canonical install shape as the release
+  workflow.
+
+## [1.11.1] — 2026-07-06
+
+> Patch release: ship the CLI command registry in built distributions so a clean
+> wheel install renders the full command list.
+
+### Fixed
+- **Command registry ships in wheels.** `tokenpak/core/registry/commands.json` is now
+  declared as package data, so a clean `pip install` renders the full command list
+  (`tokenpak help` / `help --all`) instead of reporting `0 commands`. The
+  distribution-contents gate now asserts the registry file in every built wheel and
+  sdist, and the registry's tier labels and the `start` usage string were corrected to
+  match the shipped open-source CLI verbs.
+
+## [1.11.0] — 2026-07-06
+
+> Minor release: the batch reviewed and merged under the 2026-07-06 non-author review gate —
+> two new dashboard capabilities plus five correctness and packaging fixes.
+
+### Added
+- **Dashboard v2 JSON foundation.** `tokenpak dashboard --json` now emits a versioned
+  `dashboard.v2.0` snapshot with measured/not-measured semantics and source labeling, backed by
+  the new `tokenpak.platform` capability-detection package. Legacy TUI and fleet-wide views are
+  adapted to the new contract.
+- **Dashboard SSH tunnel launcher.** New `tokenpak dashboard connect` / `disconnect` subcommands
+  establish and tear down an SSH-tunneled dashboard session (ControlMaster-based, with liveness
+  and health probing); `--public` is repositioned as the advanced non-tunneled mode.
+
+### Fixed
+- **Wheel ships companion runtime files.** Companion shell hooks, codex skills, and the companion
+  guide are now included in built distributions; on clean installs the codex hooks no longer fail
+  with exit 127. The distribution-contents gate now asserts these files in every built wheel and
+  sdist.
+- **Context-window table corrected and consolidated.** Stale 200K entries for 1M-window models
+  were corrected against provider-published metadata, current models were added, and the table now
+  lives in the models registry as the single source (spend-guard thresholds key off real windows;
+  unknown-model conservative fallback unchanged).
+- **No fabricated model attribution.** Logging and forecast paths no longer default a missing
+  model id to a real model name; unknown stays unknown and cost is never attributed to a
+  fabricated id.
+- **Shutdown telemetry record persisted.** Proxy shutdown now writes its summary record to the
+  telemetry events file instead of silently dropping it on a missing method.
+- **Response stop reason captured.** The proxy records `stop_reason` for non-streaming and
+  streaming responses, so refusals returned as HTTP 200 are distinguishable from successful
+  completions in monitoring data. Forwarded bytes remain untouched.
+
+### CI
+- `actions/checkout` bumped v4 → v7 across workflows (gate-inventory manifest refreshed).
+
+
+## [1.10.4] — 2026-07-05
+
+> **Release note:** version **1.10.3 was tagged but never published to PyPI.** Its release run
+> stopped fail-closed at the test gate (a release-only `pytest-timeout` enforcement issue in the
+> dev/full test shapes — no build, GitHub Release, or PyPI artifact was produced) and PyPI remained
+> at 1.10.2. 1.10.4 carries the intended 1.10.3 changes (below), plus the release-test fix.
+
+### Fixed
+- **Release test-gate stability.** A health-check integration test that polls `/health` for up to
+  ~30 seconds by design is given a per-test timeout above the global 30-second cap, so it is no
+  longer killed under the enforced `pytest-timeout` in the dev/full test shapes. Release-mechanics
+  only — no runtime behavior change.
+
+## [1.10.3] — 2026-07-05
+
+> Patch release: a curated set of concurrency, durability, and telemetry-truth fixes for the
+> SQLite-backed stores and the proxy connection lifecycle. No new capabilities or CLI surface.
+
+### Fixed
+- **Concurrency and crash-durability across the SQLite-backed stores.** The companion
+  journal/budget store, the dispatch effect ledger, the telemetry store, the spend-guard pending
+  store, and the monitor write path now use atomic writes, single-owner database resolvers, and
+  uniqueness keys that hold under concurrent access and across crash/restart. Dedupe keys prevent
+  double-counting and cost accounting reflects actual spend.
+- **Telemetry/monitor windowing and write-truth.** `get_stats` now windows on the parsed
+  timestamp, so an N-hour window is a real N-hour window (previously a same-date row could be
+  counted regardless of the hour). Monitor write failures surface as dropped-row diagnostics
+  instead of being lost silently.
+- **Proxy connection lifecycle and breaker accounting.** Session-client leases are released
+  exactly once — a streaming-request construction failure no longer double-releases and
+  prematurely closes a client another in-flight request still holds — and breaker/concurrency-gate
+  accounting races are closed.
+- **Queued telemetry flushed on shutdown.** Request rows still queued for the monitor's background
+  writer are drained to disk on a clean shutdown instead of being dropped when the writer thread
+  exits.
+- **Runtime state scoped under `TOKENPAK_HOME`.** Monitor database resolution honors
+  `TOKENPAK_HOME` so runtime state stays within the configured home directory.
+
+## [1.10.2] — 2026-07-03
+
+> **Release note:** version **1.10.1 was never released.** Its release pipeline runs stopped
+> fail-closed at the public-API snapshot gate (no build, GitHub Release, or PyPI artifact was
+> produced) and the `v1.10.1` tag was retired. 1.10.2 carries the intended 1.10.1 changes
+> below, plus the corrected public-API snapshot.
+
+### Fixed
+- **Proxy upstream transport reliability.** Transient upstream failures (connection resets,
+  server disconnects, retryable 5xx honoring `Retry-After`) are now retried with a bounded,
+  policy-driven recovery before any bytes reach the client — and never after streaming output
+  has started. Failed-request recovery metadata is persisted with credentials redacted.
+- **Connection pool no longer hands retries a dead connection.** A pooled client that raises a
+  transport error is evicted (identity-checked) so the retry gets a fresh connection; evicted,
+  idle-reaped, and LRU-displaced clients are retired and closed after a grace period instead of
+  being closed while requests are still in flight on them. New pool metrics `evicted_clients`
+  and `retired_pending_close`; pool timeouts are env-tunable via `TOKENPAK_POOL_CONNECT_TIMEOUT`
+  and `TOKENPAK_POOL_READ_TIMEOUT`.
+
+### Deprecated
+- `tokenpak.proxy.server.MAX_UPSTREAM_RETRIES` is retained as a compatibility alias so existing
+  imports continue to work, but it is now non-authoritative and deprecated (planned for removal
+  in a future minor release): retry behavior is governed by `UpstreamRetryPolicy`, and
+  `TOKENPAK_UPSTREAM_RETRIES` remains the supported operator control. Operator-facing behavior
+  is unchanged.
+
+### Release integrity
+- **Public-API snapshot regenerated in the canonical release environment.** The previous snapshot
+  had been regenerated against a stale installed package instead of the source tree, which is what
+  stopped the 1.10.1 release runs at the snapshot gate. The snapshot now records the bounded-retry
+  public surface (`tokenpak.proxy.upstream_retry`, re-exported by `tokenpak.proxy.server` and
+  `tokenpak.proxy.server_async`) and drops two symbol records that were never part of the released
+  package, plus a host-specific import-error record.
+
 ## [1.10.0] — 2026-06-28
 
 ### Added

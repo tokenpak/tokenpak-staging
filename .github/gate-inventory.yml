@@ -1,0 +1,24 @@
+# TokenPak CI gate inventory — gate-surface change-control
+# Any PR touching .github/workflows/** MUST update this manifest in the same PR
+# and state the gate delta (added/removed/modified) in the PR body.
+# Enforced by .github/workflows/gate-inventory-check.yml.
+#
+# Required status contexts (informational snapshot, 2026-07-02):
+#   staging/main: Integration Tests (Python 3.10/3.11/3.12), Layout check,
+#                 Check for internal/sensitive content  [strict, enforce_admins]
+#   public/main:  license-check (ruleset 18198213); force-push+deletion blocked (ruleset 18449162)
+files:
+  benchmarks.yml: d3d1ecb741c1a8fdb168aaca746b32811c0af59f2d9580be9a77603eba5b6303
+  ci.yml: 1b886f07857a3be6ee9d842305a5979588cb20e1c422ba64e087b8555c8314b9
+  determinism.yml: 80eafcd8f0c3bc6f657c77e2d3f77cdde1e0ee9adcfb7ea16c888e2f60543e38
+  forbidden-impl-vocab-check.yml: 4f620ec5241d07d184da7750b4010bddd5d4ea94013ac0e9768f926f3ab560ea
+  gate-inventory-check.yml: faec5160d776bd7d57479ccfc35547d22c1101cc2bfd7ac69aa4ff62ae044787
+  identity-language-check.yml: cb6299369edf70a1eb5f9f3599316c40e34776b992354e12b6fa3625a95b4f15
+  integration.yml: 6d9138e713e04b3d35107e05c7412f704b3097c1f159d5368cab9b5967ade1e1
+  license-check.yml: 1b089f06c6d443a69fb226080dd03fc506548434e5ca5b20b3ecd7408ea9a6c3
+  public-layout-check.yml: 1849dbab552186abe2a6eec32f86823f308cd690a0cd856b414a726e4edbb29b
+  release-rehearsal.yml: 1f6423e36ccd6287095731fefc72629bc970f51001cb8cfecd5ebbcd62e6024b
+  release.yml: b3af6b1a09c7331beba0ad94ec7ddca11963a71b3a9c3509865da9585c68d5fa
+  repo-hygiene.yml: 487c0811904fad3eb2c3c9711037cbc99c8eb1b79154b95be8bd8722d92baab5
+  secret-scan.yml: 4ffbcae7b016cbbfe12e8f318516713f92b673e56972633737899b843743273c
+  trust-conformance.yml: d17ba281c1327388293c02d5773a5eac2e7053e54fe9dd71c497f7556155ebd3

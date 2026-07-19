@@ -641,27 +641,43 @@ class TestMemoryGuardInit:
     def test_init_explicit_values(self):
         from tokenpak.proxy.memory_guard import MemoryGuard
 
-        mg = MemoryGuard(target_mb=500, ceiling_mb=900, sys_low_mb=200)
+        mg = MemoryGuard(
+            target_mb=500,
+            ceiling_mb=900,
+            sys_low_mb=200,
+            check_interval_secs=30,
+            cooldown_secs=300,
+        )
         assert mg.target_mb == 500
         assert mg.ceiling_mb == 900
         assert mg.sys_low_mb == 200
+        assert mg.hysteresis_mb == 64
 
-    def test_init_auto_calculated(self):
-        from tokenpak.proxy.memory_guard import MemoryGuard, calculate_budget
+    @pytest.mark.parametrize(
+        ("target", "ceiling", "interval", "cooldown"),
+        [(0, 2, 1, 1), (2, 2, 1, 1), (2, 1, 1, 1), (1, 2, 0, 1), (1, 2, 2, 1)],
+    )
+    def test_init_rejects_unsafe_thresholds(self, target, ceiling, interval, cooldown):
+        from tokenpak.proxy.memory_guard import MemoryGuard
 
-        budget = calculate_budget()
-        mg = MemoryGuard()
-        assert mg.target_mb == budget["target_mb"]
-        assert mg.ceiling_mb == budget["ceiling_mb"]
+        with pytest.raises(ValueError):
+            MemoryGuard(
+                target_mb=target,
+                ceiling_mb=ceiling,
+                check_interval_secs=interval,
+                cooldown_secs=cooldown,
+            )
 
     def test_stats_initial(self):
         from tokenpak.proxy.memory_guard import MemoryGuard
 
-        mg = MemoryGuard()
+        mg = MemoryGuard(target_mb=100, ceiling_mb=200)
         s = mg.stats
         assert s["checks"] == 0
         assert s["gc_runs"] == 0
-        assert s["last_level"] == "GREEN"
+        assert s["last_level"] == "UNKNOWN"
+        assert s["state"] == "created"
+        assert s["callback_policy"] == "gc_trim_only_no_unbounded_disposable_proxy_cache"
 
     def test_stats_has_config(self):
         from tokenpak.proxy.memory_guard import MemoryGuard
@@ -674,7 +690,7 @@ class TestMemoryGuardInit:
     def test_start_stop(self):
         from tokenpak.proxy.memory_guard import MemoryGuard
 
-        mg = MemoryGuard(check_interval_secs=60)
+        mg = MemoryGuard(target_mb=99999, ceiling_mb=999999, check_interval_secs=60)
         mg.start()
         assert mg._thread is not None
         assert mg._thread.is_alive()
@@ -687,7 +703,7 @@ class TestMemoryGuardInit:
     def test_start_idempotent(self):
         from tokenpak.proxy.memory_guard import MemoryGuard
 
-        mg = MemoryGuard(check_interval_secs=60)
+        mg = MemoryGuard(target_mb=99999, ceiling_mb=999999, check_interval_secs=60)
         mg.start()
         first_thread = mg._thread
         mg.start()  # Should not create a new thread
@@ -714,7 +730,7 @@ class TestMemoryGuardInit:
         from tokenpak.proxy.memory_guard import MemoryGuard
 
         # Set ceiling very low to force RED
-        mg = MemoryGuard(target_mb=1, ceiling_mb=1, sys_low_mb=0)
+        mg = MemoryGuard(target_mb=1, ceiling_mb=2, sys_low_mb=0)
         mg._check()
         assert mg.stats["red_triggers"] >= 1
 
@@ -744,7 +760,7 @@ class TestMemoryGuardInit:
 
         mg = MemoryGuard(
             target_mb=1,
-            ceiling_mb=1,
+            ceiling_mb=2,
             sys_low_mb=0,
             on_evict_compact_cache=evict_compact,
         )
@@ -755,29 +771,65 @@ class TestMemoryGuardInit:
 
 
 class TestCreateMemoryGuard:
+    _ENV_NAMES = (
+        "TOKENPAK_MEMORY_GUARD",
+        "TOKENPAK_MEMORY_TARGET_MB",
+        "TOKENPAK_MEMORY_CEILING_MB",
+        "TOKENPAK_MEMORY_CHECK_SECS",
+        "TOKENPAK_MEMORY_COOLDOWN_SECS",
+        "TOKENPAK_MEMORY_SYS_LOW_MB",
+    )
+
+    def _clear(self, monkeypatch):
+        for name in self._ENV_NAMES:
+            monkeypatch.delenv(name, raising=False)
+
+    def test_default_is_disabled(self, monkeypatch):
+        self._clear(monkeypatch)
+        from tokenpak.proxy.memory_guard import create_memory_guard
+
+        assert create_memory_guard() is None
+
     def test_disabled_returns_none(self, monkeypatch):
+        self._clear(monkeypatch)
         monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "0")
         from tokenpak.proxy.memory_guard import create_memory_guard
 
         result = create_memory_guard()
         assert result is None
 
-    def test_enabled_returns_guard(self, monkeypatch):
+    def test_enabled_requires_explicit_thresholds(self, monkeypatch):
+        self._clear(monkeypatch)
         monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "1")
         from tokenpak.proxy.memory_guard import create_memory_guard
 
-        result = create_memory_guard()
-        assert result is not None
+        with pytest.raises(ValueError, match="TOKENPAK_MEMORY_TARGET_MB"):
+            create_memory_guard()
 
     def test_explicit_overrides_respected(self, monkeypatch):
+        self._clear(monkeypatch)
         monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "1")
         monkeypatch.setenv("TOKENPAK_MEMORY_TARGET_MB", "512")
         monkeypatch.setenv("TOKENPAK_MEMORY_CEILING_MB", "900")
+        monkeypatch.setenv("TOKENPAK_MEMORY_CHECK_SECS", "20")
+        monkeypatch.setenv("TOKENPAK_MEMORY_COOLDOWN_SECS", "240")
+        monkeypatch.setenv("TOKENPAK_MEMORY_SYS_LOW_MB", "0")
         from tokenpak.proxy.memory_guard import create_memory_guard
 
         mg = create_memory_guard()
+        assert mg is not None
         assert mg.target_mb == 512
         assert mg.ceiling_mb == 900
+        assert mg.check_interval == 20
+        assert mg.cooldown_secs == 240
+
+    def test_invalid_boolean_rejected(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "sometimes")
+        from tokenpak.proxy.memory_guard import create_memory_guard
+
+        with pytest.raises(ValueError, match="explicit boolean"):
+            create_memory_guard()
 
 
 # ============================================================================
