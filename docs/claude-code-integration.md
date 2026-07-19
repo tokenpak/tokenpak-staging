@@ -24,7 +24,7 @@ claude "summarize this file" < README.md
 
 TokenPak auto-detects your consumption mode and applies the right profile (`claude-code-cli`, `claude-code-tui`, etc.) based on your session headers. No manual profile selection required.
 
-!!! tip "One-command setup (coming soon)"
+!!! tip "One-command setup (planned)"
  `tokenpak install --claude-code` will automate proxy startup, shell-rc injection, and profile selection.
 
 ---
@@ -74,7 +74,7 @@ $ claude "what does this repo do?" < README.md
 
 The inline savings line appears in stderr and is captured in the proxy log. It does not interfere with stdout, so script pipelines work unmodified.
 
-[▶ View CLI mode recording](demo/claude-code/cli.cast) · [recording script](demo/claude-code/cli.sh)
+▶ View CLI mode recording (`demo/claude-code/cli.cast`, pending commit) · recording script (`demo/claude-code/cli.sh`, pending commit)
 
 ### Troubleshooting
 
@@ -129,7 +129,7 @@ TokenPak detects interactive mode via the `X-Claude-Code-Interactive: 1` header 
 !!! note "Savings tape is a preview feature"
  The inline per-turn display is under active development. Current builds show the savings summary at session end only.
 
-[▶ View TUI mode recording](demo/claude-code/tui.cast) · [recording script](demo/claude-code/tui.sh)
+▶ View TUI mode recording (`demo/claude-code/tui.cast`, pending commit) · recording script (`demo/claude-code/tui.sh`, pending commit)
 
 ### Troubleshooting
 
@@ -185,7 +185,7 @@ Sessions active: 3
  Total 8,220 tokens $0.041 (saved $0.019)
 ```
 
-[▶ View tmux mode recording](demo/claude-code/tmux.cast) · [recording script](demo/claude-code/tmux.sh)
+▶ View tmux mode recording (`demo/claude-code/tmux.cast`, pending commit) · recording script (`demo/claude-code/tmux.sh`, pending commit)
 
 ### Troubleshooting
 
@@ -265,7 +265,7 @@ response = client.messages.create(
 # Proxy log: profile=claude-code-sdk tokens_in=12 tokens_out=34 latency=310ms
 ```
 
-[▶ View SDK mode recording](demo/claude-code/sdk.cast) · [recording script](demo/claude-code/sdk.sh)
+▶ View SDK mode recording (`demo/claude-code/sdk.cast`, pending commit) · recording script (`demo/claude-code/sdk.sh`, pending commit)
 
 ### Troubleshooting
 
@@ -332,7 +332,7 @@ TokenPak detects IDE mode via the `User-Agent` header set by IDE extensions (e.g
 ```
 
 !!! note "IDE mode recording"
- asciinema captures terminal output only. The IDE savings header and status-bar display require a screen recording. [▶ View IDE mode recording](demo/claude-code/ide.cast) · [recording script](demo/claude-code/ide.sh) — Kevin will replace the placeholder with a screen recording if available.
+ asciinema captures terminal output only. The IDE savings header and status-bar display require a screen recording. ▶ View IDE mode recording (`demo/claude-code/ide.cast`, pending commit) · recording script (`demo/claude-code/ide.sh`, pending commit) — Kevin will replace the placeholder with a screen recording if available.
 
 ### Troubleshooting
 
@@ -401,7 +401,7 @@ $ ANTHROPIC_BASE_URL=http://localhost:8766 claude --print "daily standup summary
  budget_remaining=$4.83 / $5.00 today
 ```
 
-[▶ View cron mode recording](demo/claude-code/cron.cast) · [recording script](demo/claude-code/cron.sh)
+▶ View cron mode recording (`demo/claude-code/cron.cast`, pending commit) · recording script (`demo/claude-code/cron.sh`, pending commit)
 
 ### Troubleshooting
 
@@ -437,13 +437,13 @@ Vault injection is disabled for the `claude-code-sdk` profile.
 
 ### Cache Invalidation Alerts
 
-**Status: coming soon**
+**Status: planned — not yet implemented**
 
 When a vault document changes and invalidates a cached context block, tokenpak will surface a warning. Currently, cache evictions are silent.
 
 ### Cost Forecasting
 
-**Status: coming soon**
+**Status: planned — not yet implemented**
 
 The `/forecast` endpoint will estimate cost for a pending request before it is sent. Currently, cost reporting is post-hoc only.
 
@@ -505,7 +505,7 @@ Unknown model IDs pass through unchanged (forward-compatible).
 
 ### Multi-Provider Failover
 
-**Status: coming soon**
+**Status: planned — not yet implemented**
 
 Automatic failover to AWS Bedrock or local Ollama when Anthropic's API is unavailable or rate-limited. Currently, tokenpak routes all traffic to the single upstream configured in `ANTHROPIC_BASE_URL`.
 
@@ -513,7 +513,7 @@ Automatic failover to AWS Bedrock or local Ollama when Anthropic's API is unavai
 
 ## Settings UI
 
-**Status: coming soon**
+**Status: planned — not yet implemented**
 
 A web UI at `http://localhost:8766/settings/claude-code` will provide point-and-click control over per-mode profiles, vault injection depth, budget caps, and provider routing.
 
@@ -529,7 +529,7 @@ tokenpak config get claude-code
 
 ## Doctor Command
 
-**Status: coming soon**
+**Status: planned — not yet implemented**
 
 `tokenpak doctor --claude-code` will run a health check specific to Claude Code integration: verify the proxy is reachable at `ANTHROPIC_BASE_URL`, confirm profile auto-detection is working, and flag misconfigured vault paths.
 
