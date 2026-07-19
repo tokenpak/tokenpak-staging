@@ -34,7 +34,7 @@ def test_public_entrypoints_link_to_examples_delivery_path() -> None:
     assert "[examples/README.md](examples/README.md)" in readme
     # docs/index.md must use the absolute GitHub URL: examples/ lives outside
     # the docs tree, so a relative ../examples/ link is a broken link on the
-    # rendered site and fails `mkdocs build --strict` (Std 10 C5).
+    # rendered site and fails the configured strict documentation build.
     assert (
         "[Runnable Examples](https://github.com/tokenpak/tokenpak/blob/main/examples/README.md)"
         in docs_index
