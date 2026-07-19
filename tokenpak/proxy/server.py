@@ -72,6 +72,7 @@ from .headers import (
     forward_headers,
 )
 from .memory_guard import create_memory_guard as _create_memory_guard
+from .memory_guard import memory_guard_configuration_status as _memory_guard_configuration_status
 from .passthrough import (
     LEGACY_HEADER_ALLOWLIST,
     PassthroughConfig,
@@ -3048,6 +3049,7 @@ class ProxyServer:
         # Explicit opt-in guard. Configuration is parsed during construction,
         # but its thread starts only after the listener binds successfully.
         self._memory_guard = _create_memory_guard()
+        self._memory_guard_configuration = _memory_guard_configuration_status()
         self._stop_lock = threading.Lock()
         self._signal_stop_thread: Optional[threading.Thread] = None
         self._lifecycle_state = "created"
@@ -3570,6 +3572,7 @@ class ProxyServer:
                 "state": "disabled",
                 "thread_alive": False,
                 "callback_policy": "disabled",
+                "configuration": dict(self._memory_guard_configuration),
                 "callbacks": {
                     "compact": False,
                     "token": False,

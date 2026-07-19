@@ -55,9 +55,7 @@ def test_proxy_lifecycle_starts_and_joins_exactly_one_guard(monkeypatch):
     port = _free_port()
     proxy = _make_proxy(monkeypatch, port)
     guard_threads_before = {
-        thread.ident
-        for thread in threading.enumerate()
-        if thread.name == "tokenpak-memory-guard"
+        thread.ident for thread in threading.enumerate() if thread.name == "tokenpak-memory-guard"
     }
 
     proxy.start(blocking=False)
@@ -68,8 +66,7 @@ def test_proxy_lifecycle_starts_and_joins_exactly_one_guard(monkeypatch):
         live_guard_threads = [
             thread
             for thread in threading.enumerate()
-            if thread.name == "tokenpak-memory-guard"
-            and thread.ident not in guard_threads_before
+            if thread.name == "tokenpak-memory-guard" and thread.ident not in guard_threads_before
         ]
         assert snapshot["enabled"] is True
         assert snapshot["state"] == "running"
@@ -81,9 +78,7 @@ def test_proxy_lifecycle_starts_and_joins_exactly_one_guard(monkeypatch):
             "token": False,
             "semantic": False,
         }
-        assert snapshot["callback_policy"] == (
-            "gc_trim_only_no_unbounded_disposable_proxy_cache"
-        )
+        assert snapshot["callback_policy"] == ("gc_trim_only_no_unbounded_disposable_proxy_cache")
     finally:
         proxy.stop()
 
@@ -96,8 +91,7 @@ def test_proxy_lifecycle_starts_and_joins_exactly_one_guard(monkeypatch):
     assert not [
         thread
         for thread in threading.enumerate()
-        if thread.name == "tokenpak-memory-guard"
-        and thread.ident not in guard_threads_before
+        if thread.name == "tokenpak-memory-guard" and thread.ident not in guard_threads_before
     ]
 
     # The listener handle is released and repeated stop remains idempotent.
@@ -112,15 +106,37 @@ def test_proxy_lifecycle_starts_and_joins_exactly_one_guard(monkeypatch):
 def test_disabled_proxy_has_no_guard_thread(monkeypatch):
     monkeypatch.setenv("TOKENPAK_MEMORY_GUARD", "0")
     proxy = _make_proxy(monkeypatch, _free_port())
-    assert proxy._memory_guard_snapshot() == {
+    snapshot = proxy._memory_guard_snapshot()
+    assert {key: value for key, value in snapshot.items() if key != "configuration"} == {
         "enabled": False,
         "state": "disabled",
         "thread_alive": False,
         "callback_policy": "disabled",
         "callbacks": {"compact": False, "token": False, "semantic": False},
     }
+    assert snapshot["configuration"]["source"] == "environment"
+    assert snapshot["configuration"]["mode"] == "off"
+    assert snapshot["configuration"]["triggering_env"] == ["TOKENPAK_MEMORY_GUARD"]
     proxy.stop()
     assert proxy._lifecycle_state == "stopped"
+
+
+def test_corrupt_managed_config_fails_off_and_surfaces_health_warning(monkeypatch, tmp_path):
+    for name in memory_guard_module._MEMORY_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path))
+    (tmp_path / "memory-optimization.json").write_text("truncated")
+
+    proxy = _make_proxy(monkeypatch, _free_port())
+    snapshot = proxy._memory_guard_snapshot()
+    health = proxy.health()
+
+    assert snapshot["enabled"] is False
+    assert snapshot["configuration"]["source"] == "managed_error"
+    assert "ignored" in snapshot["configuration"]["warning"]
+    assert health["memory_guard"]["configuration"] == snapshot["configuration"]
+    assert health["status"] == "ok"
+    proxy.stop()
 
 
 def test_stop_before_start_is_terminal(monkeypatch):
@@ -299,6 +315,33 @@ def test_threshold_boundaries_cooldown_and_red_escalation(monkeypatch):
     assert compact.call_args_list[0].args == (25,)
     assert compact.call_args_list[1].args == (50,)
     assert stats["config"]["hysteresis_mb"] == 25
+
+
+def test_observe_mode_records_pressure_without_taking_action(monkeypatch):
+    monkeypatch.setattr(memory_guard_module, "get_rss_mb", lambda: 250)
+    monkeypatch.setattr(memory_guard_module, "get_available_ram_mb", lambda: 1000)
+    collect = MagicMock(return_value=0)
+    trim = MagicMock(return_value=False)
+    evict = MagicMock(return_value=1)
+    monkeypatch.setattr(memory_guard_module.gc, "collect", collect)
+    monkeypatch.setattr(memory_guard_module, "malloc_trim", trim)
+    guard = MemoryGuard(
+        target_mb=100,
+        ceiling_mb=200,
+        action_mode="observe",
+        on_evict_compact_cache=evict,
+    )
+
+    guard._check(now=0)
+
+    snapshot = guard.stats
+    assert snapshot["last_level"] == "RED"
+    assert snapshot["observed_pressure_checks"] == 1
+    assert snapshot["red_triggers"] == 0
+    assert snapshot["config"]["action_mode"] == "observe"
+    collect.assert_not_called()
+    trim.assert_not_called()
+    evict.assert_not_called()
 
 
 def test_hysteresis_exposes_recovery_band_before_green(monkeypatch):
@@ -516,9 +559,7 @@ def test_psutil_missing_is_explicit_unsupported(monkeypatch):
 
 
 def test_psutil_read_failure_is_explicit_unsupported(monkeypatch):
-    process = SimpleNamespace(
-        memory_info=MagicMock(side_effect=OSError("process read failed"))
-    )
+    process = SimpleNamespace(memory_info=MagicMock(side_effect=OSError("process read failed")))
     fake_psutil = SimpleNamespace(
         virtual_memory=lambda: SimpleNamespace(total=8 * 1024 * 1024, available=1),
         Process=lambda: process,

@@ -40,7 +40,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 logger = logging.getLogger("tokenpak.memory_guard")
 
@@ -57,6 +57,29 @@ __all__ = [
 _MIB = 1024 * 1024
 _FALSE_VALUES = {"", "0", "false", "no", "off"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_MEMORY_ENV_PREFIX = "TOKENPAK_MEMORY_"
+_MEMORY_ENV_NAMES = frozenset(
+    {
+        "TOKENPAK_MEMORY_GUARD",
+        "TOKENPAK_MEMORY_MODE",
+        "TOKENPAK_MEMORY_TARGET_MB",
+        "TOKENPAK_MEMORY_CEILING_MB",
+        "TOKENPAK_MEMORY_CHECK_SECS",
+        "TOKENPAK_MEMORY_COOLDOWN_SECS",
+        "TOKENPAK_MEMORY_SYS_LOW_MB",
+    }
+)
+_CONFIG_STATUS_LOCK = threading.Lock()
+_LAST_CONFIG_STATUS: dict[str, Any] = {
+    "source": "default",
+    "mode": "off",
+    "plan_sha256": None,
+    "managed_config_path": None,
+    "managed_file_present": False,
+    "managed_file_ignored": False,
+    "triggering_env": [],
+    "warning": None,
+}
 
 
 class MemoryMeasurementUnsupported(RuntimeError):
@@ -81,7 +104,9 @@ def memory_measurement_support() -> dict[str, Any]:
             "supported": not missing,
             "platform": "linux",
             "source": "procfs",
-            "reason": None if not missing else f"missing required procfs files: {', '.join(missing)}",
+            "reason": (
+                None if not missing else f"missing required procfs files: {', '.join(missing)}"
+            ),
         }
 
     if sys.platform == "darwin" or sys.platform.startswith("win"):
@@ -122,7 +147,9 @@ def _read_proc_kib(path: str, field: str) -> int:
                         break
                     return value
     except (OSError, ValueError) as exc:
-        raise MemoryMeasurementUnsupported(f"cannot read {field.rstrip(':')} from {path}: {exc}") from exc
+        raise MemoryMeasurementUnsupported(
+            f"cannot read {field.rstrip(':')} from {path}: {exc}"
+        ) from exc
     raise MemoryMeasurementUnsupported(f"missing or invalid {field.rstrip(':')} in {path}")
 
 
@@ -218,10 +245,14 @@ class MemoryGuard:
         sys_low_mb: int = 0,
         check_interval_secs: float = 30,
         cooldown_secs: float = 300,
+        action_mode: str = "auto",
+        configuration: Mapping[str, Any] | None = None,
         on_evict_compact_cache: Callable[[int], int] | None = None,
         on_evict_token_cache: Callable[[int], int] | None = None,
         on_evict_semantic_cache: Callable[[], int] | None = None,
     ) -> None:
+        if action_mode not in {"observe", "auto"}:
+            raise ValueError("action_mode must be 'observe' or 'auto'")
         if not isinstance(target_mb, int) or isinstance(target_mb, bool) or target_mb <= 0:
             raise ValueError("target_mb must be positive")
         if (
@@ -247,6 +278,8 @@ class MemoryGuard:
         self.sys_low_mb = int(sys_low_mb)
         self.check_interval = check_interval
         self.cooldown_secs = cooldown
+        self.action_mode = action_mode
+        self.configuration = dict(configuration or {})
         gap = self.ceiling_mb - self.target_mb
         self.hysteresis_mb = min(64, max(1, gap // 4), max(0, self.target_mb - 1))
 
@@ -280,6 +313,7 @@ class MemoryGuard:
             "red_triggers": 0,
             "sys_low_triggers": 0,
             "suppressed_actions": 0,
+            "observed_pressure_checks": 0,
             "compact_evictions": 0,
             "token_evictions": 0,
             "semantic_evictions": 0,
@@ -411,6 +445,7 @@ class MemoryGuard:
         snapshot["enabled"] = True
         snapshot["measurement"] = dict(snapshot["measurement"])
         snapshot["config"] = {
+            "action_mode": self.action_mode,
             "target_mb": self.target_mb,
             "ceiling_mb": self.ceiling_mb,
             "hysteresis_mb": self.hysteresis_mb,
@@ -418,6 +453,7 @@ class MemoryGuard:
             "check_interval_secs": self.check_interval,
             "cooldown_secs": self.cooldown_secs,
         }
+        snapshot["configuration"] = dict(self.configuration)
         snapshot["callbacks"] = {
             "compact": self._evict_compact_cache is not None,
             "token": self._evict_token_cache is not None,
@@ -451,9 +487,7 @@ class MemoryGuard:
         if rss >= self.ceiling_mb:
             level = "RED"
             sys_triggered = False
-        elif rss >= self.target_mb or (
-            self.sys_low_mb > 0 and sys_avail < self.sys_low_mb
-        ):
+        elif rss >= self.target_mb or (self.sys_low_mb > 0 and sys_avail < self.sys_low_mb):
             level = "YELLOW"
             sys_triggered = self.sys_low_mb > 0 and sys_avail < self.sys_low_mb
         else:
@@ -472,12 +506,9 @@ class MemoryGuard:
 
             if level == "GREEN":
                 sys_recovered = (
-                    self.sys_low_mb == 0
-                    or sys_avail >= self.sys_low_mb + self.hysteresis_mb
+                    self.sys_low_mb == 0 or sys_avail >= self.sys_low_mb + self.hysteresis_mb
                 )
-                fully_recovered = (
-                    rss <= self.target_mb - self.hysteresis_mb and sys_recovered
-                )
+                fully_recovered = rss <= self.target_mb - self.hysteresis_mb and sys_recovered
                 if self._stats["pressure_latched"] and not fully_recovered:
                     self._stats["last_level"] = "RECOVERY"
                 else:
@@ -493,6 +524,9 @@ class MemoryGuard:
             )
             self._stats["last_level"] = level
             self._stats["pressure_latched"] = True
+            if self.action_mode == "observe":
+                self._stats["observed_pressure_checks"] += 1
+                return
             if in_cooldown and not escalation:
                 self._stats["suppressed_actions"] += 1
                 return
@@ -589,25 +623,161 @@ def _number_from_env(name: str, default: float) -> float:
         raise ValueError(f"{name} must be numeric") from exc
 
 
-def create_memory_guard() -> MemoryGuard | None:
-    """Create the explicit opt-in guard; disabled is the default."""
-    if not _parse_enabled(os.environ.get("TOKENPAK_MEMORY_GUARD", "0")):
+def _set_configuration_status(**updates: Any) -> None:
+    with _CONFIG_STATUS_LOCK:
+        _LAST_CONFIG_STATUS.clear()
+        _LAST_CONFIG_STATUS.update(
+            {
+                "source": "default",
+                "mode": "off",
+                "plan_sha256": None,
+                "managed_config_path": None,
+                "managed_file_present": False,
+                "managed_file_ignored": False,
+                "triggering_env": [],
+                "warning": None,
+                **updates,
+            }
+        )
+
+
+def memory_guard_configuration_status() -> dict[str, Any]:
+    """Return the startup-time configuration source and fail-safe warning."""
+    with _CONFIG_STATUS_LOCK:
+        snapshot = dict(_LAST_CONFIG_STATUS)
+    snapshot["triggering_env"] = list(snapshot.get("triggering_env", []))
+    return snapshot
+
+
+def _present_memory_env() -> list[str]:
+    return sorted(name for name in os.environ if name.startswith(_MEMORY_ENV_PREFIX))
+
+
+def _validate_memory_env(names: list[str]) -> None:
+    unknown = sorted(set(names) - _MEMORY_ENV_NAMES)
+    if unknown:
+        raise ValueError(f"unknown TOKENPAK_MEMORY_* variable(s): {', '.join(unknown)}")
+    empty = [name for name in names if not os.environ[name].strip()]
+    if empty:
+        raise ValueError(f"empty TOKENPAK_MEMORY_* value(s): {', '.join(empty)}")
+    if "TOKENPAK_MEMORY_GUARD" in names:
+        _parse_enabled(os.environ["TOKENPAK_MEMORY_GUARD"])
+    if "TOKENPAK_MEMORY_MODE" in names:
+        mode = os.environ["TOKENPAK_MEMORY_MODE"].strip().lower()
+        if mode not in {"observe", "auto"}:
+            raise ValueError("TOKENPAK_MEMORY_MODE must be 'observe' or 'auto'")
+
+    for name in ("TOKENPAK_MEMORY_TARGET_MB", "TOKENPAK_MEMORY_CEILING_MB"):
+        if name in names:
+            try:
+                value = int(os.environ[name])
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+    if "TOKENPAK_MEMORY_SYS_LOW_MB" in names:
+        try:
+            sys_low = int(os.environ["TOKENPAK_MEMORY_SYS_LOW_MB"])
+        except ValueError as exc:
+            raise ValueError("TOKENPAK_MEMORY_SYS_LOW_MB must be an integer") from exc
+        if sys_low < 0:
+            raise ValueError("TOKENPAK_MEMORY_SYS_LOW_MB must be non-negative")
+    for name in ("TOKENPAK_MEMORY_CHECK_SECS", "TOKENPAK_MEMORY_COOLDOWN_SECS"):
+        if name in names:
+            value = _number_from_env(name, 0)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
+
+
+def _guard_from_environment(names: list[str], *, managed_path: Path) -> MemoryGuard | None:
+    enabled = _parse_enabled(os.environ.get("TOKENPAK_MEMORY_GUARD", "0"))
+    mode = os.environ.get("TOKENPAK_MEMORY_MODE", "auto").strip().lower()
+    status = {
+        "source": "environment",
+        "mode": mode if enabled else "off",
+        "managed_config_path": str(managed_path),
+        "managed_file_present": managed_path.exists(),
+        "managed_file_ignored": managed_path.exists(),
+        "triggering_env": names,
+    }
+    if not enabled:
+        _set_configuration_status(**status)
         return None
 
     target = _required_positive_int("TOKENPAK_MEMORY_TARGET_MB")
     ceiling = _required_positive_int("TOKENPAK_MEMORY_CEILING_MB")
     interval = _number_from_env("TOKENPAK_MEMORY_CHECK_SECS", 30.0)
     cooldown = _number_from_env("TOKENPAK_MEMORY_COOLDOWN_SECS", 300.0)
-    sys_low_raw = os.environ.get("TOKENPAK_MEMORY_SYS_LOW_MB", "0")
-    try:
-        sys_low = int(sys_low_raw)
-    except ValueError as exc:
-        raise ValueError("TOKENPAK_MEMORY_SYS_LOW_MB must be an integer") from exc
-
+    sys_low = int(os.environ.get("TOKENPAK_MEMORY_SYS_LOW_MB", "0"))
+    configuration = {**status, "plan_sha256": None, "warning": None}
+    _set_configuration_status(**configuration)
     return MemoryGuard(
         target_mb=target,
         ceiling_mb=ceiling,
         sys_low_mb=sys_low,
         check_interval_secs=interval,
         cooldown_secs=cooldown,
+        action_mode=mode,
+        configuration=configuration,
+    )
+
+
+def create_memory_guard() -> MemoryGuard | None:
+    """Create a guard from one exclusive source: env, managed plan, or off."""
+    from tokenpak.services.memory_optimization import (
+        CorruptManagedConfigError,
+        load_managed_plan,
+        managed_paths,
+    )
+
+    managed_path = managed_paths().config
+    present_env = _present_memory_env()
+    if present_env:
+        _validate_memory_env(present_env)
+        return _guard_from_environment(present_env, managed_path=managed_path)
+
+    if not managed_path.exists():
+        _set_configuration_status(
+            source="default",
+            mode="off",
+            managed_config_path=str(managed_path),
+        )
+        return None
+
+    try:
+        plan, plan_hash = load_managed_plan(managed_path)
+    except CorruptManagedConfigError as exc:
+        warning = f"managed MemoryGuard config ignored: {exc}"
+        logger.warning(warning)
+        _set_configuration_status(
+            source="managed_error",
+            mode="off",
+            managed_config_path=str(managed_path),
+            managed_file_present=True,
+            warning=warning,
+        )
+        return None
+
+    guard_config = plan["memory_guard"]
+    configuration = {
+        "source": "managed",
+        "mode": plan["mode"],
+        "plan_sha256": plan_hash,
+        "managed_config_path": str(managed_path),
+        "managed_file_present": True,
+        "managed_file_ignored": False,
+        "triggering_env": [],
+        "warning": None,
+    }
+    _set_configuration_status(**configuration)
+    if not guard_config["enabled"]:
+        return None
+    return MemoryGuard(
+        target_mb=guard_config["target_mb"],
+        ceiling_mb=guard_config["ceiling_mb"],
+        sys_low_mb=guard_config["sys_low_mb"],
+        check_interval_secs=guard_config["check_interval_secs"],
+        cooldown_secs=guard_config["cooldown_secs"],
+        action_mode=guard_config["mode"],
+        configuration=configuration,
     )

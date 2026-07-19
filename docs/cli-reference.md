@@ -317,6 +317,16 @@ View and edit config
 - `migrate`
   - `--config-json` — Path to legacy config.json (default: ~/.tokenpak/config.json) (default: ~/.tokenpak/config.json)
   - `--dry-run` — Print what would change without writing
+- `optimize`
+  - `--plan` — Show the deterministic plan without writing (default)
+  - `--apply` — Atomically apply the recomputed process-local plan
+  - `--status` — Read managed artifacts and drift state without writing
+  - `--rollback` — Restore the exact recorded preimage
+  - `--profile` — Memory budget policy (default: balanced) — choices: `balanced`, `conservative`, `throughput`
+  - `--mode` — Runtime behavior (default: auto) — choices: `auto`, `observe`, `off`
+  - `--expect-hash` — With --apply, refuse unless the recomputed plan has this SHA-256
+  - `--force` — With --rollback, restore the preimage despite external drift
+  - `--json` — Emit machine-readable JSON
 
 ### `tokenpak explain`
 
@@ -638,6 +648,10 @@ TokenPak Dispatch — scoped, station-based, resumable, gated work packages with
   - `--json` — Emit machine-readable JSON instead of human-readable output
 - `receipt`
   - `JOB_ID` — Dispatch job id (job_…)
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `routes`
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `workers`
   - `--json` — Emit machine-readable JSON instead of human-readable output
 
 ---

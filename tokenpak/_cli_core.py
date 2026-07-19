@@ -5141,9 +5141,74 @@ def _build_config_mgmt_parser(sub):
         help="Print what would change without writing",
     )
     p_migrate.set_defaults(func=cmd_config_migrate)
+
+    # optimize — deterministic, process-local MemoryGuard planning + state
+    p_optimize = csub.add_parser(
+        "optimize",
+        help="Plan, apply, inspect, or roll back process-local memory optimization",
+    )
+    from tokenpak.services.memory_optimization import MODES as memory_modes
+    from tokenpak.services.memory_optimization import PROFILES as memory_profiles
+
+    action = p_optimize.add_mutually_exclusive_group()
+    action.add_argument(
+        "--plan",
+        action="store_const",
+        const="plan",
+        dest="optimize_action",
+        help="Show the deterministic plan without writing (default)",
+    )
+    action.add_argument(
+        "--apply",
+        action="store_const",
+        const="apply",
+        dest="optimize_action",
+        help="Atomically apply the recomputed process-local plan",
+    )
+    action.add_argument(
+        "--status",
+        action="store_const",
+        const="status",
+        dest="optimize_action",
+        help="Read managed artifacts and drift state without writing",
+    )
+    action.add_argument(
+        "--rollback",
+        action="store_const",
+        const="rollback",
+        dest="optimize_action",
+        help="Restore the exact recorded preimage",
+    )
+    p_optimize.add_argument(
+        "--profile",
+        choices=sorted(memory_profiles),
+        default="balanced",
+        help="Memory budget policy",
+    )
+    p_optimize.add_argument(
+        "--mode",
+        choices=sorted(memory_modes),
+        default="auto",
+        help="Runtime behavior",
+    )
+    p_optimize.add_argument(
+        "--expect-hash",
+        metavar="SHA256",
+        help="With --apply, refuse unless the recomputed plan has this SHA-256",
+    )
+    p_optimize.add_argument(
+        "--force",
+        action="store_true",
+        help="With --rollback, restore the preimage despite external drift",
+    )
+    p_optimize.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    p_optimize.set_defaults(func=_config_optimize_dispatch)
     p.set_defaults(func=_bare_help(
         "config", "Manage configuration files",
-        ["sync", "pull", "validate", "show", "init", "doctor", "env", "path", "migrate"],
+        [
+            "sync", "pull", "validate", "show", "init", "doctor", "env", "path",
+            "migrate", "optimize",
+        ],
         exit_nonzero=True,
     ))
 
@@ -5156,6 +5221,11 @@ def _config_doctor_dispatch(args):
 def _config_env_dispatch(args):
     from tokenpak.cli.commands.config_env import cmd_config_env
     return cmd_config_env(args)
+
+
+def _config_optimize_dispatch(args):
+    from tokenpak.cli.commands._config_optimize import cmd_config_optimize
+    return cmd_config_optimize(args)
 
 
 # ── End Version Control Commands ──────────────────────────────────────────────
