@@ -141,14 +141,14 @@ workflow-steps-check:  ## Std 30 §13.3 — fail if workflow-steps.json drifts
 telemetry-snapshot:  ## Std 30 §7 — regenerate tokenpak/_snapshots/telemetry-schema.json
 	$(PYTHON) scripts/release_gate/gen_telemetry_schema.py
 
-telemetry-check:  ## Std 30 §7 — fail if telemetry-schema.json drifts
-	$(PYTHON) scripts/release_gate/gen_telemetry_schema.py --check
+telemetry-check:  ## Std 30 §7 — fail if telemetry-schema.json drifts (HOME-isolated; never reads live ~/.tokenpak DBs)
+	HOME="$$(mktemp -d)" $(PYTHON) scripts/release_gate/gen_telemetry_schema.py --check
 
 taxonomy-check:  ## Std 02 §13 + Std 30 §5 (R5) — every test has exactly one taxonomy marker
 	$(PYTHON) scripts/release_gate/taxonomy_check.py
 
 deps-audit:  ## Std 02 §14 + Std 30 §13.2 (R17) — uv lock --check + pip-audit + yanked-package scan
-	@command -v uv >/dev/null && uv lock --check || echo "uv not installed; skipping uv lock --check (install uv to enable)"
+	@if command -v uv >/dev/null 2>&1; then uv lock --check; else echo "uv not installed; skipping uv lock --check (install uv to enable)"; fi
 	$(PYTHON) -m pip install --quiet pip-audit
 	$(PYTHON) -m pip_audit --strict --skip-editable
 
@@ -168,9 +168,13 @@ release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (r
 
 # ── Std 10 §5 Release Check (A1-A7 / B1 / B3 / C5 / C6) ──────────────────────
 # `make release-check` automates the Std 10 §5 step-2 gate set. Mapping:
-#   A1-A7 → check + api-snapshot-check + workflow-steps-check + telemetry-check
-#           + taxonomy-check + release-gate-check + migration-multihop
-#           (per Std 10 §4; gates with no standalone local target — A3 mypy,
+#   A1-A7 → ci-lint + test + api-snapshot-check + workflow-steps-check
+#           + telemetry-check + taxonomy-check + release-gate-check
+#           + migration-multihop
+#           (per Std 10 §4; A1 is the EXACT CI ruff selection from
+#           .github/workflows/ci.yml — deliberately NOT `make check`, whose
+#           format-check step is CI-unenforced tooling drift handled in a
+#           separate packet; gates with no standalone local target — A3 mypy,
 #           A5 fresh-machine install, A6 bench — remain manual §5 checklist
 #           items and are NOT silently claimed by this target)
 #   B1    → audit                       (Std 10 B1)
@@ -179,11 +183,14 @@ release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (r
 #   C6    → release-docs-pattern-check  (Std 10 C6)
 # Ceiling: C9 / C10 / C16 and coverage are deliberately excluded — coverage is
 # advisory per Std 66 §11.2; C9/C10/C16 run via the release master checklist.
-.PHONY: audit docs-check marketing-filler-check release-docs-pattern-check release-check
+.PHONY: ci-lint audit docs-check marketing-filler-check release-docs-pattern-check release-check
+
+ci-lint:  ## Std 10 A1 — the EXACT CI ruff selection (.github/workflows/ci.yml), not `make check`
+	$(RUFF) check tokenpak/ tests/ --select=E,F,W,I --ignore=E501,E701,E702,E402,E741,F841
 
 audit:  ## Std 10 B1 — doc-drift audit (advisory) + strict dependency audit (blocking)
-	-bash scripts/audit-docs.sh
-	@echo "note: audit-docs.sh findings above are advisory (soft warning gate per its own header + CI continue-on-error); Std 10 B1 blocks only on Critical/High"
+	@bash scripts/audit-docs.sh \
+		|| echo "⚠️  audit-docs.sh findings above are ADVISORY (soft warning gate per its own header + CI continue-on-error); Std 10 B1 blocks only on Critical/High not accepted in Std 09 §6"
 	$(VENV_BIN)/python -m pip install --quiet pip-audit
 	$(VENV_BIN)/python -m pip_audit --strict .
 	@echo "✅  B1 audit clean (no known vulnerabilities in declared dependency tree)"
@@ -228,5 +235,5 @@ release-docs-pattern-check:  ## Std 10 C6 — no TODO / "coming soon" / stale up
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "✅  C6 clean over release-touched docs"
 
-release-check: check api-snapshot-check workflow-steps-check telemetry-check taxonomy-check release-gate-check migration-multihop audit marketing-filler-check docs-check release-docs-pattern-check  ## Std 10 §5 step 2 — automate gates A1-A7 / B1 / B3 / C5 / C6
+release-check: ci-lint test api-snapshot-check workflow-steps-check telemetry-check taxonomy-check release-gate-check migration-multihop audit marketing-filler-check docs-check release-docs-pattern-check  ## Std 10 §5 step 2 — automate gates A1-A7 / B1 / B3 / C5 / C6
 	@echo "✅  release-check: A1-A7 / B1 / B3 / C5 / C6 gate targets all executed"

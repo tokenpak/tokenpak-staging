@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.needs_fast_host
+
 pytest.importorskip("tokenpak.compression.pack", reason="module not available in current build")
 import statistics
 import time
