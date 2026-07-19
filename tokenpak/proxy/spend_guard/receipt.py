@@ -10,7 +10,7 @@ for the request-level trust claims:
     C03  Unclear AI costs          -> cost block (tokens + estimated_cost_usd)
     C06  Context overload          -> context block (cache reuse + include/drop)
     C10  No clear request trail     -> trail block (session / agent / cycle / job)
-    C11  No proof of optimization   -> optimization block (would_have_saved_usd)
+    C11  No proof of optimization   -> optimization block (would_have_saved_tokens)
     C18  Hard debugging            -> debug_pointer block (trace id + capture mode)
     C21  Hidden repetition          -> context.cache_read_tokens + trail.agent_id
 
@@ -138,7 +138,7 @@ class ReceiptSpendGuard:
 class ReceiptOptimization:
     """Proof of optimization — what TokenPak saved (C11)."""
 
-    would_have_saved_usd: ProofField
+    would_have_saved_tokens: ProofField
     methods: ProofField
 
 
@@ -434,7 +434,7 @@ def build_request_receipt(
     # Conservative/proxy-only attribution: never surface a per-request saving the
     # canonical aggregate would not credit (see _conservative_savings_field).
     optimization = ReceiptOptimization(
-        would_have_saved_usd=_conservative_savings_field(rec),
+        would_have_saved_tokens=_conservative_savings_field(rec),
         methods=(
             ProofField.known(optimization_methods)
             if optimization_methods is not None
