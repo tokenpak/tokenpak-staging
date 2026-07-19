@@ -1,6 +1,6 @@
 """Tests for scripts/migrate_monitor_db.py — legacy monitor.db detect/merge/archive.
 
-Covers the three legacy input states required by P0-WAVE0:
+Covers the three supported legacy input states:
   * legacy at ``~/tokenpak/`` only
   * legacy at ``~/.tokenpak/`` only
   * legacy at both
@@ -198,6 +198,31 @@ def test_schema_mismatch_is_skipped_not_dropped(home):
     assert summary["skipped"]                     # surfaced, not silently merged
     assert summary["exit_code"] == 2
     assert bad.exists()                           # NOT archived, NOT deleted
+
+
+def test_incompatible_existing_target_leaves_valid_source_untouched(home):
+    source = home / "tokenpak" / "monitor.db"
+    _make_db(source, _ROWS_A)
+    target = migrator.canonical_target(home)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(target))
+    conn.execute("CREATE TABLE requests (id INTEGER PRIMARY KEY, junk TEXT)")
+    conn.commit()
+    conn.close()
+
+    summary = migrator.migrate(
+        target,
+        migrator.legacy_candidates(home),
+        apply=True,
+        today="2026-07-19",
+    )
+
+    assert summary["exit_code"] == 2
+    assert summary["rows_inserted"] == 0
+    assert summary["archived"] == []
+    assert source.exists()
+    assert _count(source) == 2
+    assert not list(source.parent.glob("monitor.db.legacy-*"))
 
 
 def test_dangling_legacy_symlink_archived_not_followed(home):

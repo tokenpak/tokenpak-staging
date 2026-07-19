@@ -101,6 +101,25 @@ def _requests_create_sql(conn: sqlite3.Connection) -> Optional[str]:
     return row[0] if row else None
 
 
+def _target_schema_issue(target: Path) -> Optional[str]:
+    """Return a fail-closed reason when an existing target is incompatible."""
+    try:
+        conn = sqlite3.connect(str(target))
+        try:
+            if not _has_requests_table(conn):
+                return "canonical target has no 'requests' table"
+            columns = _table_columns(conn, REQUESTS_TABLE)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return f"canonical target is unreadable: {exc}"
+
+    missing = [column for column in REQUIRED_COLUMNS if column not in columns]
+    if missing:
+        return f"canonical target requests table missing columns: {missing}"
+    return None
+
+
 def _row_count(path: Path) -> int:
     try:
         conn = sqlite3.connect(str(path))
@@ -199,7 +218,9 @@ def _merge_one(target: Path, source: Path) -> int:
         # Common content columns, in target order, excluding the surrogate id.
         common = [c for c in tcols if c in scols and c != "id"]
         if not common:
-            return 0
+            raise sqlite3.DatabaseError(
+                "source and canonical target have no common request columns"
+            )
 
         col_list = ", ".join(common)
         existing = set(
@@ -274,6 +295,16 @@ def migrate(
 
     log(f"Canonical target: {target}{'' if target.exists() else '  (will be created)'}")
     log(f"Mode: {'APPLY' if apply else 'DRY-RUN (no changes; pass --apply to migrate)'}")
+
+    # Never archive a valid source behind an incompatible existing target. An
+    # operator must repair or explicitly replace that target before migration.
+    if apply and mergeable and target.exists():
+        target_issue = _target_schema_issue(target)
+        if target_issue:
+            log(f"⚠ skipped: {target} — {target_issue}")
+            summary["skipped"].append((str(target), target_issue))
+            summary["exit_code"] = 2
+            return summary
 
     # Materialise the target from the first mergeable source if it is absent.
     if apply and mergeable and not target.exists():

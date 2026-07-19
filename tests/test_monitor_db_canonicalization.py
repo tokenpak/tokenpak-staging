@@ -1,4 +1,4 @@
-"""Tests for monitor.db reader canonicalization (P0-WAVE0 reader rewire).
+"""Tests for monitor.db reader canonicalization.
 
 Verifies that the previously-hardcoded readers now resolve the monitor DB
 through ``tokenpak._paths`` instead of literal legacy paths, so every reader
