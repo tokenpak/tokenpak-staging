@@ -12,8 +12,8 @@ from typing import Optional
 SEP = "────────────────────────────────────────"
 
 # Reuse monitor DB for spend queries.
-# Resolve via the canonical resolver (Std 33 / Std 34 §1.2) so this command
-# reads the same store as every other reader. Kept as a module-level constant
+# Resolve via the canonical resolver so this command reads the same store as
+# every other reader. Kept as a module-level constant
 # (rather than inlined) so tests can patch ``budget._MONITOR_DB``.
 def _default_monitor_db() -> str:
     env = os.environ.get("TOKENPAK_DB", "").strip()

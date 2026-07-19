@@ -54,8 +54,8 @@ def _claude_settings_path() -> Path:
 
 
 def _proxy_pid_path() -> Path:
-    # Route through the canonical home resolver (Std 33 / Std 34 §1.2) instead
-    # of hardcoding the legacy ``~/.tokenpak`` directory.
+    # Route through the canonical home resolver instead of hardcoding the
+    # legacy ``~/.tokenpak`` directory.
     try:
         from tokenpak import _paths
 
@@ -66,7 +66,7 @@ def _proxy_pid_path() -> Path:
 
 def _monitor_db_path() -> Path:
     # Resolve the active monitor.db via the canonical resolver so this check
-    # reports against the same store every other reader uses (Std 33 / 34 §1.2).
+    # reports against the same store every other reader uses.
     try:
         from tokenpak import _paths
 

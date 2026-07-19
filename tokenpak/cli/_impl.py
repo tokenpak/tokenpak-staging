@@ -26,7 +26,7 @@ def _resolve_db_path(db_path: Optional[str] = None) -> str:
 
     Routes through ``tokenpak._paths.monitor_db`` so every reader agrees on the
     same store (``$TOKENPAK_DB`` -> ``~/.tpk`` -> ``~/.tokenpak`` -> ``~/tokenpak``)
-    instead of hardcoding a divergent legacy default (Std 33 / Std 34 §1.2).
+    instead of hardcoding a divergent legacy default.
     """
     if db_path:
         return db_path

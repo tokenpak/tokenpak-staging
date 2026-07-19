@@ -4,7 +4,7 @@ Monitor DB legacy migration — detect / merge / archive
 ======================================================
 
 Consolidate request-ledger rows from legacy ``monitor.db`` locations into the
-single canonical store at ``~/.tpk/monitor.db`` (Std 33 / Std 34 §1.2).
+single canonical store at ``~/.tpk/monitor.db``.
 
 Legacy locations probed (in addition to any ``$TOKENPAK_DB`` override):
 

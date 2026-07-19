@@ -22,8 +22,8 @@ from typing import Any, Dict, List, Optional
 PROXY_BASE = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
 
 
-# Resolve the monitor DB via the canonical resolver (Std 33 / Std 34 §1.2) so
-# this command reads the same store as every other reader. Kept as a
+# Resolve the monitor DB via the canonical resolver so this command reads the
+# same store as every other reader. Kept as a
 # module-level constant so tests can patch ``optimize._MONITOR_DB``.
 def _default_monitor_db() -> str:
     env = os.environ.get("TOKENPAK_DB", "").strip()
