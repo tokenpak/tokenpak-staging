@@ -13,9 +13,9 @@
 # Returns non-zero if any finding is detected.
 # Used as a soft CI warning gate (continue-on-error in GitHub Actions).
 #
-# --release-gate (Std 10 B1): orphan-page findings (check 2) are surfaced as
-# warnings but do not fail the gate — they are Medium-severity doc drift per
-# Std 09 §2, tracked as known findings per Std 09 §6, not Critical/High.
+# --release-gate: orphan-page findings (check 2) are surfaced as warnings but
+# do not fail the gate. They are existing Medium documentation drift, tracked
+# as known findings rather than classified as Critical or High.
 # Duplicate-filename (check 1) and root-doc (check 3) findings still fail.
 #
 # Usage: bash scripts/audit-docs.sh [--release-gate] [docs-dir] [mkdocs-yml]
@@ -153,7 +153,7 @@ if [[ $RELEASE_GATE -eq 1 ]]; then
         echo "AUDIT RESULT (release-gate): FAIL — $BLOCKING blocking issue(s) (duplicate-filename / root-doc classes)."
         exit 1
     elif [[ $FOUND -ne 0 ]]; then
-        echo "AUDIT RESULT (release-gate): PASSED with $FOUND warning class(es) — orphan-page findings above are pre-existing Medium doc drift, tracked as known per Std 09 §6; not Critical/High (Std 10 B1)."
+        echo "AUDIT RESULT (release-gate): PASSED with $FOUND warning class(es) — orphan-page findings above are existing Medium documentation drift, tracked as known findings rather than classified as Critical or High."
         exit 0
     else
         echo "AUDIT RESULT: PASSED — no issues found."
