@@ -6,6 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Per-client launcher permission defaults.** `tokenpak permissions launcher`
+  can persist `inherit`, `approval-bypass`, `sandbox-bypass`, or `full-bypass`
+  for TokenPak-launched Codex sessions, plus the supported Claude Code subset.
+  Bypass modes require explicit confirmation, leave client config files
+  untouched, warn on every affected launch, fail closed on invalid state, and
+  retain `permissions set fleet` as a full-bypass compatibility alias.
+
 ## [1.12.0] — 2026-07-10
 
 ### Added
