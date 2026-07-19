@@ -43,7 +43,7 @@
     "@types/node": "^22.19.15",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.11",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=18.0.0"
