@@ -16,6 +16,7 @@ on:
     paths:
       - 'tokenpak/**'
       - 'tests/**'
+      - '.github/workflows/ci.yml'
       - 'pyproject.toml'
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
