@@ -1,0 +1,30 @@
+; A4 architecture-contract gate (Std 10 A4).
+; Encodes Std 01 §2 "Dependency Direction" for the canonical subsystems:
+; dependencies flow inward only; same-level subsystems are independent.
+;
+; NOTE: tokenpak/services/ is an implicit namespace package (no __init__.py),
+; so grimp cannot discover it via the tokenpak root alone. Its package
+; portions are listed as explicit extra roots below. If a new subpackage is
+; added under tokenpak/services/, it MUST be appended to root_packages here
+; or the gate is silently blind to it. tokenpak/services/memory_optimization.py
+; (a lone module, not a package) cannot be a grimp root and is NOT covered.
+;
+; Modules outside the Std 01 tiering (config, models, platform, runtime, ...)
+; are intentionally not layered here — only Std 01-named boundaries are enforced.
+
+[importlinter]
+root_packages =
+    tokenpak
+    tokenpak.services.optimization
+    tokenpak.services.routing_service
+
+[importlinter:contract:std01-layers]
+name = Std 01 §2 dependency direction (levels 0-5)
+type = layers
+layers =
+    tokenpak.cli : tokenpak.sdk : tokenpak.companion : tokenpak.dashboard : tokenpak.alerts
+    tokenpak.proxy : tokenpak.orchestration : tokenpak.plugins
+    tokenpak.services.optimization | tokenpak.services.routing_service
+    tokenpak.telemetry : tokenpak.routing
+    tokenpak.security : tokenpak.compression : tokenpak.cache : tokenpak.vault : tokenpak.sources : tokenpak.debug
+    tokenpak.core
