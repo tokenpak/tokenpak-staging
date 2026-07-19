@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-07-10T20:33:08Z",
+  "generated_at": "2026-07-19T10:32:20Z",
   "package_version": "1.12.0",
   "symbols": [
     {
@@ -746,6 +746,10 @@
     {
       "module": "tokenpak.cli.commands.cost",
       "name": "run_cost_cmd"
+    },
+    {
+      "module": "tokenpak.cli.commands.dashboard",
+      "name": "LAYOUTS"
     },
     {
       "module": "tokenpak.cli.commands.dashboard",
@@ -8196,6 +8200,46 @@
       "name": "VoyageEmbeddingAdapter"
     },
     {
+      "module": "tokenpak.proxy.admission",
+      "name": "ADMITTED"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "AgentConcurrencyGate"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "CONFIG_KEY"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "DEFAULT_MAX_PARALLEL"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "DEFAULT_QUEUE_WAIT_S"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "ENV_OVERRIDE"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "QUEUE_FULL"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "WAIT_TIMEOUT"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "build_busy_response"
+    },
+    {
+      "module": "tokenpak.proxy.admission",
+      "name": "resolve_agent_concurrency"
+    },
+    {
       "module": "tokenpak.proxy.api",
       "name": "HealthRoute"
     },
@@ -8898,6 +8942,22 @@
     {
       "module": "tokenpak.proxy.embedding_router",
       "name": "PROVIDER_VOYAGE"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "STATEFUL_API_UNSUPPORTED"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "STATEFUL_API_UNSUPPORTED_STATUS"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "STATEFUL_SURFACES_REGISTRY"
+    },
+    {
+      "module": "tokenpak.proxy.error_response",
+      "name": "build_stateful_api_unsupported_error"
     },
     {
       "module": "tokenpak.proxy.error_response",
