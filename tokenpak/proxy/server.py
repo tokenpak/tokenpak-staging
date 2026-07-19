@@ -592,12 +592,29 @@ class _ThreadedHTTPServer(HTTPServer):
             raise
 
     def _handle(self, request, client_address, managed=False):
+        # The listener admission lease above bounds total held managed
+        # connections; this per-connection gate (already inside its own
+        # worker thread, so blocking it never stalls the accept loop or
+        # control-plane traffic) further bounds how many run in parallel,
+        # queueing the rest FIFO with a bounded wait.
+        gate = getattr(self.proxy_server, "_agent_gate", None) if managed else None
+        gate_admitted = False
         try:
+            if gate is not None:
+                from tokenpak.proxy.admission import ADMITTED, build_busy_response
+
+                outcome = gate.acquire()
+                if outcome != ADMITTED:
+                    request.sendall(build_busy_response(outcome))
+                    return
+                gate_admitted = True
             self.finish_request(request, client_address)
         except Exception:
             self.handle_error(request, client_address)
         finally:
             self.shutdown_request(request)
+            if gate_admitted:
+                gate.release()
             if managed:
                 self.proxy_server._admission.release()
 
@@ -3092,6 +3109,22 @@ class ProxyServer:
         self._admission_limit = max(1, int(os.environ.get("TOKENPAK_MANAGED_ADMISSION", "16")))
         self._admission = threading.BoundedSemaphore(self._admission_limit)
         self._admission_rejected = 0
+        # Managed background-agent parallel-execution gate. The admission
+        # lease above bounds how many managed connections the listener holds
+        # at once; this gate bounds how many of those run in parallel
+        # (default 2), queueing the rest FIFO. The queue depth is the lease
+        # headroom, so total held managed connections never exceed the lease.
+        from tokenpak.proxy.admission import AgentConcurrencyGate, resolve_agent_concurrency
+        _gate_cap, _gate_source = resolve_agent_concurrency()
+        if _gate_cap is None:
+            self._agent_gate = None  # explicit operator opt-out (env off)
+        else:
+            self._agent_gate = AgentConcurrencyGate(
+                _gate_cap,
+                max_queue=max(0, self._admission_limit - _gate_cap),
+                degraded_probe=self._agent_gate_degraded,
+                source=_gate_source,
+            )
         # Rolling window of per-request compression ratios (last 100)
         self._compression_ratios: deque = deque(maxlen=100)
         self._compression_lock = threading.Lock()
@@ -3111,6 +3144,28 @@ class ProxyServer:
             self.monitor: Optional[_DbMonitor] = _DbMonitor(MONITOR_DB)
         except Exception:
             self.monitor = None
+
+    def _agent_gate_degraded(self) -> bool:
+        """Cheap local degradation probe for the agent gate's dynamic cap.
+
+        True (→ serial mode) when the degradation tracker reports a degraded
+        proxy or any provider circuit breaker is open. Reads only local state;
+        never issues a provider call. Fails open to the configured cap so a
+        probe error cannot wedge admission.
+        """
+        try:
+            if get_degradation_tracker().is_degraded():
+                return True
+        except Exception:
+            pass
+        try:
+            registry = get_circuit_breaker_registry()
+            for status in registry.all_statuses().values():
+                if status.get("state") == "open":
+                    return True
+        except Exception:
+            pass
+        return False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -3479,6 +3534,36 @@ class ProxyServer:
     def is_running(self) -> bool:
         return self._lifecycle_state == "running" and self._server is not None
 
+    def _agent_gate_degraded(self) -> bool:
+        """Cheap, no-live-call probe for the background-agent concurrency gate.
+
+        True when the same signals ``health()`` already uses to report
+        ``is_degraded`` (degradation tracker, memory guard) indicate trouble,
+        or when any provider's circuit breaker is open. Any probe failure is
+        treated as "not degraded" — a broken probe must never wedge admission
+        by pinning the gate to serial mode forever.
+        """
+        try:
+            if get_degradation_tracker().is_degraded():
+                return True
+        except Exception:
+            pass
+        try:
+            guard_snapshot = self._memory_guard_snapshot()
+            if guard_snapshot.get("enabled") and self._lifecycle_state == "running":
+                state = guard_snapshot.get("state")
+                if not (state == "running" and guard_snapshot.get("thread_alive")):
+                    return True
+        except Exception:
+            pass
+        try:
+            for status in get_circuit_breaker_registry().all_statuses().values():
+                if status.get("state") == "open":
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _memory_guard_snapshot(self) -> dict:
         """Return lifecycle/config truth without creating or starting a guard."""
         if self._memory_guard is None:
@@ -3542,6 +3627,11 @@ class ProxyServer:
                 "available": self._admission._value,
                 "rejected": self._admission_rejected,
             },
+            "agent_concurrency": (
+                self._agent_gate.snapshot()
+                if self._agent_gate is not None
+                else {"enabled": False}
+            ),
             "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "connection_pool": {
                 "http2_enabled": self._connection_pool.http2_enabled,
