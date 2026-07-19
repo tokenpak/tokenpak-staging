@@ -110,9 +110,12 @@ def _print_free_tier_upgrade_hint() -> None:
 
 SEP_INNER = "─────────────────────────────────"
 PROXY_DEFAULT = "http://127.0.0.1:8766"
+# Canonical fresh-install fallback (Std 33 / Std 34 §1.2). Only used when the
+# resolver finds no existing store; the legacy ``~/tokenpak/monitor.db`` literal
+# was removed so this never seeds a divergent pre-dot store.
 DB_DEFAULT = os.environ.get(
     "TOKENPAK_DB",
-    os.path.expanduser("~/tokenpak/monitor.db"),
+    os.path.expanduser("~/.tpk/monitor.db"),
 )
 
 
