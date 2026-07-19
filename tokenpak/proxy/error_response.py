@@ -52,7 +52,12 @@ def build_stateful_api_unsupported_error(
     *,
     registry_link: Optional[str] = None,
 ) -> bytes:
-    """Build the typed payload for explicitly unsupported stateful provider APIs."""
+    """Build the typed payload for explicitly unsupported stateful provider APIs.
+
+    This helper only constructs the response body. Callers remain responsible
+    for selecting the route-appropriate HTTP status; the exported status
+    constant records the declared default policy but is not enforced here.
+    """
     surface = surface.strip()
     remediation = remediation.strip()
     if not surface:
