@@ -150,7 +150,7 @@ def _config_permission_overrides(args: list[str]) -> tuple[bool, bool]:
     for value in values:
         key = value.partition("=")[0].strip().strip("\"'")
         leaf = key.rsplit(".", 1)[-1]
-        if key == "approval_policy" or key.startswith("approval_policy."):
+        if leaf == "approval_policy" or key.startswith("approval_policy."):
             approval = True
         elif leaf == "sandbox_mode":
             sandbox = True

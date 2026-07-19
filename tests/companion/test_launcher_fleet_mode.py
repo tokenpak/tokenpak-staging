@@ -284,6 +284,10 @@ def test_codex_launcher_mode_exact_argv(mode, expected):
         ("sandbox-bypass", ["-s", "read-only"]),
         ("full-bypass", ["--sandbox", "workspace-write"]),
         ("approval-bypass", ["-c", "approval_policy=on-request"]),
+        (
+            "approval-bypass",
+            ["-c", "profiles.review.approval_policy=on-request"],
+        ),
         ("sandbox-bypass", ["--config=sandbox_mode=workspace-write"]),
         ("full-bypass", ["-c", "default_permissions=:workspace-write"]),
         (
