@@ -463,8 +463,6 @@ def cmd_dispatch_run(args: Any) -> int:
         "manifest_id": intake.manifest.id,
         "detected_intent": intake.job.detected_intent,
         "autonomy_mode": autonomy,
-        "dry_run": dry_run,
-        "persisted": not dry_run,
         "selection_status": outcome.status,
         "precedence_layer": outcome.precedence_layer,
         "confidence": outcome.confidence,
@@ -476,6 +474,7 @@ def cmd_dispatch_run(args: Any) -> int:
         "risk_flags": list(intake.job.risk_flags),
         "confirm": bool(getattr(args, "confirm", False)),
         "dry_run": dry_run,
+        "persisted": not dry_run,
     }
     if dry_run:
         payload["note"] = (
