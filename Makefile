@@ -147,10 +147,16 @@ telemetry-check:  ## Std 30 §7 — fail if telemetry-schema.json drifts
 taxonomy-check:  ## Std 02 §13 + Std 30 §5 (R5) — every test has exactly one taxonomy marker
 	$(PYTHON) scripts/release_gate/taxonomy_check.py
 
-deps-audit:  ## Std 02 §14 + Std 30 §13.2 (R17) — uv lock --check + pip-audit + yanked-package scan
-	@command -v uv >/dev/null && uv lock --check || echo "uv not installed; skipping uv lock --check (install uv to enable)"
+deps-audit:  ## Std 02 §14 + Std 30 §13.2 (R17) — uv lock --check + pip-audit (third-party tree) + yanked-package scan
+	@if command -v uv >/dev/null; then uv lock --check; else echo "uv not installed; skipping uv lock --check (install uv to enable)"; fi
 	$(PYTHON) -m pip install --quiet pip-audit
-	$(PYTHON) -m pip_audit --strict --skip-editable
+	$(PYTHON) -m pip_audit --strict .
+# Project mode (`.`) audits the pyproject-declared third-party dependency tree.
+# `--skip-editable` was insufficient: under `--strict`, pip-audit escalates the
+# skip of the editable local `tokenpak` dist to an error in the dev/CI venv
+# (both `pip install -e ".[dev]"`). Project mode audits every third-party
+# dependency at the same --strict severity floor while excluding only the
+# unreleased local package (residual ruling decision 2).
 
 migration-multihop:  ## Std 30 §14.1 (R16) + Std 10 §E9 — run migrations from each of last 6 minor versions
 	$(PYTHON) scripts/release_gate/migration_multihop.py
@@ -165,3 +171,11 @@ release-leak-check:  ## Full-tree public-leak scan of the built sdist + wheel (r
 	$(PYTHON) -m pip install --quiet build
 	$(PYTHON) -m build
 	$(PYTHON) scripts/release_gate/check_release_leaks.py --dist dist/
+
+# Always-on baseline of cheap, deterministic, public-safety gates (maturity /
+# license / leak / help-verbs / tokenpak-literal) that must pass on every
+# release regardless of tier. Deliberately narrow: the Std 10 §5 A1-A7 / B1 /
+# B3 / C5 / C6 umbrella is owned by separate packets and NOT claimed here.
+.PHONY: release-check-baseline
+release-check-baseline:  ## Std 10 five-gate always-on baseline (adapted from staging PR #208)
+	$(PYTHON) scripts/release_check/release_check.py
