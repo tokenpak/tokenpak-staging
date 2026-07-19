@@ -1925,44 +1925,9 @@ def cmd_timeline(args):
 
 def cmd_explain(args):
     """Explain what a named workflow profile sets."""
-    _PROFILE_PRESETS = {
-        "safe": {
-            "TOKENPAK_MODE": "strict",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "8000",
-            "TOKENPAK_SKELETON_ENABLED": "false",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "balanced": {
-            "TOKENPAK_MODE": "hybrid",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "4500",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "aggressive": {
-            "TOKENPAK_MODE": "aggressive",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "2000",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "true",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-        "agentic": {
-            "TOKENPAK_MODE": "hybrid",
-            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "3000",
-            "TOKENPAK_SKELETON_ENABLED": "true",
-            "TOKENPAK_CAPSULE_BUILDER": "false",
-            "TOKENPAK_SHADOW_ENABLED": "true",
-            "TOKENPAK_BUDGET_CONTROLLER": "true",
-            "TOKENPAK_TRACE": "true",
-        },
-    }
+    # Single source of truth for profile presets is the proxy config layer.
+    # Imported lazily to avoid an import cycle at module load time.
+    from tokenpak.proxy.config import _PROFILE_PRESETS
 
     profile = getattr(args, "profile", None)
 
@@ -2133,6 +2098,7 @@ def cmd_dashboard(args):
     run_dashboard(
         fleet=getattr(args, "fleet", False),
         json_export=getattr(args, "json_export", False),
+        layout=getattr(args, "layout", "home"),
     )
 
 
@@ -2244,9 +2210,39 @@ def cmd_codex(args):
     """
     import os
     import sys
-    if getattr(args, "budget", None) is not None:
+    forwarded, trailing_receipt_out, trailing_run_id = _extract_codex_accounting_flags(
+        list(args.args)
+    )
+    forwarded, trailing_receipt_only = _extract_codex_receipt_only_flag(forwarded)
+    receipt_out = getattr(args, "receipt_out", None) or trailing_receipt_out
+    run_id = getattr(args, "run_id", None) or trailing_run_id
+    receipt_only = bool(getattr(args, "receipt_only", False) or trailing_receipt_only)
+    if bool(receipt_out) != bool(run_id):
+        print(
+            "tokenpak codex: --receipt-out and --run-id must be provided together",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if receipt_only and getattr(args, "budget", None) is not None:
+        print(
+            "tokenpak codex: --receipt-only cannot be combined with --budget",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not receipt_only and getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
-    forwarded = list(args.args)
+    if receipt_only and not (receipt_out and run_id):
+        print(
+            "tokenpak codex: --receipt-only requires --receipt-out and --run-id",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if receipt_only and getattr(args, "install_only", False):
+        print(
+            "tokenpak codex: --receipt-only cannot be combined with --install-only",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if forwarded and forwarded[0] == "doctor":
         from .companion.codex.doctor import main as doctor_main
         sys.exit(doctor_main(forwarded[1:]))
@@ -2255,8 +2251,112 @@ def cmd_codex(args):
         sys.exit(uninstall_main(forwarded[1:]))
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
+    if receipt_only:
+        forwarded = ["--receipt-only", *forwarded]
     from .companion.codex import launch
-    launch(args=forwarded)
+    sys.exit(launch(args=forwarded, receipt_out=receipt_out, run_id=run_id))
+
+
+def _extract_codex_accounting_flags(
+    forwarded: list[str],
+) -> tuple[list[str], str | None, str | None]:
+    """Consume TokenPak accounting flags even when placed after Codex args."""
+    receipt_out: str | None = None
+    run_id: str | None = None
+    stripped: list[str] = []
+    index = 0
+    while index < len(forwarded):
+        token = forwarded[index]
+        if token == "--receipt-out":
+            if index + 1 >= len(forwarded):
+                print(
+                    "tokenpak codex: --receipt-out requires a path",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            receipt_out = forwarded[index + 1]
+            index += 2
+            continue
+        if token.startswith("--receipt-out="):
+            receipt_out = token.split("=", 1)[1]
+            index += 1
+            continue
+        if token == "--run-id":
+            if index + 1 >= len(forwarded):
+                print("tokenpak codex: --run-id requires an id", file=sys.stderr)
+                sys.exit(2)
+            run_id = forwarded[index + 1]
+            index += 2
+            continue
+        if token.startswith("--run-id="):
+            run_id = token.split("=", 1)[1]
+            index += 1
+            continue
+        stripped.append(token)
+        index += 1
+    return stripped, receipt_out, run_id
+
+
+def _extract_codex_receipt_only_flag(forwarded: list[str]) -> tuple[list[str], bool]:
+    """Consume TokenPak's Vanilla receipt-only flag wherever it appears."""
+    stripped: list[str] = []
+    receipt_only = False
+    for token in forwarded:
+        if token == "--receipt-only":
+            receipt_only = True
+            continue
+        stripped.append(token)
+    return stripped, receipt_only
+
+
+def _codex_namespace_from_tail(tail: list[str]) -> argparse.Namespace:
+    """Parse TokenPak-owned ``codex`` flags while preserving Codex-native flags."""
+    budget = None
+    install_only = False
+    passthrough: list[str] = []
+    stripped, receipt_out, run_id = _extract_codex_accounting_flags(tail)
+    stripped, receipt_only = _extract_codex_receipt_only_flag(stripped)
+
+    index = 0
+    while index < len(stripped):
+        token = stripped[index]
+        if token == "--budget":
+            if index + 1 >= len(stripped):
+                print("tokenpak codex: --budget requires USD", file=sys.stderr)
+                sys.exit(2)
+            try:
+                budget = float(stripped[index + 1])
+            except ValueError:
+                print("tokenpak codex: --budget must be numeric", file=sys.stderr)
+                sys.exit(2)
+            index += 2
+            continue
+        if token.startswith("--budget="):
+            try:
+                budget = float(token.split("=", 1)[1])
+            except ValueError:
+                print("tokenpak codex: --budget must be numeric", file=sys.stderr)
+                sys.exit(2)
+            index += 1
+            continue
+        if token == "--install-only":
+            install_only = True
+            index += 1
+            continue
+        passthrough.append(token)
+        index += 1
+
+    return argparse.Namespace(
+        command="codex",
+        func=cmd_codex,
+        budget=budget,
+        install_only=install_only,
+        receipt_only=receipt_only,
+        receipt_out=receipt_out,
+        run_id=run_id,
+        args=passthrough,
+        db=".tokenpak/registry.db",
+    )
 
 
 def cmd_test(args):
@@ -2435,7 +2535,7 @@ def _build_codex_parser(sub):
             "  tokenpak codex\n"
             "  tokenpak codex --install-only    # set up without launching Codex\n"
             "  tokenpak codex doctor            # verify installation\n"
-            "  tokenpak codex uninstall         # reverse installation\n"
+            "  tokenpak codex uninstall         # clean selected home; preserve shared skills in use\n"
             "  tokenpak codex --budget 5.00\n"
             '  tokenpak codex "Fix the login bug"\n'
             "  tokenpak codex --model o3 -s workspace-write"
@@ -2453,6 +2553,26 @@ def _build_codex_parser(sub):
         "--install-only",
         action="store_true",
         help="Run setup (MCP, hooks, AGENTS.md, skills) and exit without launching codex",
+    )
+    p.add_argument(
+        "--receipt-only",
+        action="store_true",
+        help=(
+            "Launch vanilla Codex and write a no-body receipt without installing "
+            "or activating companion setup"
+        ),
+    )
+    p.add_argument(
+        "--receipt-out",
+        default=None,
+        metavar="PATH",
+        help="Write a no-body accounting receipt for this Codex process",
+    )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        metavar="ID",
+        help="Stable run identifier to include in the accounting receipt",
     )
     p.add_argument(
         "args",
@@ -3111,6 +3231,12 @@ def build_parser():
         dest="json_export",
         action="store_true",
         help="Export dashboard as JSON (non-interactive)",
+    )
+    p_dashboard.add_argument(
+        "--layout",
+        choices=("home", "dispatch", "spend", "debug", "fleet"),
+        default="home",
+        help="Select read-only cockpit layout for terminal or JSON output",
     )
     p_dashboard.add_argument(
         "--public",
@@ -5015,9 +5141,74 @@ def _build_config_mgmt_parser(sub):
         help="Print what would change without writing",
     )
     p_migrate.set_defaults(func=cmd_config_migrate)
+
+    # optimize — deterministic, process-local MemoryGuard planning + state
+    p_optimize = csub.add_parser(
+        "optimize",
+        help="Plan, apply, inspect, or roll back process-local memory optimization",
+    )
+    from tokenpak.services.memory_optimization import MODES as memory_modes
+    from tokenpak.services.memory_optimization import PROFILES as memory_profiles
+
+    action = p_optimize.add_mutually_exclusive_group()
+    action.add_argument(
+        "--plan",
+        action="store_const",
+        const="plan",
+        dest="optimize_action",
+        help="Show the deterministic plan without writing (default)",
+    )
+    action.add_argument(
+        "--apply",
+        action="store_const",
+        const="apply",
+        dest="optimize_action",
+        help="Atomically apply the recomputed process-local plan",
+    )
+    action.add_argument(
+        "--status",
+        action="store_const",
+        const="status",
+        dest="optimize_action",
+        help="Read managed artifacts and drift state without writing",
+    )
+    action.add_argument(
+        "--rollback",
+        action="store_const",
+        const="rollback",
+        dest="optimize_action",
+        help="Restore the exact recorded preimage",
+    )
+    p_optimize.add_argument(
+        "--profile",
+        choices=sorted(memory_profiles),
+        default="balanced",
+        help="Memory budget policy",
+    )
+    p_optimize.add_argument(
+        "--mode",
+        choices=sorted(memory_modes),
+        default="auto",
+        help="Runtime behavior",
+    )
+    p_optimize.add_argument(
+        "--expect-hash",
+        metavar="SHA256",
+        help="With --apply, refuse unless the recomputed plan has this SHA-256",
+    )
+    p_optimize.add_argument(
+        "--force",
+        action="store_true",
+        help="With --rollback, restore the preimage despite external drift",
+    )
+    p_optimize.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    p_optimize.set_defaults(func=_config_optimize_dispatch)
     p.set_defaults(func=_bare_help(
         "config", "Manage configuration files",
-        ["sync", "pull", "validate", "show", "init", "doctor", "env", "path", "migrate"],
+        [
+            "sync", "pull", "validate", "show", "init", "doctor", "env", "path",
+            "migrate", "optimize",
+        ],
         exit_nonzero=True,
     ))
 
@@ -5030,6 +5221,11 @@ def _config_doctor_dispatch(args):
 def _config_env_dispatch(args):
     from tokenpak.cli.commands.config_env import cmd_config_env
     return cmd_config_env(args)
+
+
+def _config_optimize_dispatch(args):
+    from tokenpak.cli.commands._config_optimize import cmd_config_optimize
+    return cmd_config_optimize(args)
 
 
 # ── End Version Control Commands ──────────────────────────────────────────────
@@ -5147,8 +5343,8 @@ def main():
                 print("\n   (Use `tokenpak help` to see all commands)", file=_sys_err.stderr)
         sys.exit(1)
 
-    # For 'claude' subcommand, manually split argv so *all* arguments after
-    # tokenpak's own flags pass through verbatim to the claude binary.
+    # For companion launchers, manually split argv so *all* arguments after
+    # tokenpak's own flags pass through verbatim to the underlying binary.
     # parse_args()/parse_known_args() would mishandle flags like
     # permission-bypass flags or split --model <value> pairs.
     if raw_cmd == "claude":
@@ -5168,6 +5364,9 @@ def main():
         args = argparse.Namespace(
             command="claude", func=cmd_claude, budget=budget, args=passthrough, db=".tokenpak/registry.db"
         )
+    elif raw_cmd == "codex":
+        codex_idx = sys.argv.index("codex")
+        args = _codex_namespace_from_tail(sys.argv[codex_idx + 1:])
     else:
         args = parser.parse_args()
 
@@ -5229,7 +5428,11 @@ def main():
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    if _is_first_run() and args.command not in ("help",):
+    machine_output = any(
+        bool(getattr(args, attr, False))
+        for attr in ("json", "json_export", "json_output", "as_json", "raw")
+    )
+    if _is_first_run() and args.command not in ("help",) and not machine_output:
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
             "   Run `tokenpak demo` to see compression in action.\n"
@@ -5626,8 +5829,7 @@ def cmd_trigger_daemon(args):
 
 def cmd_trigger_fire(args):
     """Fire an event string immediately — executes all matching enabled triggers."""
-    import subprocess
-
+    from tokenpak.orchestration.commands import run_trigger_action
     from tokenpak.orchestration.triggers.matcher import match_event
 
     store = _trigger_store()
@@ -5639,18 +5841,14 @@ def cmd_trigger_fire(args):
     print(f"Firing event: {event} ({len(matched)} trigger(s))")
     for t in matched:
         print(f"  -> {t.id}  {t.action}")
-        cmd = t.action
-        if not cmd.startswith("/") and not cmd.startswith("./") and not cmd.startswith("~"):
-            cmd = f"tokenpak {cmd}"
-        try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
-            output = (result.stdout + result.stderr).strip()
-            store.log_fire(t, result.returncode, output)
-            if output:
-                print(f"     {output[:200]}")
-        except subprocess.TimeoutExpired:
-            store.log_fire(t, -1, "timeout")
+        # Governed execution: shell=False by default; only ``shell:``-prefixed
+        # actions reach the host shell, so config payloads are not shell-interpreted.
+        result = run_trigger_action(t.action, timeout=30)
+        store.log_fire(t, result.returncode, result.output)
+        if result.timed_out:
             print("     [timeout]")
+        elif result.output:
+            print(f"     {result.output[:200]}")
 
 
 _GIT_POST_COMMIT = """#!/bin/sh

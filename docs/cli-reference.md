@@ -317,6 +317,16 @@ View and edit config
 - `migrate`
   - `--config-json` — Path to legacy config.json (default: ~/.tokenpak/config.json) (default: ~/.tokenpak/config.json)
   - `--dry-run` — Print what would change without writing
+- `optimize`
+  - `--plan` — Show the deterministic plan without writing (default)
+  - `--apply` — Atomically apply the recomputed process-local plan
+  - `--status` — Read managed artifacts and drift state without writing
+  - `--rollback` — Restore the exact recorded preimage
+  - `--profile` — Memory budget policy (default: balanced) — choices: `balanced`, `conservative`, `throughput`
+  - `--mode` — Runtime behavior (default: auto) — choices: `auto`, `observe`, `off`
+  - `--expect-hash` — With --apply, refuse unless the recomputed plan has this SHA-256
+  - `--force` — With --rollback, restore the preimage despite external drift
+  - `--json` — Emit machine-readable JSON
 
 ### `tokenpak explain`
 
@@ -445,6 +455,7 @@ Live dashboard
 
 - `--fleet` — Show fleet-wide summary (TUI)
 - `--json` — Export dashboard as JSON (non-interactive)
+- `--layout` — Select read-only cockpit layout for terminal or JSON output (default: home) — choices: `home`, `dispatch`, `spend`, `debug`, `fleet`
 - `--public` — Advanced: show public URL with token for non-tunneled access
 - `--show-token` — Display current dashboard token
 - `--new-token` — Regenerate dashboard token
@@ -638,6 +649,10 @@ TokenPak Dispatch — scoped, station-based, resumable, gated work packages with
 - `receipt`
   - `JOB_ID` — Dispatch job id (job_…)
   - `--json` — Emit machine-readable JSON instead of human-readable output
+- `routes`
+  - `--json` — Emit machine-readable JSON instead of human-readable output
+- `workers`
+  - `--json` — Emit machine-readable JSON instead of human-readable output
 
 ---
 
@@ -671,7 +686,7 @@ Examples:
   tokenpak codex
   tokenpak codex --install-only    # set up without launching Codex
   tokenpak codex doctor            # verify installation
-  tokenpak codex uninstall         # reverse installation
+  tokenpak codex uninstall         # clean selected home; preserve shared skills in use
   tokenpak codex --budget 5.00
   tokenpak codex "Fix the login bug"
   tokenpak codex --model o3 -s workspace-write
@@ -680,6 +695,9 @@ Examples:
 
 - `--budget` — Daily spend cap in USD; sets TOKENPAK_COMPANION_BUDGET env var
 - `--install-only` — Run setup (MCP, hooks, AGENTS.md, skills) and exit without launching codex
+- `--receipt-only` — Launch vanilla Codex and write a no-body receipt without installing or activating companion setup
+- `--receipt-out` — Write a no-body accounting receipt for this Codex process
+- `--run-id` — Stable run identifier to include in the accounting receipt
 - `ARGS` — Arguments forwarded verbatim to codex (or `doctor` / `uninstall`)
 
 ### `tokenpak creds`
