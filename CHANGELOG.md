@@ -6,6 +6,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Per-client launcher permission defaults.** `tokenpak permissions launcher`
+  can persist `inherit`, `approval-bypass`, `sandbox-bypass`, or `full-bypass`
+  for TokenPak-launched Codex sessions, plus the supported Claude Code subset.
+  Bypass modes require explicit confirmation, leave client config files
+  untouched, warn on every affected launch, fail closed on invalid state, and
+  retain `permissions set fleet` as a full-bypass compatibility alias.
+
 ## [1.12.0] — 2026-07-10
 
 ### Added
@@ -309,7 +317,7 @@ to existing behavior; no breaking changes to current workflows.
 
 **Background:** `pip install tokenpak` previously pulled ~5 GB of CUDA/ML wheels (torch, nvidia/\*, transformers, sentence-transformers, scipy, tree-sitter-languages, pandas, litellm, llmlingua) as hard runtime dependencies. This made first-run installs impractical on machines without CUDA or a fast connection.
 
-**What changed:** the six heavy packages listed below have been moved from `[project.dependencies]` to named `[project.optional-dependencies]` extras. The runtime behaviour is **unchanged** — every import site was already guarded with `try/except ImportError` before this release. Only the install metadata changed.
+**What changed:** the six heavy packages listed below have been moved from `[project.dependencies]` to named `[project.optional-dependencies]` extras. Slim installs no longer install those extras by default; user-invoked guarded paths now name the exact `pip install tokenpak[<extra>]` recovery command when an extra is missing.
 
 **Migration:** if your code uses any of the features below, add the corresponding extra to your install command:
 
@@ -323,21 +331,21 @@ to existing behavior; no breaking changes to current workflows.
 | LiteLLM Router integration | `pip install tokenpak[integrations-litellm]` |
 | **Everything (previous default)** | `pip install tokenpak[full]` |
 
-If you previously ran `pip install tokenpak` and relied on retrieval / code-compression / intelligence / compression / integrations-litellm features, you must add the extra to your install. Features that use the guarded import will raise a clear `ImportError` with the correct `pip install` command if the extra is absent.
+If you previously ran `pip install tokenpak` and relied on retrieval / code-compression / intelligence / compression / integrations-litellm features, you must add the extra to your install. Guarded runtime features raise, warn, or return an error with the correct `pip install` command if the extra is absent.
 
-**Slim install target:** `pip install tokenpak` on a clean machine resolves in under 30 seconds and uses under 200 MB of disk. The `[full]` extra restores the previous behaviour for users who want everything.
+**Slim install target:** `pip install tokenpak` is intended to stay fast and lightweight on a clean reference machine. The current slim-install smoke test verifies that heavy optional packages are absent from core metadata and the installed slim environment; it does not enforce a disk-size ceiling yet. The `[full]` extra restores the previous behaviour for users who want everything.
 
 ### Added — install footprint extras split
 
 - Named extras: `tokenpak[retrieval]`, `tokenpak[code-compression]`, `tokenpak[intelligence]`, `tokenpak[data]`, `tokenpak[compression]`, `tokenpak[integrations-litellm]`, `tokenpak[full]`.
-- CI: slim-install smoke test — installs tokenpak with no extras, asserts venv site-packages < 200 MB, runs `python -c "import tokenpak; from tokenpak.proxy import client"`.
+- CI: slim-install smoke test — installs tokenpak with no extras, verifies heavy optional packages are absent from core metadata and the installed slim environment, and imports `tokenpak`, `tokenpak.proxy`, and `tokenpak.proxy.server`.
 - CI: full-install matrix — `pip install -e .[full,dev]` + full test suite.
 - `tests/test_dependencies_extras.py` — slim-core invariant gate.
 - `tests/test_extras_import_guard.py` — lightweight post-demotion gate that asserts each heavy package is absent from `[project.dependencies]` and smoke-tests each guarded import path.
 
 ### Changed — import error messages
 
-- `tokenpak/integrations/litellm/proxy.py` — error message updated to suggest `pip install tokenpak[integrations-litellm]` instead of bare `pip install litellm`.
+- `tokenpak/sdk/integrations/litellm/proxy.py` — missing-extra error message updated to suggest `pip install tokenpak[integrations-litellm]` instead of bare `pip install litellm`.
 
 ---
 
@@ -603,7 +611,6 @@ This release ships no runtime, CLI, or public-API behavior change. It is a packa
 > v1.5.3 itself is not on PyPI; see v1.5.4 above.
 
 ---
-
 
 ## [v1.5.2] — 2026-05-08
 
