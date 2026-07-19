@@ -40,7 +40,7 @@ def _complete_row() -> dict:
         "cache_read_tokens": 80,
         "cache_creation_tokens": 20,
         "estimated_cost": 0.018,
-        "would_have_saved": 0.006,
+        "would_have_saved": 6000,
         "status": "success",
         "session_id": "sess-1",
         "agent_id": "proxy-test",
@@ -64,7 +64,7 @@ def test_complete_receipt_is_fully_proven():
     assert d["route"]["model"] == {"available": True, "value": "claude-sonnet"}
     assert d["cost"]["input_tokens"]["value"] == 200
     assert d["cost"]["estimated_cost_usd"] == {"available": True, "value": 0.018}
-    assert d["optimization"]["would_have_saved_tokens"] == {"available": True, "value": 0.006}
+    assert d["optimization"]["would_have_saved_tokens"] == {"available": True, "value": 6000}
     assert d["context"]["cache_read_tokens"] == {"available": True, "value": 80}
     assert d["trail"]["agent_id"]["value"] == "proxy-test"
     assert d["trail"]["dispatch_job_id"]["value"] == "job-3"
@@ -131,14 +131,14 @@ def test_empty_record_marks_everything_unavailable():
 
 
 def _saved_row(**over) -> dict:
-    row = {"id": "55", "model": "claude-sonnet", "would_have_saved": 0.006}
+    row = {"id": "55", "model": "claude-sonnet", "would_have_saved": 6000}
     row.update(over)
     return row
 
 
 def test_positive_savings_on_proxy_row_is_proven():
     d = build_request_receipt(_saved_row(cache_origin="proxy"), clock=_clock).to_dict()
-    assert d["optimization"]["would_have_saved_tokens"] == {"available": True, "value": 0.006}
+    assert d["optimization"]["would_have_saved_tokens"] == {"available": True, "value": 6000}
 
 
 def test_positive_savings_without_cache_origin_is_proven():
@@ -146,7 +146,7 @@ def test_positive_savings_without_cache_origin_is_proven():
     # invariant (positive saving => proxy compression) keeps this honest, so a
     # recorded positive saving is still surfaced — the gate must NOT hide it.
     d = build_request_receipt(_saved_row(), clock=_clock).to_dict()
-    assert d["optimization"]["would_have_saved_tokens"] == {"available": True, "value": 0.006}
+    assert d["optimization"]["would_have_saved_tokens"] == {"available": True, "value": 6000}
 
 
 def test_positive_savings_on_client_row_is_unavailable_not_raw():
@@ -166,10 +166,7 @@ def test_positive_savings_on_unknown_origin_is_unavailable():
         _saved_row(would_have_saved=12, cache_origin="unknown"), clock=_clock
     ).to_dict()
     assert d["optimization"]["would_have_saved_tokens"]["available"] is False
-    assert (
-        d["optimization"]["would_have_saved_tokens"]["reason"]
-        == "savings_not_proxy_attributed"
-    )
+    assert d["optimization"]["would_have_saved_tokens"]["reason"] == "savings_not_proxy_attributed"
 
 
 def test_zero_savings_on_client_row_is_proven_zero():
