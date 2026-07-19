@@ -11753,7 +11753,7 @@
     },
     {
       "module": "tokenpak.sdk.crewai.examples.basic_usage",
-      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'tokenpak.agent.agentic'>"
+      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'crewai_tokenpak'>"
     },
     {
       "module": "tokenpak.sdk.crewai.handoff",
