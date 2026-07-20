@@ -21,7 +21,11 @@ import time
 from pathlib import Path
 from typing import Callable, List, Tuple
 
+import pytest
+
 from tokenpak.vault._atomic import _atomic_write
+
+pytestmark = [pytest.mark.slow, pytest.mark.timeout(90)]
 
 WriterFn = Callable[[Path, str], None]
 Observation = Tuple[str, str]
@@ -68,8 +72,11 @@ def _run_race(
     r.start()
     w.start()
     w.join(timeout=60)
+    writer_finished = not w.is_alive()
     stop.set()
     r.join(timeout=10)
+    assert writer_finished, "writer thread did not finish within its 60-second race budget"
+    assert not r.is_alive(), "reader thread did not stop within its 10-second cleanup budget"
 
     return observations
 
