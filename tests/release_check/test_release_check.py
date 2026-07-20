@@ -7,6 +7,7 @@ leak gate and the identity scan both skip), so the deliberate leak/literal
 fixtures below do not flag the test file itself.
 """
 
+import builtins
 import importlib.util
 import sys
 from pathlib import Path
@@ -91,6 +92,56 @@ def test_leak_gate_flags_ticket_and_path(tmp_path):
     result = rc.gate_leak(tmp_path, changed=["docs/x.md"])
     assert not result.ok
     assert len(result.messages) == 2
+
+
+def test_leak_gate_fails_when_base_is_unavailable(tmp_path):
+    result = rc.gate_leak(tmp_path, base=None, changed=None)
+    assert not result.ok
+    assert "cannot resolve" in result.messages[0]
+
+
+def test_leak_gate_scans_extensionless_public_files(tmp_path):
+    (tmp_path / "Makefile").write_text("Tracked in TSR-7.\n", encoding="utf-8")
+    result = rc.gate_leak(tmp_path, changed=["Makefile"])
+    assert not result.ok
+
+
+def test_leak_gate_fails_when_changed_file_is_unavailable(tmp_path):
+    result = rc.gate_leak(tmp_path, changed=["docs/missing.md"])
+    assert not result.ok
+    assert "unavailable" in result.messages[0]
+
+
+def test_leak_gate_fails_when_changed_file_cannot_be_read(tmp_path, monkeypatch):
+    target = tmp_path / "Makefile"
+    target.write_text("release: all\n", encoding="utf-8")
+    original_open = builtins.open
+
+    def denied_open(file, *args, **kwargs):
+        if Path(file) == target:
+            raise PermissionError("read denied")
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", denied_open)
+    result = rc.gate_leak(tmp_path, changed=["Makefile"])
+    assert not result.ok
+    assert "scanner failed" in result.messages[0]
+
+
+def test_leak_gate_excludes_only_the_canonical_scanner_self_register(tmp_path):
+    scanner = tmp_path / "scripts" / "release_gate" / "check_release_leaks.py"
+    scanner.parent.mkdir(parents=True)
+    scanner.write_text('PATTERNS = [r"TSR-[0-9]"]\n', encoding="utf-8")
+    result = rc.gate_leak(
+        tmp_path,
+        changed=["scripts/release_gate/check_release_leaks.py"],
+    )
+    assert result.ok, result.messages
+
+    sibling = scanner.with_name("another_gate.py")
+    sibling.write_text("Tracked in TSR-7.\n", encoding="utf-8")
+    result = rc.gate_leak(tmp_path, changed=["scripts/release_gate/another_gate.py"])
+    assert not result.ok
 
 
 # --- help-verbs (pure core) --------------------------------------------------

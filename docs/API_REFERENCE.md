@@ -4422,7 +4422,7 @@ Google uses:
 - "systemInstruction" for system prompt
 - Different role names ("model" instead of "assistant")
 
-TODO: Full implementation for multi-provider support.
+Limitation: Multi-provider support is not implemented.
 
 #### `parse_request`
 

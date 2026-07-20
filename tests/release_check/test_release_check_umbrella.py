@@ -41,7 +41,7 @@ def test_audit_maps_every_std09_automated_component():
 def test_release_check_maps_every_local_umbrella_gate():
     assert _target_prerequisites("release-check") == {
         "release-check-baseline",
-        "test-release-core",
+        "test",
         "test-quick",
         "lint-imports",
         "fresh-install-demo",
@@ -71,14 +71,13 @@ def test_a3_python_defaults_to_the_release_environment_but_can_be_pinned_separat
     assert "$(A3_PYTHON) scripts/release_audit.py mypy" in _target_block("audit-mypy")
 
 
-def test_complete_suite_remains_a_separate_fail_closed_target():
+def test_complete_suite_is_a_fail_closed_umbrella_prerequisite():
     text = MAKEFILE.read_text(encoding="utf-8")
     test_block = _target_block("test")
     release_block = _target_block("release-check")
     assert "$(PYTEST) tests/ -q --tb=short" in test_block
-    assert "test" not in _target_prerequisites("release-check")
-    assert "complete A1 remains separate" in release_block
-    assert "A1-A7" not in release_block
+    assert "test" in _target_prerequisites("release-check")
+    assert "A1-A7" in release_block
 
 
 def test_composites_do_not_mask_prerequisite_failure():

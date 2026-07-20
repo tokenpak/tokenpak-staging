@@ -76,8 +76,14 @@ def run_fresh_install(repo: Path, max_seconds: float) -> float:
             environment=environment,
             cwd=repo,
         )
+        tokenpak = env_dir / scripts_dir / ("tokenpak.exe" if os.name == "nt" else "tokenpak")
+        if not tokenpak.is_file():
+            raise FreshInstallError(
+                f"installed tokenpak console entry point is missing: {tokenpak}"
+            )
+        _run([str(tokenpak), "--help"], environment=environment, cwd=root)
         output = _run(
-            [str(python), "-m", "tokenpak.cli", "demo"],
+            [str(tokenpak), "demo"],
             environment=environment,
             cwd=root,
         )

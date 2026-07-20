@@ -51,7 +51,19 @@ UPDATED_DATE = re.compile(
     r"(?:last\s+)?updated[:* ]+(?P<value>20\d{2}-\d{2}-\d{2})",
     re.IGNORECASE,
 )
-DIFF_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+A3_WAIVER_RELEASE = "1.13.0"
+A3_WAIVER_BASE = "ae1e139b73d7441b87873e2fe5e721dd0908c9b3"
+A3_WAIVER_BASELINE_CHECKED_FILES = 267
+A3_WAIVER_BASELINE_RAW_SHA256 = "85ce0f3ec7fac7d5173a1f661a0681a4a4347f1f1ea0241e060f56d2ad548ed9"
+A3_WAIVER_BASELINE_NORMALIZED_SHA256 = (
+    "3292ef557612595511aee0bee38ca79a7392dd13b5bb742bab181aca17a8d58f"
+)
+A3_WAIVER_AUTHORIZATION_SOURCE = "Release audit exception approved for version 1.13.0"
+A3_WAIVER_DELTA_ATTRIBUTION = (
+    "The final RC checks one additional empty source, tokenpak/services/__init__.py, added by "
+    "the accepted A4 import-contract carrier. The full transcript differs only in the terminal "
+    "checked-source count; all 2694 ordered error lines are byte-identical to the approved baseline."
+)
 
 
 class AuditError(RuntimeError):
@@ -130,7 +142,7 @@ def validate_accepted_finding(
         "schema_version": 1,
         "gate": "A3",
         "approval": "APPROVE-A3-V113-ONLY-WAIVER",
-        "release_version": release_version,
+        "release_version": A3_WAIVER_RELEASE,
         "python_version": python_version,
         "mypy_version": mypy_version,
         "command": list(MYPY_LOGICAL_COMMAND),
@@ -143,18 +155,25 @@ def validate_accepted_finding(
         "in_scope_file_count": evidence.in_scope_file_count,
         "raw_sha256": evidence.raw_sha256,
         "normalized_sha256": evidence.normalized_sha256,
+        "approved_base_commit": A3_WAIVER_BASE,
+        "approved_baseline_checked_file_count": A3_WAIVER_BASELINE_CHECKED_FILES,
+        "approved_baseline_raw_sha256": A3_WAIVER_BASELINE_RAW_SHA256,
+        "approved_baseline_normalized_sha256": A3_WAIVER_BASELINE_NORMALIZED_SHA256,
+        "delta_attribution": A3_WAIVER_DELTA_ATTRIBUTION,
+        "authorization_source": A3_WAIVER_AUTHORIZATION_SOURCE,
+        "expires_after_release": A3_WAIVER_RELEASE,
     }
     mismatches = [
         f"{key}: receipt={receipt.get(key)!r}, measured={value!r}"
         for key, value in expected.items()
         if receipt.get(key) != value
     ]
-    if not receipt.get("approved_base_commit"):
-        mismatches.append("approved_base_commit: missing")
-    if receipt.get("approved_baseline_normalized_sha256") != evidence.normalized_sha256:
+    if release_version != A3_WAIVER_RELEASE:
+        mismatches.append(
+            f"release invocation: requested={release_version!r}, authorized={A3_WAIVER_RELEASE!r}"
+        )
+    if A3_WAIVER_BASELINE_NORMALIZED_SHA256 != evidence.normalized_sha256:
         mismatches.append("approved baseline error set/order does not match final-RC evidence")
-    if not receipt.get("delta_attribution"):
-        mismatches.append("delta_attribution: missing")
     if mismatches:
         raise AuditError("accepted-finding receipt mismatch:\n  " + "\n  ".join(mismatches))
 
@@ -273,43 +292,6 @@ def scan_doc_patterns(lines: Iterable[tuple[str, int, str]], *, base_date: date)
     return findings
 
 
-def parse_added_diff_lines(diff: str) -> list[tuple[str, int, str]]:
-    """Return current-file line coordinates for additions in a unified diff."""
-    lines: list[tuple[str, int, str]] = []
-    relative: str | None = None
-    new_line_number: int | None = None
-
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            relative = None
-            new_line_number = None
-            continue
-        if line.startswith("+++ "):
-            destination = line[4:]
-            relative = destination[2:] if destination.startswith("b/") else None
-            new_line_number = None
-            continue
-
-        hunk = DIFF_HUNK.match(line)
-        if hunk:
-            new_line_number = int(hunk.group("start"))
-            continue
-
-        if relative is None or new_line_number is None:
-            continue
-        if line.startswith("+"):
-            lines.append((relative, new_line_number, line[1:]))
-            new_line_number += 1
-        elif line.startswith(" "):
-            new_line_number += 1
-        elif line.startswith("-") or line.startswith("\\ No newline at end of file"):
-            continue
-        else:
-            raise AuditError(f"C6 could not parse unified diff line: {line!r}")
-
-    return lines
-
-
 def run_docs_pattern_gate(base_ref: str) -> None:
     try:
         base_date_text = subprocess.run(
@@ -328,36 +310,24 @@ def run_docs_pattern_gate(base_ref: str) -> None:
             stderr=subprocess.PIPE,
             check=True,
         ).stdout.splitlines()
-        diff = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--unified=0",
-                "--no-ext-diff",
-                f"{base_ref}...HEAD",
-                "--",
-                "README.md",
-                "docs",
-            ],
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        ).stdout
     except subprocess.CalledProcessError as exc:
         raise AuditError(
             f"C6 cannot resolve release base {base_ref!r}: {exc.stderr.strip()}"
         ) from exc
 
-    lines = parse_added_diff_lines(diff)
+    lines: list[tuple[str, int, str]] = []
+    for relative in changed:
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+        ):
+            lines.append((relative, line_number, line))
     findings = scan_doc_patterns(lines, base_date=date.fromisoformat(base_date_text))
     if findings:
         raise AuditError("C6 release-doc findings:\n  " + "\n  ".join(findings))
-    print(
-        "C6 release-doc patterns: PASS "
-        f"({len(lines)} added lines across {len(changed)} changed docs checked)"
-    )
+    print(f"C6 release-doc patterns: PASS ({len(changed)} changed docs checked)")
 
 
 def telemetry_summary(connection: sqlite3.Connection) -> dict[str, Any]:

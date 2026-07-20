@@ -238,9 +238,8 @@ audit: ci-lint audit-mypy docs-check forbidden-phrases-check telemetry-audit  ##
 
 # One Make DAG deliberately shares audit prerequisites with the named A/B/C
 # gates, so expensive strict-mypy and docs checks run exactly once per command.
-# The local core partition excludes integration, chaos, slow, and fast-host
-# tests exactly as blocking CI does. It does not satisfy complete A1; the raw
-# ``make test`` final-candidate result and exact-head partitioned CI stay
-# separate release blockers. The repository-wide formatter ratchet is deferred.
-release-check: release-check-baseline test-release-core test-quick lint-imports fresh-install-demo bench byte-fidelity-check audit release-docs-pattern-check  ## Core CI + A2-A7/B1/B3/C5/C6; complete A1 is separate
-	@echo "release-check: PASS — core CI partition and A2-A7/B1/B3/C5/C6 reached terminal success; complete A1 remains separate"
+# A1 runs the raw complete suite here. The exact CI core partition remains
+# available as ``test-release-core`` and stays independently required in CI.
+# The repository-wide formatter ratchet is deferred.
+release-check: release-check-baseline test test-quick lint-imports fresh-install-demo bench byte-fidelity-check audit release-docs-pattern-check  ## A1-A7/B1/B3/C5/C6
+	@echo "release-check: PASS — A1-A7/B1/B3/C5/C6 reached terminal success"

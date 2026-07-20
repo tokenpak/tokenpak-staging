@@ -10,10 +10,16 @@ import pytest
 
 from scripts.fresh_install_demo import FreshInstallError, validate_demo_output
 from scripts.release_audit import (
+    A3_WAIVER_AUTHORIZATION_SOURCE,
+    A3_WAIVER_BASE,
+    A3_WAIVER_BASELINE_CHECKED_FILES,
+    A3_WAIVER_BASELINE_NORMALIZED_SHA256,
+    A3_WAIVER_BASELINE_RAW_SHA256,
+    A3_WAIVER_DELTA_ATTRIBUTION,
+    A3_WAIVER_RELEASE,
     MYPY_LOGICAL_COMMAND,
     AuditError,
     collect_mypy_evidence,
-    parse_added_diff_lines,
     scan_doc_patterns,
     scan_forbidden_lines,
     telemetry_summary,
@@ -29,12 +35,19 @@ def _mypy_output() -> bytes:
     )
 
 
+def _waiver_evidence():
+    return dataclasses.replace(
+        collect_mypy_evidence(_mypy_output(), 1),
+        normalized_sha256=A3_WAIVER_BASELINE_NORMALIZED_SHA256,
+    )
+
+
 def _receipt(evidence):
     return {
         "schema_version": 1,
         "gate": "A3",
         "approval": "APPROVE-A3-V113-ONLY-WAIVER",
-        "release_version": "1.13.0",
+        "release_version": A3_WAIVER_RELEASE,
         "python_version": "3.12",
         "mypy_version": "2.3.0",
         "command": list(MYPY_LOGICAL_COMMAND),
@@ -47,14 +60,18 @@ def _receipt(evidence):
         "in_scope_file_count": evidence.in_scope_file_count,
         "raw_sha256": evidence.raw_sha256,
         "normalized_sha256": evidence.normalized_sha256,
-        "approved_base_commit": "abc123",
-        "approved_baseline_normalized_sha256": evidence.normalized_sha256,
-        "delta_attribution": "No error-line delta; one additional empty source was checked.",
+        "approved_base_commit": A3_WAIVER_BASE,
+        "approved_baseline_checked_file_count": A3_WAIVER_BASELINE_CHECKED_FILES,
+        "approved_baseline_raw_sha256": A3_WAIVER_BASELINE_RAW_SHA256,
+        "approved_baseline_normalized_sha256": A3_WAIVER_BASELINE_NORMALIZED_SHA256,
+        "delta_attribution": A3_WAIVER_DELTA_ATTRIBUTION,
+        "authorization_source": A3_WAIVER_AUTHORIZATION_SOURCE,
+        "expires_after_release": A3_WAIVER_RELEASE,
     }
 
 
 def test_mypy_receipt_accepts_only_exact_evidence():
-    evidence = collect_mypy_evidence(_mypy_output(), 1)
+    evidence = _waiver_evidence()
     validate_accepted_finding(
         evidence,
         _receipt(evidence),
@@ -77,7 +94,7 @@ def test_mypy_receipt_accepts_only_exact_evidence():
     ],
 )
 def test_mypy_receipt_rejects_every_contract_drift(field, value):
-    evidence = collect_mypy_evidence(_mypy_output(), 1)
+    evidence = _waiver_evidence()
     receipt = _receipt(evidence)
     receipt[field] = value
     with pytest.raises(AuditError, match="receipt mismatch"):
@@ -85,6 +102,21 @@ def test_mypy_receipt_rejects_every_contract_drift(field, value):
             evidence,
             receipt,
             release_version="1.13.0",
+            python_version="3.12",
+            mypy_version="2.3.0",
+        )
+
+
+def test_mypy_receipt_rejects_next_release_and_wrong_authorized_base():
+    evidence = _waiver_evidence()
+    receipt = _receipt(evidence)
+    receipt["release_version"] = "1.14.0"
+    receipt["approved_base_commit"] = "not-the-authorized-base"
+    with pytest.raises(AuditError, match="receipt mismatch"):
+        validate_accepted_finding(
+            evidence,
+            receipt,
+            release_version="1.14.0",
             python_version="3.12",
             mypy_version="2.3.0",
         )
@@ -138,28 +170,6 @@ def test_release_doc_scanner_rejects_patterns_and_stale_dates():
     ]
     findings = scan_doc_patterns(lines, base_date=date(2026, 7, 1))
     assert len(findings) == 3
-
-
-def test_release_doc_diff_parser_scans_only_added_lines():
-    diff = """\
-diff --git a/docs/a.md b/docs/a.md
-index 1234567..89abcde 100644
---- a/docs/a.md
-+++ b/docs/a.md
-@@ -4 +4 @@
--TODO: legacy finding outside the release change
-+Replacement text
-@@ -8,0 +9,2 @@
-+Coming soon
-+Updated: 2026-01-01
-"""
-    lines = parse_added_diff_lines(diff)
-    assert lines == [
-        ("docs/a.md", 4, "Replacement text"),
-        ("docs/a.md", 9, "Coming soon"),
-        ("docs/a.md", 10, "Updated: 2026-01-01"),
-    ]
-    assert len(scan_doc_patterns(lines, base_date=date(2026, 7, 1))) == 2
 
 
 def _telemetry_connection(cache_origin="proxy"):

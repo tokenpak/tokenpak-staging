@@ -52,10 +52,6 @@ MATURITY_TO_CLASSIFIER = {
     "inactive": "7 - Inactive",
 }
 
-_LEAK_TEXT_SUFFIXES = frozenset(
-    {".md", ".py", ".txt", ".toml", ".yml", ".yaml", ".json", ".rst", ".cfg", ".ini", ".sh"}
-)
-
 
 @dataclass
 class GateResult:
@@ -179,13 +175,13 @@ def gate_leak(root: Path, base=None, changed=None) -> GateResult:
         if base is None:
             return GateResult(
                 "leak",
-                True,
-                ["delta-style: no base ref resolved; skipped (pass a base ref to scan a delta)"],
+                False,
+                ["delta-style leak gate cannot resolve a base ref"],
             )
         changed = _changed_files(root, base)
         if changed is None:
             return GateResult(
-                "leak", True, [f"delta-style: could not diff against {base!r}; skipped"]
+                "leak", False, [f"delta-style leak gate could not diff against {base!r}"]
             )
     try:
         scanner = _load_release_leak_scanner()
@@ -193,11 +189,16 @@ def gate_leak(root: Path, base=None, changed=None) -> GateResult:
         for rel in changed:
             if rel.startswith(("tests/", "scripts/release_check/")):
                 continue
-            if Path(rel).suffix not in _LEAK_TEXT_SUFFIXES:
+            # The canonical scanner necessarily contains its own forbidden-
+            # pattern register.  Scanning that implementation as authored
+            # public content would self-flag every registered pattern; the
+            # identity workflow applies the same exact-path exclusion.
+            if rel == "scripts/release_gate/check_release_leaks.py":
                 continue
             path = root / rel
-            if path.is_file():
-                files.append(scanner.ScanFile(relpath=rel, abspath=str(path)))
+            if not path.is_file():
+                return GateResult("leak", False, [f"changed public file is unavailable: {rel}"])
+            files.append(scanner.ScanFile(relpath=rel, abspath=str(path)))
         findings = scanner.scan_files(files)
     except (AttributeError, ImportError, OSError) as exc:
         return GateResult("leak", False, [f"release leak scanner failed: {exc}"])
