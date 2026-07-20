@@ -6,16 +6,12 @@ package layout for ``scripts/``. Lives under tests/ (which the release-check
 leak gate and the identity scan both skip), so the deliberate leak/literal
 fixtures below do not flag the test file itself.
 """
+
 import importlib.util
 import sys
 from pathlib import Path
 
-_MOD = (
-    Path(__file__).resolve().parents[2]
-    / "scripts"
-    / "release_check"
-    / "release_check.py"
-)
+_MOD = Path(__file__).resolve().parents[2] / "scripts" / "release_check" / "release_check.py"
 _spec = importlib.util.spec_from_file_location("release_check_under_test", _MOD)
 rc = importlib.util.module_from_spec(_spec)
 # Register before exec so the module's @dataclass can resolve cls.__module__
@@ -34,10 +30,10 @@ def _write_pkg(root, classifier="4 - Beta", status="Beta", license_ok=True):
     lic = "Apache License\nVersion 2.0, January 2004\n" if license_ok else "MIT License\n"
     (root / "LICENSE").write_text(lic, encoding="utf-8")
     (root / "pyproject.toml").write_text(
-        "[project]\nname = \"tokenpak\"\n"
+        '[project]\nname = "tokenpak"\n'
         "classifiers = [\n"
-        f"    \"Development Status :: {classifier}\",\n"
-        "    \"License :: OSI Approved :: Apache Software License\",\n"
+        f'    "Development Status :: {classifier}",\n'
+        '    "License :: OSI Approved :: Apache Software License",\n'
         "]\n",
         encoding="utf-8",
     )
@@ -77,16 +73,24 @@ def test_license_fail_non_apache(tmp_path):
     assert not rc.gate_license(tmp_path).ok
 
 
-# --- leak (delta-style core) -------------------------------------------------
-def test_leak_scan_clean():
-    pats = rc.load_leak_patterns()
-    assert rc.scan_leaks("docs/x.md", "TokenPak routes requests to your provider.", pats) == []
+# --- leak (delta-style shared scanner) --------------------------------------
+def test_leak_gate_allows_public_fleet_and_openclaw_forms(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "x.md").write_text(
+        "Run `tokenpak fleet` with caller `openclaw:main`.\n", encoding="utf-8"
+    )
+    result = rc.gate_leak(tmp_path, changed=["docs/x.md"])
+    assert result.ok, result.messages
 
 
-def test_leak_scan_flags_ticket_and_path():
-    pats = rc.load_leak_patterns()
-    hits = rc.scan_leaks("docs/x.md", "Tracked in TSR-7; logs under /home/sue/run.", pats)
-    assert hits  # both a ticket-ID and a private path
+def test_leak_gate_flags_ticket_and_path(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "x.md").write_text("Tracked in TSR-7; logs under /home/sue/run.\n", encoding="utf-8")
+    result = rc.gate_leak(tmp_path, changed=["docs/x.md"])
+    assert not result.ok
+    assert len(result.messages) == 2
 
 
 # --- help-verbs (pure core) --------------------------------------------------
