@@ -13,8 +13,8 @@ Baseline gates:
   license           first-party README / LICENSE / package metadata declare
                     Apache-2.0 (third-party dependency notices excluded).
   leak              delta-style scan of changed files for internal identity /
-                    ticket-ID / private-path references (register:
-                    ``leak_patterns.txt``; mirrors the identity-language check).
+                    ticket-ID / private-path references through the shared
+                    release leak scanner and its public-surface allowlists.
   help-verbs        every help-advertised CLI verb resolves to an implemented
                     handler — no phantom verbs. Minimal parser introspection
                     until the generated CLI registry lands.
@@ -26,11 +26,14 @@ Exit non-zero if any gate fails. ``--gate NAME`` runs a single gate. Gate
 functions are importable and take an explicit ``root`` so fixtures can target a
 temporary tree.
 """
+
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,10 +51,6 @@ MATURITY_TO_CLASSIFIER = {
     "mature": "6 - Mature",
     "inactive": "7 - Inactive",
 }
-
-_LEAK_TEXT_SUFFIXES = frozenset(
-    {".md", ".py", ".txt", ".toml", ".yml", ".yaml", ".json", ".rst", ".cfg", ".ini", ".sh"}
-)
 
 
 @dataclass
@@ -90,14 +89,19 @@ def gate_maturity(root: Path) -> GateResult:
         # this gate still fails on whenever a marker IS declared. Requiring the
         # marker back is a README instance fix outside this tooling packet.
         return GateResult(
-            "maturity", True,
-            ["README declares no maturity marker; match-if-declared — nothing "
-             "contradicts the pyproject classifier (marker mismatches still fail)"],
+            "maturity",
+            True,
+            [
+                "README declares no maturity marker; match-if-declared — nothing "
+                "contradicts the pyproject classifier (marker mismatches still fail)"
+            ],
         )
     declared = m.group(1).strip().lower().split()[0].rstrip(".")
     expected = MATURITY_TO_CLASSIFIER.get(declared)
     if expected is None:
-        return GateResult("maturity", False, [f"README maturity {declared!r} not in known maturity set"])
+        return GateResult(
+            "maturity", False, [f"README maturity {declared!r} not in known maturity set"]
+        )
 
     cm = re.search(r"Development Status\s*::\s*([0-9] - [A-Za-z/ -]+?)\s*[\"',]", pp)
     if not cm:
@@ -109,8 +113,10 @@ def gate_maturity(root: Path) -> GateResult:
         return GateResult(
             "maturity",
             False,
-            [f"classifier {actual!r} != README maturity {declared!r} "
-             f"(expected 'Development Status :: {expected}')"],
+            [
+                f"classifier {actual!r} != README maturity {declared!r} "
+                f"(expected 'Development Status :: {expected}')"
+            ],
         )
     return GateResult("maturity", True, [f"classifier matches README maturity ({declared})"])
 
@@ -136,32 +142,30 @@ def gate_license(root: Path) -> GateResult:
 # --------------------------------------------------------------------------- #
 # gate: internal-reference leak (delta-style)
 # --------------------------------------------------------------------------- #
-def load_leak_patterns() -> list:
-    out = []
-    for line in (HERE / "leak_patterns.txt").read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if s and not s.startswith("#"):
-            out.append(s)
-    return [re.compile(p) for p in out]
-
-
-def scan_leaks(rel_path, text, patterns) -> list:
-    """Pure: return 'path:line: pattern' strings for one file's content."""
-    hits = []
-    for i, line in enumerate(text.splitlines(), 1):
-        for rx in patterns:
-            if rx.search(line):
-                hits.append(f"{rel_path}:{i}: {rx.pattern}")
-    return hits
+def _load_release_leak_scanner():
+    """Load the canonical exact-pattern scanner without duplicating policy."""
+    module_name = "_tokenpak_release_leak_scanner"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    path = HERE.parent / "release_gate" / "check_release_leaks.py"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load release leak scanner from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _changed_files(root: Path, base: str):
     try:
         out = subprocess.check_output(
             ["git", "-C", str(root), "diff", "--name-only", "--diff-filter=AM", base, "HEAD"],
-            stderr=subprocess.DEVNULL, text=True,
+            stderr=subprocess.DEVNULL,
+            text=True,
         )
-        return [x for x in out.split() if x]
+        return [x for x in out.splitlines() if x]
     except Exception:
         return None
 
@@ -169,23 +173,41 @@ def _changed_files(root: Path, base: str):
 def gate_leak(root: Path, base=None, changed=None) -> GateResult:
     if changed is None:
         if base is None:
-            return GateResult("leak", True,
-                              ["delta-style: no base ref resolved; skipped (pass a base ref to scan a delta)"])
+            return GateResult(
+                "leak",
+                False,
+                ["delta-style leak gate cannot resolve a base ref"],
+            )
         changed = _changed_files(root, base)
         if changed is None:
-            return GateResult("leak", True, [f"delta-style: could not diff against {base!r}; skipped"])
-    patterns = load_leak_patterns()
-    findings = []
-    for rel in changed:
-        if rel.startswith(("tests/", "scripts/release_check/")):
-            continue
-        if Path(rel).suffix not in _LEAK_TEXT_SUFFIXES:
-            continue
-        text = _read(root / rel)
-        if text is None:
-            continue
-        findings.extend(scan_leaks(rel, text, patterns))
-    return GateResult("leak", not findings, findings or ["no internal-reference leaks in delta"])
+            return GateResult(
+                "leak", False, [f"delta-style leak gate could not diff against {base!r}"]
+            )
+    try:
+        scanner = _load_release_leak_scanner()
+        files = []
+        for rel in changed:
+            if rel.startswith(("tests/", "scripts/release_check/")):
+                continue
+            # The canonical scanner necessarily contains its own forbidden-
+            # pattern register.  Scanning that implementation as authored
+            # public content would self-flag every registered pattern; the
+            # identity workflow applies the same exact-path exclusion.
+            if rel == "scripts/release_gate/check_release_leaks.py":
+                continue
+            path = root / rel
+            if not path.is_file():
+                return GateResult("leak", False, [f"changed public file is unavailable: {rel}"])
+            files.append(scanner.ScanFile(relpath=rel, abspath=str(path)))
+        findings = scanner.scan_files(files)
+    except (AttributeError, ImportError, OSError) as exc:
+        return GateResult("leak", False, [f"release leak scanner failed: {exc}"])
+    messages = [f"{finding.path}:{finding.line}: {finding.pattern}" for finding in findings]
+    return GateResult(
+        "leak",
+        not findings,
+        messages or [f"no internal-reference leaks in {len(files)} changed public files"],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -228,10 +250,14 @@ def gate_help_verbs(root: Path) -> GateResult:
     try:
         verbs = collect_cli_verbs()
     except Exception as e:  # an un-introspectable CLI is itself a finding
-        return GateResult("help-verbs", False, [f"could not introspect CLI parser: {type(e).__name__}: {e}"])
+        return GateResult(
+            "help-verbs", False, [f"could not introspect CLI parser: {type(e).__name__}: {e}"]
+        )
     phantom = check_help_verbs(verbs)
     if phantom:
-        return GateResult("help-verbs", False, [f"help-advertised verb with no handler: {v}" for v in phantom])
+        return GateResult(
+            "help-verbs", False, [f"help-advertised verb with no handler: {v}" for v in phantom]
+        )
     return GateResult("help-verbs", True, [f"all {len(verbs)} CLI verbs resolve to a handler"])
 
 
@@ -266,8 +292,9 @@ def gate_tokenpak_literal(root: Path, allowed=None) -> GateResult:
         if text and ".tokenpak" in text:
             offenders.append(rel)
     ok = not offenders
-    msgs = ([f"NEW .tokenpak literal outside the legacy baseline: {r}" for r in offenders]
-            or ["no .tokenpak regressions outside the frozen legacy baseline"])
+    msgs = [f"NEW .tokenpak literal outside the legacy baseline: {r}" for r in offenders] or [
+        "no .tokenpak regressions outside the frozen legacy baseline"
+    ]
     return GateResult("tokenpak-literal", ok, msgs)
 
 
@@ -279,7 +306,8 @@ def _default_base(root: Path):
         try:
             mb = subprocess.check_output(
                 ["git", "-C", str(root), "merge-base", ref, "HEAD"],
-                stderr=subprocess.DEVNULL, text=True,
+                stderr=subprocess.DEVNULL,
+                text=True,
             ).strip()
             if mb:
                 return mb

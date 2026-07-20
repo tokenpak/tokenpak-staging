@@ -2686,7 +2686,7 @@ def _build_test_parser(sub):
             "Launch an interactive test that auto-detects your available\n"
             "platforms, providers, and models, then runs a 5-turn A/B\n"
             "comparison (with vs without tokenpak) with live display.\n\n"
-            "Just run: tokenpak test"
+            "Run: tokenpak test"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
