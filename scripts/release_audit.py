@@ -51,6 +51,7 @@ UPDATED_DATE = re.compile(
     r"(?:last\s+)?updated[:* ]+(?P<value>20\d{2}-\d{2}-\d{2})",
     re.IGNORECASE,
 )
+DIFF_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 
 
 class AuditError(RuntimeError):
@@ -272,6 +273,43 @@ def scan_doc_patterns(lines: Iterable[tuple[str, int, str]], *, base_date: date)
     return findings
 
 
+def parse_added_diff_lines(diff: str) -> list[tuple[str, int, str]]:
+    """Return current-file line coordinates for additions in a unified diff."""
+    lines: list[tuple[str, int, str]] = []
+    relative: str | None = None
+    new_line_number: int | None = None
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            relative = None
+            new_line_number = None
+            continue
+        if line.startswith("+++ "):
+            destination = line[4:]
+            relative = destination[2:] if destination.startswith("b/") else None
+            new_line_number = None
+            continue
+
+        hunk = DIFF_HUNK.match(line)
+        if hunk:
+            new_line_number = int(hunk.group("start"))
+            continue
+
+        if relative is None or new_line_number is None:
+            continue
+        if line.startswith("+"):
+            lines.append((relative, new_line_number, line[1:]))
+            new_line_number += 1
+        elif line.startswith(" "):
+            new_line_number += 1
+        elif line.startswith("-") or line.startswith("\\ No newline at end of file"):
+            continue
+        else:
+            raise AuditError(f"C6 could not parse unified diff line: {line!r}")
+
+    return lines
+
+
 def run_docs_pattern_gate(base_ref: str) -> None:
     try:
         base_date_text = subprocess.run(
@@ -290,24 +328,36 @@ def run_docs_pattern_gate(base_ref: str) -> None:
             stderr=subprocess.PIPE,
             check=True,
         ).stdout.splitlines()
+        diff = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--unified=0",
+                "--no-ext-diff",
+                f"{base_ref}...HEAD",
+                "--",
+                "README.md",
+                "docs",
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
     except subprocess.CalledProcessError as exc:
         raise AuditError(
             f"C6 cannot resolve release base {base_ref!r}: {exc.stderr.strip()}"
         ) from exc
 
-    lines: list[tuple[str, int, str]] = []
-    for relative in changed:
-        path = ROOT / relative
-        if not path.is_file():
-            continue
-        for line_number, line in enumerate(
-            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
-        ):
-            lines.append((relative, line_number, line))
+    lines = parse_added_diff_lines(diff)
     findings = scan_doc_patterns(lines, base_date=date.fromisoformat(base_date_text))
     if findings:
         raise AuditError("C6 release-doc findings:\n  " + "\n  ".join(findings))
-    print(f"C6 release-doc patterns: PASS ({len(changed)} changed docs checked)")
+    print(
+        "C6 release-doc patterns: PASS "
+        f"({len(lines)} added lines across {len(changed)} changed docs checked)"
+    )
 
 
 def telemetry_summary(connection: sqlite3.Connection) -> dict[str, Any]:

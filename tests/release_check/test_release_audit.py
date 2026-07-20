@@ -13,6 +13,7 @@ from scripts.release_audit import (
     MYPY_LOGICAL_COMMAND,
     AuditError,
     collect_mypy_evidence,
+    parse_added_diff_lines,
     scan_doc_patterns,
     scan_forbidden_lines,
     telemetry_summary,
@@ -137,6 +138,28 @@ def test_release_doc_scanner_rejects_patterns_and_stale_dates():
     ]
     findings = scan_doc_patterns(lines, base_date=date(2026, 7, 1))
     assert len(findings) == 3
+
+
+def test_release_doc_diff_parser_scans_only_added_lines():
+    diff = """\
+diff --git a/docs/a.md b/docs/a.md
+index 1234567..89abcde 100644
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -4 +4 @@
+-TODO: legacy finding outside the release change
++Replacement text
+@@ -8,0 +9,2 @@
++Coming soon
++Updated: 2026-01-01
+"""
+    lines = parse_added_diff_lines(diff)
+    assert lines == [
+        ("docs/a.md", 4, "Replacement text"),
+        ("docs/a.md", 9, "Coming soon"),
+        ("docs/a.md", 10, "Updated: 2026-01-01"),
+    ]
+    assert len(scan_doc_patterns(lines, base_date=date(2026, 7, 1))) == 2
 
 
 def _telemetry_connection(cache_origin="proxy"):
