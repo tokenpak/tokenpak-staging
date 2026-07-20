@@ -127,7 +127,7 @@ def test_unlisted_edge_turns_gate_red(tmp_path):
 
 
 def test_unlisted_entrypoint_bypass_turns_gate_red(tmp_path):
-    """The §5.2 boundary contract detects an undeclared direct bypass."""
+    """The entrypoint boundary contract detects an undeclared direct bypass."""
     sentinel = "tokenpak.cli.commands.preview -> tokenpak.compression.core"
     original = CONFIG_PATH.read_text()
     assert sentinel in original, "entrypoint bypass sentinel missing from config"

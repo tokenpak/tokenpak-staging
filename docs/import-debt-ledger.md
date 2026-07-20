@@ -22,7 +22,7 @@ violations immediately**; these known edges burn down over time.
 `monolith-coupling` (edge into the root-level `_cli_core` monolith),
 `sibling-cross-import` (one entrypoint imports another), and
 `entrypoint-pipeline-bypass` (an entrypoint skips the proxy path without a
-qualified §5.2 exception).
+qualified documented exception).
 
 The pinned exact baseline lives in `tests/lint/import_debt_baseline.txt`.
 Current ledger edges must remain a subset of that immutable set; the gate rejects
@@ -30,8 +30,8 @@ a same-count remove-and-replace debt swap, not only a count increase.
 
 **Documented exception set: EMPTY.** The architecture permits narrowly justified
 *entrypoint → `services/` direct calls*. Twelve current direct bypass edges
-lack the required `§5.2-exception` citation and justification, so Group 9 records
-them as debt rather than reclassifying them as exceptions. Any future exception
+lack the required exception marker and justification, so Group 9 records them
+as debt rather than reclassifying them as exceptions. Any future exception
 claim must name condition A, B, or C and document its architectural reason at
 the call site.
 
@@ -40,9 +40,9 @@ the call site.
 Per the ruling: **Group 7 → 2 (incl. 2b) → 1 → 4 → 6 → 5 → 3**. Group 8
 (direct sibling edges) was surfaced after the ruling by the sibling-independence
 contract; place it alongside Group 3 because both address entrypoint-surface
-inversion work. Group 9 was surfaced by the complete §5.2 boundary review and
-must burn down through proxy routing or a separately reviewed, properly marked
-§5.2 exception.
+inversion work. Group 9 was surfaced by the complete entrypoint boundary review
+and must burn down through proxy routing or a separately reviewed, properly
+marked direct-call exception.
 
 ## Group 1 — `core/runtime/proxy.py` launcher lives in Level 0 (11 edges)
 
@@ -210,9 +210,9 @@ primitive. Sequence this work with Group 3. Closing tracker:
 ## Group 9 — entrypoint bypasses of proxy routing (12 edges)
 
 Rationale: these entrypoint modules call `services/` or pipeline primitives
-directly without a qualifying `§5.2-exception` citation. They remain declared
-debt until routed through the proxy or individually justified under condition
-A, B, or C. Closing tracker: `BURN-A4-G9`.
+directly without a qualifying documented exception. They remain declared debt
+until routed through the proxy or individually justified under condition A,
+B, or C. Closing tracker: `BURN-A4-G9`.
 
 | ID | Edge | Class | Release waiver | Tracker | Src |
 |---|---|---|---|---|---|
