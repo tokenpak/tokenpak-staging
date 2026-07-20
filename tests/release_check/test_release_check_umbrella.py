@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
+CORE_MARKERS = "not integration and not chaos and not slow and not needs_fast_host"
 
 
 def _target_prerequisites(name: str) -> set[str]:
@@ -37,10 +38,10 @@ def test_audit_maps_every_std09_automated_component():
     }
 
 
-def test_release_check_maps_every_named_std10_gate():
+def test_release_check_maps_every_local_umbrella_gate():
     assert _target_prerequisites("release-check") == {
         "release-check-baseline",
-        "test",
+        "test-release-core",
         "test-quick",
         "lint-imports",
         "fresh-install-demo",
@@ -54,6 +55,24 @@ def test_release_check_maps_every_named_std10_gate():
 def test_release_check_does_not_activate_deferred_formatter_ratchet():
     assert "check" not in _target_prerequisites("release-check")
     assert "format-check" not in _target_prerequisites("release-check")
+
+
+def test_release_core_partition_exactly_matches_blocking_ci():
+    text = MAKEFILE.read_text(encoding="utf-8")
+    assert f"RELEASE_CORE_MARKERS := {CORE_MARKERS}" in text
+    block = _target_block("test-release-core")
+    assert '$(PYTEST) tests/ -m "$(RELEASE_CORE_MARKERS)" -q --tb=short' in block
+    assert "does not satisfy complete A1" in block
+
+
+def test_complete_suite_remains_a_separate_fail_closed_target():
+    text = MAKEFILE.read_text(encoding="utf-8")
+    test_block = _target_block("test")
+    release_block = _target_block("release-check")
+    assert "$(PYTEST) tests/ -q --tb=short" in test_block
+    assert "test" not in _target_prerequisites("release-check")
+    assert "complete A1 remains separate" in release_block
+    assert "A1-A7" not in release_block
 
 
 def test_composites_do_not_mask_prerequisite_failure():

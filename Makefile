@@ -18,7 +18,7 @@ MKDOCS      := $(VENV_BIN)/mkdocs
 UNAME := $(shell uname -s)
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
-.PHONY: help dev test lint format check build docs clean install hooks bench benchmark-headline lint-imports
+.PHONY: help dev test test-release-core lint format check build docs clean install hooks bench benchmark-headline lint-imports
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:  ## Show this help message
@@ -45,6 +45,11 @@ install:  ## Install tokenpak (non-editable, no dev extras)
 # ── Testing ────────────────────────────────────────────────────────────────────
 test:  ## Run full test suite
 	$(PYTEST) tests/ -q --tb=short
+
+RELEASE_CORE_MARKERS := not integration and not chaos and not slow and not needs_fast_host
+
+test-release-core:  ## Run blocking CI core partition; does not satisfy complete A1
+	$(PYTEST) tests/ -m "$(RELEASE_CORE_MARKERS)" -q --tb=short
 
 test-quick:  ## Run quick audit subset (<30s, no live proxy needed)
 	$(PYTEST) -m quick -q --tb=short
@@ -230,8 +235,9 @@ audit: ci-lint audit-mypy docs-check forbidden-phrases-check telemetry-audit  ##
 
 # One Make DAG deliberately shares audit prerequisites with the named A/B/C
 # gates, so expensive strict-mypy and docs checks run exactly once per command.
-# A1 is the complete suite plus the exact CI Ruff selection in ``audit``. The
-# repository-wide formatter ratchet is separately deferred and is not a release
-# prerequisite for this candidate.
-release-check: release-check-baseline test test-quick lint-imports fresh-install-demo bench byte-fidelity-check audit release-docs-pattern-check  ## A1-A7/B1/B3/C5/C6
-	@echo "release-check: PASS — A1-A7, B1, B3, C5, and C6 reached terminal success"
+# The local core partition excludes integration, chaos, slow, and fast-host
+# tests exactly as blocking CI does. It does not satisfy complete A1; the raw
+# ``make test`` final-candidate result and exact-head partitioned CI stay
+# separate release blockers. The repository-wide formatter ratchet is deferred.
+release-check: release-check-baseline test-release-core test-quick lint-imports fresh-install-demo bench byte-fidelity-check audit release-docs-pattern-check  ## Core CI + A2-A7/B1/B3/C5/C6; complete A1 is separate
+	@echo "release-check: PASS — core CI partition and A2-A7/B1/B3/C5/C6 reached terminal success; complete A1 remains separate"
