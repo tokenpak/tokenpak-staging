@@ -29,6 +29,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.timeout(90)]
 
 WriterFn = Callable[[Path, str], None]
 Observation = Tuple[str, str]
+MAX_UNIQUE_OBSERVATIONS = 256
 
 
 def _run_race(
@@ -45,19 +46,29 @@ def _run_race(
     seeded with ``payload_a`` before the threads start, so the reader never
     needs to handle a pre-first-write window.
     """
-    observations: List[Observation] = []
+    # The reader can run far faster than a durable writer. Keeping every full
+    # 4-8 KiB payload made this stress test consume gigabytes on slower disks,
+    # which starved the writer and turned the harness into its own timeout.
+    # These races have only two valid payloads; retain a bounded set of unique
+    # observations so every distinct torn/error state is still detected.
+    observations: set[Observation] = set()
     stop = threading.Event()
+
+    def record(observation: Observation) -> None:
+        if observation in observations or len(observations) < MAX_UNIQUE_OBSERVATIONS:
+            observations.add(observation)
 
     def reader() -> None:
         while not stop.is_set():
             try:
                 content = target.read_text(encoding="utf-8", errors="replace")
-                observations.append(("ok", content))
+                record(("ok", content))
             except FileNotFoundError:
                 # Should not happen after the seed write, but be defensive.
                 pass
             except OSError as exc:
-                observations.append(("oserr", str(exc)))
+                record(("oserr", str(exc)))
+            time.sleep(0)
 
     def writer() -> None:
         for i in range(iterations):
@@ -78,7 +89,7 @@ def _run_race(
     assert writer_finished, "writer thread did not finish within its 60-second race budget"
     assert not r.is_alive(), "reader thread did not stop within its 10-second cleanup budget"
 
-    return observations
+    return list(observations)
 
 
 def _non_atomic_write_with_pause(target: Path, content: str) -> None:
@@ -106,7 +117,10 @@ def test_atomic_index_json_write(tmp_path: Path) -> None:
     payload_b = json.dumps({"v": "B", "blocks": {"k": "y" * 4096}})
 
     observations = _run_race(
-        lambda t, c: _atomic_write(t, c),
+        # This is an atomic-visibility race, not a power-loss durability test.
+        # Skipping fsync keeps the scheduler/disk from becoming the bottleneck;
+        # the same-directory temporary file + os.replace path is unchanged.
+        lambda t, c: _atomic_write(t, c, fsync=False),
         index_path,
         payload_a,
         payload_b,
@@ -133,7 +147,7 @@ def test_atomic_block_file_write(tmp_path: Path) -> None:
     payload_b = "B" * 8192
 
     observations = _run_race(
-        lambda t, c: _atomic_write(t, c),
+        lambda t, c: _atomic_write(t, c, fsync=False),
         block_file,
         payload_a,
         payload_b,
@@ -188,7 +202,7 @@ def test_atomic_write_negative_control(tmp_path: Path) -> None:
 # ---------------- converted-site coverage ----------------
 
 
-def test_atomic_blockstore_flush_race(tmp_path: Path) -> None:
+def test_atomic_blockstore_flush_race(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Same writer/reader race, driven through a converted production site.
 
     ``BlockStore.flush`` used to publish its JSON store via a plain
@@ -197,7 +211,14 @@ def test_atomic_blockstore_flush_race(tmp_path: Path) -> None:
     observation must be complete, parseable JSON containing one of the two
     alternating payloads.
     """
+    import tokenpak.vault.blocks as blocks_module
     from tokenpak.vault.blocks import BlockRecord, BlockStore
+
+    monkeypatch.setattr(
+        blocks_module,
+        "_atomic_write",
+        lambda target, content: _atomic_write(target, content, fsync=False),
+    )
 
     store_path = tmp_path / "blocks.json"
     store = BlockStore(str(store_path))
