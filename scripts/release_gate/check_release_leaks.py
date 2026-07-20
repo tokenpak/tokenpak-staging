@@ -51,12 +51,34 @@ Usage
     # Scan a directory tree directly (local / fixtures):
     python scripts/release_gate/check_release_leaks.py --tree tokenpak/
 
+    # Delta-style test-fixture VALUE scan (per-PR gate for tests/ surfaces):
+    python scripts/release_gate/check_release_leaks.py \
+        --fixture-values changed-test-files.txt
+
+Fixture-value mode
+------------------
+``tests/`` and ``packages/tests/`` are excluded from both the full-tree scan
+and the delta gate's content scan (dev surfaces, never shipped) — but fixture
+VALUES in test files are still repository-public surface, and agent-name
+fixture values have leaked through this gap before. ``--fixture-values`` takes
+a newline-separated list of changed test files (as computed by the delta
+gate's ``git diff``) and scans only their **values**: string literals in
+Python files (docstrings excluded — prose, not fixture data) and the full
+content of data-fixture files (json/yaml/toml/…). It reuses the same pattern
+register and masking above — no second enumeration exists anywhere. Files
+under ``tests/release_gate/`` are excluded for the same reason this scanner
+excludes itself from the delta gate: they are the gate's own regression
+fixtures and intentionally contain register strings. Legacy occurrences in
+files NOT on the changed list are never scanned (delta-style historical-debt
+tolerance).
+
 Exit status: ``0`` if no unallowlisted match is found, ``1`` otherwise.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import re
 import tarfile
@@ -616,6 +638,125 @@ def scan_files(files: list[ScanFile]) -> list[Finding]:
     return findings
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Delta-style test-fixture VALUE scan (``--fixture-values``)
+# ──────────────────────────────────────────────────────────────────────────
+# The delta gate excludes ``tests/`` / ``packages/tests/`` wholesale, so a
+# forbidden fixture VALUE in a test file was never inspected. This mode closes
+# that gap for the per-PR delta gate: it scans only the files it is handed
+# (the changed-file list), and only their values — string literals for Python,
+# whole content for data-fixture formats. Reuses PATTERNS + mask_content;
+# there is deliberately no second pattern enumeration.
+
+# Test-surface prefixes this mode is scoped to; anything else on the list is
+# ignored (the main delta scan already covers non-test paths).
+_FIXTURE_SCAN_PREFIXES = ("tests/", "packages/tests/")
+
+# The release-gate regression suite intentionally embeds register strings as
+# fixtures for the scanner itself (see tests/release_gate/*). Excluded for the
+# same reason the delta gate excludes this file and the workflow ymls: the
+# gate's own implementation/fixture surface cannot be subject to the gate.
+_FIXTURE_SCAN_EXCLUDE_PREFIXES = ("tests/release_gate/",)
+
+# Data-fixture formats whose entire content is fixture values.
+_FIXTURE_DATA_EXTS = {".json", ".yml", ".yaml", ".toml", ".txt", ".ini", ".cfg"}
+
+
+def _python_string_values(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, value)`` for every string literal in ``source``,
+    excluding docstrings (prose about the tests, not fixture data).
+
+    Raises ``SyntaxError`` on unparseable source — callers treat that as a
+    finding-free pass for this mode because an unparseable Python test file
+    cannot execute and already fails the test-suite jobs.
+    """
+    tree = ast.parse(source)
+    docstring_nodes: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstring_nodes.add(id(body[0].value))
+    values: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstring_nodes
+        ):
+            values.append((node.lineno, node.value))
+    return values
+
+
+def scan_fixture_values(files: list[ScanFile]) -> list[Finding]:
+    """Scan test-file VALUES (not comments/docstrings) against PATTERNS."""
+    compiled = [(p, re.compile(p)) for p in PATTERNS]
+    findings: list[Finding] = []
+    for sf in files:
+        try:
+            with open(sf.abspath, encoding="utf-8") as fh:
+                content = fh.read()
+        except (UnicodeDecodeError, OSError):
+            continue
+        if sf.relpath.endswith(".py"):
+            try:
+                values = _python_string_values(content)
+            except SyntaxError:
+                # Unparseable Python cannot run; the test jobs fail it.
+                continue
+            for pat, rx in compiled:
+                for lineno, value in values:
+                    if rx.search(mask_content(pat, sf.relpath, value)):
+                        findings.append(
+                            Finding(path=sf.relpath, line=lineno, pattern=pat, text=value)
+                        )
+        else:
+            # Data-fixture file: every line is fixture value content.
+            for pat, rx in compiled:
+                masked = mask_content(pat, sf.relpath, content)
+                orig_lines = content.split("\n")
+                for idx, mline in enumerate(masked.split("\n")):
+                    if rx.search(mline):
+                        findings.append(
+                            Finding(
+                                path=sf.relpath,
+                                line=idx + 1,
+                                pattern=pat,
+                                text=orig_lines[idx] if idx < len(orig_lines) else "",
+                            )
+                        )
+    return findings
+
+
+def collect_fixture_list(listfile: str, root: str = ".") -> list[ScanFile]:
+    """Read a newline-separated changed-file list and keep the in-scope test
+    files that exist. Files outside the test prefixes, under the release-gate
+    fixture exclusion, binary, or deleted are skipped."""
+    out: list[ScanFile] = []
+    with open(listfile, encoding="utf-8") as fh:
+        for raw in fh:
+            rel = raw.strip()
+            if not rel:
+                continue
+            if not rel.startswith(_FIXTURE_SCAN_PREFIXES):
+                continue
+            if rel.startswith(_FIXTURE_SCAN_EXCLUDE_PREFIXES):
+                continue
+            ext = os.path.splitext(rel)[1].lower()
+            if ext != ".py" and ext not in _FIXTURE_DATA_EXTS:
+                continue
+            abspath = os.path.join(root, rel)
+            if not os.path.isfile(abspath) or _looks_binary(abspath):
+                continue
+            out.append(ScanFile(relpath=rel, abspath=abspath))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -629,17 +770,35 @@ def main(argv: list[str] | None = None) -> int:
         metavar="DIR",
         help="directory tree to scan (repo-relative paths computed from DIR)",
     )
+    src.add_argument(
+        "--fixture-values",
+        metavar="FILELIST",
+        help=(
+            "newline-separated changed-file list; scan test-fixture VALUES "
+            "delta-style (tests/ and packages/tests/ entries only)"
+        ),
+    )
+    ap.add_argument(
+        "--root",
+        metavar="DIR",
+        default=".",
+        help="repository root the --fixture-values list is relative to",
+    )
     args = ap.parse_args(argv)
 
     with tempfile.TemporaryDirectory() as workdir:
         if args.dist:
             files = collect_dist(args.dist, workdir)
             source_desc = f"distribution artifacts in {args.dist}"
-        else:
+            findings = scan_files(files)
+        elif args.tree:
             files = collect_tree(args.tree)
             source_desc = f"tree {args.tree}"
-
-        findings = scan_files(files)
+            findings = scan_files(files)
+        else:
+            files = collect_fixture_list(args.fixture_values, args.root)
+            source_desc = f"changed test files listed in {args.fixture_values}"
+            findings = scan_fixture_values(files)
 
     if findings:
         # GitHub-annotation lines + human summary.
@@ -649,21 +808,23 @@ def main(argv: list[str] | None = None) -> int:
             if key in seen:
                 continue
             seen.add(key)
+            where = "test-fixture value" if args.fixture_values else "shipped file"
             print(
                 f"::error file={f.path},line={f.line}::"
-                f"Forbidden pattern '{f.pattern}' in shipped file."
+                f"Forbidden pattern '{f.pattern}' in {where}."
             )
             print(f"  {f.path}:{f.line}: {f.text.strip()}")
         print()
         print(
             f"FAIL: {len(seen)} forbidden-pattern match(es) in {source_desc}.\n"
-            "These ship to users. See CONTRIBUTING.md → Public language rules.\n"
+            "This is repository-public surface. See CONTRIBUTING.md → Public "
+            "language rules.\n"
             "If a match is a legitimate public surface, add a path-scoped "
             "allowlist entry (and keep it in sync with the delta gate)."
         )
         return 1
 
-    print(f"OK: scanned {len(files)} shipped file(s) in {source_desc}; no leaks found.")
+    print(f"OK: scanned {len(files)} file(s) in {source_desc}; no leaks found.")
     return 0
 
 

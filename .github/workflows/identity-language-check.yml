@@ -37,6 +37,20 @@ jobs:
             > changed-files.txt || true
           echo "Changed files (filtered):"
           cat changed-files.txt | sed 's/^/  /'
+          # Changed TEST files, for the delta-style fixture-VALUE scan below.
+          # tests/ and packages/tests/ are excluded from the content scan
+          # above (dev surfaces), but fixture VALUES in them are still
+          # repository-public surface. tests/release_gate/ is excluded for
+          # the same reason the scanner files themselves are: it is the
+          # gate's own regression-fixture surface and intentionally contains
+          # register strings.
+          git diff --name-only --diff-filter=AM "$base" "$head" \
+            | grep -E "^(tests/|packages/tests/)" \
+            | grep -vE "^tests/release_gate/" \
+            | grep -E '\.(py|json|yml|yaml|toml|txt|ini|cfg)$' \
+            > changed-test-files.txt || true
+          echo "Changed test files (fixture-value scan):"
+          cat changed-test-files.txt | sed 's/^/  /'
 
       - name: Scan for forbidden identity / language
         run: |
@@ -582,6 +596,24 @@ jobs:
             exit 1
           fi
           echo "Identity / language check OK."
+
+      - name: Scan test-fixture values (delta)
+        run: |
+          set -euo pipefail
+          if [ ! -s changed-test-files.txt ]; then
+            echo "No test files changed; skipping fixture-value scan."
+            exit 0
+          fi
+          # Delta-style fixture-VALUE scan for changed files under tests/ and
+          # packages/tests/. Reuses the forbidden-pattern register inside
+          # scripts/release_gate/check_release_leaks.py (the self-excluded
+          # register file) — no pattern list is enumerated here. Python files
+          # are scanned on string-literal VALUES only (docstrings excluded);
+          # data-fixture files (json/yaml/toml/…) on full content. Legacy
+          # occurrences in files NOT changed by this PR are never scanned
+          # (historical-debt tolerance — same delta model as the scan above).
+          python3 scripts/release_gate/check_release_leaks.py \
+            --fixture-values changed-test-files.txt
 
   branch-name-identity:
     # The content scan above only inspects CHANGED FILE contents, so an
