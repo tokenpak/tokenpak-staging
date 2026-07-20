@@ -121,9 +121,7 @@ def test_atomic_index_json_write(tmp_path: Path) -> None:
         seen_values.add(parsed["v"])
 
     # Race-quality sanity check: 1000 alternations should reach both values.
-    assert seen_values == {"A", "B"}, (
-        f"expected reader to observe both A and B, got {seen_values}"
-    )
+    assert seen_values == {"A", "B"}, f"expected reader to observe both A and B, got {seen_values}"
 
 
 # ---------------- T6.2 ----------------
@@ -150,9 +148,7 @@ def test_atomic_block_file_write(tmp_path: Path) -> None:
         )
         seen_values.add(payload[:1])
 
-    assert seen_values == {"A", "B"}, (
-        f"expected reader to observe both A and B, got {seen_values}"
-    )
+    assert seen_values == {"A", "B"}, f"expected reader to observe both A and B, got {seen_values}"
 
 
 # ---------------- T6.3 ----------------
@@ -221,9 +217,7 @@ def test_atomic_blockstore_flush_race(tmp_path: Path) -> None:
             )
         )  # save() flushes to disk when the store is file-backed
 
-    observations = _run_race(
-        writer_func, store_path, payload_a, payload_b, iterations=400
-    )
+    observations = _run_race(writer_func, store_path, payload_a, payload_b, iterations=400)
     assert observations, "reader recorded no observations"
 
     seen_values: set[str] = set()
@@ -231,11 +225,7 @@ def test_atomic_blockstore_flush_race(tmp_path: Path) -> None:
         assert kind == "ok", f"reader hit non-ok branch: {kind}={payload!r}"
         parsed = json.loads(payload)  # torn write -> JSONDecodeError
         content = parsed["race-block"]["compressed_content"]
-        assert content in {payload_a, payload_b}, (
-            f"partial content observed: len={len(content)}"
-        )
+        assert content in {payload_a, payload_b}, f"partial content observed: len={len(content)}"
         seen_values.add(content[:1])
 
-    assert seen_values == {"A", "B"}, (
-        f"expected reader to observe both A and B, got {seen_values}"
-    )
+    assert seen_values == {"A", "B"}, f"expected reader to observe both A and B, got {seen_values}"
