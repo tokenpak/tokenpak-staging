@@ -195,8 +195,11 @@ release-check-baseline:  ## Five-gate always-on release baseline
 # A3 accepted findings are external release-captain receipts. A nonzero mypy
 # result is never downgraded in this public tree: the exact Python/mypy/command,
 # counts, files, and transcript hashes must all match the supplied receipt.
+# A3_PYTHON can pin that audited toolchain independently when the release-core
+# VENV intentionally mirrors CI's narrower development install shape.
 A3_ACCEPTED_FINDING ?=
 A3_RELEASE_VERSION ?=
+A3_PYTHON ?= $(VENV_BIN)/python3
 RELEASE_BASE_REF ?= $(shell git rev-parse -q --verify github/main 2>/dev/null || git rev-parse -q --verify public/main 2>/dev/null)
 
 .PHONY: ci-lint audit-mypy docs-check forbidden-phrases-check telemetry-audit \
@@ -207,7 +210,7 @@ ci-lint:  ## A1/B1 — exact Ruff selection used by CI
 	$(RUFF) check tokenpak/ tests/ --select=E,F,W,I --ignore=E501,E701,E702,E402,E741,F841
 
 audit-mypy:  ## A3/B1 — unchanged six-root strict-mypy gate
-	$(VENV_BIN)/python3 scripts/release_audit.py mypy $(if $(A3_ACCEPTED_FINDING),--accepted-finding "$(A3_ACCEPTED_FINDING)") $(if $(A3_RELEASE_VERSION),--release-version "$(A3_RELEASE_VERSION)")
+	$(A3_PYTHON) scripts/release_audit.py mypy $(if $(A3_ACCEPTED_FINDING),--accepted-finding "$(A3_ACCEPTED_FINDING)") $(if $(A3_RELEASE_VERSION),--release-version "$(A3_RELEASE_VERSION)")
 
 docs-check:  ## C5/B1 — strict links, navigation audit, and generated CLI-doc parity
 	bash scripts/audit-docs.sh --release-gate

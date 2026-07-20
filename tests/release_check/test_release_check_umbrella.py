@@ -65,6 +65,12 @@ def test_release_core_partition_exactly_matches_blocking_ci():
     assert "does not satisfy complete A1" in block
 
 
+def test_a3_python_defaults_to_the_release_environment_but_can_be_pinned_separately():
+    text = MAKEFILE.read_text(encoding="utf-8")
+    assert "A3_PYTHON ?= $(VENV_BIN)/python3" in text
+    assert "$(A3_PYTHON) scripts/release_audit.py mypy" in _target_block("audit-mypy")
+
+
 def test_complete_suite_remains_a_separate_fail_closed_target():
     text = MAKEFILE.read_text(encoding="utf-8")
     test_block = _target_block("test")
