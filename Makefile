@@ -18,7 +18,7 @@ MKDOCS      := $(VENV_BIN)/mkdocs
 UNAME := $(shell uname -s)
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
-.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline lint-imports
+.PHONY: help dev test lint format check build docs clean install hooks bench benchmark-headline lint-imports
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:  ## Show this help message
@@ -64,6 +64,9 @@ test-chaos:  ## Run chaos & resilience tests (fault injection / failure-recovery
 
 benchmark-headline:  ## Run headline 30-50% claim benchmark (standard 21 §9.8 blocking)
 	$(PYTEST) tests/benchmarks/test_headline_claim.py -v -s
+
+bench:  ## Run the blocking Claude Code passthrough p50 regression gate
+	$(VENV_BIN)/python3 scripts/benchmark_claude_passthrough.py
 
 # ── Linting & formatting ───────────────────────────────────────────────────────
 lint:  ## Run ruff linter
