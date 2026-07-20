@@ -8,7 +8,7 @@ violations immediately**; these known edges burn down over time.
 - **Source commit (edge inventory):** `26fa65007b47bcf77fd9bca342f4f3ab0922bd36`
   (github-staging/main at ruling time; applies to every row unless noted)
 - **Policy:** declared-debt ratchet; known edges are explicit, never silent.
-- **Baseline row count:** **71**. This ledger is **monotonically shrinking**:
+- **Baseline row count:** **83**. This ledger is **monotonically shrinking**:
   rows may only be removed (with the matching `.importlinter` entry, in the same
   PR that removes the physical import). Adding a row requires an explicit
   release waiver recorded with the candidate evidence. Enforced by
@@ -20,20 +20,29 @@ violations immediately**; these known edges burn down over time.
 **Classes** — `upward-import` (lower tier imports higher tier),
 `entrypoint-in-lower-tier` (entrypoint surface hosted inside a lower subsystem),
 `monolith-coupling` (edge into the root-level `_cli_core` monolith),
-`sibling-cross-import` (one entrypoint imports another).
+`sibling-cross-import` (one entrypoint imports another), and
+`entrypoint-pipeline-bypass` (an entrypoint skips the proxy path without a
+qualified §5.2 exception).
+
+The pinned exact baseline lives in `tests/lint/import_debt_baseline.txt`.
+Current ledger edges must remain a subset of that immutable set; the gate rejects
+a same-count remove-and-replace debt swap, not only a count increase.
 
 **Documented exception set: EMPTY.** The architecture permits narrowly justified
-*entrypoint → `services/` direct calls*. None of the 71 edges has that
-shape (they are subsystem→subsystem upward imports, monolith couplings, or
-entrypoint-sibling imports). Therefore no edge here is reclassified as an
-exception. Any future claim must name and document its architectural reason.
+*entrypoint → `services/` direct calls*. Twelve current direct bypass edges
+lack the required `§5.2-exception` citation and justification, so Group 9 records
+them as debt rather than reclassifying them as exceptions. Any future exception
+claim must name condition A, B, or C and document its architectural reason at
+the call site.
 
 ## Burn-down order
 
 Per the ruling: **Group 7 → 2 (incl. 2b) → 1 → 4 → 6 → 5 → 3**. Group 8
 (direct sibling edges) was surfaced after the ruling by the sibling-independence
 contract; place it alongside Group 3 because both address entrypoint-surface
-inversion work.
+inversion work. Group 9 was surfaced by the complete §5.2 boundary review and
+must burn down through proxy routing or a separately reviewed, properly marked
+§5.2 exception.
 
 ## Group 1 — `core/runtime/proxy.py` launcher lives in Level 0 (11 edges)
 
@@ -197,6 +206,28 @@ primitive. Sequence this work with Group 3. Closing tracker:
 | IMP-069 | `tokenpak.companion.launcher -> tokenpak.cli.commands.permissions` | sibling-cross-import | ⬜ pending | BURN-A4-G8 | 26fa650 |
 | IMP-070 | `tokenpak.companion.codex.launcher -> tokenpak.cli.commands.permissions` | sibling-cross-import | ⬜ pending | BURN-A4-G8 | 26fa650 |
 | IMP-071 | `tokenpak.sdk.registry -> tokenpak.cli.commands.install` | sibling-cross-import | ⬜ pending | BURN-A4-G8 | 26fa650 |
+
+## Group 9 — entrypoint bypasses of proxy routing (12 edges)
+
+Rationale: these entrypoint modules call `services/` or pipeline primitives
+directly without a qualifying `§5.2-exception` citation. They remain declared
+debt until routed through the proxy or individually justified under condition
+A, B, or C. Closing tracker: `BURN-A4-G9`.
+
+| ID | Edge | Class | Release waiver | Tracker | Src |
+|---|---|---|---|---|---|
+| IMP-072 | `tokenpak.cli.commands._config_optimize -> tokenpak.services.memory_optimization` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-073 | `tokenpak.cli.commands.compress_cmd -> tokenpak.compression.dedup` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-074 | `tokenpak.cli.commands.compress_cmd -> tokenpak.compression.engines.heuristic` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-075 | `tokenpak.cli.commands.fingerprint -> tokenpak.compression.fingerprinting.generator` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-076 | `tokenpak.cli.commands.fingerprint -> tokenpak.compression.fingerprinting.privacy` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-077 | `tokenpak.cli.commands.fingerprint -> tokenpak.compression.fingerprinting.sync` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-078 | `tokenpak.cli.commands.preview -> tokenpak.compression.core` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-079 | `tokenpak.sdk.integrations.claude_code.mcp_server -> tokenpak.compression.budgets.policy` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-080 | `tokenpak.sdk.integrations.claude_code.mcp_server -> tokenpak.compression.extraction.extractor` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-081 | `tokenpak.sdk.integrations.litellm.formatter -> tokenpak.compression.engines` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-082 | `tokenpak.sdk.integrations.litellm.formatter -> tokenpak.compression.engines.base` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
+| IMP-083 | `tokenpak.sdk.integrations.litellm.formatter -> tokenpak.compression.wire` | entrypoint-pipeline-bypass | ⬜ pending | BURN-A4-G9 | ae1e139 |
 
 ---
 

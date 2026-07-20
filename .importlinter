@@ -144,3 +144,35 @@ ignore_imports =
     tokenpak.proxy.server -> tokenpak.dashboard.export_api
     tokenpak.proxy.server -> tokenpak.dashboard.session_filter
     tokenpak.proxy.server -> tokenpak.dashboard
+
+[importlinter:contract:std01-entrypoint-proxy-path]
+name = Entrypoints use proxy instead of services or pipeline primitives
+type = forbidden
+source_modules =
+    tokenpak.cli
+    tokenpak.sdk
+    tokenpak.companion
+    tokenpak.dashboard
+    tokenpak.alerts
+forbidden_modules =
+    tokenpak.services
+    tokenpak.compression
+    tokenpak.security
+    tokenpak.cache
+    tokenpak.routing
+allow_indirect_imports = true
+ignore_imports =
+    ; Existing direct bypasses are declared debt, not §5.2 exceptions
+    ; (IMP-072..IMP-083). New direct bypasses fail this contract.
+    tokenpak.cli.commands._config_optimize -> tokenpak.services.memory_optimization
+    tokenpak.cli.commands.compress_cmd -> tokenpak.compression.dedup
+    tokenpak.cli.commands.compress_cmd -> tokenpak.compression.engines.heuristic
+    tokenpak.cli.commands.fingerprint -> tokenpak.compression.fingerprinting.generator
+    tokenpak.cli.commands.fingerprint -> tokenpak.compression.fingerprinting.privacy
+    tokenpak.cli.commands.fingerprint -> tokenpak.compression.fingerprinting.sync
+    tokenpak.cli.commands.preview -> tokenpak.compression.core
+    tokenpak.sdk.integrations.claude_code.mcp_server -> tokenpak.compression.budgets.policy
+    tokenpak.sdk.integrations.claude_code.mcp_server -> tokenpak.compression.extraction.extractor
+    tokenpak.sdk.integrations.litellm.formatter -> tokenpak.compression.engines
+    tokenpak.sdk.integrations.litellm.formatter -> tokenpak.compression.engines.base
+    tokenpak.sdk.integrations.litellm.formatter -> tokenpak.compression.wire

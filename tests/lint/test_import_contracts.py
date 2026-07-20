@@ -7,8 +7,8 @@ Four surfaces enforce the declared-debt ratchet:
 2. Negative: removing any single ``ignore_imports`` entry (an unlisted edge)
    turns the gate red — proves the contract actually detects violations.
 3. Ledger integrity + monotonicity: the ``ignore_imports`` set and
-   ``docs/import-debt-ledger.md`` are exactly 1:1, and their size never grows
-   past the ruled baseline (monotonically shrinking debt).
+   ``docs/import-debt-ledger.md`` are exactly 1:1, and every current edge stays
+   inside the pinned exact baseline (no same-count debt substitution).
 4. Services coverage: ``tokenpak/services/`` is a regular package and every
    module under it is visible to the import graph (grimp), so no service
    module can evade the gate.
@@ -28,10 +28,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / ".importlinter"
 LEDGER_PATH = REPO_ROOT / "docs" / "import-debt-ledger.md"
+DEBT_BASELINE_PATH = Path(__file__).with_name("import_debt_baseline.txt")
 
-# Initial baseline: 71 declared debt edges. This number may only DECREASE.
+# Initial baseline: 83 declared debt edges. This number may only DECREASE.
 # Increasing it requires an explicit release waiver recorded in the ledger.
-DEBT_BASELINE = 71
+DEBT_BASELINE = 83
 
 EDGE_RE = re.compile(r"^(?P<src>[\w.]+)\s*->\s*(?P<dst>[\w.]+)$")
 
@@ -125,6 +126,24 @@ def test_unlisted_edge_turns_gate_red(tmp_path):
     )
 
 
+def test_unlisted_entrypoint_bypass_turns_gate_red(tmp_path):
+    """The §5.2 boundary contract detects an undeclared direct bypass."""
+    sentinel = "tokenpak.cli.commands.preview -> tokenpak.compression.core"
+    original = CONFIG_PATH.read_text()
+    assert sentinel in original, "entrypoint bypass sentinel missing from config"
+    mutated_lines = [line for line in original.splitlines() if line.strip() != sentinel]
+    mutated_config = tmp_path / ".importlinter"
+    mutated_config.write_text("\n".join(mutated_lines) + "\n")
+
+    result = _run_gate(mutated_config)
+    assert result.returncode != 0, (
+        "entrypoint boundary stayed green with an undeclared direct pipeline import"
+    )
+    assert "tokenpak.cli.commands.preview" in result.stdout, (
+        f"failure output does not name the violating entrypoint:\n{result.stdout}"
+    )
+
+
 def test_ledger_and_config_are_one_to_one():
     """Every ignore edge has exactly one ledger row and vice versa."""
     ignores = _parse_config_ignores(CONFIG_PATH.read_text())
@@ -145,8 +164,20 @@ def test_ledger_and_config_are_one_to_one():
 
 
 def test_debt_is_monotonically_shrinking():
-    """The declared-debt set may never grow past the ruled baseline."""
+    """Current debt must be a subset of the pinned exact baseline."""
     ledger = _parse_ledger_rows(LEDGER_PATH.read_text())
+    ledger_edges = set(ledger.values())
+    baseline_edges = {
+        line.strip() for line in DEBT_BASELINE_PATH.read_text().splitlines() if line.strip()
+    }
+    assert len(baseline_edges) == DEBT_BASELINE, (
+        f"exact baseline has {len(baseline_edges)} unique edges, expected {DEBT_BASELINE}"
+    )
+    substituted = ledger_edges - baseline_edges
+    assert not substituted, (
+        "ledger contains debt outside the pinned baseline; same-count debt "
+        f"substitution is forbidden: {sorted(substituted)}"
+    )
     assert len(ledger) <= DEBT_BASELINE, (
         f"ledger has {len(ledger)} rows > baseline {DEBT_BASELINE}. Adding "
         f"debt requires an explicit release waiver; new import edges must be "
