@@ -18,7 +18,7 @@ MKDOCS      := $(VENV_BIN)/mkdocs
 UNAME := $(shell uname -s)
 
 # ── Phony targets ──────────────────────────────────────────────────────────────
-.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline
+.PHONY: help dev test lint format check build docs clean install hooks benchmark-headline lint-imports
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:  ## Show this help message
@@ -74,6 +74,9 @@ format:  ## Run ruff formatter (auto-fix)
 
 format-check:  ## Check formatting without making changes
 	$(RUFF) format --check tokenpak/ tests/
+
+lint-imports:  ## Run the import-linter architecture-contract gate
+	$(VENV_BIN)/lint-imports
 
 check: lint format-check test  ## Run lint + format check + tests (CI gate)
 

@@ -140,6 +140,9 @@ dev = [
     "pytest-timeout>=2.1.0",
     "black>=24.0.0",
     "ruff>=0.2.0",
+    # Architecture-contract gate (.importlinter) and its contract tests
+    # under tests/lint/test_import_contracts.py.
+    "import-linter>=2.0",
     # Subsystem test deps: the dispatch test suite imports pydantic/jsonschema.
     # Pulled via the [dispatch] extra so the standard `.[dev]` CI job collects
     # and runs those tests instead of erroring at import time.
