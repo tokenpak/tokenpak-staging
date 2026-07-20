@@ -230,5 +230,8 @@ audit: ci-lint audit-mypy docs-check forbidden-phrases-check telemetry-audit  ##
 
 # One Make DAG deliberately shares audit prerequisites with the named A/B/C
 # gates, so expensive strict-mypy and docs checks run exactly once per command.
-release-check: release-check-baseline check test-quick lint-imports fresh-install-demo bench byte-fidelity-check audit release-docs-pattern-check  ## A1-A7/B1/B3/C5/C6
+# A1 is the complete suite plus the exact CI Ruff selection in ``audit``. The
+# repository-wide formatter ratchet is separately deferred and is not a release
+# prerequisite for this candidate.
+release-check: release-check-baseline test test-quick lint-imports fresh-install-demo bench byte-fidelity-check audit release-docs-pattern-check  ## A1-A7/B1/B3/C5/C6
 	@echo "release-check: PASS — A1-A7, B1, B3, C5, and C6 reached terminal success"

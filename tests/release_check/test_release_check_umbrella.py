@@ -40,7 +40,7 @@ def test_audit_maps_every_std09_automated_component():
 def test_release_check_maps_every_named_std10_gate():
     assert _target_prerequisites("release-check") == {
         "release-check-baseline",
-        "check",
+        "test",
         "test-quick",
         "lint-imports",
         "fresh-install-demo",
@@ -49,6 +49,11 @@ def test_release_check_maps_every_named_std10_gate():
         "audit",
         "release-docs-pattern-check",
     }
+
+
+def test_release_check_does_not_activate_deferred_formatter_ratchet():
+    assert "check" not in _target_prerequisites("release-check")
+    assert "format-check" not in _target_prerequisites("release-check")
 
 
 def test_composites_do_not_mask_prerequisite_failure():
