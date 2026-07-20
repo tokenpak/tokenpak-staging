@@ -21,7 +21,11 @@ import time
 from pathlib import Path
 from typing import Callable, List, Tuple
 
+import pytest
+
 from tokenpak.vault._atomic import _atomic_write
+
+pytestmark = [pytest.mark.slow, pytest.mark.timeout(90)]
 
 WriterFn = Callable[[Path, str], None]
 Observation = Tuple[str, str]
@@ -68,8 +72,11 @@ def _run_race(
     r.start()
     w.start()
     w.join(timeout=60)
+    writer_finished = not w.is_alive()
     stop.set()
     r.join(timeout=10)
+    assert writer_finished, "writer thread did not finish within its 60-second race budget"
+    assert not r.is_alive(), "reader thread did not stop within its 10-second cleanup budget"
 
     return observations
 
@@ -114,9 +121,7 @@ def test_atomic_index_json_write(tmp_path: Path) -> None:
         seen_values.add(parsed["v"])
 
     # Race-quality sanity check: 1000 alternations should reach both values.
-    assert seen_values == {"A", "B"}, (
-        f"expected reader to observe both A and B, got {seen_values}"
-    )
+    assert seen_values == {"A", "B"}, f"expected reader to observe both A and B, got {seen_values}"
 
 
 # ---------------- T6.2 ----------------
@@ -143,9 +148,7 @@ def test_atomic_block_file_write(tmp_path: Path) -> None:
         )
         seen_values.add(payload[:1])
 
-    assert seen_values == {"A", "B"}, (
-        f"expected reader to observe both A and B, got {seen_values}"
-    )
+    assert seen_values == {"A", "B"}, f"expected reader to observe both A and B, got {seen_values}"
 
 
 # ---------------- T6.3 ----------------
@@ -214,9 +217,7 @@ def test_atomic_blockstore_flush_race(tmp_path: Path) -> None:
             )
         )  # save() flushes to disk when the store is file-backed
 
-    observations = _run_race(
-        writer_func, store_path, payload_a, payload_b, iterations=400
-    )
+    observations = _run_race(writer_func, store_path, payload_a, payload_b, iterations=400)
     assert observations, "reader recorded no observations"
 
     seen_values: set[str] = set()
@@ -224,11 +225,7 @@ def test_atomic_blockstore_flush_race(tmp_path: Path) -> None:
         assert kind == "ok", f"reader hit non-ok branch: {kind}={payload!r}"
         parsed = json.loads(payload)  # torn write -> JSONDecodeError
         content = parsed["race-block"]["compressed_content"]
-        assert content in {payload_a, payload_b}, (
-            f"partial content observed: len={len(content)}"
-        )
+        assert content in {payload_a, payload_b}, f"partial content observed: len={len(content)}"
         seen_values.add(content[:1])
 
-    assert seen_values == {"A", "B"}, (
-        f"expected reader to observe both A and B, got {seen_values}"
-    )
+    assert seen_values == {"A", "B"}, f"expected reader to observe both A and B, got {seen_values}"
