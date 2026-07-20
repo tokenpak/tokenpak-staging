@@ -480,7 +480,7 @@ Unknown model IDs pass through unchanged (forward-compatible).
 ## FAQ
 
 **Q: Does TokenPak change what Claude Code does or sees?**
-No. TokenPak is a transparent proxy. All requests and responses are forwarded unmodified (in `transparent` mode) or with opt-in compression. Claude Code behaves identically — it just goes through a local hop first.
+No. TokenPak is a transparent proxy. All requests and responses are forwarded unmodified (in `transparent` mode) or with opt-in compression. Claude Code behaves identically through a local hop.
 
 **Q: Do I need an API key?**
 Yes. TokenPak forwards your `ANTHROPIC_API_KEY` to Anthropic's API unchanged. It does not provide its own API credentials.

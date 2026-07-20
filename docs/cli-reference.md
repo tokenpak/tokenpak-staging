@@ -787,7 +787,7 @@ Launch an interactive test that auto-detects your available
 platforms, providers, and models, then runs a 5-turn A/B
 comparison (with vs without tokenpak) with live display.
 
-Just run: tokenpak test
+Run: tokenpak test
 
 ### `tokenpak prove`
 

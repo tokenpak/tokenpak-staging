@@ -11120,7 +11120,7 @@ def mark_done(self, item: str) -> None
 ```
 
 - **Returns:** `None`
-- **Description:** Move item from open → done (if present), or just append to done.
+- **Description:** Move item from open → done (if present), or append to done.
 
 #### `add_open`
 
