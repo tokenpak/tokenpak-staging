@@ -32,27 +32,34 @@ tokenpak codex           # launches Codex with the companion active
 `tokenpak codex` does the equivalent for Codex, registering the same MCP server
 through `codex mcp add` so it shows up in `codex mcp list`.
 
-### Parallel Codex sessions
+### When another Codex session is already running
 
-The default `shared` mode uses your existing `~/.codex` home and is deliberately
-single-session because Codex keeps local SQLite databases open. If an
-interactive `tokenpak codex` launch finds that home occupied, TokenPak asks
-whether to use a fresh isolated home for that invocation. Choosing **Yes**
-does not change your environment, configuration, or future default; choosing
-**No** or pressing Enter preserves the safe refusal.
+TokenPak normally uses your existing local Codex history. If another Codex
+session still holds that history, TokenPak waits briefly for it to become safe.
+After verified contention, an interactive launch offers a temporary session:
 
-The mode choice applies only to that invocation. The generated session home is
-retention-managed and is not promised to be deleted immediately when Codex
-exits.
+```text
+Another Codex session is using your shared local history.
+Start a temporary session without that prior history? [y/N]
+```
 
-The prompt is never shown in CI or non-interactive commands. You can also choose
-a mode explicitly:
+Choosing **Yes** creates a new temporary history lineage for that invocation.
+It does not attach the prior shared history, replace the normal lineage, or
+change the default for future launches. Choosing **No** or pressing Enter
+preserves the safe refusal. TokenPak does not offer the fallback when inspection
+is incomplete or reports a permission, storage, corruption, or unknown failure.
+
+The temporary session is retention-managed and may remain on disk after Codex
+exits. The prompt is never shown in CI or non-interactive commands.
+
+Advanced operators can still select an explicit compatibility mode for
+diagnostics, recovery, or automation:
 
 ```bash
-# Stable home per project; parallel across different projects.
+# Stable internal history per project.
 TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex
 
-# Fresh home per invocation; parallel even from the same project.
+# New internal history for one invocation.
 TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex
 ```
 

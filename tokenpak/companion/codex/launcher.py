@@ -26,6 +26,8 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Callable as _Callable
@@ -55,6 +57,103 @@ _TRUTHY = {"1", "true", "yes"}
 _STORAGE_PRESSURE_ERRNOS = {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 _APPROVAL_ARGS = ("--ask-for-approval", "never")
 _SANDBOX_ARGS = ("--sandbox", "danger-full-access")
+
+_TEMPORARY_RECOVERY_POLICY_ID = "tokenpak.codex.temporary-recovery"
+_TEMPORARY_RECOVERY_POLICY_VERSION = "1"
+
+
+class PreflightStatus(str, Enum):
+    """Typed outcome of the selected Codex-home safety inspection."""
+
+    CLEAR = "clear"
+    LIVE_HOLDER = "live_holder"
+    STOPPED_HOLDER = "stopped_holder"
+    HOLDER_TIMEOUT_LAST_VERIFIED_LIVE = "holder_timeout_last_verified_live"
+    INSPECTION_INCOMPLETE = "inspection_incomplete"
+    PERMISSION_ERROR = "permission_error"
+    STORAGE_ERROR = "storage_error"
+    CORRUPTED_STATE = "corrupted_state"
+    CANCELLED = "cancelled"
+    UNKNOWN_FAILURE = "unknown_failure"
+
+
+@dataclass(frozen=True)
+class PreflightEvidence:
+    """Immutable diagnostic facts from one bounded preflight epoch."""
+
+    status: PreflightStatus
+    diagnostics_complete: bool
+    holder_pids: tuple[int, ...]
+    holder_state: str
+    observed_at: str
+    diagnostic_epoch: str
+    detail: str
+    remediation: str | None
+    exit_code: int | None
+
+    def as_receipt(self) -> dict[str, object]:
+        return {
+            "status": self.status.value,
+            "diagnostics_complete": self.diagnostics_complete,
+            "holder_pids": list(self.holder_pids),
+            "holder_state": self.holder_state,
+            "observed_at": self.observed_at,
+            "diagnostic_epoch": self.diagnostic_epoch,
+            "detail": self.detail,
+            "remediation": self.remediation,
+            "exit_code": self.exit_code,
+        }
+
+
+@dataclass(frozen=True)
+class FallbackDecision:
+    """Versioned policy decision derived from immutable preflight evidence."""
+
+    eligible: bool
+    decision_reason: str
+    policy_id: str
+    policy_version: str
+    evaluated_at: str
+
+    def as_receipt(self) -> dict[str, object]:
+        return {
+            "eligible": self.eligible,
+            "decision_reason": self.decision_reason,
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "evaluated_at": self.evaluated_at,
+        }
+
+
+@dataclass(frozen=True)
+class PreflightEvaluation:
+    """Diagnostic evidence paired with the policy decision it produced."""
+
+    evidence: PreflightEvidence
+    fallback_decision: FallbackDecision
+
+    @property
+    def is_clear(self) -> bool:
+        return self.evidence.status is PreflightStatus.CLEAR
+
+    @property
+    def exit_code(self) -> int | None:
+        return self.evidence.exit_code
+
+    def as_receipt(self) -> dict[str, object]:
+        return {
+            "evidence": self.evidence.as_receipt(),
+            "fallback_decision": self.fallback_decision.as_receipt(),
+        }
+
+
+class TemporarySessionChoice(str, Enum):
+    """Typed response to the invocation-only recovery prompt."""
+
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    NOT_AVAILABLE = "not_available"
 
 
 def _bypass_env_enabled(env: dict[str, str] | None = None) -> bool:
@@ -313,28 +412,22 @@ def _drain_esc_pressed() -> bool:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def _prompt_for_one_time_isolated_fallback(shared_home: Path) -> bool | None:
-    """Offer an interactive, invocation-only escape from shared-home contention.
-
-    ``True`` selects a fresh isolated home, ``False`` preserves the original
-    fail-closed result, and ``None`` represents an explicit Ctrl-C cancel.
-    The choice is never persisted to the process environment or user config.
-    """
+def _prompt_for_temporary_session() -> TemporarySessionChoice:
+    """Offer a temporary history lineage after verified shared-session contention."""
     if (
         not _stdin_is_tty()
         or os.environ.get("CI")
         or os.environ.get("TOKENPAK_NONINTERACTIVE")
         or os.environ.get("TERM", "") == "dumb"
     ):
-        return False
+        return TemporarySessionChoice.NOT_AVAILABLE
 
     print(
-        f"tokenpak: shared Codex home {shared_home} is already in use "
-        "or cannot be verified clear.",
+        "tokenpak: Another Codex session is using your shared local history.",
         file=sys.stderr,
     )
     print(
-        "tokenpak: start this invocation with a fresh isolated home instead? "
+        "tokenpak: Start a temporary session without that prior history? "
         "[y/N]: ",
         end="",
         file=sys.stderr,
@@ -344,11 +437,102 @@ def _prompt_for_one_time_isolated_fallback(shared_home: Path) -> bool | None:
         choice = input().strip().lower()
     except EOFError:
         print(file=sys.stderr)
-        return False
+        return TemporarySessionChoice.DECLINED
     except KeyboardInterrupt:
         print("\ntokenpak: cancelled.", file=sys.stderr)
-        return None
-    return choice in {"y", "yes"}
+        return TemporarySessionChoice.CANCELLED
+    if choice in {"y", "yes"}:
+        return TemporarySessionChoice.ACCEPTED
+    return TemporarySessionChoice.DECLINED
+
+
+def _holder_state(status) -> str:
+    running = tuple(getattr(status, "running_pids", ()) or ())
+    stopped = tuple(getattr(status, "stopped_pids", ()) or ())
+    if running and stopped:
+        return "mixed"
+    if stopped:
+        return "stopped"
+    if running:
+        return "running"
+    return "unavailable" if getattr(status, "locked", False) else "none"
+
+
+def _fallback_decision(evidence: PreflightEvidence) -> FallbackDecision:
+    eligible_statuses = {
+        PreflightStatus.LIVE_HOLDER,
+        PreflightStatus.STOPPED_HOLDER,
+        PreflightStatus.HOLDER_TIMEOUT_LAST_VERIFIED_LIVE,
+    }
+    eligible = evidence.diagnostics_complete and evidence.status in eligible_statuses
+    reason = (
+        "verified_holder_contention"
+        if eligible
+        else "diagnostics_incomplete"
+        if not evidence.diagnostics_complete
+        else f"status_{evidence.status.value}_not_eligible"
+    )
+    return FallbackDecision(
+        eligible=eligible,
+        decision_reason=reason,
+        policy_id=_TEMPORARY_RECOVERY_POLICY_ID,
+        policy_version=_TEMPORARY_RECOVERY_POLICY_VERSION,
+        evaluated_at=utc_now(),
+    )
+
+
+def _preflight_evaluation(
+    *,
+    status: PreflightStatus,
+    diagnostics_complete: bool,
+    holder_pids: tuple[int, ...] = (),
+    holder_state: str = "none",
+    detail: str,
+    remediation: str | None,
+    exit_code: int | None,
+    diagnostic_epoch: str,
+) -> PreflightEvaluation:
+    evidence = PreflightEvidence(
+        status=status,
+        diagnostics_complete=diagnostics_complete,
+        holder_pids=holder_pids,
+        holder_state=holder_state,
+        observed_at=utc_now(),
+        diagnostic_epoch=diagnostic_epoch,
+        detail=detail,
+        remediation=remediation,
+        exit_code=exit_code,
+    )
+    return PreflightEvaluation(
+        evidence=evidence,
+        fallback_decision=_fallback_decision(evidence),
+    )
+
+
+def _coerce_preflight_evaluation(value: object) -> PreflightEvaluation:
+    """Fail closed for legacy test/plugin seams without making integers eligible."""
+    if isinstance(value, PreflightEvaluation):
+        return value
+    diagnostic_epoch = f"legacy-{os.getpid()}-{time.time_ns()}"
+    if value is None:
+        return _preflight_evaluation(
+            status=PreflightStatus.CLEAR,
+            diagnostics_complete=True,
+            detail="legacy clear preflight result",
+            remediation=None,
+            exit_code=None,
+            diagnostic_epoch=diagnostic_epoch,
+        )
+    exit_code = value if isinstance(value, int) else 1
+    status = PreflightStatus.CANCELLED if exit_code == 130 else PreflightStatus.UNKNOWN_FAILURE
+    return _preflight_evaluation(
+        status=status,
+        diagnostics_complete=False,
+        detail="untyped preflight result; refusing temporary-session fallback",
+        remediation="retry after updating the TokenPak Codex launcher",
+        exit_code=exit_code,
+        diagnostic_epoch=diagnostic_epoch,
+    )
 
 
 def _preflight_state_lock(
@@ -362,13 +546,12 @@ def _preflight_state_lock(
     sleep=None,
     monotonic=None,
     deadline: float | None = None,
-) -> "int | None":
+) -> PreflightEvaluation:
     """Preflight Codex-owned SQLite databases before exec.
 
-    Returns ``None`` when it is safe to launch — the home is clear, or a
-    contended lock cleared within the bounded wait.  Returns an ``int``
-    exit code when the caller should abort instead of exec-ing into a
-    contended home:
+    Returns immutable diagnostic evidence paired with the versioned policy
+    decision that determines whether a temporary session may be offered.
+    The caller proceeds only for a typed ``clear`` result.
 
     * a suspended/stopped holder (which never releases) short-circuits to
       direct remediation without waiting;
@@ -384,6 +567,7 @@ def _preflight_state_lock(
     """
     from . import state_lock
 
+    diagnostic_epoch = f"{os.getpid()}-{time.time_ns()}"
     esc_pressed = esc_pressed or _drain_esc_pressed
     sleep = sleep or time.sleep
     monotonic = monotonic or time.monotonic
@@ -439,29 +623,75 @@ def _preflight_state_lock(
         ok, value = results.get()
         if ok:
             return value
-        return state_lock.LockStatus(
-            home=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"),
-            db_path=Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-            / state_lock.STATE_DB_NAME,
-            exists=True,
-            locked=True,
-            detail=(f"holder inspection raised {value.__class__.__name__}; refusing unsafe access"),
+        return value
+
+    def failure_evaluation(exc: BaseException) -> PreflightEvaluation:
+        if isinstance(exc, KeyboardInterrupt):
+            status = PreflightStatus.CANCELLED
+            exit_code = 130
+        elif isinstance(exc, PermissionError):
+            status = PreflightStatus.PERMISSION_ERROR
+            exit_code = 1
+        elif isinstance(exc, OSError) and exc.errno in _STORAGE_PRESSURE_ERRNOS:
+            status = PreflightStatus.STORAGE_ERROR
+            exit_code = 1
+        else:
+            status = PreflightStatus.UNKNOWN_FAILURE
+            exit_code = 1
+        detail = f"holder inspection raised {exc.__class__.__name__}; refusing unsafe access"
+        remediation = "retry after resolving the reported Codex-home inspection failure"
+        print(f"tokenpak: {detail}", file=sys.stderr)
+        return _preflight_evaluation(
+            status=status,
             diagnostics_complete=False,
-            incomplete_reasons=["proc_inspection_incomplete"],
+            detail=detail,
+            remediation=remediation,
+            exit_code=exit_code,
+            diagnostic_epoch=diagnostic_epoch,
         )
 
     status = invoke_probe()
+    if isinstance(status, BaseException):
+        return failure_evaluation(status)
     if not status.locked:
-        return None
+        return _preflight_evaluation(
+            status=PreflightStatus.CLEAR,
+            diagnostics_complete=True,
+            holder_state="none",
+            detail=status.detail,
+            remediation=None,
+            exit_code=None,
+            diagnostic_epoch=diagnostic_epoch,
+        )
     if not getattr(status, "diagnostics_complete", True):
-        print(state_lock.remediation_hint(status), file=sys.stderr)
-        return 1
+        remediation = state_lock.remediation_hint(status)
+        print(remediation, file=sys.stderr)
+        return _preflight_evaluation(
+            status=PreflightStatus.INSPECTION_INCOMPLETE,
+            diagnostics_complete=False,
+            holder_pids=tuple(status.holder_pids),
+            holder_state=_holder_state(status),
+            detail=status.detail,
+            remediation=remediation,
+            exit_code=1,
+            diagnostic_epoch=diagnostic_epoch,
+        )
 
     # A stopped/suspended holder never releases the lock — waiting is
     # futile, so surface direct remediation immediately.
     if status.stopped_pids:
-        print(state_lock.remediation_hint(status), file=sys.stderr)
-        return 1
+        remediation = state_lock.remediation_hint(status)
+        print(remediation, file=sys.stderr)
+        return _preflight_evaluation(
+            status=PreflightStatus.STOPPED_HOLDER,
+            diagnostics_complete=True,
+            holder_pids=tuple(status.holder_pids),
+            holder_state=_holder_state(status),
+            detail=status.detail,
+            remediation=remediation,
+            exit_code=1,
+            diagnostic_epoch=diagnostic_epoch,
+        )
 
     if interactive:
         print(
@@ -472,7 +702,7 @@ def _preflight_state_lock(
         print(
             "tokenpak: Codex local database is busy; waiting up to "
             f"{int(timeout_s)}s for the holder to release "
-            "(use TOKENPAK_CODEX_SESSION_MODE=isolated for a fresh home)...",
+            "before refusing the launch safely...",
             file=sys.stderr,
         )
 
@@ -482,20 +712,60 @@ def _preflight_state_lock(
                 "tokenpak: cancelled while waiting for the Codex database lock.",
                 file=sys.stderr,
             )
-            print(state_lock.remediation_hint(status), file=sys.stderr)
-            return 130
+            remediation = state_lock.remediation_hint(status)
+            print(remediation, file=sys.stderr)
+            return _preflight_evaluation(
+                status=PreflightStatus.CANCELLED,
+                diagnostics_complete=True,
+                holder_pids=tuple(status.holder_pids),
+                holder_state=_holder_state(status),
+                detail="cancelled while waiting for the Codex database lock",
+                remediation=remediation,
+                exit_code=130,
+                diagnostic_epoch=diagnostic_epoch,
+            )
         sleep(min(poll_interval_s, max(0.0, deadline - monotonic())))
         if monotonic() >= deadline:
             break
         status = invoke_probe()
+        if isinstance(status, BaseException):
+            return failure_evaluation(status)
         if not status.locked:
-            return None
+            return _preflight_evaluation(
+                status=PreflightStatus.CLEAR,
+                diagnostics_complete=True,
+                holder_state="none",
+                detail=status.detail,
+                remediation=None,
+                exit_code=None,
+                diagnostic_epoch=diagnostic_epoch,
+            )
         if not getattr(status, "diagnostics_complete", True):
-            print(state_lock.remediation_hint(status), file=sys.stderr)
-            return 1
+            remediation = state_lock.remediation_hint(status)
+            print(remediation, file=sys.stderr)
+            return _preflight_evaluation(
+                status=PreflightStatus.INSPECTION_INCOMPLETE,
+                diagnostics_complete=False,
+                holder_pids=tuple(status.holder_pids),
+                holder_state=_holder_state(status),
+                detail=status.detail,
+                remediation=remediation,
+                exit_code=1,
+                diagnostic_epoch=diagnostic_epoch,
+            )
         if status.stopped_pids:
-            print(state_lock.remediation_hint(status), file=sys.stderr)
-            return 1
+            remediation = state_lock.remediation_hint(status)
+            print(remediation, file=sys.stderr)
+            return _preflight_evaluation(
+                status=PreflightStatus.STOPPED_HOLDER,
+                diagnostics_complete=True,
+                holder_pids=tuple(status.holder_pids),
+                holder_state=_holder_state(status),
+                detail=status.detail,
+                remediation=remediation,
+                exit_code=1,
+                diagnostic_epoch=diagnostic_epoch,
+            )
         if not interactive:
             print(
                 "tokenpak: still waiting for the Codex database lock...",
@@ -506,8 +776,24 @@ def _preflight_state_lock(
         f"tokenpak: Codex database still locked after {int(timeout_s)}s.",
         file=sys.stderr,
     )
-    print(state_lock.remediation_hint(status), file=sys.stderr)
-    return 1
+    remediation = state_lock.remediation_hint(status)
+    print(remediation, file=sys.stderr)
+    running = tuple(getattr(status, "running_pids", ()) or ())
+    timeout_status = (
+        PreflightStatus.HOLDER_TIMEOUT_LAST_VERIFIED_LIVE
+        if running
+        else PreflightStatus.UNKNOWN_FAILURE
+    )
+    return _preflight_evaluation(
+        status=timeout_status,
+        diagnostics_complete=True,
+        holder_pids=tuple(status.holder_pids),
+        holder_state=_holder_state(status),
+        detail=status.detail,
+        remediation=remediation,
+        exit_code=1,
+        diagnostic_epoch=diagnostic_epoch,
+    )
 
 
 def _run_codex_process(
@@ -730,6 +1016,34 @@ def _receipt_only_setup_metadata() -> dict[str, object]:
     }
 
 
+def _temporary_recovery_metadata(
+    evaluation: PreflightEvaluation,
+    *,
+    fallback_attempted: bool,
+    fallback_result: str,
+) -> dict[str, object]:
+    """Return precise receipt fields for the tactical temporary-session bridge."""
+    return {
+        "original_preflight_result": evaluation.as_receipt(),
+        "fallback_attempted": fallback_attempted,
+        "fallback_result": fallback_result,
+        "original_session_class": "shared",
+        "selected_session_class": (
+            "temporary"
+            if fallback_result in {"selected", "provisioned", "setup_failed"}
+            else "shared"
+        ),
+        "continuity_mode": (
+            "new_temporary_lineage"
+            if fallback_result in {"selected", "provisioned", "setup_failed"}
+            else "shared_lineage_not_replaced"
+        ),
+        "prior_shared_history_attached": False,
+        "bridge_policy_id": evaluation.fallback_decision.policy_id,
+        "bridge_policy_version": evaluation.fallback_decision.policy_version,
+    }
+
+
 def _write_accounting_receipt(
     *,
     receipt_out: str,
@@ -819,18 +1133,36 @@ def main(
     needs_kernel_preflight = paths.mode == session_home.MODE_SHARED or sys.platform.startswith(
         "linux"
     )
-    lock_exit = _preflight_state_lock(home=paths.home) if needs_kernel_preflight else None
-    if lock_exit is not None:
+    preflight = (
+        _coerce_preflight_evaluation(_preflight_state_lock(home=paths.home))
+        if needs_kernel_preflight
+        else None
+    )
+    original_preflight: PreflightEvaluation | None = None
+    fallback_metadata: dict[str, object] | None = None
+    lock_exit = preflight.exit_code if preflight is not None else None
+    if preflight is not None and not preflight.is_clear:
+        original_preflight = preflight
         if (
-            lock_exit != 130
+            preflight.fallback_decision.eligible
             and paths.mode == session_home.MODE_SHARED
             and not install_only
             and not receipt_only
         ):
-            isolated_choice = _prompt_for_one_time_isolated_fallback(paths.home)
-            if isolated_choice is None:
+            temporary_choice = _prompt_for_temporary_session()
+            if temporary_choice is TemporarySessionChoice.CANCELLED:
                 lock_exit = 130
-            elif isolated_choice:
+                fallback_metadata = _temporary_recovery_metadata(
+                    preflight,
+                    fallback_attempted=False,
+                    fallback_result="cancelled",
+                )
+            elif temporary_choice is TemporarySessionChoice.ACCEPTED:
+                fallback_metadata = _temporary_recovery_metadata(
+                    preflight,
+                    fallback_attempted=True,
+                    fallback_result="selected",
+                )
                 try:
                     paths = session_home.select_paths(
                         mode=session_home.MODE_ISOLATED,
@@ -839,17 +1171,38 @@ def main(
                     )
                 except (session_home.InvalidSessionMode, ValueError) as exc:
                     print(
-                        f"tokenpak: temporary isolated-home selection failed: {exc}",
+                        f"tokenpak: temporary session selection failed: {exc}",
                         file=sys.stderr,
+                    )
+                    fallback_metadata = _temporary_recovery_metadata(
+                        preflight,
+                        fallback_attempted=True,
+                        fallback_result="selection_failed",
                     )
                 else:
                     print(
-                        "tokenpak: using an isolated Codex home for "
-                        "this invocation only.",
+                        "tokenpak: starting a temporary session with a new history "
+                        "lineage for this invocation only.",
                         file=sys.stderr,
                     )
                     _print_session_paths(paths)
                     lock_exit = None
+            else:
+                fallback_metadata = _temporary_recovery_metadata(
+                    preflight,
+                    fallback_attempted=False,
+                    fallback_result=(
+                        "declined"
+                        if temporary_choice is TemporarySessionChoice.DECLINED
+                        else "not_available"
+                    ),
+                )
+        else:
+            fallback_metadata = _temporary_recovery_metadata(
+                preflight,
+                fallback_attempted=False,
+                fallback_result="not_eligible",
+            )
 
     if lock_exit is not None:
         if receipt_out and run_id:
@@ -862,6 +1215,10 @@ def main(
                     "codex_home": str(paths.home),
                 }
             )
+            if preflight is not None:
+                setup["codex_preflight"] = preflight.as_receipt()
+            if fallback_metadata is not None:
+                setup.update(fallback_metadata)
             try:
                 _write_accounting_receipt(
                     receipt_out=receipt_out,
@@ -898,7 +1255,41 @@ def main(
             lease = session_home.SessionLease.acquire(paths)
     except (OSError, RuntimeError) as exc:
         print(f"tokenpak: selected-home setup refused: {exc}", file=sys.stderr)
-        return 1
+        failure_exit = original_preflight.exit_code if original_preflight is not None else 1
+        failure_exit = failure_exit if failure_exit is not None else 1
+        if fallback_metadata is not None:
+            fallback_metadata = _temporary_recovery_metadata(
+                original_preflight,
+                fallback_attempted=True,
+                fallback_result="setup_failed",
+            )
+        if receipt_out and run_id and original_preflight is not None:
+            setup = {
+                "setup_completed": False,
+                "session_mode": paths.mode,
+                "codex_home": str(paths.home),
+                "codex_preflight": original_preflight.as_receipt(),
+                **(fallback_metadata or {}),
+            }
+            try:
+                _write_accounting_receipt(
+                    receipt_out=receipt_out,
+                    run_id=run_id,
+                    codex_args=args,
+                    setup=setup,
+                    started_at=utc_now(),
+                    start_monotonic=time.monotonic(),
+                    exit_code=failure_exit,
+                    status="blocked",
+                    missing_evidence=["temporary_session_setup_failed"],
+                )
+            except (OSError, RuntimeError) as receipt_exc:
+                print(
+                    f"tokenpak: failed to write accounting receipt: {receipt_exc}",
+                    file=sys.stderr,
+                )
+                return 1
+        return failure_exit
 
     with _lease_with_post_retention(lease, session_home, paths):
 
@@ -908,7 +1299,8 @@ def main(
             if paths.mode == session_home.MODE_WORKSPACE and not sys.platform.startswith("linux"):
                 return True
             lease.assert_home_binding()
-            return _preflight_state_lock(home=paths.home) is None
+            evaluation = _coerce_preflight_evaluation(_preflight_state_lock(home=paths.home))
+            return evaluation.is_clear
 
         # Close the preflight-to-lease race for reusable homes.  A native
         # Codex process does not participate in our sentinel guard, so sample
@@ -937,7 +1329,41 @@ def main(
                 lease.assert_home_binding()
         except (OSError, RuntimeError) as exc:
             print(f"tokenpak: selected-home provisioning refused: {exc}", file=sys.stderr)
-            return 1
+            failure_exit = original_preflight.exit_code if original_preflight is not None else 1
+            failure_exit = failure_exit if failure_exit is not None else 1
+            if fallback_metadata is not None and original_preflight is not None:
+                fallback_metadata = _temporary_recovery_metadata(
+                    original_preflight,
+                    fallback_attempted=True,
+                    fallback_result="setup_failed",
+                )
+            if receipt_out and run_id and original_preflight is not None:
+                setup = {
+                    "setup_completed": False,
+                    "session_mode": paths.mode,
+                    "codex_home": str(paths.home),
+                    "codex_preflight": original_preflight.as_receipt(),
+                    **(fallback_metadata or {}),
+                }
+                try:
+                    _write_accounting_receipt(
+                        receipt_out=receipt_out,
+                        run_id=run_id,
+                        codex_args=args,
+                        setup=setup,
+                        started_at=utc_now(),
+                        start_monotonic=time.monotonic(),
+                        exit_code=failure_exit,
+                        status="blocked",
+                        missing_evidence=["temporary_session_provisioning_failed"],
+                    )
+                except (OSError, RuntimeError) as receipt_exc:
+                    print(
+                        f"tokenpak: failed to write accounting receipt: {receipt_exc}",
+                        file=sys.stderr,
+                    )
+                    return 1
+            return failure_exit
 
         if provisioned.seeded:
             print(
@@ -1095,6 +1521,15 @@ def main(
             "skills_installed_count": len(installed),
             "skills_configured_count": len(configured),
         }
+        if original_preflight is not None:
+            setup["codex_preflight"] = original_preflight.as_receipt()
+        if fallback_metadata is not None:
+            fallback_metadata = _temporary_recovery_metadata(
+                original_preflight,
+                fallback_attempted=True,
+                fallback_result="provisioned",
+            )
+            setup.update(fallback_metadata)
 
         budget_phrase = (
             f"budget ${config.budget_daily_usd:.2f}/day"
