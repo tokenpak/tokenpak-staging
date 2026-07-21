@@ -15,6 +15,7 @@ features`` probe-avoidance behavior — that lives in ``hooks.py`` /
 
 from __future__ import annotations
 
+import builtins
 import errno
 import json
 import os
@@ -42,6 +43,13 @@ def _status(locked=False, stopped=None):
         stopped_pids=stopped or [],
         detail="lock detail",
     )
+
+
+def _allow_isolated_fallback_prompt(monkeypatch):
+    monkeypatch.setattr(launcher, "_stdin_is_tty", lambda: True)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("TOKENPAK_NONINTERACTIVE", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
 
 
 class _Clock:
@@ -186,6 +194,67 @@ def test_preflight_incomplete_result_mid_wait_short_circuits(capsys):
     assert "inspection incomplete" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("answer", ["y", "Y", "yes", "YES"])
+def test_one_time_isolated_fallback_accepts_explicit_yes(monkeypatch, capsys, answer):
+    _allow_isolated_fallback_prompt(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda: answer)
+
+    assert launcher._prompt_for_one_time_isolated_fallback(Path("/tmp/shared")) is True
+    err = capsys.readouterr().err
+    assert "shared Codex home /tmp/shared" in err
+    assert "fresh isolated home" in err
+    assert "[y/N]" in err
+
+
+@pytest.mark.parametrize("answer", ["", "n", "no", "later"])
+def test_one_time_isolated_fallback_defaults_to_refusal(monkeypatch, answer):
+    _allow_isolated_fallback_prompt(monkeypatch)
+    monkeypatch.setattr(builtins, "input", lambda: answer)
+
+    assert launcher._prompt_for_one_time_isolated_fallback(Path("/tmp/shared")) is False
+
+
+@pytest.mark.parametrize("env_name", ["CI", "TOKENPAK_NONINTERACTIVE"])
+def test_one_time_isolated_fallback_never_prompts_automation(monkeypatch, env_name):
+    _allow_isolated_fallback_prompt(monkeypatch)
+    monkeypatch.setenv(env_name, "1")
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda: (_ for _ in ()).throw(AssertionError("automation was prompted")),
+    )
+
+    assert launcher._prompt_for_one_time_isolated_fallback(Path("/tmp/shared")) is False
+
+
+def test_one_time_isolated_fallback_never_prompts_non_tty_or_dumb_term(monkeypatch):
+    _allow_isolated_fallback_prompt(monkeypatch)
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda: (_ for _ in ()).throw(AssertionError("suppressed launch was prompted")),
+    )
+
+    monkeypatch.setattr(launcher, "_stdin_is_tty", lambda: False)
+    assert launcher._prompt_for_one_time_isolated_fallback(Path("/tmp/shared")) is False
+
+    monkeypatch.setattr(launcher, "_stdin_is_tty", lambda: True)
+    monkeypatch.setenv("TERM", "dumb")
+    assert launcher._prompt_for_one_time_isolated_fallback(Path("/tmp/shared")) is False
+
+
+def test_one_time_isolated_fallback_ctrl_c_cancels(monkeypatch, capsys):
+    _allow_isolated_fallback_prompt(monkeypatch)
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    assert launcher._prompt_for_one_time_isolated_fallback(Path("/tmp/shared")) is None
+    assert "cancelled" in capsys.readouterr().err
+
+
 # ── main() wires the preflight before exec, and --install-only skips it ─
 
 
@@ -254,6 +323,88 @@ def test_main_aborts_when_preflight_blocks(monkeypatch, tmp_path):
     monkeypatch.setattr(launcher, "_run_codex_process", _must_not_run)
     assert launcher.main([]) == 7
     assert not (tmp_path / "user" / ".codex" / "codex.pid").exists()
+    assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
+
+
+def test_shared_contention_can_use_isolated_home_for_one_invocation(
+    monkeypatch, tmp_path, capsys
+):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    shared_home = tmp_path / "user" / ".codex"
+    preflight_homes = []
+
+    def block_shared_only(*, home, **_kwargs):
+        preflight_homes.append(Path(home))
+        return 1 if Path(home) == shared_home else None
+
+    monkeypatch.setattr(launcher, "_preflight_state_lock", block_shared_only)
+    monkeypatch.setattr(
+        launcher,
+        "_prompt_for_one_time_isolated_fallback",
+        lambda home: Path(home) == shared_home,
+    )
+    captured = {}
+
+    def fake_run(argv, env, *, on_start=None):
+        captured["argv"] = argv
+        captured["env"] = env
+        assert on_start is not None
+        on_start(os.getpid())
+        return 0, launcher.empty_usage()
+
+    monkeypatch.setattr(launcher, "_run_codex_process", fake_run)
+    monkeypatch.setattr(launcher, "_launcher_mode_state", lambda: ("approval-bypass", None))
+    receipt_path = tmp_path / "fallback-receipt.json"
+
+    assert (
+        launcher.main(
+            [],
+            receipt_out=str(receipt_path),
+            run_id="shared_fallback_receipt",
+        )
+        == 0
+    )
+    assert preflight_homes == [shared_home]
+    assert captured["argv"] == ["codex", "--ask-for-approval", "never"]
+    assert captured["env"]["TOKENPAK_CODEX_SESSION_MODE"] == "isolated"
+    assert captured["env"]["CODEX_HOME"].startswith(
+        str(tmp_path / "tokenpak-home" / "companion" / "codex" / "sessions")
+    )
+    assert os.environ["TOKENPAK_CODEX_SESSION_MODE"] == "shared"
+    assert captured["env"]["TOKENPAK_CODEX_RUN_ID"] == "shared_fallback_receipt"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["tokenpak_setup"]["session_mode"] == "isolated"
+    assert receipt["tokenpak_setup"]["codex_home"] == captured["env"]["CODEX_HOME"]
+    assert "this invocation only" in capsys.readouterr().err
+    assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
+
+
+def test_shared_contention_decline_preserves_original_exit(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: 7)
+    monkeypatch.setattr(
+        launcher,
+        "_prompt_for_one_time_isolated_fallback",
+        lambda _home: False,
+    )
+
+    assert launcher.main([]) == 7
+    assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
+
+
+def test_shared_contention_prompt_cancel_returns_130(monkeypatch, tmp_path):
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: 1)
+    monkeypatch.setattr(
+        launcher,
+        "_prompt_for_one_time_isolated_fallback",
+        lambda _home: None,
+    )
+
+    assert launcher.main([]) == 130
     assert not list((tmp_path / "tokenpak-home").rglob("codex.pid"))
 
 

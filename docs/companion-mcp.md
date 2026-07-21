@@ -32,6 +32,30 @@ tokenpak codex           # launches Codex with the companion active
 `tokenpak codex` does the equivalent for Codex, registering the same MCP server
 through `codex mcp add` so it shows up in `codex mcp list`.
 
+### Parallel Codex sessions
+
+The default `shared` mode uses your existing `~/.codex` home and is deliberately
+single-session because Codex keeps local SQLite databases open. If an
+interactive `tokenpak codex` launch finds that home occupied, TokenPak asks
+whether to use a fresh isolated home for that invocation. Choosing **Yes**
+does not change your environment, configuration, or future default; choosing
+**No** or pressing Enter preserves the safe refusal.
+
+The mode choice applies only to that invocation. The generated session home is
+retention-managed and is not promised to be deleted immediately when Codex
+exits.
+
+The prompt is never shown in CI or non-interactive commands. You can also choose
+a mode explicitly:
+
+```bash
+# Stable home per project; parallel across different projects.
+TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex
+
+# Fresh home per invocation; parallel even from the same project.
+TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex
+```
+
 The MCP server is the same stdio JSON-RPC program in both cases:
 `python3 -m tokenpak.companion.mcp.server`. Only the discovery mechanism
 differs between clients.

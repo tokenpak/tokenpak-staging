@@ -313,6 +313,44 @@ def _drain_esc_pressed() -> bool:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def _prompt_for_one_time_isolated_fallback(shared_home: Path) -> bool | None:
+    """Offer an interactive, invocation-only escape from shared-home contention.
+
+    ``True`` selects a fresh isolated home, ``False`` preserves the original
+    fail-closed result, and ``None`` represents an explicit Ctrl-C cancel.
+    The choice is never persisted to the process environment or user config.
+    """
+    if (
+        not _stdin_is_tty()
+        or os.environ.get("CI")
+        or os.environ.get("TOKENPAK_NONINTERACTIVE")
+        or os.environ.get("TERM", "") == "dumb"
+    ):
+        return False
+
+    print(
+        f"tokenpak: shared Codex home {shared_home} is already in use "
+        "or cannot be verified clear.",
+        file=sys.stderr,
+    )
+    print(
+        "tokenpak: start this invocation with a fresh isolated home instead? "
+        "[y/N]: ",
+        end="",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        choice = input().strip().lower()
+    except EOFError:
+        print(file=sys.stderr)
+        return False
+    except KeyboardInterrupt:
+        print("\ntokenpak: cancelled.", file=sys.stderr)
+        return None
+    return choice in {"y", "yes"}
+
+
 def _preflight_state_lock(
     *,
     home: Path | str | None = None,
@@ -782,6 +820,37 @@ def main(
         "linux"
     )
     lock_exit = _preflight_state_lock(home=paths.home) if needs_kernel_preflight else None
+    if lock_exit is not None:
+        if (
+            lock_exit != 130
+            and paths.mode == session_home.MODE_SHARED
+            and not install_only
+            and not receipt_only
+        ):
+            isolated_choice = _prompt_for_one_time_isolated_fallback(paths.home)
+            if isolated_choice is None:
+                lock_exit = 130
+            elif isolated_choice:
+                try:
+                    paths = session_home.select_paths(
+                        mode=session_home.MODE_ISOLATED,
+                        workspace_dir=Path.cwd(),
+                        source_home=paths.source_home,
+                    )
+                except (session_home.InvalidSessionMode, ValueError) as exc:
+                    print(
+                        f"tokenpak: temporary isolated-home selection failed: {exc}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        "tokenpak: using an isolated Codex home for "
+                        "this invocation only.",
+                        file=sys.stderr,
+                    )
+                    _print_session_paths(paths)
+                    lock_exit = None
+
     if lock_exit is not None:
         if receipt_out and run_id:
             setup = (
