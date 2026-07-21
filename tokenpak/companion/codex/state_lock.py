@@ -1258,9 +1258,14 @@ def remediation_hint(status: LockStatus) -> str:
         )
     elif status.running_pids:
         lines.append("          finish or close the running session normally before retrying")
-    lines.append(
-        "          to run a parallel session without contention, set "
-        "TOKENPAK_CODEX_SESSION_MODE=workspace (per-project home) or "
-        "=isolated (fresh per-session home)."
-    )
+    if not status.diagnostics_complete:
+        lines.append(
+            "          TokenPak cannot safely offer a temporary session until "
+            "the inspection completes"
+        )
+    else:
+        lines.append(
+            "          an interactive launch may choose a temporary session "
+            "without the prior shared history"
+        )
     return "\n".join(lines)
