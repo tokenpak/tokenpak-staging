@@ -231,6 +231,7 @@ class TestMediumPackBenchmark:
         )
 
 
+@pytest.mark.needs_fast_host
 class TestLargePackBenchmark:
     """Large pack: ~50,000 tokens, 50 blocks, heavy compaction to 8,000 (84% reduction)."""
 
