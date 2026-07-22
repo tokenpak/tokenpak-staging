@@ -19,7 +19,7 @@ Rendering substrate (v1.8.0 foundation pass):
 from __future__ import annotations
 
 import sys
-from typing import Optional
+from typing import Callable, Optional, cast
 
 from tokenpak._formatting.colors import Color, paint, supports_color
 from tokenpak._formatting.picker import (
@@ -137,7 +137,7 @@ def _exec(cmd: str, args: str = "", *, clear: bool = True) -> int:
             argv.extend(args.split())
         sys.argv = argv
         from tokenpak._cli_core import main as cli_main
-        cli_main()
+        cast(Callable[[], None], cli_main)()
     except SystemExit as _se:
         code = _se.code if isinstance(_se.code, int) else (0 if _se.code is None else 1)
     except Exception as exc:
@@ -258,7 +258,7 @@ def _dispatch(cmd: str, args: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 # Commands that need a text input before executing
-_INPUT_COMMANDS: dict[str, dict] = {
+_INPUT_COMMANDS: dict[str, dict[str, str]] = {
     "index":        {"label": "Directory to index:", "placeholder": "e.g. ~/projects/myapp"},
     "search":       {"label": "Search query:", "placeholder": "e.g. authentication middleware"},
     "calibrate":    {"label": "Directory to calibrate:", "placeholder": "e.g. ~/projects/myapp"},
@@ -268,7 +268,7 @@ _INPUT_COMMANDS: dict[str, dict] = {
 
 # Commands that need a subcommand picked first.
 # Each subcommand can optionally have an "input" key for args it needs.
-_SUBCOMMAND_COMMANDS: dict[str, list[tuple[str, str, dict]]] = {
+_SUBCOMMAND_COMMANDS: dict[str, list[tuple[str, str, dict[str, str]]]] = {
     # (subcommand_args, display_label, input_config)
     # input_config: {} means no input needed; {"label": ..., "placeholder": ...} means prompt first
     "route": [

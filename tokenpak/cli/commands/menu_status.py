@@ -38,7 +38,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional, cast
 
 # Schema version for the machine-readable (``--json``) snapshot. Bump on any
 # field rename/removal so consumers can pin. (spec F3)
@@ -76,22 +76,22 @@ class StatusCache:
     """Lazy, TTL'd, backoff-protected proxy-status cache (single-writer)."""
 
     def __init__(self) -> None:
-        self._health: Optional[dict] = None
+        self._health: Optional[dict[str, Any]] = None
         self._health_at: float = 0.0
         self._health_state: str = "unknown"
-        self._stats: Optional[dict] = None
+        self._stats: Optional[dict[str, Any]] = None
         self._stats_at: float = 0.0
         self._backoff_until: float = 0.0
 
     # -- internal probes ---------------------------------------------------
-    def _get(self, path: str) -> Optional[dict]:
+    def _get(self, path: str) -> Optional[dict[str, Any]]:
         url = f"http://127.0.0.1:{_port()}{path}"
         try:
             resp = urllib.request.urlopen(url, timeout=_TIMEOUT)  # noqa: S310 (localhost)
             raw = resp.read()
             if resp.status != 200:
                 return None
-            return json.loads(raw.decode() or "{}") if raw else {}
+            return cast(dict[str, Any], json.loads(raw.decode() or "{}")) if raw else {}
         except Exception:  # noqa: BLE001 — re-raised classification happens in caller
             raise
 
@@ -172,7 +172,7 @@ def snapshot(*, probe: bool = True) -> ProxyStatus:
     return _CACHE.snapshot(probe=probe)
 
 
-def json_snapshot() -> dict:
+def json_snapshot() -> dict[str, Any]:
     """Deterministic, schema-versioned status dict for ``tokenpak --json`` (F3).
 
     Cheap: reads only cached state (no fresh probe is forced), emits stable

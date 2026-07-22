@@ -11,7 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 # ---------------------------------------------------------------------------
 # Severity levels
@@ -86,7 +86,8 @@ def _check_config(verbose: bool) -> DiagResult:
     try:
         from .cli_validate_config import ConfigValidator
 
-        validator = ConfigValidator()
+        validator_factory = cast(Callable[[], Any], ConfigValidator)
+        validator = validator_factory()
         exit_code, errors, warnings = validator.validate(str(found_path))
 
         # Determine severity based on exit code
@@ -344,7 +345,7 @@ def _check_disk_space(verbose: bool) -> List[DiagResult]:
     }
     results: List[DiagResult] = []
 
-    seen_devices: set = set()
+    seen_devices: set[str] = set()
     for label, d in dirs.items():
         check_path = d if d.exists() else Path.home()
         try:
@@ -382,7 +383,7 @@ def _check_disk_space(verbose: bool) -> List[DiagResult]:
 # Main command
 # ---------------------------------------------------------------------------
 
-def cmd_diagnose(args) -> None:
+def cmd_diagnose(args: Any) -> None:
     """Run tokenpak diagnose."""
     port = int(os.environ.get("TOKENPAK_PORT", "8766"))
     as_json = getattr(args, "json_output", False)

@@ -31,7 +31,10 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tokenpak.tip.pak import Pak
 
 # Tokenpak imports are deferred into handlers to keep `tokenpak --help`
 # fast (these contracts pull in the vault subsystem on import).
@@ -401,8 +404,8 @@ def cmd_pak_create(args: Any) -> int:
     include_content: bool = bool(getattr(args, "include_content", True))
     max_bytes: int = int(getattr(args, "max_bytes", 2_000_000))
 
-    anchors: list[dict] = []
-    skipped: list[dict] = []
+    anchors: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for path in sorted(src.rglob("*")):
         # A2 (codex-review-1): never follow symlinks — a link to e.g.
         # /etc/hostname would otherwise be read as a file and its target
@@ -563,7 +566,7 @@ def cmd_pak_import(args: Any) -> int:
     return 0
 
 
-def _estimate_tokens(anchors: list[dict]) -> int:
+def _estimate_tokens(anchors: list[dict[str, Any]]) -> int:
     """Rough token estimate (chars / 4) over embedded anchor content.
 
     Beta 1 placeholder — Pro adds real model-specific tokenizers.
@@ -628,7 +631,7 @@ def _vault_block_count() -> int:
     if "tokenpak.proxy.vault_bridge" not in _sys.modules:
         return 0
     try:
-        from tokenpak.proxy.vault_bridge import get_vault_index  # type: ignore[import]
+        from tokenpak.proxy.vault_bridge import get_vault_index
 
         vi = get_vault_index()
         if vi is None:
@@ -659,7 +662,7 @@ def _promotion_candidate_count() -> int:
         return 0
 
 
-def _resolve_vault_pak(pak_ref: str):
+def _resolve_vault_pak(pak_ref: str) -> Pak | None:
     """Return a Pak instance for a vault: ID, or None when not indexed."""
     block_id = pak_ref[len("vault:"):]
     try:
@@ -721,7 +724,7 @@ def _inspect_from_file(path: str, *, as_json: bool) -> int:
     return 0
 
 
-def _print_pak_text(payload: dict) -> None:
+def _print_pak_text(payload: dict[str, Any]) -> None:
     """Render a Pak's metadata.
 
     Handles two shapes:

@@ -59,7 +59,7 @@ def cmd_features_list(args: Any) -> int:
     lic = _lic.load_license()
     active_tier = lic.tier if lic else _lic.TIER_FREE
 
-    rows: list[dict] = []
+    rows: list[dict[str, str]] = []
     seen: set[str] = set()
 
     # All gated features (tracked in _GATES).
@@ -138,7 +138,9 @@ def cmd_features_explain(args: Any) -> int:
     return 0
 
 
-def _row(feature: str, required: str, active_tier: str, lic) -> dict:
+def _row(
+    feature: str, required: str, active_tier: str, lic: Any
+) -> dict[str, str]:
     from tokenpak import licensing as _lic
 
     enabled = _lic.is_feature_enabled(feature, lic=lic)

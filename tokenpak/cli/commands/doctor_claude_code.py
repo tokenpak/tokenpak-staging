@@ -26,7 +26,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict, cast
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -106,7 +106,12 @@ def _http_get(url: str, timeout: int = 4) -> tuple[int, bytes]:
         return 0, b""
 
 
-def _http_post_json(url: str, payload: dict, headers: dict | None = None, timeout: int = 8) -> tuple[int, bytes]:
+def _http_post_json(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
+    timeout: int = 8,
+) -> tuple[int, bytes]:
     """POST JSON payload to url. Returns (status_code, body). Never raises."""
     data = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data, method="POST")
@@ -128,10 +133,12 @@ def _http_post_json(url: str, payload: dict, headers: dict | None = None, timeou
         return 0, b""
 
 
-def _read_claude_settings() -> dict:
+def _read_claude_settings() -> dict[str, Any]:
     """Return parsed ~/.claude/settings.json or {} on any error."""
     try:
-        return json.loads(_claude_settings_path().read_text())
+        return cast(
+            dict[str, Any], json.loads(_claude_settings_path().read_text())
+        )
     except Exception:
         return {}
 
