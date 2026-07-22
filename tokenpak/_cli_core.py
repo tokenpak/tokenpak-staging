@@ -867,6 +867,9 @@ def cmd_setup(args):
     print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
     print("  2. Run: tokenpak status    (check health)")
     print("  3. Run: tokenpak savings   (see your ROI)")
+    print("  First measured receipt (stop this background proxy first):")
+    print("    tokenpak stop")
+    print("    https://github.com/tokenpak/tokenpak/blob/main/docs/first-receipt.md")
     print()
     print("💡 Quick commands:")
     print("  tokenpak serve      — start the proxy")
@@ -1623,6 +1626,16 @@ def _maybe_show_compression_notice(safe: bool) -> None:
 
 def cmd_serve(args):
     """Start monitoring proxy or telemetry server (if available)."""
+    # Apply one-invocation proxy settings before importing any proxy module.
+    # Proxy profile presets are evaluated at import time, while the stats
+    # footer reads its environment override per request.  Leaving either flag
+    # unset preserves the existing environment/config/default resolution.
+    profile = getattr(args, "profile", None)
+    if profile is not None:
+        os.environ["TOKENPAK_PROFILE"] = profile
+    if getattr(args, "stats_footer", False):
+        os.environ["TOKENPAK_STATS_FOOTER"] = "1"
+
     # --safe: restore old passthrough defaults BEFORE any proxy modules are imported
     if getattr(args, "safe", False):
         _apply_safe_mode_defaults()
@@ -3195,6 +3208,21 @@ def build_parser():
     p_serve.add_argument("--telemetry", action="store_true", help="Start telemetry ingest server")
     p_serve.add_argument("--ingest", action="store_true", help="Start Phase 5A ingest API server")
     p_serve.add_argument("--workers", type=int, default=1, help="Number of uvicorn workers")
+    p_serve.add_argument(
+        "--profile",
+        choices=["safe", "balanced", "aggressive", "agentic", "transparent"],
+        default=None,
+        help=("Workflow profile for this proxy process (default: TOKENPAK_PROFILE or balanced)"),
+    )
+    p_serve.add_argument(
+        "--stats-footer",
+        action="store_true",
+        default=False,
+        help=(
+            "Print a per-request token-savings receipt (estimated dollars) "
+            "in the proxy terminal (default: off)"
+        ),
+    )
     p_serve.add_argument(
         "--shutdown-timeout",
         type=float,
@@ -5544,7 +5572,9 @@ def main():
     if _is_first_run() and args.command not in ("help",) and not machine_output:
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
-            "   Run `tokenpak demo` to see compression in action.\n"
+            "   First measured receipt: "
+            "https://github.com/tokenpak/tokenpak/blob/main/docs/first-receipt.md\n"
+            "   Offline fixture (no provider request): `tokenpak demo`\n"
             "   Run `tokenpak help` to see all available commands.\n"
         )
         _mark_intro_seen()
