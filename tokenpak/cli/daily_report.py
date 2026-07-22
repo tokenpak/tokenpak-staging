@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Literal, TypedDict, cast
 
 
 @dataclass
@@ -38,33 +38,40 @@ class DailySavingsData:
     compression_percent: float
     top_model: str
     top_model_savings: float
-    uptime_hours: float
+    uptime_hours: int | Literal["unknown"]
     uptime_minutes: int
     errors: int
     estimated_monthly_rate: float
-    model_compression: list = None  # list[ModelCompressionRow]
-
-    def __post_init__(self):
-        if self.model_compression is None:
-            self.model_compression = []
+    model_compression: list[ModelCompressionRow] = field(default_factory=list)
 
 
-def _proxy_get(path: str, port: int = None) -> dict | None:
+class SavingsSummary(TypedDict):
+    """Fields consumed from a one-day telemetry savings report."""
+
+    total_cost: float
+    estimated_without_compression: float
+    savings_amount: float
+    savings_pct: float
+    cache_hit_rate: float
+
+
+def _proxy_get(path: str, port: int | None = None) -> dict[str, object] | None:
     """Fetch JSON from running proxy. Returns None if unreachable."""
     import urllib.request as _urlreq
 
     port = port or int(os.environ.get("TOKENPAK_PORT", "8766"))
     try:
         resp = _urlreq.urlopen(f"http://127.0.0.1:{port}{path}", timeout=2)
-        return json.loads(resp.read())
+        payload = json.loads(resp.read())
+        return cast(dict[str, object], payload) if isinstance(payload, dict) else None
     except Exception:
         return None
 
 
-def _get_model_compression_breakdown() -> list:
+def _get_model_compression_breakdown() -> list[ModelCompressionRow]:
     """Fetch per-model compression breakdown from telemetry. Returns [] on error."""
     try:
-        from tokenpak.telemetry.query import get_model_compression_breakdown
+        from tokenpak.telemetry.query_dsl import get_model_compression_breakdown
 
         rows = get_model_compression_breakdown(days=1)
         return [
@@ -81,10 +88,10 @@ def _get_model_compression_breakdown() -> list:
         return []
 
 
-def _get_savings_report() -> dict:
+def _get_savings_report() -> SavingsSummary:
     """Get historical savings data from telemetry."""
     try:
-        from tokenpak.telemetry.query import get_savings_report
+        from tokenpak.telemetry.query_dsl import get_savings_report
 
         report = get_savings_report(days=1)
         return {
@@ -113,27 +120,36 @@ def _calculate_data() -> DailySavingsData:
 
     # Extract stats
     health_stats = health.get("stats", {})
-    start_time = health_stats.get("start_time")
+    start_time = health_stats.get("start_time") if isinstance(health_stats, dict) else None
     if start_time is None:
-        uptime_h = "unknown"
+        uptime_h: int | Literal["unknown"] = "unknown"
         uptime_m = 0
-    else:
+    elif isinstance(start_time, (int, float)):
         uptime_s = max(0, time.time() - start_time)
         uptime_h = int(uptime_s // 3600)
         uptime_m = int((uptime_s % 3600) // 60)
+    else:
+        uptime_h = "unknown"
+        uptime_m = 0
 
     # Requests and errors
-    requests = stats.get("requests", 0)
-    errors = stats.get("errors", 0)
+    requests_value = stats.get("requests", 0)
+    errors_value = stats.get("errors", 0)
+    requests = int(requests_value) if isinstance(requests_value, (int, float)) else 0
+    errors = int(errors_value) if isinstance(errors_value, (int, float)) else 0
 
     # Tokens
-    input_tokens = stats.get("input_tokens", 0)
-    saved_tokens = stats.get("saved_tokens", 0)
+    input_value = stats.get("input_tokens", 0)
+    saved_value = stats.get("saved_tokens", 0)
+    input_tokens = float(input_value) if isinstance(input_value, (int, float)) else 0.0
+    saved_tokens = float(saved_value) if isinstance(saved_value, (int, float)) else 0.0
     compression_pct = (saved_tokens / input_tokens * 100) if input_tokens > 0 else 0
 
     # Cache
-    cache_hits = cache.get("cache_hits", 0)
-    cache_misses = cache.get("cache_misses", 0)
+    hits_value = cache.get("cache_hits", 0)
+    misses_value = cache.get("cache_misses", 0)
+    cache_hits = float(hits_value) if isinstance(hits_value, (int, float)) else 0.0
+    cache_misses = float(misses_value) if isinstance(misses_value, (int, float)) else 0.0
     cache_total = cache_hits + cache_misses
     cache_hit_rate = (cache_hits / cache_total) if cache_total > 0 else 0.0
 
@@ -145,7 +161,7 @@ def _calculate_data() -> DailySavingsData:
     top_model = "unknown"
     top_model_savings = 0.0
     try:
-        from tokenpak.telemetry.query import get_model_usage
+        from tokenpak.telemetry.query_dsl import get_model_usage
 
         usage = get_model_usage(days=1)
         if usage:
@@ -155,7 +171,7 @@ def _calculate_data() -> DailySavingsData:
                 # Estimate cost based on tokens (simplified)
                 model_costs[u.model] = u.request_count
             if model_costs:
-                top_model = max(model_costs, key=model_costs.get)
+                top_model = max(model_costs, key=lambda model: model_costs[model])
                 top_model_savings = savings_amount  # Proxy: assume savings proportional
     except Exception:
         pass
@@ -163,7 +179,7 @@ def _calculate_data() -> DailySavingsData:
     # Estimated monthly rate
     if requests > 0 and savings_amount > 0:
         # Rough estimate: daily savings * 30 / time elapsed
-        days_running = max(uptime_h / 24, 0.1)
+        days_running = max(uptime_h / 24, 0.1) if uptime_h != "unknown" else 0.1
         daily_savings = savings_amount / max(days_running, 0.1)
         estimated_monthly = daily_savings * 30
     else:
@@ -189,7 +205,7 @@ def _calculate_data() -> DailySavingsData:
     )
 
 
-def _format_compression_table_terminal(rows: list) -> list[str]:
+def _format_compression_table_terminal(rows: list[ModelCompressionRow]) -> list[str]:
     """Format per-model compression breakdown as terminal lines."""
     if not rows:
         return ["  (no per-model compression data)"]
@@ -200,7 +216,11 @@ def _format_compression_table_terminal(rows: list) -> list[str]:
         "  " + "─" * 65,
     ]
     for r in rows:
-        ratio_pct = f"{(1 - r.avg_compression_ratio) * 100:.1f}%" if r.avg_compression_ratio < 1.0 else "0.0%"
+        ratio_pct = (
+            f"{(1 - r.avg_compression_ratio) * 100:.1f}%"
+            if r.avg_compression_ratio < 1.0
+            else "0.0%"
+        )
         lines.append(
             f"  {r.model:<30} {r.request_count:>6,} {ratio_pct:>6} {r.tokens_saved:>10,} {r.savings_amount:>9.4f}"
         )
@@ -215,7 +235,7 @@ def _format_terminal(data: DailySavingsData) -> str:
         f"  Date:       {data.timestamp.split('T')[0]}",
         f"  Requests:   {data.requests:,}",
         f"  Saved:      ${data.savings_amount:.2f} ({data.savings_percent:.1f}%)",
-        f"  Cache Hit:  {data.cache_hit_rate*100:.0f}%",
+        f"  Cache Hit:  {data.cache_hit_rate * 100:.0f}%",
         f"  Compression: {data.compression_percent:.1f}%",
         f"  Top Model:  {data.top_model}",
         f"  Uptime:     {data.uptime_hours}h {data.uptime_minutes:02d}m",
@@ -237,7 +257,7 @@ def _format_markdown(data: DailySavingsData) -> str:
         "| ------ | ----- |",
         f"| Requests | {data.requests:,} |",
         f"| Savings | ${data.savings_amount:.2f} ({data.savings_percent:.1f}%) |",
-        f"| Cache Hit Rate | {data.cache_hit_rate*100:.0f}% |",
+        f"| Cache Hit Rate | {data.cache_hit_rate * 100:.0f}% |",
         f"| Compression | {data.compression_percent:.1f}% |",
         f"| Top Model | {data.top_model} |",
         f"| Uptime | {data.uptime_hours}h {data.uptime_minutes:02d}m |",
@@ -254,7 +274,11 @@ def _format_markdown(data: DailySavingsData) -> str:
             "| ----- | ---: | ----------: | -----------: | ------: |",
         ]
         for r in rows:
-            ratio_pct = f"{(1 - r.avg_compression_ratio) * 100:.1f}%" if r.avg_compression_ratio < 1.0 else "0.0%"
+            ratio_pct = (
+                f"{(1 - r.avg_compression_ratio) * 100:.1f}%"
+                if r.avg_compression_ratio < 1.0
+                else "0.0%"
+            )
             lines.append(
                 f"| {r.model} | {r.request_count:,} | {ratio_pct} | {r.tokens_saved:,} | ${r.savings_amount:.4f} |"
             )
@@ -263,16 +287,16 @@ def _format_markdown(data: DailySavingsData) -> str:
     return "\n".join(lines)
 
 
-def _format_json(data: DailySavingsData) -> dict:
+def _format_json(data: DailySavingsData) -> dict[str, object]:
     """Format as JSON dict."""
     result = asdict(data)
     # model_compression is a list of ModelCompressionRow dataclasses; asdict handles them
-    return result
+    return cast(dict[str, object], result)
 
 
 def generate_report(
     format: Literal["terminal", "markdown", "json"] = "terminal",
-) -> str | dict:
+) -> str | dict[str, object]:
     """Generate daily savings report in specified format.
 
     Args:

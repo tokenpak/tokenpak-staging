@@ -20,12 +20,15 @@ Exit codes:
     2 — Config has warnings only (will work but issues detected)
 """
 
+from __future__ import annotations
+
+from argparse import Namespace
 import os
 import re
 import socket
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, TypedDict
 
 import yaml
 
@@ -40,7 +43,7 @@ class ConfigError:
         message: str,
         suggestion: str = "",
         is_warning: bool = False,
-    ):
+    ) -> None:
         self.line = line
         self.field = field
         self.message = message
@@ -104,12 +107,12 @@ class ConfigValidator:
     }
 
     def __init__(self):
-        self.errors: List[ConfigError] = []
-        self.warnings: List[ConfigError] = []
-        self.line_map: Dict[str, int] = {}  # field → line number
+        self.errors: list[ConfigError] = []
+        self.warnings: list[ConfigError] = []
+        self.line_map: dict[str, int] = {}  # field → line number
         self.raw_content: str = ""
 
-    def validate(self, config_path: str) -> Tuple[int, List[ConfigError], List[ConfigError]]:
+    def validate(self, config_path: str) -> tuple[int, list[ConfigError], list[ConfigError]]:
         """
         Validate a config file and return exit code + errors/warnings.
 
@@ -167,7 +170,9 @@ class ConfigValidator:
         else:
             return 0, self.errors, self.warnings
 
-    def validate_dict(self, config: Dict[str, Any]) -> Tuple[int, List[ConfigError], List[ConfigError]]:
+    def validate_dict(
+        self, config: dict[str, Any]
+    ) -> tuple[int, list[ConfigError], list[ConfigError]]:
         """
         Validate a config dict directly (for testing).
 
@@ -208,7 +213,7 @@ class ConfigValidator:
         else:
             return 0, self.errors, self.warnings
 
-    def _load_config(self, path: Path) -> Optional[Dict[str, Any]]:
+    def _load_config(self, path: Path) -> Optional[dict[str, Any]]:
         """Load YAML or JSON config, return None if invalid."""
         try:
             if path.suffix.lower() in [".yml", ".yaml"]:
@@ -257,7 +262,7 @@ class ConfigValidator:
             )
             return None
 
-    def _build_line_map(self, obj: Dict[str, Any], prefix: str = "") -> None:
+    def _build_line_map(self, obj: dict[str, Any], prefix: str = "") -> None:
         """Approximate line numbers for fields by scanning raw content."""
         for key in obj.keys():
             pattern = rf"^\s*{re.escape(key)}\s*:"
@@ -271,7 +276,7 @@ class ConfigValidator:
         """Get approximate line number for field."""
         return self.line_map.get(field, 1)
 
-    def _validate_top_level(self, config: Dict[str, Any]) -> None:
+    def _validate_top_level(self, config: dict[str, Any]) -> None:
         """Check required top-level keys."""
         for required in self.REQUIRED_TOP_LEVEL:
             if required not in config:
@@ -284,7 +289,7 @@ class ConfigValidator:
                     )
                 )
 
-    def _validate_server(self, server: Dict[str, Any]) -> None:
+    def _validate_server(self, server: dict[str, Any]) -> None:
         """Validate server section."""
         if not isinstance(server, dict):
             self.errors.append(
@@ -343,11 +348,9 @@ class ConfigValidator:
                 )
 
         # Check unknown keys
-        self._check_unknown_keys(
-            server, self.KNOWN_SERVER_KEYS, "server", prefix="server."
-        )
+        self._check_unknown_keys(server, self.KNOWN_SERVER_KEYS, "server", prefix="server.")
 
-    def _validate_providers(self, providers: Dict[str, Any]) -> None:
+    def _validate_providers(self, providers: dict[str, Any]) -> None:
         """Validate providers section."""
         if not isinstance(providers, dict):
             self.errors.append(
@@ -433,7 +436,7 @@ class ConfigValidator:
                     )
                 )
 
-    def _validate_cache(self, cache: Dict[str, Any]) -> None:
+    def _validate_cache(self, cache: dict[str, Any]) -> None:
         """Validate cache section."""
         if not cache:
             return  # Optional
@@ -487,7 +490,7 @@ class ConfigValidator:
         # Check unknown keys
         self._check_unknown_keys(cache, self.KNOWN_CACHE_KEYS, "cache", prefix="cache.")
 
-    def _validate_routing(self, routing: Dict[str, Any]) -> None:
+    def _validate_routing(self, routing: dict[str, Any]) -> None:
         """Validate routing section (optional but check if present)."""
         if not routing:
             return
@@ -505,8 +508,8 @@ class ConfigValidator:
 
     def _check_unknown_keys(
         self,
-        obj: Dict[str, Any],
-        known_keys: set,
+        obj: dict[str, Any],
+        known_keys: set[str],
         section: str,
         prefix: str = "",
     ) -> None:
@@ -532,7 +535,7 @@ class ConfigValidator:
                 )
 
     @staticmethod
-    def _find_similar(word: str, candidates: set, max_distance: int = 2) -> Optional[str]:
+    def _find_similar(word: str, candidates: set[str], max_distance: int = 2) -> Optional[str]:
         """Find similar word using simple edit distance."""
         import difflib
 
@@ -555,7 +558,20 @@ class ConfigValidator:
 # Schema-compat API — drop-in replacements for config_schema_validator.py
 # ---------------------------------------------------------------------------
 
-def validate_config_dict(config: Dict[str, Any]) -> Tuple[bool, List[Dict[str, str]]]:
+
+class ValidationErrorDict(TypedDict):
+    """Schema-compatible validation error returned by the public helpers."""
+
+    path: str
+    message: str
+    suggestion: str
+    validator: str
+    instance: object | None
+
+
+def validate_config_dict(
+    config: dict[str, Any],
+) -> tuple[bool, list[ValidationErrorDict]]:
     """
     Validate a config dict.
 
@@ -578,7 +594,7 @@ def validate_config_dict(config: Dict[str, Any]) -> Tuple[bool, List[Dict[str, s
     return exit_code == 0, error_dicts
 
 
-def validate_config_file(filepath: str) -> Tuple[bool, List[Dict[str, str]]]:
+def validate_config_file(filepath: str) -> tuple[bool, list[ValidationErrorDict]]:
     """
     Load and validate a config file (YAML or JSON).
 
@@ -601,7 +617,7 @@ def validate_config_file(filepath: str) -> Tuple[bool, List[Dict[str, str]]]:
     return exit_code == 0, error_dicts
 
 
-def format_errors(errors: List[Dict[str, str]], filepath: str = None) -> str:
+def format_errors(errors: list[ValidationErrorDict], filepath: Optional[str] = None) -> str:
     """
     Format error list (from validate_config_dict/validate_config_file) as a human-readable string.
     """
@@ -623,7 +639,7 @@ def format_errors(errors: List[Dict[str, str]], filepath: str = None) -> str:
     return "\n".join(lines)
 
 
-def cmd_validate_config(args):
+def cmd_validate_config(args: Namespace) -> int:
     """CLI command: tokenpak validate-config <config_file>"""
     config_file = args.file
 
