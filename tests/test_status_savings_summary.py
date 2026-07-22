@@ -94,6 +94,7 @@ def _render(
             return_value=historical or {"error": "db_not_found"},
         ),
         patch.object(status, "_query_tip_cache_attribution", side_effect=_tip_unavailable),
+        patch.object(status, "_connect_db", return_value=None),
         patch.object(status, "_print_free_tier_upgrade_hint"),
         patch.object(status, "_get_version", return_value="1.14.0"),
         redirect_stdout(out),
