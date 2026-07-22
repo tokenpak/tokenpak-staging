@@ -13,7 +13,7 @@ import sqlite3
 import threading
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, cast
 
 
 def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -80,7 +80,7 @@ class CostTracker:
         if not hasattr(self._local, "conn") or self._local.conn is None:
             self._local.conn = sqlite3.connect(self._db_path, check_same_thread=False)
             self._local.conn.row_factory = sqlite3.Row
-        return self._local.conn
+        return cast(sqlite3.Connection, self._local.conn)
 
     def _init_db(self) -> None:
         conn = self._conn()
@@ -88,7 +88,7 @@ class CostTracker:
         conn.commit()
 
     @staticmethod
-    def _period_clause(period: str) -> tuple[str, list]:
+    def _period_clause(period: str) -> tuple[str, list[str]]:
         """Return (WHERE clause fragment, params) for the given period."""
         today = date.today()
         if period == "day":
@@ -150,7 +150,7 @@ class CostTracker:
     # Read
     # -----------------------------------------------------------------------
 
-    def get_summary(self, period: str = "day") -> dict:
+    def get_summary(self, period: str = "day") -> dict[str, Any]:
         """Return summary dict for the given period.
 
         Returns:
@@ -189,7 +189,7 @@ class CostTracker:
             "total_cost_usd": round(float(row["total_cost_usd"]), 6),
         }
 
-    def get_by_model(self, period: str = "day") -> list[dict]:
+    def get_by_model(self, period: str = "day") -> list[dict[str, Any]]:
         """Return per-model breakdown for the given period.
 
         Returns list of dicts, each with:

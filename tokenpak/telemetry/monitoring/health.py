@@ -74,7 +74,7 @@ def check_providers() -> Dict[str, Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _estimate_dict_memory_mb(d: dict) -> float:
+def _estimate_dict_memory_mb(d: dict[Any, Any]) -> float:
     """Best-effort estimate of in-memory dict size in MB via sys.getsizeof."""
     try:
         import sys as _sys
