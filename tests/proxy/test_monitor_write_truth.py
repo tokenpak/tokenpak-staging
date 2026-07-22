@@ -41,6 +41,7 @@ def _clean_writer_state():
             except Exception:
                 pass
         monitor_module._DB_CONNECTION = None
+        monitor_module._DB_CONNECTION_PATH = None
 
 
 def _row_count(db_path, table="requests"):
@@ -233,6 +234,24 @@ def test_flush_waits_for_queued_rows(tmp_path):
     assert _row_count(db) == 10
     # Writer keeps running after flush.
     assert monitor_module._DB_BACKGROUND_THREAD.is_alive()
+
+
+def test_writer_routes_interleaved_rows_to_each_monitor_database(tmp_path):
+    """The process-global queue must honor each work item's database path."""
+    first_db = tmp_path / "first.db"
+    second_db = tmp_path / "second.db"
+    first = Monitor(db_path=str(first_db))
+    second = Monitor(db_path=str(second_db))
+
+    # Construct both monitors before enqueueing.  The first row opens the
+    # cached writer connection for first_db; the second row must switch that
+    # connection rather than silently landing in first_db as well.
+    _log_minimal(first, endpoint="first")
+    _log_minimal(second, endpoint="second")
+
+    assert second.flush(timeout=10.0) is True
+    assert _row_count(first_db) == 1
+    assert _row_count(second_db) == 1
 
 
 def test_new_monitor_restarts_worker_after_stop(tmp_path):
