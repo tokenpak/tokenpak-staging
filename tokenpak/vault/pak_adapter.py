@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Protocol, cast
+from typing import Optional, Protocol
 
 from tokenpak.tip.pak import (
     Pak,
@@ -239,29 +239,13 @@ def search_as_paks(
     descending BM25 score, deterministic on ties. Empty list when no
     blocks meet ``min_score`` or no vault index is available.
 
-    ``vault_index`` defaults to the module-level singleton accessor in
-    :mod:`tokenpak.vault.search`; pass an explicit instance for tests or
-    when consuming a non-default index.
+    Pass ``vault_index`` explicitly. When no index is available, the function
+    returns an empty result rather than importing upward into the proxy layer.
 
     This is the read-only Phase 1 surface — no writes, no daemon contact,
     no Pak-store I/O. The Pro daemon's recall resolver (Phase 2) consumes
     these Paks alongside Interaction and Decision Paks for ranking.
     """
-    if vault_index is None:
-        # Lazy import to avoid pulling the vault subsystem into the module
-        # graph for callers that only need the per-block conversion helper.
-        try:
-            from tokenpak.proxy.vault_bridge import get_vault_index
-        except ImportError:
-            return []
-        try:
-            vault_index = cast(_VaultSearch, get_vault_index())
-        except Exception:
-            # Vault unavailable (config error, missing index, etc.) — empty
-            # result is the correct UX ("no relevant Paks → level 0, empty
-            # list").
-            return []
-
     if vault_index is None:
         return []
 
