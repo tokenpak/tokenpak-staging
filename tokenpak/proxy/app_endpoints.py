@@ -34,6 +34,7 @@ import datetime as _dt
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, urlparse
@@ -354,21 +355,25 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
         _send_error(handler, 500, "search_failed", str(exc))
         return
 
-    out = []
+    out: list[dict[str, object]] = []
     for block, score in results:
         block_id = block.get("block_id") or block.get("id") or ""
-        source = block.get("source_type") or "vault"
-        row = {
+        source = str(block.get("source_type") or "vault")
+        token_value = block.get("tokens") or block.get("raw_tokens") or 0
+        tokens = int(token_value) if isinstance(token_value, (int, float, str)) else 0
+        preview_value = block.get("title") or block.get("summary") or ""
+        preview = str(preview_value)[:200]
+        row: dict[str, object] = {
             "block_id": block_id,
             "path": block.get("path") or block.get("source_path", ""),
             "score": round(float(score), 3),
-            "tokens": int(block.get("tokens", 0) or block.get("raw_tokens", 0) or 0),
-            "preview": (block.get("title") or block.get("summary") or "")[:200],
+            "tokens": tokens,
+            "preview": preview,
             "source": source,
         }
         if source == "claude_transcript":
-            ct = block.get("claude_transcript") or {}
-            if ct:
+            ct = block.get("claude_transcript")
+            if isinstance(ct, Mapping):
                 row["claude_transcript"] = {
                     "project_dir": ct.get("project_dir"),
                     "project_cwd_guess": ct.get("project_cwd_guess"),
@@ -566,8 +571,9 @@ def _handle_budget_get(handler: Any, qs: dict[str, list[str]]) -> None:
     import math as _math
 
     try:
-        remaining_val: Optional[float] = float(remaining)
-        if not _math.isfinite(remaining_val):
+        parsed_remaining = float(remaining)
+        remaining_val: Optional[float] = parsed_remaining
+        if not _math.isfinite(parsed_remaining):
             remaining_val = None
     except (TypeError, ValueError):
         remaining_val = None

@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 from urllib.parse import urlparse
 
 from tokenpak.proxy.adapters.base import FormatAdapter, TokenCounter
@@ -171,7 +171,9 @@ def load_custom_providers() -> list[CustomProvider]:
 # ---------------------------------------------------------------------------
 
 
-def _make_custom_adapter(provider: CustomProvider) -> type[FormatAdapter]:
+def _make_custom_adapter(
+    provider: CustomProvider,
+) -> Callable[[FormatAdapter, CustomProvider], FormatAdapter]:
     """Create a FormatAdapter that detects requests to a custom provider's
     hostname and delegates normalise/denormalise to the matching built-in
     format adapter.
@@ -275,7 +277,7 @@ def build_custom_adapters(
             continue
 
         adapter_cls = _make_custom_adapter(cp)
-        adapter_inst = adapter_cls(delegate=delegate, cp=cp)
+        adapter_inst = adapter_cls(delegate, cp)
         # Priority 200 -- below built-in adapters (240-300) but above
         # passthrough (0).  Custom providers should not shadow built-in hosts.
         registry.register(adapter_inst, priority=200)

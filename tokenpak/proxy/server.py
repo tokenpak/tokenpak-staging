@@ -32,7 +32,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -61,6 +61,7 @@ from tokenpak.telemetry.footer import render_footer_oneline
 from tokenpak.telemetry.monitoring.request_logger import log_request
 from tokenpak.telemetry.monitoring.request_logger import new_request_id as _new_request_id
 
+from .capsule_integration import RequestHook
 from .circuit_breaker import (
     get_circuit_breaker_registry,
     get_rate_limit_registry,
@@ -128,6 +129,7 @@ class _SessionState(TypedDict):
     cache_read_client: int
     cache_read_proxy: int
     cache_read_unknown: int
+    ingest_entries: int
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +373,6 @@ class PipelineTrace:
         return cast(dict[str, object], d)
 
 
-RequestHook = Callable[[bytes, str, PipelineTrace | None], tuple[bytes, int, int, int]]
-
-
 class TraceStorage:
     """Thread-safe storage for recent pipeline traces."""
 
@@ -489,6 +488,7 @@ def _new_session() -> _SessionState:
         "cache_read_client": 0,
         "cache_read_proxy": 0,
         "cache_read_unknown": 0,
+        "ingest_entries": 0,
     }
 
 
@@ -589,11 +589,17 @@ class _ThreadedHTTPServer(HTTPServer):
                 pass
         return peeked
 
-    def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def process_request(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: object,
+    ) -> None:
         # Keep control-plane endpoints responsive while bounding model traffic.
         # Admission happens before a worker thread is created, so overload cannot
         # turn into an unbounded thread/socket population.
-        peeked = self._peek_request_head(request)
+        accepted_socket = cast(socket.socket, request)
+        accepted_address = cast(tuple[str, int], client_address)
+        peeked = self._peek_request_head(accepted_socket)
         first_line = peeked.split(b"\r\n", 1)[0]
         parts = first_line.split(b" ", 2)
         path = parts[1].decode("latin-1", "ignore") if len(parts) > 1 else ""
@@ -619,13 +625,16 @@ class _ThreadedHTTPServer(HTTPServer):
         admitted = managed and self.proxy_server._admission.acquire(blocking=False)
         if managed and not admitted:
             try:
-                request.sendall(_ADMISSION_REJECT_RESPONSE)
+                accepted_socket.sendall(_ADMISSION_REJECT_RESPONSE)
             finally:
-                self.shutdown_request(request)
+                self.shutdown_request(accepted_socket)
             self.proxy_server._admission_rejected += 1
             return
         try:
-            t = threading.Thread(target=self._handle, args=(request, client_address, managed))
+            t = threading.Thread(
+                target=self._handle,
+                args=(accepted_socket, accepted_address, managed),
+            )
             t.daemon = True
             t.start()
         except Exception:
@@ -634,7 +643,7 @@ class _ThreadedHTTPServer(HTTPServer):
             # neither leaks. Re-raise so the serving loop records the error.
             if admitted:
                 self.proxy_server._admission.release()
-            self.shutdown_request(request)
+            self.shutdown_request(accepted_socket)
             raise
 
     def _handle(
@@ -996,10 +1005,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.wfile.write(err)
                 return
             sf = ps.session_filter
-            result = sf.query(params)
+            session_result = sf.query(params)
             models = sf.distinct_models()
-            result["models"] = models
-            self._send_json(result)
+            session_result["models"] = models
+            self._send_json(session_result)
             return
         if path.startswith("http"):
             self._proxy_to(path, "GET")
@@ -2190,7 +2199,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     ps.session["cost_saved"] += cost_saved
                     ps.session["cache_read_tokens"] += cache_read_tokens
                     ps.session["cache_creation_tokens"] += cache_creation_tokens
-                    ps.session[f"cache_read_{_cache_origin}"] += cache_read_tokens
+                    if _cache_origin == "client":
+                        ps.session["cache_read_client"] += cache_read_tokens
+                    else:
+                        ps.session["cache_read_proxy"] += cache_read_tokens
 
                 # Persist to monitor.db so `tokenpak status`, dashboards, and
                 # cross-session reporting see this request. Async write queue
@@ -3002,11 +3014,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         import sqlite3 as _sqlite3
 
         ps = self._ps
-        db_path = (
-            ps.monitor.db_path
-            if getattr(ps, "monitor", None) is not None
-            else str(_paths.under("monitor.db"))
-        )
+        monitor = ps.monitor
+        db_path = monitor.db_path if monitor is not None else str(_paths.under("monitor.db"))
 
         sessions: list[dict[str, object]] = []
         try:

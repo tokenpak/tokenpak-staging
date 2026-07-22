@@ -66,7 +66,7 @@ def _config_max_parallel() -> int:
     except ImportError:
         raw = DEFAULT_MAX_PARALLEL
     try:
-        if isinstance(raw, bool):  # bool is an int subclass; True would mean 1
+        if raw is None or isinstance(raw, bool):  # bool is an int subclass; True would mean 1
             raise ValueError
         value = int(raw)
         if value < 1:

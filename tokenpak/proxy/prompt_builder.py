@@ -567,7 +567,7 @@ class PromptCacheStats:
             else:
                 self.breakpoint_skipped[name] += 1
 
-    def summary(self) -> dict[str, float | int]:
+    def summary(self) -> dict[str, object]:
         with self._lock:
             total = self.cache_markers_applied + self.cache_markers_skipped
             pct = (self.cache_markers_applied / total * 100) if total > 0 else 0

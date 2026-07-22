@@ -1143,6 +1143,8 @@ def main(
     # modes fail closed; a typo must never fall back to shared state.
     from . import session_home
 
+    session_home_api = _cast(_SessionHomeModule, session_home)
+
     try:
         paths = session_home.select_paths(workspace_dir=Path.cwd())
     except (session_home.InvalidSessionMode, ValueError) as exc:
@@ -1155,7 +1157,7 @@ def main(
     # to shared/workspace mode and can recover receipt-proven quarantines even
     # when the selected launch later blocks or runs out of storage.
     _run_isolated_retention(
-        session_home,
+        session_home_api,
         paths,
         phase="pre-launch",
         preserve_home=paths.home,
@@ -1283,7 +1285,7 @@ def main(
             if not _is_storage_pressure(exc):
                 raise
             _run_isolated_retention(
-                session_home,
+                session_home_api,
                 paths,
                 phase="storage-pressure",
                 preserve_home=paths.home,
@@ -1301,7 +1303,7 @@ def main(
                 fallback_result="setup_failed",
             )
         if receipt_out and run_id and original_preflight is not None:
-            setup = {
+            failure_setup = {
                 "setup_completed": False,
                 "session_mode": paths.mode,
                 "codex_home": str(paths.home),
@@ -1313,7 +1315,7 @@ def main(
                     receipt_out=receipt_out,
                     run_id=run_id,
                     codex_args=args,
-                    setup=setup,
+                    setup=failure_setup,
                     started_at=utc_now(),
                     start_monotonic=time.monotonic(),
                     exit_code=failure_exit,
@@ -1328,7 +1330,7 @@ def main(
                 return 1
         return failure_exit
 
-    with _lease_with_post_retention(lease, session_home, paths):
+    with _lease_with_post_retention(lease, session_home_api, paths):
 
         def reusable_home_is_clear() -> bool:
             if paths.mode == session_home.MODE_ISOLATED:
@@ -1355,7 +1357,7 @@ def main(
                 if not _is_storage_pressure(exc):
                     raise
                 _run_isolated_retention(
-                    session_home,
+                    session_home_api,
                     paths,
                     phase="storage-pressure",
                     preserve_home=paths.home,
@@ -1375,7 +1377,7 @@ def main(
                     fallback_result="setup_failed",
                 )
             if receipt_out and run_id and original_preflight is not None:
-                setup = {
+                provisioning_failure_setup = {
                     "setup_completed": False,
                     "session_mode": paths.mode,
                     "codex_home": str(paths.home),
@@ -1387,7 +1389,7 @@ def main(
                         receipt_out=receipt_out,
                         run_id=run_id,
                         codex_args=args,
-                        setup=setup,
+                        setup=provisioning_failure_setup,
                         started_at=utc_now(),
                         start_monotonic=time.monotonic(),
                         exit_code=failure_exit,
@@ -1416,7 +1418,7 @@ def main(
 
         if paths.mode == session_home.MODE_ISOLATED:
             _run_isolated_retention(
-                session_home,
+                session_home_api,
                 paths,
                 phase="post-provision",
                 preserve_home=paths.home,
@@ -1424,8 +1426,8 @@ def main(
 
         if receipt_only:
             assert receipt_out is not None and run_id is not None
-            setup = _receipt_only_setup_metadata()
-            setup.update({"session_mode": paths.mode, "codex_home": str(paths.home)})
+            receipt_setup = _receipt_only_setup_metadata()
+            receipt_setup.update({"session_mode": paths.mode, "codex_home": str(paths.home)})
             env = paths.environment(_vanilla_receipt_env())
             env["TOKENPAK_CODEX_RECEIPT_OUT"] = receipt_out
             env["TOKENPAK_CODEX_RUN_ID"] = run_id
@@ -1455,7 +1457,7 @@ def main(
                     receipt_out=receipt_out,
                     run_id=run_id,
                     codex_args=args,
-                    setup=setup,
+                    setup=receipt_setup,
                     started_at=started_at,
                     start_monotonic=start_monotonic,
                     exit_code=exit_code,

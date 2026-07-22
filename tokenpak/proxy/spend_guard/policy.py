@@ -489,10 +489,10 @@ def load_config(raw_config: Optional[dict[str, Any]] = None) -> SpendGuardConfig
             int,
         ),
     )
-    for env_key, attr, caster in env_overrides:
+    for env_key, attr, env_caster in env_overrides:
         if env_key in env:
             try:
-                setattr(cfg, attr, caster(env[env_key]))
+                setattr(cfg, attr, env_caster(env[env_key]))
                 if attr in _LEGACY_DOLLAR_FIELDS:
                     # Env override of a legacy dollar field also engages
                     # the dollar plane and emits the deprecation warning.

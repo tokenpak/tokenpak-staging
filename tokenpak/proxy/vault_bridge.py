@@ -24,14 +24,13 @@ from array import array as _array
 from bisect import bisect_left as _bisect_left
 from collections import Counter as _Counter
 from collections import OrderedDict as _OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass as _dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
 from tokenpak.core.config_loader import get as _cfg
-
 from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 
 if TYPE_CHECKING:
@@ -71,7 +70,12 @@ class _VaultIndexBackend(Protocol):
 
     def maybe_reload(self) -> None: ...
 
-    def search(self, query: str, top_k: int = 5, min_score: float = 2.0) -> list[SearchResult]: ...
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+    ) -> Sequence[tuple[Mapping[str, object], float]]: ...
 
     def compile_injection(
         self, query: str, budget: int = 4000, top_k: int = 5, min_score: float = 2.0
@@ -1313,8 +1317,11 @@ def inject_vault_context(
                     if isinstance((block_id := block.get("block_id")), str)
                 ]
                 semantic_scores = semantic_scorer.score(query, block_ids)
+                mutable_results = [(dict(block), score) for block, score in bm25_results]
                 rescored = score_and_sort(
-                    bm25_results, query=query, semantic_scores=semantic_scores
+                    mutable_results,
+                    query=query,
+                    semantic_scores=semantic_scores,
                 )[:INJECT_TOP_K]
                 # Build injection from rescored results
                 injection_text, tokens_used, source_refs = _compile_from_results(

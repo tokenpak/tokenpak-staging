@@ -351,9 +351,10 @@ async def _forward_request(request: Request, target_url: str) -> Response:
         # Extract session ID from headers if available
         session_id = request.headers.get("X-Session-ID", None)
         size_alert = monitor.check_request_size(len(body), session_id=session_id)
-        if size_alert and ps.telemetry_events:
+        telemetry_events = getattr(ps, "telemetry_events", None)
+        if size_alert and telemetry_events:
             # Log alert to telemetry
-            ps.telemetry_events.append(
+            telemetry_events.append(
                 {
                     "type": "request_size_alert",
                     "timestamp": datetime.now().isoformat(),
@@ -798,8 +799,8 @@ def _record_telemetry(
             try:
                 ps.compression_stats.record_compression(
                     model=model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
+                    tokens_in=input_tokens,
+                    tokens_out=output_tokens,
                     ratio=ratio,
                     latency_ms=latency_ms,
                     status="ok",
@@ -1265,10 +1266,14 @@ async def run_async_proxy(
         timeout_keep_alive=75,
         timeout_graceful_shutdown=int(proxy_server.shutdown_timeout),
     )
-    server = uvicorn.Server(config)
 
-    # Suppress uvicorn's default signal handlers (ProxyServer manages shutdown)
-    server.install_signal_handlers = lambda: None
+    class _TokenPakUvicornServer(uvicorn.Server):
+        """Uvicorn server whose lifecycle is governed by ``ProxyServer``."""
+
+        def install_signal_handlers(self) -> None:
+            return
+
+    server = _TokenPakUvicornServer(config)
 
     tasks = [asyncio.create_task(server.serve())]
 

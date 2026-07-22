@@ -161,8 +161,10 @@ _VALIDATION_GATE_LOCK = threading.Lock()
 
 def _has_validation_gate() -> bool:
     try:
-        import tokenpak.core.validation_gate
+        from tokenpak.core import validation_gate as _validation_gate
 
+        if _validation_gate is None:
+            return False
         return True
     except Exception:
         return False
@@ -759,7 +761,10 @@ def _apply_budget(
     try:
         from tokenpak.core.config_loader import get as _cfg
 
-        budget_total = total_tokens or int(_cfg("budget_total_tokens", 100_000))
+        configured_total = _cfg("budget_total_tokens", 100_000)
+        if configured_total is None:
+            configured_total = 100_000
+        budget_total = total_tokens or int(configured_total)
     except Exception:
         budget_total = total_tokens or 100_000
     try:
@@ -767,6 +772,6 @@ def _apply_budget(
 
         b = Budgeter()
         b.total_tokens = budget_total
-        return cast(dict[str, object], b.allocate(cast(dict[str, object], components)))
+        return b.allocate(components)
     except Exception:
         return components  # fail-open
