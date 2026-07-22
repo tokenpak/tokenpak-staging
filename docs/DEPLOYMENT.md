@@ -142,7 +142,7 @@ Default location: `~/.tokenpak/config.json`
  "compression": {
  "enabled": true,
  "level": "balanced",
- "threshold_tokens": 4500
+ "threshold_tokens": 1500
  },
  "budget": {
  "monthly_usd": 100,

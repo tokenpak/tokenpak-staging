@@ -107,6 +107,10 @@ from .websocket import (  # noqa: F401
 )
 
 __all__ = [
+    "HTTPProxy",
+    "ProxyRequest",
+    "ProxyResponse",
+    "ROUTE_CLAUDE_CODE",
     "adapters",
     "cache",
     "cache_invalidator",

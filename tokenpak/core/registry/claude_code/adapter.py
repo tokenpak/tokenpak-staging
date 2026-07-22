@@ -4,7 +4,7 @@ import platform
 from typing import Dict, Optional
 
 from tokenpak.core.registry.claude_code.config import ClaudeCodeConfig
-from tokenpak.proxy.request import ROUTE_CLAUDE_CODE, HTTPProxy, ProxyRequest, ProxyResponse
+from tokenpak.proxy import ROUTE_CLAUDE_CODE, HTTPProxy, ProxyRequest, ProxyResponse
 
 
 class ClaudeCodeAdapter:
