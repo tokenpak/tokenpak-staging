@@ -236,6 +236,11 @@ class StatsCollector:
         return "\n".join(lines)
 
 
+def to_text(self: StatsCollector) -> str:
+    """Return the legacy module-level plaintext rendering helper."""
+    return self.to_text()
+
+
 # ---------------------------------------------------------------------------
 # Module-level singleton — import and use directly
 # ---------------------------------------------------------------------------

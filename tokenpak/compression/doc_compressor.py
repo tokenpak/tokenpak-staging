@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .salience.doc_extractor import DocExtractionResult, DocExtractor
 
 
@@ -49,13 +51,6 @@ class DocCompressor:
         return result.extracted
 
 
-def compress_document(
-    content: str,
-    annotation_context: int = 2,
-    include_rst_headings: bool = True,
-) -> str:
+def compress_document(content: str, **kwargs: Any) -> str:
     """Module-level helper — compress *content* via :class:`DocCompressor`."""
-    return DocCompressor(
-        annotation_context=annotation_context,
-        include_rst_headings=include_rst_headings,
-    ).compress(content)
+    return DocCompressor(**kwargs).compress(content)

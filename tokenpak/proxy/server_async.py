@@ -967,7 +967,7 @@ async def handle_v1_proxy(request: Request) -> Response:
     return await _forward_request(request, target_url)
 
 
-async def handle_not_found(request: Request, exc: Exception) -> JSONResponse:
+async def handle_not_found(request: Request, exc: Exception | None = None) -> JSONResponse:
     return JSONResponse({"error": "not_found", "path": request.url.path}, status_code=404)
 
 

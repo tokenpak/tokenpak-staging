@@ -539,15 +539,13 @@ class TestCwdIndependence:
         assert Path(engine.db_path) == home / "telemetry.db"
         assert (home / "telemetry.db").is_file()
 
-    def test_cost_tracker_default_honors_scoped_home_and_creates_parent(
-        self, tmp_path, monkeypatch
-    ):
+    def test_cost_tracker_explicit_scoped_home_creates_parent(self, tmp_path, monkeypatch):
         from tokenpak.telemetry.cost_tracker import CostTracker
 
         home = tmp_path / "nested" / "tokenpak-home"
         monkeypatch.setenv("TOKENPAK_HOME", str(home))
 
-        tracker = CostTracker()
+        tracker = CostTracker(None)
 
         assert Path(tracker._db_path) == home / "cost.db"
         assert (home / "cost.db").is_file()

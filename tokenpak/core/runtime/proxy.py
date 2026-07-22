@@ -143,7 +143,8 @@ class Monitor(_BaseMonitor):
         conn.commit()
         conn.close()
 
-    def log(
+    # This compatibility shim intentionally preserves the legacy positional ABI.
+    def log(  # type: ignore[override]
         self,
         model: object,
         input_tokens: object,
@@ -160,18 +161,18 @@ class Monitor(_BaseMonitor):
         cache_read_tokens: object = 0,
         cache_creation_tokens: object = 0,
         would_have_saved: object = 0,
+        session_id: object = "",
+        stable_hash: object = "",
+        volatile_hash: object = "",
         cache_origin: object = "unknown",
         user_id: object = "",
         cache_creation_ephemeral_1h_tokens: object = 0,
         cache_creation_ephemeral_5m_tokens: object = 0,
         ttl_attribution: object | None = None,
-        session_id: object = "",
         agent_id: object = "",
         cycle_id: object = "",
         attribution_source: object = "",
         stop_reason: object = "",
-        stable_hash: object = "",
-        volatile_hash: object = "",
     ) -> None:
         """Log a request; extends parent with session_id and fingerprints."""
         from datetime import datetime
