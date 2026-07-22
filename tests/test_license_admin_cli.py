@@ -329,10 +329,7 @@ class TestGenkeysCommand:
         priv_pem = (tmp_path / "tokenpak_private.pem").read_bytes()
         rsa_header = b"-----BEGIN RSA " + b"PRIVATE KEY-----"
         generic_header = b"-----BEGIN " + b"PRIVATE KEY-----"
-        assert (
-            rsa_header in priv_pem
-            or generic_header in priv_pem
-        )
+        assert rsa_header in priv_pem or generic_header in priv_pem
 
     def test_genkeys_refuses_overwrite_without_force(self, tmp_path, capsys):
         parser = build_parser()
