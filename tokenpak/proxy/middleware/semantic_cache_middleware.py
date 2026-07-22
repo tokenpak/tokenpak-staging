@@ -94,9 +94,7 @@ class SemanticCacheMiddleware:
 
         return lookup
 
-    def record(
-        self, query: str, response: dict[str, Any], scope_key: str = ""
-    ) -> None:
+    def record(self, query: str, response: dict[str, Any], scope_key: str = "") -> None:
         """
         Store *response* for *query* in the appropriate cache.
 

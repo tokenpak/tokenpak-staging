@@ -60,6 +60,7 @@ def _load_channel_configs() -> list[dict[str, Any]]:
             if config_path.suffix == ".yaml":
                 try:
                     import yaml
+
                     with open(config_path) as f:
                         data = yaml.safe_load(f) or {}
                 except ImportError:
@@ -119,6 +120,7 @@ def dispatch(event: str, severity: str, message: str, **extra: Any) -> None:
     def _deliver_all() -> None:
         from . import email as email_channel
         from . import slack, telegram, webhook
+
         for ch in channels:
             ch_type = ch.get("type")
             try:
@@ -159,7 +161,8 @@ def dispatch(event: str, severity: str, message: str, **extra: Any) -> None:
     t = threading.Thread(target=_deliver_all, daemon=True, name="tokenpak-alert-dispatch")
     t.start()
 
+
 # Alias for backwards-compatibility with tests that import dispatch_alert
 dispatch_alert = dispatch
 
-__all__ = ['email', 'slack', 'telegram', 'webhook', 'dispatch', 'dispatch_alert']
+__all__ = ["email", "slack", "telegram", "webhook", "dispatch", "dispatch_alert"]

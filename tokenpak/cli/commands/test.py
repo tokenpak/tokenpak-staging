@@ -690,7 +690,7 @@ def run_test(
     test_id: str,
 ) -> None:
     """Execute the test and display results."""
-    from tokenpak.prove.adapter import ArmResult, TurnResult, run_arm
+    from tokenpak.prove.adapter import TurnResult, run_arm
 
     scenario = _SCENARIOS[test_id]
     arms_cfg = _map_platform_to_adapter(platform, provider, model)

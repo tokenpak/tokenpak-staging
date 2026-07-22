@@ -180,7 +180,11 @@ def _analyze_model(session: Dict[str, Any]) -> Dict[str, Any]:
     if alt_result:
         alt_name, savings_frac = alt_result
         savings_pct = int(savings_frac * 100)
-        alt_cost = _model_cost_per_request(alt_name, avg_input, avg_output) if avg_input > 0 else cost_per_req * (1 - savings_frac)
+        alt_cost = (
+            _model_cost_per_request(alt_name, avg_input, avg_output)
+            if avg_input > 0
+            else cost_per_req * (1 - savings_frac)
+        )
         if avg_input == 0 or alt_cost < cost_per_req:
             best_alt = (alt_name, savings_pct, "dynamic tier step-down")
             best_alt_cost = alt_cost

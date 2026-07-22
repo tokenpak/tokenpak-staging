@@ -31,7 +31,6 @@ import sys
 from pathlib import Path
 from typing import TypedDict, cast
 
-
 HookEntry = dict[str, object]
 HookGroup = dict[str, object]
 

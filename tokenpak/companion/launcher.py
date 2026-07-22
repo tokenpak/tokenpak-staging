@@ -196,6 +196,7 @@ def main(args: list[str] | None = None) -> int:
         default_proxy = os.environ.get("TOKENPAK_PROXY_URL", "http://localhost:8766")
         try:
             import httpx
+
             resp = httpx.get(f"{default_proxy}/health", timeout=1.0)
             if resp.status_code == 200:
                 proxy_url = default_proxy
@@ -206,6 +207,7 @@ def main(args: list[str] | None = None) -> int:
 
     # Print styled startup banner
     from tokenpak.cli.commands.status import MEME_LINES, _get_version
+
     meme = random.choice(MEME_LINES)
     version = _get_version()  # dynamic, e.g. "v1.8.0" (single source: tokenpak.__version__)
 
@@ -213,7 +215,10 @@ def main(args: list[str] | None = None) -> int:
     bare_tag = " \u2022 Bare: ON" if config.bare else ""
     print(f"  \U0001f4e6 Token{_TEAL}Pak{_RESET} Claude Companion", file=sys.stderr)
     print(f"     {_DIM}TokenPak {version}{_RESET}", file=sys.stderr)
-    print(f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{bare_tag}{_RESET}", file=sys.stderr)
+    print(
+        f"     {_DIM}Ready \u2022 Mode: {mode} \u2022 Budget: {budget}{bare_tag}{_RESET}",
+        file=sys.stderr,
+    )
     if proxy_url:
         print(f"     {_DIM}Proxy active \u2192 {proxy_url}{_RESET}", file=sys.stderr)
     print(file=sys.stderr)
@@ -282,10 +287,10 @@ _SESSION_PREFIX = "\U0001f4e6"  # 📦
 # painted across the whole label so it reads as a solid TokenPak chip
 # regardless of the user's terminal background; the trailing reset clears
 # it. Foreground: white "📦 Token", teal "Pak", gray "Claude Companion".
-_LBL_BG_BLACK = "\033[48;2;0;0;0m"   # solid black background fill
-_LBL_TEAL = "\033[38;2;0;180;170m"   # "Pak" — TokenPak teal
+_LBL_BG_BLACK = "\033[48;2;0;0;0m"  # solid black background fill
+_LBL_TEAL = "\033[38;2;0;180;170m"  # "Pak" — TokenPak teal
 _LBL_WHITE = "\033[38;2;255;255;255m"  # "📦 Token"        — white
-_LBL_GRAY = "\033[38;2;90;94;105m"   # "Claude Companion" — muted gray
+_LBL_GRAY = "\033[38;2;90;94;105m"  # "Claude Companion" — muted gray
 _LBL_RESET = "\033[0m"
 # Default session label shown in the top-HR chat-header. Kept in sync
 # with ``hooks/session_start_name.sh`` so the post-/clear restore
@@ -408,9 +413,7 @@ def _write_settings(config: CompanionConfig) -> str:
     # /clear. Skipped when the bundled script is missing on this host
     # (same defensive pattern as pre_send.sh above).
     session_name_hook = hooks_dir / "session_start_name.sh"
-    session_name_cmd = (
-        f"bash {session_name_hook}" if session_name_hook.is_file() else None
-    )
+    session_name_cmd = f"bash {session_name_hook}" if session_name_hook.is_file() else None
 
     settings: dict[str, Any] = {}
     user_settings_path = Path.home() / ".claude" / "settings.json"

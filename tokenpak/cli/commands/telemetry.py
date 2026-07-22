@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 def _get_telemetry_db_path() -> Path:
     from tokenpak.core.paths import get_db_path
+
     return get_db_path("telemetry.db")
 
 
@@ -74,9 +75,18 @@ ORDER BY e.ts ASC
 """
 
 _FIELDS = [
-    "trace_id", "ts", "ts_iso", "provider", "model", "agent_id",
-    "status", "duration_ms", "input_tokens", "output_tokens",
-    "total_tokens", "cost_usd",
+    "trace_id",
+    "ts",
+    "ts_iso",
+    "provider",
+    "model",
+    "agent_id",
+    "status",
+    "duration_ms",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cost_usd",
 ]
 
 

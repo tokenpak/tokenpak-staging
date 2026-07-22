@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import time
 import uuid
-from functools import wraps
 from collections.abc import Callable, Mapping
+from functools import wraps
 from typing import Optional, ParamSpec, TypeVar
 
 from .audit_trail import CacheAudit, CompileAudit, MetricsAudit
 from .logger import RequestLogger
-
 
 P = ParamSpec("P")
 R = TypeVar("R")

@@ -53,9 +53,7 @@ def cmd_list(args: list[str]) -> int:
         return 0
 
     now = int(time.time())
-    rows: list[list[str]] = [
-        ["ID", "PLATFORM", "KIND", "REFRESH", "EXPIRES", "STATUS", "SOURCE"]
-    ]
+    rows: list[list[str]] = [["ID", "PLATFORM", "KIND", "REFRESH", "EXPIRES", "STATUS", "SOURCE"]]
     for c in creds:
         rows.append(
             [
@@ -215,7 +213,11 @@ def cmd_add(args: list[str]) -> int:
         )
         return 2
 
-    platform = (parsed.get("--platform") or _prompt("platform (openai|anthropic|google|xai|...)", required=True) or "").lower()
+    platform = (
+        parsed.get("--platform")
+        or _prompt("platform (openai|anthropic|google|xai|...)", required=True)
+        or ""
+    ).lower()
     if not platform:
         return 2
 
@@ -231,7 +233,9 @@ def cmd_add(args: list[str]) -> int:
     if not secret:
         return 2
 
-    scope_raw = parsed.get("--scope") or _prompt("scope hosts (comma-separated, optional)", default="")
+    scope_raw = parsed.get("--scope") or _prompt(
+        "scope hosts (comma-separated, optional)", default=""
+    )
     scope_hosts = [h.strip() for h in scope_raw.split(",") if h.strip()]
 
     account_hint = parsed.get("--account")
@@ -258,9 +262,7 @@ def cmd_remove(args: list[str]) -> int:
         return 2
     cred_id = args[0]
 
-    owned_here = {
-        c.id for c in discover_all() if c.provider == "user-config"
-    }
+    owned_here = {c.id for c in discover_all() if c.provider == "user-config"}
     if cred_id not in owned_here:
         # Check whether another provider owns it so we can point the user elsewhere.
         other = next((c for c in discover_all() if c.id == cred_id), None)
@@ -326,6 +328,7 @@ def _prompt_secret(label: str, required: bool = False) -> str:
             print(f"tokenpak creds add: missing required secret {label!r}", file=sys.stderr)
         return ""
     import getpass
+
     try:
         return getpass.getpass(f"  {label}: ").strip()
     except (EOFError, KeyboardInterrupt):

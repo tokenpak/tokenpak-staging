@@ -63,7 +63,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Generic, Mapping, Optional, TypeVar, TypedDict, cast
+from typing import Callable, Generic, Mapping, Optional, TypedDict, TypeVar, cast
 
 logger = logging.getLogger(__name__)
 

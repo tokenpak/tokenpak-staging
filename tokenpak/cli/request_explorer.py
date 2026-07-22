@@ -47,9 +47,7 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
-def load_requests(
-    path: Optional[Path] = None, limit: Optional[int] = None
-) -> list[dict[str, Any]]:
+def load_requests(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict[str, Any]]:
     p = path or REQUESTS_PATH
     if not p.exists():
         return []
@@ -67,9 +65,7 @@ def load_requests(
     return rows
 
 
-def get_request_by_id(
-    request_id: str, path: Optional[Path] = None
-) -> Optional[dict[str, Any]]:
+def get_request_by_id(request_id: str, path: Optional[Path] = None) -> Optional[dict[str, Any]]:
     for row in load_requests(path=path):
         if row.get("id") == request_id:
             return row

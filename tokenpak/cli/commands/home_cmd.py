@@ -49,20 +49,21 @@ def build_home_parser(sub: Any) -> None:
 
     p_init = csub.add_parser("init", help="Create home + starter config")
     p_init.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Overwrite an existing config.json",
     )
     p_init.set_defaults(func=cmd_home_init)
 
     p_validate = csub.add_parser("validate", help="Parse + lint config file")
     p_validate.add_argument(
-        "--json", dest="as_json", action="store_true",
+        "--json",
+        dest="as_json",
+        action="store_true",
     )
     p_validate.set_defaults(func=cmd_home_validate)
 
-    p_explain = csub.add_parser(
-        "explain", help="List every config key + value + source"
-    )
+    p_explain = csub.add_parser("explain", help="List every config key + value + source")
     p_explain.add_argument("--json", dest="as_json", action="store_true")
     p_explain.set_defaults(func=cmd_home_explain)
 
@@ -76,11 +77,13 @@ def build_home_parser(sub: Any) -> None:
         ),
     )
     p_migrate.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Show what would be copied without writing anything",
     )
     p_migrate.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help=(
             "Allow merging into an existing ~/.tpk/ (default: refuse "
             "and report what to do manually)"
@@ -225,10 +228,13 @@ def cmd_home_explain(args: Any) -> int:
     }
 
     if getattr(args, "as_json", False):
-        print(json.dumps(
-            {k: {"value": v, "source": s} for k, (v, s) in keys.items()},
-            indent=2, sort_keys=True,
-        ))
+        print(
+            json.dumps(
+                {k: {"value": v, "source": s} for k, (v, s) in keys.items()},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
     print(f"Config file : {cfg_path}")
@@ -310,8 +316,7 @@ def _starter_config() -> dict[str, Any]:
         "port": 8766,
         "vault_path": str(Path.home() / "vault"),
         "_comment": (
-            "Created by `tokenpak home init`. See `tokenpak home "
-            "explain` for what each key does."
+            "Created by `tokenpak home init`. See `tokenpak home explain` for what each key does."
         ),
     }
 

@@ -259,9 +259,7 @@ class UpstreamRetryPolicy:
         return None
 
     def _delay(self, attempt: int, retry_after: object = None) -> float:
-        backoff = self.backoff or RateLimitBackoff(
-            base_wait=0.2, max_wait=2.5, jitter_factor=0.0
-        )
+        backoff = self.backoff or RateLimitBackoff(base_wait=0.2, max_wait=2.5, jitter_factor=0.0)
         return backoff.wait_time(attempt, retry_after=_parse_retry_after(retry_after))
 
     def retry_for_exception(

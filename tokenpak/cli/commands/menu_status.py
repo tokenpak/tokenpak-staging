@@ -44,10 +44,10 @@ from typing import Any, Optional, cast
 # field rename/removal so consumers can pin. (spec F3)
 STATUS_SCHEMA_VERSION = 1
 
-_HEALTH_TTL = 1.5      # D2
-_STATS_TTL = 7.0       # D2
-_BACKOFF = 3.0         # D4
-_TIMEOUT = 0.3         # D3 (300ms; hard ceiling < 500ms)
+_HEALTH_TTL = 1.5  # D2
+_STATS_TTL = 7.0  # D2
+_BACKOFF = 3.0  # D4
+_TIMEOUT = 0.3  # D3 (300ms; hard ceiling < 500ms)
 
 
 def _port() -> int:
@@ -67,9 +67,9 @@ def _monotonic() -> float:
 class ProxyStatus:
     """Honest proxy state. ``None`` means *unknown* — never fabricate."""
 
-    state: str                      # "running" | "stopped" | "starting" | "unknown"
-    cost: Optional[float] = None    # today's spend; None when unknown
-    saved: Optional[float] = None   # today's savings; None when unknown
+    state: str  # "running" | "stopped" | "starting" | "unknown"
+    cost: Optional[float] = None  # today's spend; None when unknown
+    saved: Optional[float] = None  # today's savings; None when unknown
 
 
 class StatusCache:
@@ -122,7 +122,9 @@ class StatusCache:
         except Exception:  # noqa: BLE001
             self._backoff_until = now + _BACKOFF
             self._health = None
-            self._health_state = self._health_state if self._health_state != "unknown" else "unknown"
+            self._health_state = (
+                self._health_state if self._health_state != "unknown" else "unknown"
+            )
 
     def _refresh_stats(self, now: float) -> None:
         if now < self._backoff_until:
@@ -181,9 +183,9 @@ def json_snapshot() -> dict[str, Any]:
     s = snapshot(probe=False)
     return {
         "schema_version": STATUS_SCHEMA_VERSION,
-        "proxy": s.state,                 # running|stopped|starting|unknown
-        "cost_today": s.cost,             # may be null (honesty — D7)
-        "saved_today": s.saved,           # may be null
+        "proxy": s.state,  # running|stopped|starting|unknown
+        "cost_today": s.cost,  # may be null (honesty — D7)
+        "saved_today": s.saved,  # may be null
         "port": _port(),
     }
 

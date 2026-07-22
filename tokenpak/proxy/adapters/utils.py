@@ -11,6 +11,7 @@ Provides module-level functions that delegate to the per-format adapter instance
 - extract_response_tokens() — extract output token count from response body
 - extract_query_signal()   — extract search query signal for vault context
 """
+
 from __future__ import annotations
 
 import threading
@@ -33,6 +34,7 @@ def _get_registry() -> AdapterRegistry:
         with _REGISTRY_LOCK:
             if _REGISTRY is None:
                 from . import build_default_registry
+
                 _REGISTRY = build_default_registry()
     return _REGISTRY
 
@@ -40,6 +42,7 @@ def _get_registry() -> AdapterRegistry:
 # ---------------------------------------------------------------------------
 # Public API — mirrors monolith module-level functions
 # ---------------------------------------------------------------------------
+
 
 def _header_mapping(headers: Any) -> Dict[str, str]:
     """Build a plain dict from BaseHTTPRequestHandler headers."""
@@ -91,9 +94,7 @@ def extract_response_tokens(
         return 0
 
 
-def extract_query_signal(
-    body_bytes: bytes, adapter: Optional[FormatAdapter] = None
-) -> str:
+def extract_query_signal(body_bytes: bytes, adapter: Optional[FormatAdapter] = None) -> str:
     """Extract a search query signal from the request body for vault context.
 
     Returns:

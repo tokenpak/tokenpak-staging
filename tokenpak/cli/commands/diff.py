@@ -146,9 +146,7 @@ def _is_pinned(segment: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_diff_from_segments(
-    trace_id: str, segments: list[dict[str, Any]]
-) -> ContextDiff:
+def _build_diff_from_segments(trace_id: str, segments: list[dict[str, Any]]) -> ContextDiff:
     """Build a ContextDiff from a list of segment records."""
     removed = []
     compressed = []

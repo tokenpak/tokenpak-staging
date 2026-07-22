@@ -15,6 +15,9 @@ import time
 from typing import Optional
 from urllib.parse import urlparse
 
+from tokenpak.core.config_loader import get as _cfg
+from tokenpak.proxy.adapters.base import FormatAdapter
+
 from .circuit_breaker import (  # noqa: F401 — re-exported for consumers
     _BLOCKED_FORWARD_HEADERS,
     _MAX_REQUEST_BYTES,
@@ -37,9 +40,6 @@ from .circuit_breaker import (  # noqa: F401 — re-exported for consumers
     _sanitize_headers,
     _suggest_model,
 )
-from tokenpak.core.config_loader import get as _cfg
-from tokenpak.proxy.adapters.base import FormatAdapter
-
 from .config import UPSTREAM_ROUTES, UPSTREAM_TIMEOUT
 
 # ---------------------------------------------------------------------------

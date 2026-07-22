@@ -164,7 +164,9 @@ def build_ssh_command(
 
 
 def _write_metadata(paths: TunnelPaths, payload: dict[str, Any]) -> None:
-    paths.metadata.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    paths.metadata.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _load_metadata(path: Path) -> dict[str, Any] | None:
@@ -289,7 +291,9 @@ def _start_ssh_tunnel(
             start_new_session=True,
         )
     except FileNotFoundError as exc:
-        raise DashboardTunnelError("OpenSSH client not found. Install ssh or set TOKENPAK_SSH_BIN.") from exc
+        raise DashboardTunnelError(
+            "OpenSSH client not found. Install ssh or set TOKENPAK_SSH_BIN."
+        ) from exc
 
     time.sleep(0.25)
     if process.poll() is not None:
@@ -396,12 +400,16 @@ def disconnect_dashboard(
     if record is None:
         if not quiet:
             print(f"No dashboard tunnel recorded for {host}.")
-        return DisconnectResult(host=host, target=target, disconnected=False, metadata_removed=False)
+        return DisconnectResult(
+            host=host, target=target, disconnected=False, metadata_removed=False
+        )
 
     control_socket = Path(str(record.get("control_socket") or ""))
     disconnected = _run_ssh_control(str(record.get("target") or target), control_socket, "exit")
     _cleanup_record(record)
-    return DisconnectResult(host=host, target=target, disconnected=disconnected, metadata_removed=True)
+    return DisconnectResult(
+        host=host, target=target, disconnected=disconnected, metadata_removed=True
+    )
 
 
 def _result_payload(result: DashboardTunnelResult) -> dict[str, Any]:
@@ -439,7 +447,9 @@ def cmd_dashboard_tunnel(args: Any) -> int:
                 local_port=getattr(args, "local_port", "auto"),
                 ssh_user=getattr(args, "ssh_user", None),
                 open_browser=bool(getattr(args, "open_browser", True)),
-                health_timeout=float(getattr(args, "health_timeout", DEFAULT_HEALTH_TIMEOUT_SECONDS)),
+                health_timeout=float(
+                    getattr(args, "health_timeout", DEFAULT_HEALTH_TIMEOUT_SECONDS)
+                ),
             )
             if json_output:
                 print(json.dumps(_result_payload(connect_result), indent=2, sort_keys=True))

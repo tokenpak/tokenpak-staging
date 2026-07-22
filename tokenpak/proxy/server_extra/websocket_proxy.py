@@ -195,9 +195,7 @@ class WebSocketConnectionManager:
         logger.debug("Registered connection %s from %s", connection_id, client_address)
         return True
 
-    def unregister(
-        self, connection_id: str, close_code: Optional[int] = None
-    ) -> None:
+    def unregister(self, connection_id: str, close_code: Optional[int] = None) -> None:
         """
         Unregister an active connection.
 
@@ -212,9 +210,7 @@ class WebSocketConnectionManager:
         if stats is not None:
             stats.disconnected_at = time.time()
             stats.close_code = close_code
-            logger.debug(
-                "Unregistered connection %s (code=%s)", connection_id, close_code
-            )
+            logger.debug("Unregistered connection %s (code=%s)", connection_id, close_code)
 
     # ------------------------------------------------------------------ #
     # Stats recording
@@ -226,9 +222,7 @@ class WebSocketConnectionManager:
         if stats is not None:
             stats.messages_received += 1
 
-    def record_chunk(
-        self, connection_id: str, compressed: int, uncompressed: int
-    ) -> None:
+    def record_chunk(self, connection_id: str, compressed: int, uncompressed: int) -> None:
         """
         Record a compressed chunk sent to *connection_id*.
 

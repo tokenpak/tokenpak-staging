@@ -35,7 +35,7 @@ _KEY_FILE = _BLOB_DIR / ".key"
 
 _MAGIC = b"TPKD"
 _VERSION = b"\x01"
-_HEADER_LEN = 5   # magic(4) + version(1)
+_HEADER_LEN = 5  # magic(4) + version(1)
 _NONCE_LEN = 12
 _TAG_LEN = 16
 _MIN_BLOB_LEN = _HEADER_LEN + _NONCE_LEN + _TAG_LEN  # 33
@@ -74,9 +74,7 @@ def _load_or_generate_key() -> bytes:
     if env_key:
         raw = bytes.fromhex(env_key)
         if len(raw) != 32:
-            raise ValueError(
-                "TOKENPAK_DEBUG_CAPTURE_KEY must be exactly 64 hex chars (32 bytes)"
-            )
+            raise ValueError("TOKENPAK_DEBUG_CAPTURE_KEY must be exactly 64 hex chars (32 bytes)")
         return raw
 
     _BLOB_DIR.mkdir(parents=True, exist_ok=True)
@@ -153,9 +151,7 @@ def decrypt_blob(blob: bytes, key: bytes | None = None) -> Any:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     if len(blob) < _HEADER_LEN or blob[:4] != _MAGIC:
-        raise ValueError(
-            f"Bad magic: expected {_MAGIC!r}, got {blob[:4]!r}"
-        )
+        raise ValueError(f"Bad magic: expected {_MAGIC!r}, got {blob[:4]!r}")
     if len(blob) < _MIN_BLOB_LEN:
         raise ValueError(
             f"Blob too short to be a valid encrypted record "
@@ -348,6 +344,4 @@ def export_capture(
         blob = enc_path.read_bytes()
         return cast(dict[str, Any], decrypt_blob(blob, key=key))
 
-    raise FileNotFoundError(
-        f"No capture found for trace_id={trace_id!r} in {base}"
-    )
+    raise FileNotFoundError(f"No capture found for trace_id={trace_id!r} in {base}")

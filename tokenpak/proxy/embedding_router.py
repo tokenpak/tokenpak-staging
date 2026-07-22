@@ -96,9 +96,7 @@ def _rule_model_preference(
     for prefix, provider in _MODEL_PREFIX_MAP:
         if hint_lower.startswith(prefix):
             if provider in available:
-                logger.debug(
-                    "content-aware router: model_hint=%r → %s", model_hint, provider
-                )
+                logger.debug("content-aware router: model_hint=%r → %s", model_hint, provider)
                 return provider
             logger.debug(
                 "content-aware router: model_hint=%r matched %s but provider not available",
@@ -172,12 +170,11 @@ class ContentAwareRouter:
         strategy: Optional[str] = None,
     ) -> None:
         self.available_providers: List[str] = (
-            list(available_providers) if available_providers is not None
+            list(available_providers)
+            if available_providers is not None
             else list(_DEFAULT_PROVIDERS)
         )
-        self._strategy = strategy or os.environ.get(
-            "TOKENPAK_EMBEDDING_ROUTING_STRATEGY", "auto"
-        )
+        self._strategy = strategy or os.environ.get("TOKENPAK_EMBEDDING_ROUTING_STRATEGY", "auto")
 
     # ------------------------------------------------------------------
     # Public API
@@ -214,9 +211,7 @@ class ContentAwareRouter:
             If no providers are available.
         """
         if not self.available_providers:
-            raise RuntimeError(
-                "ContentAwareRouter: no embedding providers are available."
-            )
+            raise RuntimeError("ContentAwareRouter: no embedding providers are available.")
 
         strategy = self._strategy
 

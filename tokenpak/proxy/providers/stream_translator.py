@@ -481,12 +481,7 @@ class StreamingTranslator:
 
     def _build_impl(
         self, src: str, tgt: str
-    ) -> (
-        _AnthropicToOpenAIStream
-        | _OpenAIToAnthropicStream
-        | _GoogleToAnthropicStream
-        | None
-    ):
+    ) -> _AnthropicToOpenAIStream | _OpenAIToAnthropicStream | _GoogleToAnthropicStream | None:
         if src == tgt:
             return None
         if src == "anthropic" and tgt == "openai":

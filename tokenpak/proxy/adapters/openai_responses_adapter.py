@@ -195,7 +195,10 @@ class OpenAIResponsesAdapter(FormatAdapter):
                     return function_name
             return ""
 
-        return sorted(copy.deepcopy(tools), key=lambda t: (_tool_name(t), json.dumps(t, sort_keys=True, ensure_ascii=False)))
+        return sorted(
+            copy.deepcopy(tools),
+            key=lambda t: (_tool_name(t), json.dumps(t, sort_keys=True, ensure_ascii=False)),
+        )
 
     def _build_prompt_cache_key(self, canonical: CanonicalRequest) -> str:
         stable_payload: OrderedDict[str, Any] = OrderedDict()
@@ -205,11 +208,17 @@ class OpenAIResponsesAdapter(FormatAdapter):
         stable_payload["input_prefix"] = self._stable_message_prefix(canonical.messages)
         stable_payload["input_format"] = canonical.raw_extra.get("_input_format", "message_array")
 
-        for key in sorted(k for k in canonical.raw_extra.keys() if k not in _VOLATILE_EXTRA_KEYS and not k.startswith("_")):
+        for key in sorted(
+            k
+            for k in canonical.raw_extra.keys()
+            if k not in _VOLATILE_EXTRA_KEYS and not k.startswith("_")
+        ):
             stable_payload[key] = copy.deepcopy(canonical.raw_extra[key])
 
         digest = hashlib.sha256(
-            json.dumps(stable_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            json.dumps(
+                stable_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
         ).hexdigest()[:32]
         return f"tokenpak:openai-prefix:{digest}"
 

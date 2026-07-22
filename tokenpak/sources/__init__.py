@@ -41,4 +41,16 @@ def list_connectors() -> list[str]:
     """List available connectors."""
     return list(CONNECTORS.keys())
 
-__all__ = ['base', 'base_source', 'git_adapter', 'github', 'google_drive', 'local', 'notion', 'notion_adapter', 'obsidian', 'url_adapter']
+
+__all__ = [
+    "base",
+    "base_source",
+    "git_adapter",
+    "github",
+    "google_drive",
+    "local",
+    "notion",
+    "notion_adapter",
+    "obsidian",
+    "url_adapter",
+]

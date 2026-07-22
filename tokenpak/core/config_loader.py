@@ -25,6 +25,7 @@ def _as_config_dict(value: object) -> ConfigDict:
         return {}
     return cast(ConfigDict, value)
 
+
 try:
     import yaml as _yaml
 
