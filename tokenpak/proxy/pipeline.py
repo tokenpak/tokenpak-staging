@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from tokenpak.proxy.request import ProxyRequest
 
@@ -331,7 +331,7 @@ def stage_ttl_hotfix(
         return request, result
 
     # Collect all blocks with cache_control in document order
-    blocks: list = []
+    blocks: list[dict[str, Any]] = []
     for item in body_data.get("system") or []:
         if isinstance(item, dict):
             blocks.append(item)
@@ -410,12 +410,17 @@ def stage_byte_restore(
         return request, result
 
     # Import byte-level injection functions (modular request.py)
+    byte_inject: Callable[[bytes, str], bytes] | None = None
     try:
-        from tokenpak.proxy.request import _byte_inject_system_block
-    except ImportError:
-        _byte_inject_system_block = None
+        from tokenpak.proxy.request import (
+            _byte_inject_system_block as imported_byte_inject,
+        )
 
-    if not vault_injection_text or max_inject_chars <= 0 or _byte_inject_system_block is None:
+        byte_inject = imported_byte_inject
+    except ImportError:
+        pass
+
+    if not vault_injection_text or max_inject_chars <= 0 or byte_inject is None:
         request.body = original_body
         result.details["action"] = "restored_original"
         return request, result
@@ -423,7 +428,9 @@ def stage_byte_restore(
     # Check query length relevance gate
     query_signal = ""
     try:
-        from tokenpak.proxy.vault_bridge import extract_query_signal
+        from tokenpak.proxy import vault_bridge
+
+        extract_query_signal = getattr(vault_bridge, "extract_query_signal")
         query_signal = extract_query_signal(original_body, adapter=adapter)
     except (ImportError, Exception):
         pass
@@ -434,7 +441,7 @@ def stage_byte_restore(
         return request, result
 
     trimmed = vault_injection_text[:max_inject_chars]
-    request.body = _byte_inject_system_block(original_body, trimmed)
+    request.body = byte_inject(original_body, trimmed)
     result.details["action"] = "byte_spliced"
     result.details["injected_chars"] = len(trimmed)
     return request, result

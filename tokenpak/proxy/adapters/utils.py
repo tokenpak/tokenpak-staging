@@ -17,15 +17,16 @@ import threading
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from .base import FormatAdapter
+from .registry import AdapterRegistry
 
 # ---------------------------------------------------------------------------
 # Registry singleton — lazy initialised to avoid import-time side effects
 # ---------------------------------------------------------------------------
-_REGISTRY = None
+_REGISTRY: AdapterRegistry | None = None
 _REGISTRY_LOCK = threading.Lock()
 
 
-def _get_registry():
+def _get_registry() -> AdapterRegistry:
     """Return the default adapter registry singleton."""
     global _REGISTRY
     if _REGISTRY is None:

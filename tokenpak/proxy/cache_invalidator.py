@@ -26,7 +26,7 @@ import collections
 import json
 import sqlite3
 import threading
-from typing import List, NamedTuple, Optional
+from typing import Any, List, NamedTuple, Optional
 
 # ---------------------------------------------------------------------------
 # Event representation
@@ -92,7 +92,7 @@ def _get_session_cache() -> _SessionBodyCache:
 # Comparison helpers
 # ---------------------------------------------------------------------------
 
-def _canonical_tools(tools) -> str:
+def _canonical_tools(tools: Any) -> str:
     """Normalize tools array to a canonical JSON string for stable comparison.
 
     Sorts by tool name so insertion-order differences don't produce false positives.
@@ -109,7 +109,7 @@ def _canonical_tools(tools) -> str:
         return json.dumps(tools, sort_keys=True, ensure_ascii=False)
 
 
-def _has_images(messages) -> bool:
+def _has_images(messages: Any) -> bool:
     """Return True if any message content block has type 'image'."""
     if not isinstance(messages, list):
         return False
@@ -213,7 +213,7 @@ def _detect_cache_invalidators(
 
 def _write_cache_invalidator_events(
     db_path: str,
-    request_id,
+    request_id: Any,
     session_id: str,
     events: List[CacheInvalidatorEvent],
 ) -> None:

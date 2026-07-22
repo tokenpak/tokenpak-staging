@@ -14,7 +14,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import httpx
 
@@ -334,7 +334,7 @@ def build_terminal_recovery_payload(
     message: str,
     stream_started: bool,
     recovery_record: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build the structured terminal recovery error envelope."""
 
     error = {
@@ -352,7 +352,7 @@ def build_terminal_recovery_payload(
     return {"error": error}
 
 
-def _redact_headers(headers: Mapping[str, object] | None) -> dict:
+def _redact_headers(headers: Mapping[str, object] | None) -> dict[str, str]:
     if not headers:
         return {}
     return {

@@ -33,7 +33,7 @@ Scoping
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from tokenpak.cache.semantic_cache import (
     SemanticCache,
@@ -94,20 +94,22 @@ class SemanticCacheMiddleware:
 
         return lookup
 
-    def record(self, query: str, response: dict, scope_key: str = "") -> None:
+    def record(
+        self, query: str, response: dict[str, Any], scope_key: str = ""
+    ) -> None:
         """
         Store *response* for *query* in the appropriate cache.
 
         Call this AFTER a successful upstream LLM response.
         """
         cache = self._get_or_create_cache(scope_key)
-        cache.store(query, response)
+        cache.store(query, cast(Any, response))
         logger.debug(
             "[SemanticCacheMiddleware] stored query scope=%s",
             self._resolve_scope_key(scope_key),
         )
 
-    def build_trace(self, lookup: SemanticCacheLookup) -> dict:
+    def build_trace(self, lookup: SemanticCacheLookup) -> dict[str, Any]:
         """
         Build trace/span metadata from a cache lookup result.
 
@@ -125,7 +127,7 @@ class SemanticCacheMiddleware:
             }
         }
 
-    def stats(self, scope_key: str = "") -> dict:
+    def stats(self, scope_key: str = "") -> dict[str, int | float]:
         """Return hit/miss stats for a given scope."""
         key = self._resolve_scope_key(scope_key)
         cache = self._caches.get(key)

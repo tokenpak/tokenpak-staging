@@ -185,17 +185,20 @@ class OpenAIResponsesAdapter(FormatAdapter):
         def _tool_name(tool: Dict[str, Any]) -> str:
             if not isinstance(tool, dict):
                 return ""
-            if isinstance(tool.get("name"), str):
-                return tool["name"]
+            name = tool.get("name")
+            if isinstance(name, str):
+                return name
             fn = tool.get("function")
-            if isinstance(fn, dict) and isinstance(fn.get("name"), str):
-                return fn["name"]
+            if isinstance(fn, dict):
+                function_name = fn.get("name")
+                if isinstance(function_name, str):
+                    return function_name
             return ""
 
         return sorted(copy.deepcopy(tools), key=lambda t: (_tool_name(t), json.dumps(t, sort_keys=True, ensure_ascii=False)))
 
     def _build_prompt_cache_key(self, canonical: CanonicalRequest) -> str:
-        stable_payload = OrderedDict()
+        stable_payload: OrderedDict[str, Any] = OrderedDict()
         stable_payload["model"] = canonical.model
         stable_payload["instructions"] = copy.deepcopy(canonical.system)
         stable_payload["tools"] = self._stable_tools(canonical.tools or [])

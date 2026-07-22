@@ -18,12 +18,12 @@ import gzip
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from websockets.server import WebSocketServerProtocol  # type: ignore
 except ImportError:
-    WebSocketServerProtocol = None  # type: ignore
+    WebSocketServerProtocol = None
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ class WebSocketConnectionStats:
         end = self.disconnected_at if self.disconnected_at is not None else time.time()
         return end - self.connected_at
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict for JSON output / dashboard."""
         return {
             "connection_id": self.connection_id,
@@ -257,6 +257,6 @@ class WebSocketConnectionManager:
         """Return stats for *connection_id* (active or historical), or None."""
         return self._all.get(connection_id)
 
-    def get_all_stats(self) -> List[dict]:
+    def get_all_stats(self) -> List[dict[str, Any]]:
         """Return a list of serialised stats dicts for all tracked connections."""
         return [s.to_dict() for s in self._all.values()]

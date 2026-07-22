@@ -12,11 +12,12 @@ guarantee — replay must not re-serialize JSON.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from .contracts import GuardOutcome, PendingRequest, TIPDirective
 from .intent import Intent
 from .pending import PendingStore
+from .policy import SpendGuardConfig
 
 
 def resolve_pending(
@@ -25,8 +26,8 @@ def resolve_pending(
     pending: PendingRequest,
     intent: Intent,
     tip: Optional[TIPDirective],
-    cfg,
-    builders: dict,
+    cfg: SpendGuardConfig,
+    builders: dict[str, Callable[[PendingRequest], bytes]],
 ) -> GuardOutcome:
     """Dispatch on the parsed intent (and optional TIP allow-once).
 

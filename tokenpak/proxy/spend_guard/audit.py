@@ -18,7 +18,7 @@ import sqlite3
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 _log = logging.getLogger(__name__)
 
@@ -88,8 +88,8 @@ def write_audit(
     projected_cost: Optional[float] = None,
     projected_tokens: Optional[int] = None,
     request_hash: Optional[str] = None,
-    tip=None,                   # TIPDirective | None
-    extra: Optional[dict] = None,
+    tip: Any = None,                   # TIPDirective | None
+    extra: Optional[dict[str, Any]] = None,
 ) -> None:
     """Insert one audit row. Best-effort — never raises into caller."""
     try:
@@ -141,7 +141,7 @@ def query_recent(
     *,
     session_id: Optional[str] = None,
     limit: int = 100,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Read the most recent audit rows. Used by tests and `tokenpak doctor`."""
     path = _db_path(audit_db_path)
     conn = sqlite3.connect(str(path), timeout=2.0)

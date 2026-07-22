@@ -65,7 +65,7 @@ _QUALITY_PROVIDERS: List[str] = [
 _LENGTH_THRESHOLD = int(os.environ.get("TOKENPAK_EMBEDDING_LENGTH_THRESHOLD", "512"))
 
 # Model-prefix → canonical provider name lookup
-_MODEL_PREFIX_MAP: List[tuple] = [
+_MODEL_PREFIX_MAP: List[tuple[str, str]] = [
     ("voyage-", PROVIDER_VOYAGE),
     ("text-embedding-", PROVIDER_OPENAI),
     ("models/text-embedding", PROVIDER_GEMINI),
@@ -233,6 +233,9 @@ class ContentAwareRouter:
                 or _rule_text_length(input_text, self.available_providers)
                 or self.available_providers[0]
             )
+
+        if result is None:
+            result = self.available_providers[0]
 
         logger.debug(
             "content-aware router: strategy=%s model_hint=%r text_len=%d → %s",

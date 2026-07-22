@@ -26,7 +26,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .contracts import PendingRequest
 
@@ -48,7 +48,7 @@ _SENSITIVE_HEADERS = frozenset({
 })
 
 
-def redact_headers(headers: dict) -> dict:
+def redact_headers(headers: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of ``headers`` with credential-bearing headers removed.
 
     Case-insensitive on the header name. Used at store time (so creds never
@@ -213,7 +213,7 @@ class PendingStore:
         *,
         session_id: str,
         body: bytes,
-        headers: dict,
+        headers: dict[str, Any],
         target_url: str,
         provider: str,
         model: str,
