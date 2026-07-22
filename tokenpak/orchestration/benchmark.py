@@ -7,12 +7,25 @@ import statistics
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple, cast
 
 from tokenpak.compression.processors import get_processor
+from tokenpak.compression.processors.image import ImageProcessor
 from tokenpak.core.registry import Block, BlockRegistry
 from tokenpak.telemetry.tokens import cache_info, clear_cache, count_tokens, count_tokens_uncached
 from tokenpak.vault.walker import walk_directory
+
+
+class _TextProcessor(Protocol):
+    def process(self, content: str, path: str = "") -> str: ...
+
+
+def _process_text(processor: object, content: str, path: str) -> str | None:
+    """Run a text processor, leaving binary image inputs to binary-aware paths."""
+    if isinstance(processor, ImageProcessor):
+        return None
+    return cast(_TextProcessor, processor).process(content, path)
+
 
 # ---------------------------------------------------------------------------
 # Built-in sample data for compression benchmark
@@ -896,7 +909,8 @@ def _run_single_compression_test(
     t0 = time.perf_counter()
     processor = get_processor(file_type)
     if processor:
-        compressed = processor.process(content, filename)
+        processed = _process_text(processor, content, filename)
+        compressed = content if processed is None else processed
     else:
         compressed = content
     elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -1047,7 +1061,7 @@ def benchmark_tokenization(texts: List[str], iterations: int = 3) -> dict[str, A
     # Cold cache benchmark
     times = []
     for _ in range(iterations):
-        clear_cache()  # type: ignore[no-untyped-call]
+        clear_cache()
         start = time.perf_counter()
         for t in texts:
             count_tokens(t)
@@ -1067,7 +1081,7 @@ def benchmark_tokenization(texts: List[str], iterations: int = 3) -> dict[str, A
     results["cache_speedup"] = results["cold_cache_avg_ms"] / max(
         results["warm_cache_avg_ms"], 0.001
     )
-    results["cache_info"] = str(cache_info())  # type: ignore[no-untyped-call]
+    results["cache_info"] = str(cache_info())
 
     return results
 
@@ -1099,7 +1113,7 @@ def benchmark_processing(files: List[Tuple[str, str, int]], iterations: int = 3)
         for _ in range(iterations):
             start = time.perf_counter()
             for path, content in items:
-                processor.process(content, path)
+                _process_text(processor, content, path)
             elapsed = time.perf_counter() - start
             times.append(elapsed)
 
@@ -1120,7 +1134,7 @@ def benchmark_indexing_baseline(directory: str, iterations: int = 3) -> dict[str
     times = []
 
     for _ in range(iterations):
-        clear_cache()  # type: ignore[no-untyped-call]  # No cache benefit
+        clear_cache()  # No cache benefit
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/bench.db"
@@ -1155,7 +1169,9 @@ def benchmark_indexing_baseline(directory: str, iterations: int = 3) -> dict[str
                 if not processor:
                     continue
 
-                compressed = processor.process(content, path)
+                compressed = _process_text(processor, content, path)
+                if compressed is None:
+                    continue
 
                 # Simulate old: uncached token counting
                 raw_tokens = count_tokens_uncached(content)
@@ -1225,7 +1241,9 @@ def benchmark_indexing_optimized(directory: str, iterations: int = 3) -> dict[st
                     if not processor:
                         continue
 
-                    compressed = processor.process(content, path)
+                    compressed = _process_text(processor, content, path)
+                    if compressed is None:
+                        continue
 
                     block = Block(
                         path=path,
@@ -1366,7 +1384,9 @@ def run_benchmark(directory: str, iterations: int = 3, compare: bool = False) ->
                 if not processor:
                     continue
 
-                compressed = processor.process(content, path)
+                compressed = _process_text(processor, content, path)
+                if compressed is None:
+                    continue
 
                 block = Block(
                     path=path,

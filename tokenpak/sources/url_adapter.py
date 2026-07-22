@@ -15,7 +15,7 @@ import urllib.request
 import urllib.robotparser
 from http.client import HTTPMessage
 from types import TracebackType
-from typing import BinaryIO, Protocol, cast
+from typing import IO, Protocol, cast
 
 from .base_source import Provenance, SourceAdapter, SourceFetchError
 
@@ -137,7 +137,7 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
         req: urllib.request.Request,
-        fp: BinaryIO,
+        fp: IO[bytes],
         code: int,
         msg: str,
         headers: HTTPMessage,

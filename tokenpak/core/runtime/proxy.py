@@ -16,9 +16,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
 
 # ---------------------------------------------------------------------------
 # Implemented symbols — re-exported from modular tree
@@ -85,8 +84,7 @@ class Monitor(_BaseMonitor):
     and session_id support in log()."""
 
     def _init_db(self) -> None:
-        base_init = cast(Callable[[], None], super()._init_db)
-        base_init()
+        super()._init_db()
         conn = sqlite3.connect(str(self.db_path))
         # session_id column on requests
         try:

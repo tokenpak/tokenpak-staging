@@ -14,14 +14,19 @@ import socket
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from tokenpak.compression.processors import get_processor
+from tokenpak.compression.processors.image import ImageProcessor
 from tokenpak.core.registry import Block, BlockRegistry
 from tokenpak.telemetry.tokens import clear_cache, count_tokens
 from tokenpak.vault.walker import walk_directory
 
 PROFILE_PATH = Path.home() / ".tokenpak" / "calibration.json"
+
+
+class _TextProcessor(Protocol):
+    def process(self, content: str, path: str = "") -> str: ...
 
 
 def _ensure_profile_dir() -> None:
@@ -56,16 +61,16 @@ def _candidate_workers(max_workers: int = 8) -> list[int]:
     return sorted(cands)
 
 
-def _sample_files(directory: str, max_files: int = 150) -> list[tuple[str, str, str]]:
+def _sample_files(directory: str, max_files: int = 150) -> list[tuple[str, str, int]]:
     files = list(walk_directory(directory))
-    return files[:max_files]  # type: ignore
+    return files[:max_files]
 
 
-def _run_index_once(files: list[tuple[str, str, str]], workers: int) -> float:
+def _run_index_once(files: list[tuple[str, str, int]], workers: int) -> float:
     """Return elapsed seconds for indexing sample."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    clear_cache()  # type: ignore[no-untyped-call]
+    clear_cache()
     with tempfile.TemporaryDirectory() as tmpdir:
         db = f"{tmpdir}/calibrate.db"
         reg = BlockRegistry(db)
@@ -79,9 +84,9 @@ def _run_index_once(files: list[tuple[str, str, str]], workers: int) -> float:
             if not content.strip():
                 return None
             proc = get_processor(file_type)
-            if not proc:
+            if not proc or isinstance(proc, ImageProcessor):
                 return None
-            compressed = proc.process(content, path)
+            compressed = cast(_TextProcessor, proc).process(content, path)
             return (
                 path,
                 content,

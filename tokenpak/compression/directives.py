@@ -564,9 +564,9 @@ def apply_directives(
 
     # 1. Compression directives on segments
     compression_list = cast(list[CompressionDirective], directives.get("compression", []))
-    tokens_before = sum(s.get("tokens", 0) for s in segments)
+    tokens_before = sum(cast(int, s.get("tokens", 0)) for s in segments)
     updated_segments, applied, skipped = apply_compression_directives(segments, compression_list)
-    tokens_after = sum(s.get("tokens", 0) for s in updated_segments)
+    tokens_after = sum(cast(int, s.get("tokens", 0)) for s in updated_segments)
     result.segments = updated_segments
     result.applied.extend(applied)
     result.skipped.extend(skipped)
@@ -576,7 +576,8 @@ def apply_directives(
     agent_dedup = cast(dict[str, object], directives.get("agent_dedup", {}))
     remaining_blocks = apply_agent_dedup(vault_blocks, agent_dedup)
     if agent_dedup:
-        result.applied.append(f"agent_dedup(skip={len(agent_dedup.get('skip_blocks', []))})")
+        skip_blocks = cast(list[object], agent_dedup.get("skip_blocks", []))
+        result.applied.append(f"agent_dedup(skip={len(skip_blocks)})")
 
     # 3. Context plan on vault blocks
     context_plan = cast(dict[str, object], directives.get("context_plan", {}))

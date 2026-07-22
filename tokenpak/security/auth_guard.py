@@ -35,9 +35,6 @@ INCIDENT_LOG_PATH = Path(
     os.environ.get("TOKENPAK_INCIDENT_LOG", os.path.expanduser("~/.tokenpak/incidents.log"))
 )
 
-AuthFailureDetails = dict[str, object]
-AuthFailureHandler = Callable[[str, str, AuthFailureDetails], None]
-
 
 class AuthGuard:
     """

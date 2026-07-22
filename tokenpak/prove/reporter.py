@@ -9,6 +9,7 @@ or any number of arms (matrix mode).
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
@@ -265,7 +266,7 @@ def _arm_to_dict(arm: ArmResult) -> dict[str, object]:
 
 def _metric_row(
     label: str,
-    values: list[int | float],
+    values: Sequence[int | float],
     baseline_val: int | float | None,
     label_w: int,
     col_w: int,

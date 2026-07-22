@@ -84,9 +84,12 @@ class PluginRegistry:
 
         # 1. Canonical: config.yaml
         try:
-            plugin_list = config_get("plugins.enabled", [], cast=list)
-            if plugin_list:
-                for path in plugin_list:
+            configured_plugins: object = config_get("plugins.enabled", [])
+            if isinstance(configured_plugins, list) and configured_plugins:
+                for path in configured_plugins:
+                    if not isinstance(path, str):
+                        logger.warning("Ignoring non-string plugin path: %r", path)
+                        continue
                     self._load_plugin_path(path)
                 return
         except Exception as exc:

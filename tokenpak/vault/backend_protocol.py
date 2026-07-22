@@ -37,7 +37,7 @@ from __future__ import annotations
 import importlib
 import logging
 from collections.abc import Callable, Mapping
-from typing import Dict, List, Protocol, Tuple, runtime_checkable
+from typing import Dict, List, Protocol, Tuple, cast, runtime_checkable
 
 logger = logging.getLogger("tokenpak.vault.backend_protocol")
 
@@ -406,7 +406,7 @@ def _get_count_tokens_fn() -> Callable[[str], int]:
     try:
         from tokenpak.tokens import count_tokens
 
-        return count_tokens
+        return cast(Callable[[str], int], count_tokens)
     except ImportError:
         # Rough fallback: 4 chars ≈ 1 token
         def _fallback_count(text: str) -> int:

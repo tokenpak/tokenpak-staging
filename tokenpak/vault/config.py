@@ -160,15 +160,24 @@ def load(path: Optional[Path] = None) -> VaultConfig:
         return VaultConfig()
 
     raw = _load_yaml_text(cfg_path.read_text(encoding="utf-8"))
-    version = int(raw.get("version", SCHEMA_VERSION))
+    raw_version = raw.get("version", SCHEMA_VERSION)
+    if not isinstance(raw_version, (str, bytes, bytearray, int, float)):
+        raise ValueError(f"vault.yaml: invalid schema version: {raw_version!r}")
+    version = int(raw_version)
     if version != SCHEMA_VERSION:
         raise ValueError(
             f"vault.yaml schema version {version} not supported "
             f"(this build expects v{SCHEMA_VERSION})"
         )
 
+    raw_paths = raw.get("paths", [])
+    if raw_paths is None:
+        raw_paths = []
+    if not isinstance(raw_paths, list):
+        raise ValueError("vault.yaml: paths must be a list")
+
     entries: list[VaultPathEntry] = []
-    for item in raw.get("paths", []) or []:
+    for item in raw_paths:
         if not isinstance(item, dict) or "path" not in item:
             raise ValueError(f"vault.yaml: invalid path entry: {item!r}")
         entries.append(

@@ -11,9 +11,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
 from typing import Any, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
@@ -887,7 +887,10 @@ def create_app(
         def _run() -> dict[str, object]:
             if "engine" not in _cost_engine:
                 _cost_engine["engine"] = CostEngine(db_path=db_path)
-            return _cost_engine["engine"].reprocess_costs(from_date, to_date, pricing_version)
+            raw_result = _cost_engine["engine"].reprocess_costs(from_date, to_date, pricing_version)
+            result: dict[str, object] = {}
+            result.update(raw_result)
+            return result
 
         result = await loop.run_in_executor(_executor, _run)
         return {"status": "ok", **result}
@@ -995,7 +998,12 @@ def create_app(
                 _insight_engine["engine"] = InsightEngine(db_path=db_path)
             engine = _insight_engine["engine"]
             insights = engine.generate_insights(days=days)
-            return [i.to_dict() for i in insights]
+            rows: list[dict[str, object]] = []
+            for insight in insights:
+                row: dict[str, object] = {}
+                row.update(insight.to_dict())
+                rows.append(row)
+            return rows
 
         insight_list = await loop.run_in_executor(_executor, _run)
         return {

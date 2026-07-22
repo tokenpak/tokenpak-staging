@@ -598,10 +598,13 @@ def _compile_from_results(
     if not results:
         return "", 0, []
 
+    count_token_fn: Callable[[str], int]
     try:
-        from tokenpak.telemetry.tokens import count_tokens
+        from tokenpak.telemetry.tokens import count_tokens as _cached_count_tokens
+
+        count_token_fn = _cached_count_tokens
     except ImportError:
-        count_tokens = _fallback_count_tokens
+        count_token_fn = _fallback_count_tokens
 
     injection_parts: List[str] = []
     tokens_used = 0
@@ -610,7 +613,7 @@ def _compile_from_results(
     for block, score in results:
         # Modular VaultIndex stores content directly in block dict
         content = block.get("content", "")
-        block_tokens = block.get("raw_tokens", 0) or count_tokens(content)
+        block_tokens = block.get("raw_tokens", 0) or count_token_fn(content)
 
         remaining = budget - tokens_used
         if remaining <= 100:
@@ -619,7 +622,7 @@ def _compile_from_results(
         if block_tokens > remaining:
             char_limit = remaining * 4
             content = content[:char_limit].rsplit("\n", 1)[0]
-            block_tokens = count_tokens(content)
+            block_tokens = count_token_fn(content)
             if block_tokens > remaining:
                 break
 
@@ -633,5 +636,5 @@ def _compile_from_results(
 
     header = "\n\n## Retrieved Context\n"
     injection_text = header + "\n\n".join(injection_parts)
-    tokens_used = count_tokens(injection_text)
+    tokens_used = count_token_fn(injection_text)
     return injection_text, tokens_used, source_refs

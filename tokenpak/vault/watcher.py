@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Protocol, cast
 
 if TYPE_CHECKING:
     # Forward-ref only — actual import is delayed inside the start() path
@@ -31,6 +31,11 @@ if TYPE_CHECKING:
     from watchdog.observers.api import BaseObserver
 
 logger = logging.getLogger(__name__)
+
+
+class _TextProcessor(Protocol):
+    def process(self, content: str, path: str = "") -> str: ...
+
 
 DEFAULT_IGNORE_PATTERNS = [
     "*.pyc",
@@ -283,7 +288,7 @@ class VaultWatcher:
                 processor = get_processor(file_type)
                 if processor is None:
                     continue
-                compressed = processor.process(content, str(p))
+                compressed = cast(_TextProcessor, processor).process(content, str(p))
 
                 content_hash = hashlib.sha256(content.encode()).hexdigest()
                 block = {

@@ -99,7 +99,10 @@ class EvidencePack:
         Expected chunk keys: id (or chunk_id), text
         """
         for chunk in memory_chunks[:max_items]:
-            chunk_text = chunk.get("text", "")
+            chunk_text_value = chunk.get("text", "")
+            if not isinstance(chunk_text_value, str):
+                continue
+            chunk_text = chunk_text_value
             if not chunk_text.strip():
                 continue
 

@@ -364,9 +364,7 @@ class VaultHealth:
         # Prune blocks for deleted files (filesystem-source only)
         entries_removed = 0
         for bid in list(new_blocks.keys()):
-            entry = new_blocks.get(bid)
-            if not entry:
-                continue
+            entry = new_blocks[bid]
             src_type = entry.get("source_type", "filesystem")
             if src_type != "filesystem":
                 continue

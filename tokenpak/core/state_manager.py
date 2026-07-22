@@ -366,7 +366,7 @@ class IntentStateManager:
 
     def _init_state(self) -> StateDict:
         defaults = self._DEFAULTS.get(self.intent, {})
-        return cast(StateData, _copy.deepcopy(defaults))
+        return _copy.deepcopy(defaults)
 
     # ── Validation ───────────────────────────────────────────────────────────
 

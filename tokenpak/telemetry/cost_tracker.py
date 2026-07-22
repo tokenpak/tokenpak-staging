@@ -64,8 +64,16 @@ class CostTracker:
         summary = tracker.get_summary("day")
     """
 
-    def __init__(self, db_path: str = ":memory:"):
-        self._db_path = str(Path(db_path).expanduser()) if db_path != ":memory:" else db_path
+    def __init__(self, db_path: str | Path | None = None):
+        if db_path is None:
+            from tokenpak.core.paths import get_db_path
+
+            resolved_path = get_db_path("cost.db")
+            self._db_path = str(resolved_path)
+        elif str(db_path) == ":memory:":
+            self._db_path = ":memory:"
+        else:
+            self._db_path = str(Path(db_path).expanduser())
         if self._db_path != ":memory:":
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
@@ -241,7 +249,7 @@ _tracker: Optional[CostTracker] = None
 _tracker_lock = threading.Lock()
 
 
-def get_cost_tracker(db_path: str = "~/.tokenpak/cost.db") -> CostTracker:
+def get_cost_tracker(db_path: str | Path | None = None) -> CostTracker:
     """Return the process-level singleton CostTracker."""
     global _tracker
     if _tracker is None:

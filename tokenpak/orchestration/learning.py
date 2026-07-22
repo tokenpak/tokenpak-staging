@@ -831,13 +831,13 @@ def cmd_learn_status(learning_path: str = DEFAULT_LEARNING_PATH) -> None:
         print("📊  Model Performance by Task Type")
         for task_type, models in sorted(mp.items()):
             print(f"  {task_type}")
-            for model, stats in sorted(
+            for model, model_stats in sorted(
                 models.items(),
                 key=lambda kv: kv[1].get("acceptance_rate", 0),
                 reverse=True,
             ):
-                rate = stats.get("acceptance_rate", 0)
-                samples = stats.get("samples", 0)
+                rate = model_stats.get("acceptance_rate", 0)
+                samples = model_stats.get("samples", 0)
                 bar = "█" * int(rate * 10)
                 flag = " ✓" if samples >= MIN_SAMPLES_THRESHOLD else " (low data)"
                 print(f"    {model:<40} {rate * 100:5.1f}%  [{bar:<10}]  n={samples}{flag}")
@@ -855,9 +855,9 @@ def cmd_learn_status(learning_path: str = DEFAULT_LEARNING_PATH) -> None:
                 continue
             modes = cast(CompressionModeMap, raw_modes)
             print(f"  {rc}")
-            for mode, stats in sorted(modes.items()):
-                retry_rate = stats.get("retry_rate", 0)
-                events = stats.get("event_count", 0)
+            for mode, compression_stats in sorted(modes.items()):
+                retry_rate = compression_stats.get("retry_rate", 0)
+                events = compression_stats.get("event_count", 0)
                 flag = " ⚠️  (high retry)" if retry_rate > 0.20 else ""
                 print(f"    {mode:<14} retry={retry_rate * 100:.1f}%  n={events}{flag}")
         if overrides:
@@ -903,17 +903,17 @@ def cmd_learn_status(learning_path: str = DEFAULT_LEARNING_PATH) -> None:
         print(f"⚡  Quality-per-Token  ({len(qpt_map)} combos tracked)")
         # Group by task_type
         by_task: dict[str, list[QualityPerTokenStats]] = {}
-        for key, stats in qpt_map.items():
-            tt = stats.get("task_type", "UNKNOWN")
-            by_task.setdefault(tt, []).append(stats)
+        for key, qpt_stats in qpt_map.items():
+            task_type = qpt_stats.get("task_type", "UNKNOWN")
+            by_task.setdefault(task_type, []).append(qpt_stats)
         for tt in sorted(by_task):
             entries = sorted(by_task[tt], key=lambda s: s.get("avg_qpt", 0.0), reverse=True)
             print(f"  {tt}")
-            for stats in entries:
-                model = stats.get("model", "?")
-                mode = stats.get("compression_mode", "?")
-                avg = stats.get("avg_qpt", 0.0)
-                n = stats.get("samples", 0)
+            for qpt_stats in entries:
+                model = qpt_stats.get("model", "?")
+                mode = qpt_stats.get("compression_mode", "?")
+                avg = qpt_stats.get("avg_qpt", 0.0)
+                n = qpt_stats.get("samples", 0)
                 flag = " ✓" if n >= MIN_SAMPLES_THRESHOLD else " (low data)"
                 print(f"    {model:<36} [{mode:<12}] QPT={avg:.2e}  n={n}{flag}")
         print()
@@ -1049,7 +1049,6 @@ def on_episode_complete(
         The distilled EpisodeRecord.
     """
     from tokenpak.orchestration.episode_distiller import (  # noqa: PLC0415
-        EpisodeRecord,
         distill_episode,
         submit_to_memory,
     )

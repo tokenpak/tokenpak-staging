@@ -296,21 +296,21 @@ def format_attribution(tracker: AttributionTracker, days: int = 7) -> str:
         "Agent Breakdown:",
     ]
 
-    for src, stats in by_source.items():
-        pct = (stats["cost_saved"] / total_saved * 100) if total_saved > 0 else 0
+    for src, source_stats in by_source.items():
+        pct = (source_stats["cost_saved"] / total_saved * 100) if total_saved > 0 else 0
         # Find emoji
         emoji = "??"
         for key, em in AGENT_EMOJI.items():
             if key in src.lower():
                 emoji = em
                 break
-        lines.append(f"  {emoji} {src:<22} ${stats['cost_saved']:>10.2f} ({pct:.0f}%)")
+        lines.append(f"  {emoji} {src:<22} ${source_stats['cost_saved']:>10.2f} ({pct:.0f}%)")
 
     lines.append("")
     lines.append("Top Models (by savings):")
-    for model, stats in list(by_model.items())[:5]:
-        pct = (stats["cost_saved"] / total_saved * 100) if total_saved > 0 else 0
-        lines.append(f"  {model:<24} ${stats['cost_saved']:>10.2f} ({pct:.0f}%)")
+    for model, model_stats in list(by_model.items())[:5]:
+        pct = (model_stats["cost_saved"] / total_saved * 100) if total_saved > 0 else 0
+        lines.append(f"  {model:<24} ${model_stats['cost_saved']:>10.2f} ({pct:.0f}%)")
 
     # Leakage warning
     leakage = tracker.leakage_pct(since=since)

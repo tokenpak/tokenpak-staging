@@ -310,4 +310,4 @@ def get_recent_fallback_events(n: int = 20) -> list[dict[str, object]]:
 
     Delegates to :func:`tokenpak.orchestration.retry.load_recent_retry_events`.
     """
-    return cast(list[dict[str, object]], load_recent_retry_events(n))
+    return load_recent_retry_events(n)

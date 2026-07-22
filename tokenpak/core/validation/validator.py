@@ -210,7 +210,7 @@ class ResponseValidator:
 
     def _check_type(self, value: Any, expected: str) -> bool:
         """Check if value matches expected JSON Schema type."""
-        type_map = {
+        type_map: dict[str, type[object] | tuple[type[object], ...]] = {
             "string": str,
             "integer": int,
             "number": (int, float),
@@ -222,10 +222,7 @@ class ResponseValidator:
         expected_types = type_map.get(expected)
         if expected_types is None:
             return True  # Unknown type, skip
-        # Ensure expected_types is a tuple for isinstance
-        if isinstance(expected_types, tuple):
-            return isinstance(value, expected_types)
-        return isinstance(value, (expected_types,))
+        return isinstance(value, expected_types)
 
     def _validate_semantics(
         self, response: Dict[str, Any]

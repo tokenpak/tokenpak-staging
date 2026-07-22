@@ -296,6 +296,9 @@ class SemanticCache:
 
         Returns the new ``SemanticCacheEntry``.
         """
+        if not isinstance(response_bytes, bytes):
+            raise TypeError("response_bytes must be bytes")
+
         normalised = _normalise(query)
         query_hash = _hash(normalised)
         # Composite key — wire_format is a key dimension so JSON and SSE

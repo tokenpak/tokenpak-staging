@@ -33,8 +33,11 @@ def _fallback_count_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+_count_tokens_impl: Callable[[str], int]
 try:
-    from tokenpak.telemetry.tokens import count_tokens as _count_tokens_impl
+    from tokenpak.telemetry.tokens import count_tokens as _cached_count_tokens
+
+    _count_tokens_impl = _cached_count_tokens
 except ImportError:
     _count_tokens_impl = _fallback_count_tokens
 
@@ -411,7 +414,7 @@ class VaultIndex:
                 inverted[term].add(bid)
 
         # Build new LRU cache — preload top-N recently-modified blocks
-        new_cache: OrderedDict = OrderedDict()
+        new_cache: OrderedDict[str, str] = OrderedDict()
         new_cache_bytes = 0
         preload_n = VAULT_CACHE_PRELOAD
         if preload_n > 0:

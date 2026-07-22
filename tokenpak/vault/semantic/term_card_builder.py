@@ -98,12 +98,14 @@ def enforce_caps(card: TermCard) -> TermCard:
     """Return a copy of *card* with all fields truncated to their hard caps."""
     out = dict(card)
     for field, cap in CAPS.items():
-        if field in out and isinstance(out[field], str):
-            out[field] = _truncate(out[field], cap)
+        value = out.get(field)
+        if isinstance(value, str):
+            out[field] = _truncate(value, cap)
     for field, item_cap in CAPS_LIST_ITEM.items():
-        if field in out and isinstance(out[field], list):
+        value = out.get(field)
+        if isinstance(value, list):
             max_items = CAPS_LIST_MAX[field]
-            out[field] = [_truncate(str(item), item_cap) for item in out[field][:max_items]]
+            out[field] = [_truncate(str(item), item_cap) for item in value[:max_items]]
     return out
 
 
