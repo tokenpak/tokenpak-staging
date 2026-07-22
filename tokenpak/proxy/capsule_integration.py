@@ -33,12 +33,24 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Protocol, Tuple
 
 if TYPE_CHECKING:
     from .server import PipelineTrace, StageTrace
 
 logger = logging.getLogger(__name__)
+
+
+class RequestHook(Protocol):
+    """Compression hook shape accepted by the proxy request pipeline."""
+
+    def __call__(
+        self,
+        body: bytes,
+        model: str,
+        trace: Optional["PipelineTrace"] = None,
+    ) -> tuple[bytes, int, int, int]: ...
+
 
 # Feature flag (env var takes precedence, then config file)
 _CAPSULE_BUILDER_ENABLED: Optional[bool] = None
@@ -85,7 +97,7 @@ def capsule_request_hook(
     model: str,
     trace: Optional["PipelineTrace"] = None,
     *,
-    base_hook: Optional[Callable] = None,
+    base_hook: Optional[RequestHook] = None,
 ) -> Tuple[bytes, int, int, int]:
     """
     Request hook that applies capsule compression.
@@ -197,8 +209,8 @@ def capsule_request_hook(
 
 
 def get_capsule_request_hook(
-    base_hook: Optional[Callable] = None,
-) -> Callable:
+    base_hook: Optional[RequestHook] = None,
+) -> RequestHook:
     """
     Get a request hook with capsule builder integration.
 
@@ -213,7 +225,9 @@ def get_capsule_request_hook(
         Request hook suitable for ProxyServer.request_hook.
     """
 
-    def hook(body: bytes, model: str, trace: Optional["PipelineTrace"] = None):
+    def hook(
+        body: bytes, model: str, trace: Optional["PipelineTrace"] = None
+    ) -> tuple[bytes, int, int, int]:
         return capsule_request_hook(body, model, trace, base_hook=base_hook)
 
     return hook
