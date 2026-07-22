@@ -104,6 +104,26 @@ tokenpak doctor # checks Python version, deps, config
 tokenpak status # verify proxy is reachable
 ```
 
+### First measured receipt check
+
+Before treating a local deployment as value-ready, run the supported
+[three-command first-receipt path](first-receipt.md). It assumes existing
+`ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` environment variables. The
+current project's existing `README.md` must contain at least 8,000 UTF-8
+characters of real project context. The third command asks the model to review
+that document in a real provider request and may incur provider charges.
+
+```bash
+python -m pip install tokenpak
+tokenpak serve --profile aggressive --stats-footer  # terminal 1; leave running
+python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'  # terminal 2
+```
+
+The proxy prints the measured token receipt to its own standard error; it does
+not inject the receipt into the provider response. The displayed dollar value
+is estimated. Offline demo output, short/protected inputs, and byte-preserved
+routes do not establish a positive first-request compression receipt.
+
 ---
 
 ## Configuration
@@ -122,7 +142,7 @@ Default location: `~/.tokenpak/config.json`
  "compression": {
  "enabled": true,
  "level": "balanced",
- "threshold_tokens": 4500
+ "threshold_tokens": 1500
  },
  "budget": {
  "monthly_usd": 100,
@@ -149,10 +169,11 @@ All env vars override config file values. **Env vars take priority.**
 | `TOKENPAK_PORT` | `8766` | Proxy listen port |
 | `TOKENPAK_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces) |
 | `TOKENPAK_MODE` | `hybrid` | Compression mode: `strict`, `hybrid`, `aggressive` |
+| `TOKENPAK_PROFILE` | `balanced` | Workflow profile: `safe`, `balanced`, `aggressive`, `agentic`, `transparent` |
 | `TOKENPAK_COMPACT` | `1` | Master compression switch (`0` to disable) |
-| `TOKENPAK_COMPACT_THRESHOLD_TOKENS` | `4500` | Min tokens before compression activates |
+| `TOKENPAK_COMPACT_THRESHOLD_TOKENS` | `1500` in `balanced` | Min tokens before compression activates |
 | `TOKENPAK_DB` | `~/.tokenpak/monitor.db` | SQLite telemetry database path |
-| `TOKENPAK_STATS_FOOTER` | `0` | Append savings summary to responses |
+| `TOKENPAK_STATS_FOOTER` | `0` | Print per-request savings receipt to proxy stderr |
 | `TOKENPAK_DEBUG` | `0` | Enable debug logging |
 | `TOKENPAK_METRICS_ENABLED` | `0` | Opt-in anonymous usage metrics |
 
@@ -476,7 +497,9 @@ tokenpak status
 TOKENPAK_COMPACT_THRESHOLD_TOKENS=100 tokenpak serve
 ```
 
-Compression only activates above the token threshold (default: 4,500). Short requests pass through unchanged — this is correct behavior.
+Compression only activates above the active profile's token threshold
+(`balanced`: 1,500). Short requests pass through unchanged — this is correct
+behavior.
 
 ### API key errors
 

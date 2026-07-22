@@ -7,7 +7,7 @@ Handles provider detection, cost estimation, and URL construction.
 
 import json
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, cast
 from urllib.parse import urlparse
 
 # Provider base URLs
@@ -102,14 +102,11 @@ class ProviderRouter:
             try:
                 declared = int(content_length_str)
             except (ValueError, TypeError):
-                raise ValueError(
-                    f"Invalid Content-Length header value: {content_length_str!r}"
-                )
+                raise ValueError(f"Invalid Content-Length header value: {content_length_str!r}")
             actual = len(body)
             if declared != actual:
                 raise ValueError(
-                    f"Content-Length mismatch: header says {declared}, "
-                    f"body is {actual} bytes"
+                    f"Content-Length mismatch: header says {declared}, body is {actual} bytes"
                 )
 
         # Check if it's already a full URL
@@ -222,7 +219,7 @@ class ProviderRouter:
         """Extract model name from request body."""
         try:
             data = json.loads(body)
-            return data.get("model", "unknown")
+            return cast(str, data.get("model", "unknown"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return "unknown"
 
@@ -249,6 +246,7 @@ def estimate_cost(
     """
     # Get costs from dynamic registry
     from tokenpak.models import get_model_costs
+
     costs = get_model_costs(model) if model else DEFAULT_COSTS
 
     # Calculate regular input (excluding cache tokens)

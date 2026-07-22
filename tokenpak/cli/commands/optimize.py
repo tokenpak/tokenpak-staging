@@ -13,7 +13,7 @@ import sqlite3
 import urllib.request
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -63,7 +63,7 @@ COMPRESSION_MODES = {
 def _proxy_get(path: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
     try:
         with urllib.request.urlopen(f"{PROXY_BASE}{path}", timeout=timeout) as r:
-            return json.loads(r.read())
+            return cast(Dict[str, Any], json.loads(r.read()))
     except Exception:
         return None
 
@@ -180,7 +180,11 @@ def _analyze_model(session: Dict[str, Any]) -> Dict[str, Any]:
     if alt_result:
         alt_name, savings_frac = alt_result
         savings_pct = int(savings_frac * 100)
-        alt_cost = _model_cost_per_request(alt_name, avg_input, avg_output) if avg_input > 0 else cost_per_req * (1 - savings_frac)
+        alt_cost = (
+            _model_cost_per_request(alt_name, avg_input, avg_output)
+            if avg_input > 0
+            else cost_per_req * (1 - savings_frac)
+        )
         if avg_input == 0 or alt_cost < cost_per_req:
             best_alt = (alt_name, savings_pct, "dynamic tier step-down")
             best_alt_cost = alt_cost
@@ -492,7 +496,7 @@ try:
     @click.option("--verbose", "-v", is_flag=True, help="Per-block analysis")
     @click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON output")
     @click.option("--apply", is_flag=True, help="Auto-apply recommendations")
-    def optimize_cmd(verbose, as_json, apply):
+    def optimize_cmd(verbose: bool, as_json: bool, apply: bool) -> None:
         """Analyze session for cost + token efficiency."""
         run_optimize(verbose=verbose, as_json=as_json, apply=apply)
 

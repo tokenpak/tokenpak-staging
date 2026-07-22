@@ -42,7 +42,20 @@ Get TokenPak running in under 5 minutes.
 
 ---
 
-## Configure Your LLM Client (one-time wizard)
+## Prove One Measured Request
+
+For the canonical first-use path, follow
+[First Measured Savings Receipt](first-receipt.md). It installs TokenPak, starts
+one receipt-enabled foreground proxy, and sends one eligible request using your
+current project's real `README.md`. Complete that path before starting another
+proxy or applying a client integration.
+
+`tokenpak demo` remains an optional offline fixture; it is not a receipt from
+your own provider request.
+
+---
+
+## Configure a Saved Local Proxy (optional wizard)
 
 Run the setup wizard once after installing:
 
@@ -50,27 +63,29 @@ Run the setup wizard once after installing:
 tokenpak setup
 ```
 
-The wizard detects your installed LLM client and writes the proxy URL into the correct
-config file automatically — no manual editing required.
-
-- **Claude Code**: writes `ANTHROPIC_BASE_URL=http://localhost:8766` into `~/.claude/settings.json`
-- **OpenAI SDK**: prints the one-line export command
-- **Google AI SDK**: prints the one-line export command
+The wizard detects an API key already exported in your environment, asks for a
+provider, port, and compression profile, writes `~/.tokenpak/config.yaml`, and
+starts a background proxy. It does not rewrite client configuration or persist
+your provider key.
 
 !!! tip "Non-interactive / CI"
- Run `tokenpak setup` and answer the prompts, or set the proxy URL manually using the instructions in the [manual alternative](#connect-your-llm-client-manual-alternative) section below.
+ Configure the proxy with environment variables and use the manual client
+ connection instructions below; the interactive setup wizard exits without
+ reconfiguration when no terminal is attached.
 
-The wizard never reads or writes API keys — only proxy URLs.
+To connect supported clients with preview, backup, verification, and revert
+guidance, use `tokenpak integrate` after the proxy is running.
 
 ---
 
-## Start the Proxy
+## Start the Proxy Without the Wizard
 
 ```bash
 tokenpak serve --port 8766
 ```
 
-The proxy starts on `http://localhost:8766` and is ready to accept requests immediately.
+The proxy starts on `http://localhost:8766` and is ready to accept requests
+immediately. Skip this command if `tokenpak setup` already started the proxy.
 
 !!! tip "Run in background"
  ```bash
@@ -81,9 +96,15 @@ The proxy starts on `http://localhost:8766` and is ready to accept requests imme
 
 ---
 
-## Connect Your LLM Client (manual alternative)
+## Connect Your LLM Client
 
-If you prefer to configure your client manually instead of using `tokenpak setup`:
+Review detected integrations and client-specific instructions first:
+
+```bash
+tokenpak integrate
+```
+
+You can also configure a client manually:
 
 === "Claude Code"
  Configure in `~/.claude/settings.json`:
@@ -122,7 +143,7 @@ Your credentials pass through unchanged. TokenPak never stores them.
 
 ---
 
-## Verify It's Working
+## Verify Ongoing Traffic
 
 ```bash
 tokenpak status
@@ -136,7 +157,7 @@ Expected output:
 ✓ Session: 0 requests
 ```
 
-Make a test request through your client, then:
+Make a normal, eligible request through your client, then:
 
 ```bash
 tokenpak cost
