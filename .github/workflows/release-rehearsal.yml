@@ -84,6 +84,10 @@ jobs:
             full) pip install ".[dev,retrieval,code-compression,intelligence,data,compression]" ;;
           esac
 
+      - name: Check pinned Ruff formatting
+        if: matrix.shape == 'dev' && matrix.python-version == '3.12'
+        run: ruff format --check tokenpak/ tests/
+
       - name: Pytest with --continue-on-collection-errors (Std 30 §4 R4)
         id: pytest
         run: |
@@ -95,8 +99,10 @@ jobs:
           # IMPORTANT: PIPESTATUS[0] captures pytest's exit code, not tee's
           # (tee always exits 0). $? after a pipe would swallow test failures.
           set +e
+          # Keep rehearsal taxonomy aligned with the blocking release workflow:
+          # runner-sensitive perf/SLA tests have a dedicated fast-host lane.
           pytest tests/ \
-            -m "$MARKERS" \
+            -m "($MARKERS) and not needs_fast_host" \
             --continue-on-collection-errors \
             --tb=short -q \
             2>&1 | tee pytest-output.log

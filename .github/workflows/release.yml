@@ -89,6 +89,10 @@ jobs:
             full) pip install -e ".[dev,retrieval,code-compression,intelligence,data,compression]" ;;
           esac
 
+      - name: Check pinned Ruff formatting
+        if: matrix.shape == 'dev' && matrix.python-version == '3.12'
+        run: ruff format --check tokenpak/ tests/
+
       - name: Run tests with collection-error visibility
         id: pytest
         run: |

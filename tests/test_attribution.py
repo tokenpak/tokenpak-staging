@@ -1,6 +1,5 @@
 """Tests for tokenpak.attribution — agent/skill attribution tracking."""
 
-
 import pytest
 
 pytest.importorskip("tokenpak.attribution", reason="module not available in current build")
@@ -44,11 +43,13 @@ class TestDetectSource:
 
     def test_priority_order(self):
         # Explicit source wins over skill
-        src = detect_source({
-            "X-TokenPak-Source": "explicit",
-            "X-OpenClaw-Skill": "skill",
-            "X-OpenClaw-Session": "sue-main",
-        })
+        src = detect_source(
+            {
+                "X-TokenPak-Source": "explicit",
+                "X-OpenClaw-Skill": "skill",
+                "X-OpenClaw-Session": "sue-main",
+            }
+        )
         assert src == "explicit"
 
 
@@ -81,15 +82,17 @@ class TestAttributionTracker:
         sources = ["sue-openclaw", "trix-openclaw", "cali-openclaw", "unknown"]
         models = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
         for i in range(n):
-            tracker.record(AttributionRecord(
-                request_id=f"req-{i}",
-                timestamp=now - (n - i) * 60,
-                source=sources[i % len(sources)],
-                model=models[i % len(models)],
-                tokens_saved=1000 + i * 100,
-                cost_saved=0.50 + i * 0.05,
-                cache_hit=i % 2 == 0,
-            ))
+            tracker.record(
+                AttributionRecord(
+                    request_id=f"req-{i}",
+                    timestamp=now - (n - i) * 60,
+                    source=sources[i % len(sources)],
+                    model=models[i % len(models)],
+                    tokens_saved=1000 + i * 100,
+                    cost_saved=0.50 + i * 0.05,
+                    cache_hit=i % 2 == 0,
+                )
+            )
         return tracker
 
     def test_record_and_list(self):
@@ -171,21 +174,25 @@ class TestFormatAttribution:
     def test_format_shows_leakage_warning(self):
         tracker = AttributionTracker()
         for i in range(20):
-            tracker.record(AttributionRecord(
-                source="unknown",
-                cost_saved=1.0,
-                timestamp=time.time(),
-            ))
+            tracker.record(
+                AttributionRecord(
+                    source="unknown",
+                    cost_saved=1.0,
+                    timestamp=time.time(),
+                )
+            )
         output = format_attribution(tracker, days=7)
         assert "LEAKAGE" in output
 
     def test_format_no_leakage_warning(self):
         tracker = AttributionTracker()
         for i in range(20):
-            tracker.record(AttributionRecord(
-                source="sue-openclaw",
-                cost_saved=1.0,
-                timestamp=time.time(),
-            ))
+            tracker.record(
+                AttributionRecord(
+                    source="sue-openclaw",
+                    cost_saved=1.0,
+                    timestamp=time.time(),
+                )
+            )
         output = format_attribution(tracker, days=7)
         assert "LEAKAGE" not in output

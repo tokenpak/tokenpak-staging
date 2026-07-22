@@ -143,7 +143,9 @@ dev = [
     # stalling the job to the runner limit).
     "pytest-timeout>=2.1.0",
     "black>=24.0.0",
-    "ruff>=0.2.0",
+    # Formatter output is a release gate; pin it so a tool release cannot turn
+    # an unchanged checkout red or silently rewrite the baseline.
+    "ruff==0.15.22",
     # Architecture-contract gate (.importlinter) and its contract tests
     # under tests/lint/test_import_contracts.py.
     "import-linter>=2.0",

@@ -136,9 +136,33 @@ def test_write_row_retries_transient_lock_then_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor_module, "_DB_WRITE_RETRY_BACKOFF_S", 0.001)
 
     params = (
-        datetime.now().isoformat(), "claude-sonnet-4-6", "chat", 1, 1, 0.0,
-        1, 200, "test", "", 0, 0, 0, "", 0, 0, 0, "proxy", "", 0, 0, None,
-        "", "", "", "", "",
+        datetime.now().isoformat(),
+        "claude-sonnet-4-6",
+        "chat",
+        1,
+        1,
+        0.0,
+        1,
+        200,
+        "test",
+        "",
+        0,
+        0,
+        0,
+        "",
+        0,
+        0,
+        0,
+        "proxy",
+        "",
+        0,
+        0,
+        None,
+        "",
+        "",
+        "",
+        "",
+        "",
     )
     before = monitor_module.get_dropped_row_count()
     monitor_module._write_row(str(db), params)
@@ -165,9 +189,7 @@ def test_write_row_raises_after_retries_exhausted(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor_module, "_DB_WRITE_RETRY_BACKOFF_S", 0.001)
 
     with pytest.raises(sqlite3.OperationalError):
-        monitor_module._write_row(
-            str(db), ("x",) * len(monitor_module._REQUEST_INSERT_COLUMNS)
-        )
+        monitor_module._write_row(str(db), ("x",) * len(monitor_module._REQUEST_INSERT_COLUMNS))
     assert locked.attempts == monitor_module._DB_WRITE_RETRY_ATTEMPTS
 
 
@@ -186,9 +208,7 @@ def test_write_row_does_not_retry_non_transient_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor_module, "_get_db_connection", lambda p: broken)
 
     with pytest.raises(sqlite3.OperationalError):
-        monitor_module._write_row(
-            str(db), ("x",) * len(monitor_module._REQUEST_INSERT_COLUMNS)
-        )
+        monitor_module._write_row(str(db), ("x",) * len(monitor_module._REQUEST_INSERT_COLUMNS))
     assert broken.attempts == 1
 
 
@@ -324,9 +344,7 @@ def test_apply_schema_migration_tolerates_duplicate_column(tmp_path):
             conn, "ALTER TABLE requests ADD COLUMN existing TEXT"
         )
         # A genuinely new column is applied.
-        monitor_module._apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN fresh TEXT"
-        )
+        monitor_module._apply_schema_migration(conn, "ALTER TABLE requests ADD COLUMN fresh TEXT")
         cols = {r[1] for r in conn.execute("PRAGMA table_info(requests)")}
         assert "fresh" in cols
     finally:
@@ -371,9 +389,7 @@ def test_budget_alert_single_row_under_concurrent_triggers(tmp_path):
     def _fire():
         try:
             barrier.wait(timeout=5)
-            mon._check_budget_alert(
-                current_cost=100.0, _daily_limit=10.0, _threshold_pct=80.0
-            )
+            mon._check_budget_alert(current_cost=100.0, _daily_limit=10.0, _threshold_pct=80.0)
         except Exception as exc:  # pragma: no cover - failure diagnostics
             errors.append(exc)
 
@@ -456,9 +472,7 @@ def test_get_stats_windows_on_localtime(tmp_path, monkeypatch, _restore_tz):
     db = tmp_path / "monitor.db"
     mon = Monitor(db_path=str(db))
     twenty_hours_ago_local = datetime.fromtimestamp(_time.time() - 20 * 3600)
-    _insert_request(
-        db, timestamp=twenty_hours_ago_local.isoformat(), estimated_cost=1.0
-    )
+    _insert_request(db, timestamp=twenty_hours_ago_local.isoformat(), estimated_cost=1.0)
 
     stats = mon.get_stats(hours=24)
     assert stats["requests"] == 1
@@ -476,9 +490,7 @@ def test_get_stats_windows_on_localtime(tmp_path, monkeypatch, _restore_tz):
     assert old_basis == 0
 
 
-def test_get_stats_hours_window_excludes_same_date_older_row(
-    tmp_path, monkeypatch, _restore_tz
-):
+def test_get_stats_hours_window_excludes_same_date_older_row(tmp_path, monkeypatch, _restore_tz):
     # Regression for the mixed-separator windowing bug: rows are stamped
     # 'T'-separated (datetime.now().isoformat()) but the cutoff is space-
     # separated (datetime('now','localtime',?)). A RAW string compare made
@@ -576,13 +588,9 @@ def test_savings_report_agrees_with_registry_rate_estimator(tmp_path):
     assert report["total_requests"] == 1
     assert report["total_tokens_saved"] == compressed + cache_read
     assert report["total_cost_saved_usd"] == pytest.approx(expected, abs=1e-3)
-    assert report["savings_by_model"][model]["cost_saved_usd"] == pytest.approx(
-        expected, abs=1e-3
-    )
+    assert report["savings_by_model"][model]["cost_saved_usd"] == pytest.approx(expected, abs=1e-3)
     assert len(report["savings_by_date_7d"]) == 1
-    assert report["savings_by_date_7d"][0]["cost_saved_usd"] == pytest.approx(
-        expected, abs=1e-3
-    )
+    assert report["savings_by_date_7d"][0]["cost_saved_usd"] == pytest.approx(expected, abs=1e-3)
     # The report must NOT reproduce the old hardcoded flat-rate math.
     assert report["total_cost_saved_usd"] != pytest.approx(old_formula, abs=1e-3)
 
@@ -640,18 +648,14 @@ def _fetch_stop_reasons(db_path):
     try:
         return [
             row[0]
-            for row in conn.execute(
-                "SELECT stop_reason FROM requests ORDER BY id"
-            ).fetchall()
+            for row in conn.execute("SELECT stop_reason FROM requests ORDER BY id").fetchall()
         ]
     finally:
         conn.close()
 
 
 def _create_requests_table_for_insert(db_path):
-    cols = ", ".join(
-        f"{name} TEXT" for name in monitor_module._REQUEST_INSERT_COLUMNS
-    )
+    cols = ", ".join(f"{name} TEXT" for name in monitor_module._REQUEST_INSERT_COLUMNS)
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(f"CREATE TABLE requests (id INTEGER PRIMARY KEY, {cols})")
@@ -758,9 +762,7 @@ def test_existing_db_gains_stop_reason_column(tmp_path):
         cols = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
         assert "stop_reason" in cols
         # Legacy row survives the migration and reads back the '' default.
-        assert conn.execute(
-            "SELECT COALESCE(stop_reason, '') FROM requests"
-        ).fetchone()[0] == ""
+        assert conn.execute("SELECT COALESCE(stop_reason, '') FROM requests").fetchone()[0] == ""
     finally:
         conn.close()
     # The migrated column is writable on the pre-existing table.

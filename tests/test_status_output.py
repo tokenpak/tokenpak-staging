@@ -122,8 +122,11 @@ def make_args(**kwargs):
 def run_cmd_status(args, capsys):
     """Import and run cmd_status, patching proxy calls."""
 
-    with patch("tokenpak.cli._proxy_get") as mock_proxy, \
-         patch("time.time", return_value=1_770_400_000.0):
+    with (
+        patch("tokenpak.cli._proxy_get") as mock_proxy,
+        patch("time.time", return_value=1_770_400_000.0),
+    ):
+
         def _proxy_side(endpoint):
             if endpoint == "/health":
                 return MOCK_HEALTH
@@ -132,9 +135,11 @@ def run_cmd_status(args, capsys):
             elif endpoint == "/cache-stats":
                 return MOCK_CACHE
             return {}
+
         mock_proxy.side_effect = _proxy_side
 
         from tokenpak.cli import cmd_status
+
         cmd_status(args)
 
     return capsys.readouterr()
@@ -276,11 +281,9 @@ class TestNoMemeFlag:
         # Meme lines all start with 📦 in default view
         # After the "all systems healthy" line there should be no 📦
         lines = out.strip().splitlines()
-        healthy_idx = next(
-            (i for i, l in enumerate(lines) if "All systems healthy" in l), None
-        )
+        healthy_idx = next((i for i, l in enumerate(lines) if "All systems healthy" in l), None)
         if healthy_idx is not None:
-            after = "\n".join(lines[healthy_idx + 1:])
+            after = "\n".join(lines[healthy_idx + 1 :])
             assert "📦" not in after
 
     def test_meme_present_when_not_suppressed(self, capsys):
@@ -297,6 +300,7 @@ class TestProxyUnreachable:
         args = make_args()
         with patch("tokenpak.cli._proxy_get", return_value=None):
             from tokenpak.cli import cmd_status
+
             cmd_status(args)
         out = capsys.readouterr().out
         assert "not reachable" in out or "tokenpak start" in out or "⚠️" in out

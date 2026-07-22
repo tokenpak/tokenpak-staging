@@ -2,7 +2,6 @@
 Tests for agent registry + capability matching.
 """
 
-
 import pytest
 
 pytest.importorskip("tokenpak.agentic.capabilities", reason="module not available in current build")
@@ -26,6 +25,7 @@ from tokenpak.agentic.registry import (
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def temp_registry():
@@ -54,33 +54,46 @@ def populated_registry(temp_registry):
     names are not subject to `feedback_always_dynamic` (which governs
     production enumerations, not test data).
     """
-    temp_registry.register("trix", "host-1", {
-        "gpu": False,
-        "memory_gb": 4,
-        "specialties": ["code", "execution"],
-        "provider_access": ["anthropic", "openai"],
-        "max_concurrent": 1,
-    })
-    temp_registry.register("sue", "host-2", {
-        "gpu": False,
-        "memory_gb": 8,
-        "specialties": ["orchestration", "qa"],
-        "provider_access": ["anthropic"],
-        "max_concurrent": 2,
-    })
-    temp_registry.register("cali", "host-3", {
-        "gpu": True,
-        "memory_gb": 16,
-        "specialties": ["data", "analysis", "code"],
-        "provider_access": ["anthropic", "openai", "google"],
-        "max_concurrent": 1,
-    })
+    temp_registry.register(
+        "trix",
+        "host-1",
+        {
+            "gpu": False,
+            "memory_gb": 4,
+            "specialties": ["code", "execution"],
+            "provider_access": ["anthropic", "openai"],
+            "max_concurrent": 1,
+        },
+    )
+    temp_registry.register(
+        "sue",
+        "host-2",
+        {
+            "gpu": False,
+            "memory_gb": 8,
+            "specialties": ["orchestration", "qa"],
+            "provider_access": ["anthropic"],
+            "max_concurrent": 2,
+        },
+    )
+    temp_registry.register(
+        "cali",
+        "host-3",
+        {
+            "gpu": True,
+            "memory_gb": 16,
+            "specialties": ["data", "analysis", "code"],
+            "provider_access": ["anthropic", "openai", "google"],
+            "max_concurrent": 1,
+        },
+    )
     return temp_registry
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AgentInfo Tests
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestAgentInfo:
     def test_to_dict(self):
@@ -137,6 +150,7 @@ class TestAgentInfo:
 # ─────────────────────────────────────────────────────────────────────────────
 # AgentRegistry Tests
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestAgentRegistry:
     def test_register_new_agent(self, temp_registry):
@@ -251,6 +265,7 @@ class TestAgentRegistry:
 # AgentCapabilities Tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestAgentCapabilities:
     def test_default_values(self):
         caps = AgentCapabilities()
@@ -278,6 +293,7 @@ class TestAgentCapabilities:
 # ─────────────────────────────────────────────────────────────────────────────
 # CapabilityMatcher Tests
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestCapabilityMatcher:
     def test_match_no_requirements(self, populated_registry):
@@ -375,6 +391,7 @@ class TestCapabilityMatcher:
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI Integration Tests (smoke tests)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestAgentCLI:
     def test_list_no_agents(self, temp_registry, capsys, monkeypatch):
