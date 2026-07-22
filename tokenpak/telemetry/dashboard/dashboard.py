@@ -18,6 +18,13 @@ Usage::
 
 from __future__ import annotations
 
+__all__ = (
+    "RollupEngine",
+    "TelemetryDB",
+    "create_dashboard_router",
+)
+
+
 import asyncio
 import logging
 import sqlite3

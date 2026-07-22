@@ -6,6 +6,19 @@ Cited blocks gain score; ignored blocks decay. Feeds the budget allocator
 so future queries prioritize high-value blocks.
 """
 
+__all__ = (
+    "CITE_DELTA",
+    "DECAY_DELTA",
+    "DEFAULT_UTILITY_PATH",
+    "MIN_MATCH_LEN",
+    "SCORE_MAX",
+    "SCORE_MIN",
+    "get_utility_score",
+    "get_utility_weight",
+    "track_citations",
+    "update_utility",
+)
+
 import json
 import re
 from datetime import datetime, timezone

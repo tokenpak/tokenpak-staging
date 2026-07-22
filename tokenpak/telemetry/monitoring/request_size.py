@@ -10,6 +10,15 @@ Thresholds:
   - RED (700 KB): Run /compact NOW to avoid slowdowns
 """
 
+__all__ = (
+    "AlertLevel",
+    "RequestSizeConfig",
+    "RequestSizeMonitor",
+    "SizeAlert",
+    "get_monitor",
+    "reset_monitor",
+)
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone

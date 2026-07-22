@@ -2,6 +2,21 @@
 
 from __future__ import annotations
 
+__all__ = (
+    "CANONICAL_PROXY_URL",
+    "Colors",
+    "DEFAULT_FLEET_CONFIG",
+    "attribution_coverage",
+    "build_lifecycle_summary",
+    "companion_hook_integrity",
+    "load_fleet_config",
+    "run_doctor",
+    "run_fleet_doctor",
+    "run_stream_check",
+    "verify_integration_target",
+)
+
+
 import importlib.util
 import json
 import os

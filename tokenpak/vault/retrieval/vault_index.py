@@ -14,6 +14,15 @@ _bm25_tokenize(text)
 
 from __future__ import annotations
 
+__all__ = (
+    "VAULT_CACHE_MAX_BYTES",
+    "VAULT_CACHE_PRELOAD",
+    "VAULT_INDEX_RELOAD_INTERVAL",
+    "VaultIndex",
+    "count_tokens",
+)
+
+
 import json
 import math
 import os

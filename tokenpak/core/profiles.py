@@ -3,6 +3,13 @@
 Predefined configurations for different use cases.
 """
 
+__all__ = (
+    "PROFILES",
+    "apply_profile",
+    "get_profile",
+    "profile_to_yaml",
+)
+
 from typing import Any, Dict, TypedDict
 
 import yaml

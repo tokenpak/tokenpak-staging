@@ -11,6 +11,13 @@ Usage:
 
 from __future__ import annotations
 
+__all__ = (
+    "DEFAULT_THRESHOLD",
+    "SEP",
+    "run_prune",
+)
+
+
 import json
 import os
 import sys

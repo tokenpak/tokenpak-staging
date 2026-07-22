@@ -17,6 +17,11 @@ Wire format example:
   {"goal":"...","current_task":"...","done":[...],"open":[...],"next":[...]}
 """
 
+__all__ = (
+    "CanonBlockRegistry",
+    "ContextAssembler",
+)
+
 import hashlib
 import json
 import time

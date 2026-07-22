@@ -25,6 +25,14 @@ Public API:
 
 from __future__ import annotations
 
+__all__ = (
+    "DEFAULT_TIMEOUT_S",
+    "FileLockManager",
+    "LockConflictError",
+    "LockExpiredError",
+)
+
+
 import hashlib
 import json
 import os

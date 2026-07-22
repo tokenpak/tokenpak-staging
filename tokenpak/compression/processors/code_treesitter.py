@@ -12,6 +12,14 @@ Target compression: 3-10x on typical code files.
 
 from __future__ import annotations
 
+__all__ = (
+    "EXTENSION_TO_LANG",
+    "TreeSitterProcessor",
+    "extract",
+    "is_available",
+)
+
+
 import warnings
 from typing import TYPE_CHECKING, Optional, Protocol
 

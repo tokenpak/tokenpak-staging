@@ -1,6 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """Benchmarking for TokenPak: compression performance and latency."""
 
+__all__ = (
+    "BUILTIN_SAMPLES",
+    "Block",
+    "BlockRegistry",
+    "benchmark_indexing_baseline",
+    "benchmark_indexing_optimized",
+    "benchmark_processing",
+    "benchmark_search",
+    "benchmark_tokenization",
+    "cache_info",
+    "clear_cache",
+    "count_tokens",
+    "count_tokens_uncached",
+    "get_processor",
+    "run_benchmark",
+    "run_compression_benchmark",
+    "walk_directory",
+)
+
 import hashlib
 import json
 import statistics

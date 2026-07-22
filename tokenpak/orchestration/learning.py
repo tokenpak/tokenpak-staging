@@ -13,6 +13,25 @@ Feeds model routing decisions, recipe selection, and budget allocation.
 
 from __future__ import annotations
 
+__all__ = (
+    "DEFAULT_LEARNING_PATH",
+    "MIN_SAMPLES_THRESHOLD",
+    "cmd_learn_status",
+    "get_best_model",
+    "get_best_quality_per_token",
+    "get_compression_quality_signal",
+    "get_durable_lessons",
+    "get_effective_compression",
+    "learn",
+    "load",
+    "on_episode_complete",
+    "record_lesson",
+    "record_quality_per_token",
+    "reset",
+    "run_memory_promotion",
+)
+
+
 import json
 import os
 from datetime import datetime, timezone

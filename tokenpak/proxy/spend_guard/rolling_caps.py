@@ -38,6 +38,20 @@ Design notes:
 
 from __future__ import annotations
 
+__all__ = (
+    "CAP_DIMENSION_UNMEASURABLE",
+    "CapBreach",
+    "RollingCapsConfig",
+    "admit_pending_spend",
+    "check_rolling_caps",
+    "check_rolling_caps_and_admit",
+    "compute_rolling_usage",
+    "record_session_agent",
+    "reset_caches_for_testing",
+    "settle_pending_spend",
+)
+
+
 import logging
 import os
 import secrets

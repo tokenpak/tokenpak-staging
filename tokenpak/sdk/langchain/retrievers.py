@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+__all__ = (
+    "TokenPakRetriever",
+    "blocks_to_docs",
+    "doc_to_block",
+)
+
+
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 

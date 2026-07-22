@@ -6,6 +6,15 @@ Uses request headers and metadata to attribute cost savings.
 
 from __future__ import annotations
 
+__all__ = (
+    "AGENT_EMOJI",
+    "AttributionRecord",
+    "AttributionTracker",
+    "detect_source",
+    "format_attribution",
+)
+
+
 import json
 import time
 from collections import defaultdict

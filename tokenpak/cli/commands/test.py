@@ -15,6 +15,12 @@ Only options the user actually has set up are shown.
 
 from __future__ import annotations
 
+__all__ = (
+    "run",
+    "run_test",
+)
+
+
 import hashlib
 import os
 import shutil

@@ -35,6 +35,9 @@ Schema::
 
 from __future__ import annotations
 
+__all__ = ("SQLiteRetrievalBackend",)
+
+
 import json
 import math
 import re

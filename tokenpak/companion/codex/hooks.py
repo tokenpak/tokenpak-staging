@@ -24,6 +24,14 @@ inside a function body.
 
 from __future__ import annotations
 
+__all__ = (
+    "TOKENPAK_HOOK_MARKER",
+    "ensure_hooks_feature_enabled",
+    "generate_hooks_json",
+    "install_hooks",
+)
+
+
 import json
 import os
 import subprocess

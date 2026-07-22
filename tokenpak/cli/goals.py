@@ -13,6 +13,15 @@ Goal tracking system for TokenPak with support for:
 
 from __future__ import annotations
 
+__all__ = (
+    "Goal",
+    "GoalManager",
+    "GoalProgress",
+    "GoalStatus",
+    "GoalType",
+)
+
+
 import json
 import time
 from dataclasses import dataclass, field

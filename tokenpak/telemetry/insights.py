@@ -11,6 +11,14 @@ Usage:
 
 from __future__ import annotations
 
+__all__ = (
+    "DEFAULT_THRESHOLDS",
+    "Insight",
+    "InsightEngine",
+    "generate_insights",
+)
+
+
 import sqlite3
 import time
 from dataclasses import dataclass

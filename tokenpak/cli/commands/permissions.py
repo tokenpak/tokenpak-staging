@@ -47,6 +47,35 @@ Write discipline (additive-only):
 
 from __future__ import annotations
 
+__all__ = (
+    "ALL_TIERS",
+    "CLAUDE_MODE_TO_TIER",
+    "CLAUDE_TIER_TO_MODE",
+    "CLIENTS",
+    "CODEX_SETTINGS_TO_TIER",
+    "CODEX_TIER_TO_SETTINGS",
+    "DEFAULT_TIER",
+    "PERSISTENT_TIERS",
+    "TIER_DESCRIPTIONS",
+    "TierApplyResult",
+    "applied_tier",
+    "apply_claude_tier",
+    "apply_codex_tier",
+    "apply_tier",
+    "doctor_rows",
+    "fleet_mode_enabled",
+    "get_last_set_tier",
+    "read_claude_tier",
+    "read_codex_tier",
+    "reset_claude_tier",
+    "reset_codex_tier",
+    "reset_tier",
+    "resolved_settings_line",
+    "run_permissions",
+    "set_fleet_mode",
+)
+
+
 import argparse
 import json
 import os

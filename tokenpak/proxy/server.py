@@ -22,6 +22,57 @@ See tokenpak/proxy/route_policy.py for the per-route behavior matrix.
 
 from __future__ import annotations
 
+__all__ = (
+    "CLAUDE_CODE_HEADER_ALLOWLIST",
+    "CacheMetrics",
+    "CompressionStats",
+    "ConnectionPool",
+    "DegradationEventType",
+    "ExportAPI",
+    "FilterParams",
+    "ForwardProxyHandler",
+    "GracefulShutdown",
+    "INTERCEPT_HOSTS",
+    "LEGACY_HEADER_ALLOWLIST",
+    "MAX_UPSTREAM_RETRIES",
+    "PassthroughConfig",
+    "PipelineTrace",
+    "PoolConfig",
+    "ProviderRouter",
+    "ProxyServer",
+    "RequestStats",
+    "SessionFilter",
+    "StageTrace",
+    "TraceStorage",
+    "UpstreamRetryPolicy",
+    "UpstreamTruncatedJSONError",
+    "auto_detect_upstream",
+    "build_terminal_recovery_payload",
+    "detect_platform",
+    "estimate_cost",
+    "extract_sse_tokens",
+    "extract_tip_plan_id",
+    "format_startup_report",
+    "forward_headers",
+    "get_circuit_breaker_registry",
+    "get_degradation_tracker",
+    "get_policy",
+    "get_rate_limit_registry",
+    "get_stats_footer_enabled",
+    "get_upstream_inflight_snapshot",
+    "log_request",
+    "main",
+    "normalize_upstream_error",
+    "persist_failed_request_metadata",
+    "provider_from_url",
+    "render_footer_oneline",
+    "response_has_truncated_json",
+    "run_startup_checks",
+    "start_proxy",
+    "validate_auth",
+)
+
+
 import gzip
 import json
 import os

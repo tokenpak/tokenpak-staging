@@ -10,6 +10,19 @@ Supports hooks that run shell scripts at key proxy lifecycle points:
 Each hook receives JSON context via stdin with relevant event fields.
 """
 
+__all__ = (
+    "HOOK_NAMES",
+    "fire_hook",
+    "fire_on_budget_alert",
+    "fire_on_error",
+    "fire_on_request",
+    "fire_on_response",
+    "get_hook_path",
+    "hook_exists",
+    "install_hook",
+    "list_hooks",
+)
+
 import json
 import logging
 import os

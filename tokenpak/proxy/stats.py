@@ -23,6 +23,22 @@ Usage:
 
 from __future__ import annotations
 
+__all__ = (
+    "CompressionStats",
+    "MAX_LOG_BYTES",
+    "ROLLING_WINDOW",
+    "STATS",
+    "StatsCollector",
+    "build_health_response",
+    "build_stats_response",
+    "get_compression_stats",
+    "get_stats_collector",
+    "reset_singleton",
+    "reset_stats_collector",
+    "to_text",
+)
+
+
 import threading
 import time
 from collections.abc import Mapping

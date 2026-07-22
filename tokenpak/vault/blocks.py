@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+__all__ = (
+    "BlockRecord",
+    "BlockStore",
+    "SliceStore",
+    "get_block_store",
+)
+
+
 import json
 import time
 from dataclasses import asdict, dataclass, field

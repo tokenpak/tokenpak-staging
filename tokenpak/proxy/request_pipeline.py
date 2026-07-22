@@ -9,6 +9,17 @@ _apply_budget, _shadow_validate.
 
 from __future__ import annotations
 
+__all__ = (
+    "PROTECTED_MARKERS",
+    "ROUTER_ENABLED",
+    "VALIDATION_GATE_BUDGET_CAP",
+    "VALIDATION_GATE_ENABLED",
+    "can_compress",
+    "classify_message_risk",
+    "is_protected_content",
+)
+
+
 import json
 import logging
 import threading

@@ -4,6 +4,17 @@ Hybrid retriever orchestrator: combines BM25 + optional local vector search via 
 
 from __future__ import annotations
 
+__all__ = (
+    "BM25Retriever",
+    "FusedResult",
+    "HybridRetriever",
+    "HybridSearchConfig",
+    "LocalVectorRetriever",
+    "RetrievalQuery",
+    "rrf_fusion_detailed",
+)
+
+
 import asyncio
 import logging
 from typing import Dict, List, Optional

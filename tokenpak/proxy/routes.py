@@ -20,6 +20,9 @@ Provides a mixin class (ProxyRoutesMixin) with:
 
 from __future__ import annotations
 
+__all__ = ("ProxyRoutesMixin",)
+
+
 # ---------------------------------------------------------------------------
 # stdlib
 # ---------------------------------------------------------------------------

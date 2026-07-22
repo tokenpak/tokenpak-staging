@@ -22,6 +22,16 @@ Exit codes:
 
 from __future__ import annotations
 
+__all__ = (
+    "ConfigError",
+    "ConfigValidator",
+    "cmd_validate_config",
+    "format_errors",
+    "validate_config_dict",
+    "validate_config_file",
+)
+
+
 import os
 import re
 import socket

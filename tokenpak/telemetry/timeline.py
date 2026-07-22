@@ -6,6 +6,18 @@ trend analysis, ASCII charts, and anomaly detection.
 
 from __future__ import annotations
 
+__all__ = (
+    "CHART_CHARS",
+    "compute_trends",
+    "detect_anomalies",
+    "format_timeline",
+    "get_timeline",
+    "load_history",
+    "render_chart",
+    "save_snapshot",
+)
+
+
 import json
 from datetime import datetime
 from pathlib import Path

@@ -19,6 +19,21 @@ CLI:
 
 from __future__ import annotations
 
+__all__ = (
+    "add",
+    "cmd_template_add",
+    "cmd_template_list",
+    "cmd_template_remove",
+    "cmd_template_show",
+    "cmd_template_use",
+    "list_templates",
+    "remove",
+    "show",
+    "use",
+    "variables_in",
+)
+
+
 import json
 import re
 import sys

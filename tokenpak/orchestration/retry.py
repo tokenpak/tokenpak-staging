@@ -56,6 +56,18 @@ Callers may pass callables to intercept escalation decisions:
 
 from __future__ import annotations
 
+__all__ = (
+    "DEFAULT_PER_ERROR",
+    "ImmediateAlertError",
+    "MODEL_DOWNGRADE_PATH",
+    "PROVIDER_FALLBACK_PATH",
+    "RetryAttempt",
+    "RetryEngine",
+    "RetryExhaustedError",
+    "load_recent_retry_events",
+)
+
+
 import json
 import logging
 import os

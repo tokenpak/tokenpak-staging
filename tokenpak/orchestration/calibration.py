@@ -7,6 +7,20 @@
 
 from __future__ import annotations
 
+__all__ = (
+    "Block",
+    "BlockRegistry",
+    "calibrate_workers",
+    "clear_cache",
+    "count_tokens",
+    "get_processor",
+    "get_recommended_workers",
+    "load_profile",
+    "save_profile",
+    "walk_directory",
+)
+
+
 import hashlib
 import json
 import os

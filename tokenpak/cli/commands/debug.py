@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+__all__ = ("debug_cmd",)
+
+
 from argparse import Namespace
 from typing import TYPE_CHECKING, Optional
 

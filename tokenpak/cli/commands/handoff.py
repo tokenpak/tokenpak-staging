@@ -11,6 +11,12 @@ Usage:
 
 from __future__ import annotations
 
+__all__ = (
+    "SEP",
+    "handoff_cmd",
+)
+
+
 import argparse
 import sys
 from datetime import datetime, timezone

@@ -22,6 +22,32 @@ Failover Events:
 
 from __future__ import annotations
 
+__all__ = (
+    "CIRCUIT_COOL_DOWN_SECONDS",
+    "CIRCUIT_FAILURE_THRESHOLD",
+    "CircuitBreaker",
+    "CircuitState",
+    "ClassifiedError",
+    "ErrorType",
+    "FailoverConfig",
+    "FailoverDecision",
+    "FailoverEngine",
+    "FailoverEvent",
+    "FailoverEventLog",
+    "FailoverManager",
+    "MAX_RETRY_SAME_PROVIDER",
+    "ProviderAttempt",
+    "RATE_LIMIT_WAIT_SECONDS",
+    "classify_error",
+    "decide",
+    "get_event_log",
+    "load_failover_config",
+    "normalize_response",
+    "normalize_stream",
+    "render_failover_footer",
+)
+
+
 import logging
 import threading
 import time

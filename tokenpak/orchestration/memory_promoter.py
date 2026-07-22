@@ -13,6 +13,15 @@ Principle: Only promote if:
 
 from __future__ import annotations
 
+__all__ = (
+    "DEFAULT_TTL",
+    "Lesson",
+    "MemoryPromoter",
+    "PROMOTION_RULES",
+    "TIER_NAMES",
+)
+
+
 import json
 import logging
 import time

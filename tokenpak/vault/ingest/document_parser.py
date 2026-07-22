@@ -26,6 +26,16 @@ Usage::
 
 from __future__ import annotations
 
+__all__ = (
+    "DocumentParser",
+    "DocumentSection",
+    "DocumentStructure",
+    "HeadingNode",
+    "SectionType",
+    "Table",
+)
+
+
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser

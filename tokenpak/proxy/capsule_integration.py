@@ -31,6 +31,14 @@ Usage
 
 from __future__ import annotations
 
+__all__ = (
+    "TYPE_CHECKING",
+    "capsule_request_hook",
+    "clear_cache",
+    "get_capsule_request_hook",
+)
+
+
 import logging
 import os
 from typing import TYPE_CHECKING, Optional, Protocol, Tuple

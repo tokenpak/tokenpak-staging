@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Token counting utilities with caching, lazy loading, and robust truncation."""
 
+__all__ = (
+    "cache_info",
+    "clear_cache",
+    "count_tokens",
+    "count_tokens_uncached",
+    "estimate_tokens",
+    "truncate_to_tokens",
+)
+
 from functools import lru_cache
 from typing import Optional, Protocol, Sequence, Tuple
 

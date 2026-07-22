@@ -2,6 +2,27 @@
 
 from __future__ import annotations
 
+__all__ = (
+    "BlockRecord",
+    "BlockStore",
+    "EntityExtractor",
+    "SliceRecord",
+    "SliceStore",
+    "SymbolTable",
+    "VaultIndexer",
+    "convert_document",
+    "count_tokens",
+    "detect_file_type",
+    "get_block_store",
+    "get_processor",
+    "should_slice",
+    "slice_content",
+    "sync_loop",
+    "sync_to_vault",
+    "walk_directory",
+)
+
+
 import hashlib
 import json
 import os

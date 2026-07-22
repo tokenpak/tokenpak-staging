@@ -11,6 +11,8 @@ Usage:
     # {text: str, span: str, score: float}
 """
 
+__all__ = ("SpanExtractor",)
+
 import re
 from typing import TypedDict, cast
 

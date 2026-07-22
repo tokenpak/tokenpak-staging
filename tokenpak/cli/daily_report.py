@@ -7,6 +7,13 @@ Suitable for automated reporting via CLI, cron, or messaging.
 
 from __future__ import annotations
 
+__all__ = (
+    "DailySavingsData",
+    "ModelCompressionRow",
+    "generate_report",
+)
+
+
 import json
 import os
 import time
