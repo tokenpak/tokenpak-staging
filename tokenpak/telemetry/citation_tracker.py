@@ -10,7 +10,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import List, TypedDict, cast
 
 # Default utility store location (relative to project root)
 DEFAULT_UTILITY_PATH = ".tokenpak/utility.json"
@@ -25,6 +25,22 @@ SCORE_MAX = 10.0
 # Score deltas
 CITE_DELTA = 1.0
 DECAY_DELTA = 0.1
+
+
+class ContextSlice(TypedDict, total=False):
+    slice_id: str
+    content: str
+    ref: str
+
+
+class UtilityEntry(TypedDict):
+    score: float
+    hits: int
+    misses: int
+    last_cited: str | None
+
+
+UtilityStore = dict[str, UtilityEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +73,7 @@ def _extract_identifiers(block_content: str) -> List[str]:
 
 def track_citations(
     response_text: str,
-    context_slices: List[Dict],
+    context_slices: List[ContextSlice],
 ) -> List[str]:
     """
     Determine which context slices the LLM appears to have cited.
@@ -114,18 +130,18 @@ def track_citations(
 # ---------------------------------------------------------------------------
 
 
-def _load_utility(utility_path: str) -> Dict:
+def _load_utility(utility_path: str) -> UtilityStore:
     """Load utility.json; return empty dict if missing."""
     p = Path(utility_path)
     if p.exists():
         try:
-            return json.loads(p.read_text())
+            return cast(UtilityStore, json.loads(p.read_text()))
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
-def _save_utility(data: Dict, utility_path: str) -> None:
+def _save_utility(data: UtilityStore, utility_path: str) -> None:
     """Persist utility.json."""
     p = Path(utility_path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +152,7 @@ def update_utility(
     cited_ids: List[str],
     all_ids: List[str],
     utility_path: str = DEFAULT_UTILITY_PATH,
-) -> Dict:
+) -> UtilityStore:
     """
     Update utility scores after an LLM response.
 
@@ -182,7 +198,8 @@ def get_utility_score(
     Returns 5.0 (neutral) if no data exists.
     """
     data = _load_utility(utility_path)
-    return data.get(slice_id, {}).get("score", 5.0)
+    entry = data.get(slice_id)
+    return entry["score"] if entry is not None else 5.0
 
 
 def get_utility_weight(
