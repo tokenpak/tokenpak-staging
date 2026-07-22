@@ -33,7 +33,7 @@ Scoping
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional
 
 from tokenpak.cache.semantic_cache import (
     SemanticCache,
@@ -94,14 +94,14 @@ class SemanticCacheMiddleware:
 
         return lookup
 
-    def record(self, query: str, response: dict[str, Any], scope_key: str = "") -> None:
+    def record(self, query: str, response: bytes, scope_key: str = "") -> None:
         """
-        Store *response* for *query* in the appropriate cache.
+        Store raw *response* bytes for *query* in the appropriate cache.
 
         Call this AFTER a successful upstream LLM response.
         """
         cache = self._get_or_create_cache(scope_key)
-        cache.store(query, cast(Any, response))
+        cache.store(query, response)
         logger.debug(
             "[SemanticCacheMiddleware] stored query scope=%s",
             self._resolve_scope_key(scope_key),

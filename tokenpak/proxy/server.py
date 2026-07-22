@@ -13,7 +13,7 @@ Env vars (all optional):
     TOKENPAK_PORT          (default 8766)
     TOKENPAK_MODE          (default hybrid) — strict|hybrid|aggressive
     TOKENPAK_COMPACT       (default 1) — master on/off switch
-    TOKENPAK_COMPACT_THRESHOLD_TOKENS (default 4500)
+    TOKENPAK_COMPACT_THRESHOLD_TOKENS (default 1500 in the balanced profile)
     TOKENPAK_DB            (default .tokenpak/monitor.db)
     NOTIFY_SOCKET          systemd sd_notify socket path (set by systemd, not TokenPak)
 
