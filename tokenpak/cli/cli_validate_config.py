@@ -22,11 +22,11 @@ Exit codes:
 
 from __future__ import annotations
 
-from argparse import Namespace
 import os
 import re
 import socket
 import sys
+from argparse import Namespace
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
@@ -106,7 +106,7 @@ class ConfigValidator:
         "backend",
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.errors: list[ConfigError] = []
         self.warnings: list[ConfigError] = []
         self.line_map: dict[str, int] = {}  # field → line number
@@ -378,7 +378,7 @@ class ConfigValidator:
         for provider_name, provider_config in providers.items():
             self._validate_provider(provider_name, provider_config)
 
-    def _validate_provider(self, name: str, config: Dict[str, Any]) -> None:
+    def _validate_provider(self, name: str, config: dict[str, Any]) -> None:
         """Validate a single provider."""
         if not isinstance(config, dict):
             self.errors.append(
@@ -581,7 +581,7 @@ def validate_config_dict(
     """
     validator = ConfigValidator()
     exit_code, errors, _warnings = validator.validate_dict(config)
-    error_dicts = [
+    error_dicts: list[ValidationErrorDict] = [
         {
             "path": e.field,
             "message": e.message,
@@ -604,7 +604,7 @@ def validate_config_file(filepath: str) -> tuple[bool, list[ValidationErrorDict]
     """
     validator = ConfigValidator()
     exit_code, errors, _warnings = validator.validate(filepath)
-    error_dicts = [
+    error_dicts: list[ValidationErrorDict] = [
         {
             "path": e.field,
             "message": e.message,

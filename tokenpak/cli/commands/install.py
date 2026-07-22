@@ -1,4 +1,5 @@
 """tokenpak.cli.commands.install — install/configure tokenpak for Claude Code."""
+
 from __future__ import annotations
 
 import json
@@ -119,6 +120,7 @@ WantedBy=default.target
 def run_smoke_test(proxy_url: str = PROXY_URL) -> bool:
     try:
         import urllib.request
+
         with urllib.request.urlopen(f"{proxy_url}/health", timeout=5) as r:
             return bool(r.status == 200)
     except Exception:
@@ -154,7 +156,11 @@ def _setup_openclaw_if_present(proxy_url: str) -> None:
         return
 
     configs = result.get("configs", [])
+    if not isinstance(configs, list):
+        return
     for cfg in configs:
+        if not isinstance(cfg, dict):
+            continue
         path = cfg.get("path", "?")
         if cfg.get("error"):
             print(f"  {path}: {cfg['error']}")

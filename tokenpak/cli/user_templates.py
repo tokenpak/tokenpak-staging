@@ -113,9 +113,14 @@ def add(name: str, content: str) -> Template:
         existing = _decode_template(json.loads(path.read_text()))
         if existing is None:
             existing = Template(name=name, content="", created_at=now, updated_at=now)
-        template = {**existing, "content": content, "updated_at": now}
+        template = Template(
+            name=existing["name"],
+            content=content,
+            created_at=existing["created_at"],
+            updated_at=now,
+        )
     else:
-        template = {"name": name, "content": content, "created_at": now, "updated_at": now}
+        template = Template(name=name, content=content, created_at=now, updated_at=now)
     path.write_text(json.dumps(template, indent=2))
     return template
 

@@ -22,6 +22,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Literal,
     Mapping,
@@ -76,6 +77,27 @@ class ModelLeaderboardRow(TypedDict):
     saved: float
     cache_pct: int
     compress_pct: float
+
+
+class MonitorModelRow(TypedDict):
+    model: str
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    cache_read: int
+    cost: float
+    compressed: int
+    avg_latency: float
+
+
+class MonitorSavingsData(TypedDict):
+    actual_cost: float
+    cache_read: int
+    cache_hit_rate: float
+    compressed_tokens: int
+    raw_input_tokens: int
+    total_input: int
+    total_output: int
 
 
 class ProxyCounters(TypedDict, total=False):
@@ -289,14 +311,14 @@ def _monitor_db_cost(period: str = "daily") -> float:
         return 0.0
 
 
-def _monitor_db_savings(days: int = 30) -> JsonObject:
+def _monitor_db_savings(days: int = 30) -> MonitorSavingsData | None:
     """Return savings summary from monitor.db."""
     import sqlite3
     from datetime import date, timedelta
 
     db = _get_monitor_db_path()
     if db is None:
-        return {}
+        return None
 
     since = (date.today() - timedelta(days=days)).isoformat()
     try:
@@ -326,20 +348,20 @@ def _monitor_db_savings(days: int = 30) -> JsonObject:
 
         # Rough baseline: what it would cost without cache/compression
         raw_input = total_input + compressed
-        return {
-            "actual_cost": actual,
-            "cache_read": cache_read,
-            "cache_hit_rate": cache_read / total_in if total_in else 0,
-            "compressed_tokens": compressed,
-            "raw_input_tokens": raw_input,
-            "total_input": total_input,
-            "total_output": _as_int(row["total_output"]),
-        }
+        return MonitorSavingsData(
+            actual_cost=actual,
+            cache_read=cache_read,
+            cache_hit_rate=cache_read / total_in if total_in else 0,
+            compressed_tokens=compressed,
+            raw_input_tokens=raw_input,
+            total_input=total_input,
+            total_output=_as_int(row["total_output"]),
+        )
     except Exception:
-        return {}
+        return None
 
 
-def _monitor_db_models(days: int = 30) -> list[JsonObject]:
+def _monitor_db_models(days: int = 30) -> list[MonitorModelRow]:
     """Return per-model usage from monitor.db."""
     import sqlite3
     from datetime import date, timedelta
@@ -367,7 +389,19 @@ def _monitor_db_models(days: int = 30) -> list[JsonObject]:
             GROUP BY model ORDER BY requests DESC""",
             (since,),
         )
-        return [cast(JsonObject, dict(r)) for r in cur.fetchall()]
+        return [
+            MonitorModelRow(
+                model=str(r["model"] or "unknown"),
+                requests=_as_int(r["requests"]),
+                input_tokens=_as_int(r["input_tokens"]),
+                output_tokens=_as_int(r["output_tokens"]),
+                cache_read=_as_int(r["cache_read"]),
+                cost=_as_float(r["cost"]),
+                compressed=_as_int(r["compressed"]),
+                avg_latency=_as_float(r["avg_latency"]),
+            )
+            for r in cur.fetchall()
+        ]
     except Exception:
         return []
 
@@ -608,8 +642,9 @@ def _discover_plugin_commands(force: bool = False) -> dict[str, EntryPoint]:
 
         eps = entry_points()
         # Python 3.12+ exposes .select(); older returns a dict-like mapping.
+        command_eps: Sequence[EntryPoint]
         if hasattr(eps, "select"):
-            command_eps = eps.select(group="tokenpak.commands")
+            command_eps = tuple(eps.select(group="tokenpak.commands"))
         else:  # pragma: no cover - legacy importlib.metadata
             legacy_eps = cast(Mapping[str, Sequence[EntryPoint]], eps)
             command_eps = legacy_eps.get("tokenpak.commands", [])
@@ -1102,7 +1137,7 @@ def cmd_start(args: CommandArgs) -> None:
     health = _proxy_get("/health", port=port)
     if health:
         mode = health.get("compilation_mode", "unknown")
-        reqs = health.get("stats", {}).get("requests", 0)
+        reqs = _as_int(_json_object(health.get("stats")).get("requests"))
         print(f"Proxy already running (port {port}, mode={mode}, {reqs} requests).")
         return
 
@@ -1128,9 +1163,7 @@ def cmd_start(args: CommandArgs) -> None:
         proxy_path = next((c for c in candidates if c.exists()), None)
         if not proxy_path:
             print("Error: proxy.py not found. Falling back to legacy server.")
-            import types
-
-            serve_args = types.SimpleNamespace(port=port, telemetry=False, ingest=False, workers=1)
+            serve_args = argparse.Namespace(port=port, telemetry=False, ingest=False, workers=1)
             cmd_serve(serve_args)
             return
         proc = subprocess.Popen(
@@ -1262,7 +1295,8 @@ def _process_file(
     if not processor:
         return None
 
-    compressed = processor.process(content, path)
+    process_text = cast(Callable[[str, str], str], processor.process)
+    compressed = process_text(content, path)
 
     block = Block(
         path=path,
@@ -1560,7 +1594,8 @@ def _do_index(args: CommandArgs) -> None:
                     skipped += 1
                     continue
 
-                compressed = processor.process(content, path)
+                process_text = cast(Callable[[str, str], str], processor.process)
+                compressed = process_text(content, path)
 
                 block = Block(
                     path=path,
@@ -1987,7 +2022,7 @@ def cmd_requests(args: CommandArgs) -> None:
             print("No request ledger found yet. Run requests through the proxy first.")
             return
 
-        def _print_rows(rows: Sequence[Sequence[object]], with_header: bool = False) -> None:
+        def _print_rows(rows: Sequence[dict[str, Any]], with_header: bool = False) -> None:
             header = (
                 "ID         Model              Input    Output   Cache%  Saved $  Status     Age"
             )
@@ -2010,7 +2045,7 @@ def cmd_requests(args: CommandArgs) -> None:
         _print_rows(rows, with_header=True)
 
         if not follow:
-            return
+            return None
 
         # Follow new entries
         with REQUESTS_PATH.open("r") as f:
@@ -2035,12 +2070,12 @@ def cmd_requests(args: CommandArgs) -> None:
     # default: show single request
     if not request_id:
         print("Provide a request id (e.g. tokenpak requests <id>).")
-        return
+        return None
 
     row = get_request_by_id(request_id)
     if not row:
         print(f"Request '{request_id}' not found.")
-        return
+        return None
 
     view = to_view(row)
     print(f"Request ID: {view.request_id}")
@@ -2265,17 +2300,17 @@ def cmd_dashboard(args: CommandArgs) -> int | None:
             token = load_or_create_token()
         except Exception as e:
             print(f"Error: {e}")
-            return
+            return None
         print(f"Dashboard token: {token}")
         print("File: ~/.tokenpak/dashboard_token")
-        return
+        return None
 
     # --new-token: regenerate token
     if getattr(args, "new_token", False):
         token = regenerate_token()
         print(f"Token regenerated: {token}")
         print("Old token is now invalid.")
-        return
+        return None
 
     # --public: advanced public URL with token
     if getattr(args, "public", False):
@@ -2297,7 +2332,7 @@ def cmd_dashboard(args: CommandArgs) -> int | None:
         print("Default remote access: tokenpak dashboard connect <host>")
         print("Regenerate token: tokenpak dashboard --new-token\n")
         webbrowser.open(url)
-        return
+        return None
 
     # Default: TUI dashboard
 
@@ -2308,6 +2343,7 @@ def cmd_dashboard(args: CommandArgs) -> int | None:
         json_export=getattr(args, "json_export", False),
         layout=getattr(args, "layout", "home"),
     )
+    return None
 
 
 def _cmd_dashboard_public(args: CommandArgs) -> None:
@@ -2636,10 +2672,19 @@ def cmd_prove(args: CommandArgs) -> None:
         providers = list_providers()
         print("\n  Registered providers:\n")
         for p in providers:
-            models = ", ".join(p["models"][:5])
-            if len(p["models"]) > 5:
-                models += f", ... (+{len(p['models']) - 5})"
-            print(f"    {p['name']:12s}  format={p['format']:10s}  ({p['source']})")
+            raw_models = p.get("models")
+            provider_models = (
+                [model for model in raw_models if isinstance(model, str)]
+                if isinstance(raw_models, list)
+                else []
+            )
+            models = ", ".join(provider_models[:5])
+            if len(provider_models) > 5:
+                models += f", ... (+{len(provider_models) - 5})"
+            name = str(p.get("name", "unknown"))
+            provider_format = str(p.get("format", "unknown"))
+            source = str(p.get("source", "unknown"))
+            print(f"    {name:12s}  format={provider_format:10s}  ({source})")
             print(f"    {'':12s}  models: {models}")
         print("\n  Add custom providers: ~/.tokenpak/prove/providers.yaml")
         print()
@@ -3232,7 +3277,8 @@ def _build_stub_parsers(sub: Subparsers) -> None:
             if "error" in result:
                 print(f"✖ {result['error']}")
                 return 1
-            configs = result.get("configs", [])
+            raw_configs = result.get("configs", [])
+            configs = raw_configs if isinstance(raw_configs, list) else []
             print("")
             print("  OpenClaw model refresh")
             print("  " + "─" * 40)
@@ -3240,6 +3286,8 @@ def _build_stub_parsers(sub: Subparsers) -> None:
             print(f"  Installs      {len(configs)}")
             print("")
             for cfg in configs:
+                if not isinstance(cfg, dict):
+                    continue
                 print(f"  {cfg.get('path', '?')}")
                 if cfg.get("error"):
                     print(f"    ✖ {cfg['error']}")
@@ -4101,13 +4149,13 @@ def cmd_savings(args: CommandArgs) -> None:
     # Try monitor.db first (proxy's live data source)
     monitor_data = _monitor_db_savings(days=days)
 
-    if monitor_data and monitor_data.get("actual_cost", 0) > 0:
+    if monitor_data and monitor_data["actual_cost"] > 0:
         actual = monitor_data["actual_cost"]
         cache_hit_rate = monitor_data["cache_hit_rate"]
         compressed = monitor_data["compressed_tokens"]
         cache_read = monitor_data["cache_read"]
 
-        total_input = monitor_data["total_input"] + monitor_data.get("total_output", 0)
+        total_input = monitor_data["total_input"] + monitor_data["total_output"]
         avg_rate = actual / total_input if total_input > 0 else 0
         savings_amount = (cache_read + compressed) * avg_rate
         estimated_without = actual + savings_amount
@@ -4232,9 +4280,9 @@ def cmd_compare(args: CommandArgs) -> None:
 
     # Show comparison for each request
     for idx, evt in enumerate(recent[:limit], 1):
-        model = evt.get("model", "unknown")
-        input_tokens = evt.get("input_tokens", 0) or 0
-        output_tokens = evt.get("output_tokens", 0) or 0
+        model = str(evt.get("model") or "unknown")
+        input_tokens = _as_int(evt.get("input_tokens"))
+        output_tokens = _as_int(evt.get("output_tokens"))
 
         # For this demo, assume cache_read is 30% of input (adjust per actual data)
         # In production, we'd fetch actual cache_read from tp_usage table
@@ -5240,8 +5288,8 @@ def cmd_config_validate(args: CommandArgs) -> None:
 
     try:
         cfg = _json_object(json.loads(_TOKENPAK_CFG.read_text()))
-    except Exception as e:
-        print(f"✗ Could not read config: {e}")
+    except Exception as exc:
+        print(f"✗ Could not read config: {exc}")
         return
 
     errors: list[str] = []
@@ -5678,6 +5726,7 @@ def _bare_help(
         print(f"\nRun 'tokenpak {name} <subcommand> --help' for details.")
         if exit_nonzero:
             sys.exit(1)
+        return None
 
     return _help
 
@@ -6532,10 +6581,10 @@ def cmd_cost(args: CommandArgs) -> None:
     # Show live proxy session cost if available
     stats = _proxy_get("/stats")
     if stats:
-        session = stats.get("session", {})
-        proxy_cost = session.get("cost", 0)
-        proxy_saved = session.get("cost_saved", 0)
-        saved_tokens = session.get("saved_tokens", 0)
+        session = _json_object(stats.get("session"))
+        proxy_cost = _as_float(session.get("cost"))
+        proxy_saved = _as_float(session.get("cost_saved"))
+        saved_tokens = _as_int(session.get("saved_tokens"))
         if proxy_cost > 0 or saved_tokens > 0:
             print("\n  Live session (proxy):")
             print(f"    Cost:          ${proxy_cost:.4f}")
@@ -6846,6 +6895,9 @@ def cmd_goals_update(args: CommandArgs) -> None:
         return
 
     goal = manager.get_goal(args.goal_id)
+    if goal is None:
+        print(f"Goal '{args.goal_id}' not found.")
+        return
     print(f"✅ Progress updated for {goal.name}")
     print(f"   Current: {progress.current_value}")
     print(f"   Target: {progress.target_value}")
@@ -7664,9 +7716,10 @@ def _compress_messages(messages: Sequence[JsonObject], aggressive: bool = False)
     from .telemetry.tokens import count_tokens
 
     proc = TextProcessor(aggressive=aggressive)
-    parts: list[str] = []
+    parts: list[JsonObject] = []
     for msg in messages:
-        role = msg.get("role", "unknown")
+        role_value = msg.get("role", "unknown")
+        role = role_value if isinstance(role_value, str) else str(role_value)
         content = msg.get("content", "")
         if isinstance(content, list):
             # multi-part content (vision etc.)
@@ -7705,7 +7758,14 @@ def cmd_replay_run(args: CommandArgs) -> None:
     no_compress = getattr(args, "no_compress", False)
     show_diff = getattr(args, "diff", False)
 
-    raw_combined = json.dumps(e.messages)
+    replay_messages: list[JsonObject] = []
+    for message in e.messages:
+        if isinstance(message, dict):
+            replay_messages.append(_json_object(message))
+        else:
+            replay_messages.append({"role": "unknown", "content": str(message)})
+
+    raw_combined = json.dumps(replay_messages)
     raw_tokens = count_tokens(raw_combined)
 
     print(f"Replaying [{e.replay_id}] — original: {e.provider}/{e.model}")
@@ -7715,13 +7775,18 @@ def cmd_replay_run(args: CommandArgs) -> None:
     if no_compress:
         result_tokens = raw_tokens
         mode_label = "no compression"
-        compressed_messages = e.messages
+        compressed_messages = replay_messages
     else:
-        _compressed, result_tokens = _compress_messages(e.messages, aggressive=aggressive)
+        _compressed, result_tokens = _compress_messages(replay_messages, aggressive=aggressive)
         try:
-            compressed_messages = json.loads(_compressed)
+            parsed_messages = json.loads(_compressed)
+            compressed_messages = (
+                [_json_object(message) for message in parsed_messages if isinstance(message, dict)]
+                if isinstance(parsed_messages, list)
+                else replay_messages
+            )
         except Exception:
-            compressed_messages = e.messages
+            compressed_messages = replay_messages
         mode_label = "aggressive compression" if aggressive else "standard compression"
 
     saved = raw_tokens - result_tokens
@@ -7748,12 +7813,16 @@ def cmd_replay_run(args: CommandArgs) -> None:
     if show_diff and not no_compress:
         print()
         print("─── Diff (first message) ───")
-        orig_first = e.messages[0].get("content", "") if e.messages else ""
+        orig_first = replay_messages[0].get("content", "") if replay_messages else ""
         comp_first = compressed_messages[0].get("content", "") if compressed_messages else ""
         if isinstance(orig_first, list):
             orig_first = " ".join(c.get("text", "") for c in orig_first if isinstance(c, dict))
         if isinstance(comp_first, list):
             comp_first = " ".join(c.get("text", "") for c in comp_first if isinstance(c, dict))
+        if not isinstance(orig_first, str):
+            orig_first = str(orig_first)
+        if not isinstance(comp_first, str):
+            comp_first = str(comp_first)
         orig_lines = orig_first.splitlines()
         comp_lines = comp_first.splitlines()
         import difflib
@@ -9469,12 +9538,28 @@ def cmd_cost_show_budget(args: CommandArgs) -> int:
         return 1
 
     config_path = getattr(args, "config", None)
-    config = {}
+    from tokenpak.telemetry.costs.budget_tracker import BudgetConfigInput
+
+    config = BudgetConfigInput()
     if config_path:
         try:
             with open(config_path) as f:
                 config_data = json.load(f)
-                config = config_data.get("cost_budget", {})
+                raw_config = (
+                    config_data.get("cost_budget") if isinstance(config_data, dict) else None
+                )
+                if isinstance(raw_config, dict):
+                    daily_limit = raw_config.get("daily_limit")
+                    weekly_limit = raw_config.get("weekly_limit")
+                    enabled = raw_config.get("enabled")
+                    if isinstance(daily_limit, (int, float)) and not isinstance(daily_limit, bool):
+                        config["daily_limit"] = float(daily_limit)
+                    if isinstance(weekly_limit, (int, float)) and not isinstance(
+                        weekly_limit, bool
+                    ):
+                        config["weekly_limit"] = float(weekly_limit)
+                    if isinstance(enabled, bool):
+                        config["enabled"] = enabled
         except Exception as e:
             print(f"Error loading config: {e}")
             return 1

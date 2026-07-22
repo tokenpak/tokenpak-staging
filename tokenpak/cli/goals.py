@@ -344,10 +344,15 @@ class GoalManager:
         goal = self.goals[goal_id]
         for key, value in kwargs.items():
             if hasattr(goal, key):
+                updated_value: object = value
+                if key == "target_value":
+                    if not isinstance(value, (int, float)):
+                        raise TypeError("target_value must be numeric")
+                    updated_value = float(value)
                 setattr(
                     goal,
                     key,
-                    float(value) if key == "target_value" else value,
+                    updated_value,
                 )
 
         # Update progress target if needed
@@ -470,7 +475,7 @@ class GoalManager:
         goal = self.goals[goal_id]
         percent = progress.progress_percent
 
-        events = []
+        events: list[dict[str, str | int]] = []
 
         # Check milestones
         if percent >= 25 and not progress.milestone_25_fired:

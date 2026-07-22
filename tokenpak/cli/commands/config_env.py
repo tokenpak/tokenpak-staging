@@ -136,11 +136,16 @@ def known_env_keys() -> set[str]:
         from tokenpak.core import config_loader
 
         cfg = config_loader.load_config()
-        chain = (cfg.get("failover") or {}).get("chain") or []
-        for link in chain:
-            env_name = link.get("credential_env")
-            if env_name:
-                keys.add(env_name)
+        failover = cfg.get("failover")
+        if isinstance(failover, dict):
+            chain = failover.get("chain")
+            if isinstance(chain, list):
+                for link in chain:
+                    if not isinstance(link, dict):
+                        continue
+                    env_name = link.get("credential_env")
+                    if isinstance(env_name, str) and env_name:
+                        keys.add(env_name)
     except Exception:
         pass
     return keys

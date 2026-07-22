@@ -324,7 +324,11 @@ def build_dispatch_parser(
     _add_json(p_workers)
     p_workers.set_defaults(func=cmd_dispatch_workers)
 
-    p.set_defaults(func=lambda a: p.print_help() or 0)
+    def _print_dispatch_help(_args: argparse.Namespace) -> int:
+        p.print_help()
+        return 0
+
+    p.set_defaults(func=_print_dispatch_help)
 
 
 def _add_json(parser: argparse.ArgumentParser) -> None:
@@ -1322,10 +1326,7 @@ def _row_text(row: dict[str, object], key: str) -> str:
 
 def _conn(ledger: RunLedger) -> sqlite3.Connection:
     """The RunLedger's live connection (read/update for listing + status changes)."""
-    return cast(
-        sqlite3.Connection,
-        ledger._conn,  # noqa: SLF001 — intentional: same-package CLI surface.
-    )
+    return ledger._conn  # noqa: SLF001 — intentional: same-package CLI surface.
 
 
 def _query_rows(

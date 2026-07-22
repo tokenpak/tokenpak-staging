@@ -153,7 +153,7 @@ def run_prune(
     total_freed = sum(b.get("raw_tokens", 0) for b in candidates)
 
     if as_json:
-        result = {
+        result: dict[str, object] = {
             "candidates": len(candidates),
             "freed_tokens": total_freed,
             "dry_run": dry_run,
@@ -234,5 +234,7 @@ try:
 
 except ImportError:
 
-    def prune_cmd(*args: object, **kwargs: object) -> None:
+    def prune_cmd_fallback(*args: object, **kwargs: object) -> None:
         run_prune()
+
+    globals()["prune_cmd"] = prune_cmd_fallback

@@ -99,7 +99,7 @@ def cmd_pakplan_preview(args: Any) -> int:
     rows = _query_paks(db, limit=int(getattr(args, "limit", 10))) if db else []
     paks = [_pak_summary(r) for r in rows]
 
-    payload: dict[str, object] = {
+    report_payload: dict[str, object] = {
         "scope": "preview",
         "scoring": "not-shipped-in-OSS",
         "note": ("Beta 1 OSS preview is unscored. Pro Local adds the scorer + ranking pipeline."),
@@ -108,7 +108,7 @@ def cmd_pakplan_preview(args: Any) -> int:
         "paks": paks,
     }
     if getattr(args, "as_json", False):
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(report_payload, indent=2, sort_keys=True))
         return 0
 
     print("PAKPlan preview (OSS, unscored)")
@@ -168,7 +168,7 @@ def cmd_pakplan_explain(args: Any) -> int:
 def cmd_pakplan_report(args: Any) -> int:
     db = _recall_db()
     if not db or not db.exists():
-        payload: dict[str, object] = {
+        empty_payload: dict[str, object] = {
             "recall_db": str(db) if db else None,
             "present": False,
             "pak_count": 0,
@@ -177,7 +177,7 @@ def cmd_pakplan_report(args: Any) -> int:
             "advisory_vocab": {"checked": False, "note": "no Paks to lint"},
         }
         if getattr(args, "as_json", False):
-            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(json.dumps(empty_payload, indent=2, sort_keys=True))
         else:
             print("PAKPlan report")
             print("──────────────")

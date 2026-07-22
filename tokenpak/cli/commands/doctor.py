@@ -2095,8 +2095,8 @@ def run_fleet_doctor(fix: bool = False, deploy: bool = False) -> int:
         print("Deploying latest doctor to all agents...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(agents)) as ex:
             deploy_futures = {ex.submit(_deploy_doctor, a): a for a in agents}
-            for fut in concurrent.futures.as_completed(deploy_futures):
-                r = fut.result()
+            for deploy_future in concurrent.futures.as_completed(deploy_futures):
+                r = deploy_future.result()
                 status = (
                     Colors.ok(f"  Deployed to {r['name']} ({r['host']})")
                     if r["success"]
@@ -2109,9 +2109,9 @@ def run_fleet_doctor(fix: bool = False, deploy: bool = False) -> int:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(agents)) as ex:
         futures = {ex.submit(_run_remote_doctor, a, fix): a for a in agents}
-        results = []
-        for fut in concurrent.futures.as_completed(futures):
-            results.append(fut.result())
+        results: list[RemoteDoctorResult] = []
+        for doctor_future in concurrent.futures.as_completed(futures):
+            results.append(doctor_future.result())
 
     results.sort(key=lambda r: r["name"])
 

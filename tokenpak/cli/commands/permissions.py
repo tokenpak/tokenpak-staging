@@ -344,7 +344,7 @@ def _set_launcher_modes(updates: dict[str, str], source: str) -> None:
             raise ValueError(f"launcher mode {mode!r} is unsupported for {client}")
 
     state = _read_state()
-    launcher = state.setdefault("launcher", {})
+    launcher = state.get("launcher")
     if not isinstance(launcher, dict):
         launcher = {}
         state["launcher"] = launcher
@@ -370,14 +370,18 @@ def _record_last_set_tier(client: str, tier: str) -> None:
     if tier not in PERSISTENT_TIERS:  # never record "fleet" as a tier
         return
     state = _read_state()
-    state.setdefault("tiers", {})[client] = tier
+    tiers = state.get("tiers")
+    if not isinstance(tiers, dict):
+        tiers = {}
+        state["tiers"] = tiers
+    tiers[client] = tier
     _write_state(state)
 
 
 def _clear_last_set_tier(client: str) -> None:
     state = _read_state()
     tiers = state.get("tiers", {})
-    if client in tiers:
+    if isinstance(tiers, dict) and client in tiers:
         tiers.pop(client, None)
         _write_state(state)
 

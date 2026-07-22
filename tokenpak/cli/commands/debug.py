@@ -121,7 +121,8 @@ def _cmd_status() -> None:
     flag = "ON" if enabled else "OFF"
     remaining = st["requests_remaining"]
     rem_str = str(remaining) if remaining is not None else "unlimited"
-    log_kb = round(st["log_size_bytes"] / 1024, 1)
+    log_size = st["log_size_bytes"]
+    log_kb = round(log_size / 1024, 1) if isinstance(log_size, int) else 0.0
     print(f"Debug mode:    {flag}")
     if enabled:
         print(f"Remaining:     {rem_str}")

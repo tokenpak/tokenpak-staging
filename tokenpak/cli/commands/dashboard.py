@@ -26,7 +26,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from tokenpak import _paths
 from tokenpak.platform.capabilities import _detect_dashboard_capabilities
@@ -717,7 +717,7 @@ def collect_fleet_data() -> List[Dict[str, Any]]:
                 if data.get("schema_version") == SCHEMA_VERSION:
                     data = _legacy_view_from_snapshot(data)
                 data["agent_name"] = name
-                return data
+                return cast(Dict[str, Any], data)
         except Exception:
             pass
         return {
