@@ -31,6 +31,9 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Callable as _Callable
+from typing import Iterator as _Iterator
+from typing import Protocol as _Protocol
+from typing import cast as _cast
 
 from ..config import CompanionConfig
 from .accounting import (
@@ -44,6 +47,36 @@ from .accounting import (
 
 if _TYPE_CHECKING:
     from .session_home import SessionPaths
+    from .state_lock import LockStatus
+
+
+class _RetentionResult(_Protocol):
+    removed: tuple[Path, ...]
+    errors: tuple[str, ...]
+
+
+class _SessionLease(_Protocol):
+    def release(self) -> bool: ...
+
+
+class _CleanupIsolatedHomes(_Protocol):
+    def __call__(
+        self,
+        tokenpak_home: Path | None = None,
+        *,
+        preserve_home: Path | None = None,
+        remove_all_orphans: bool = False,
+        dry_run: bool = False,
+        orphan_cleanup_reason: str = "explicit-orphan-cleanup",
+        proc_root: Path = Path("/proc"),
+    ) -> _RetentionResult: ...
+
+
+class _SessionHomeModule(_Protocol):
+    MODE_ISOLATED: str
+    _generated_tokenpak_root: _Callable[[Path], Path | None]
+    cleanup_isolated_homes: _CleanupIsolatedHomes
+
 
 _TEAL = "\033[38;2;0;180;170m"
 _DIM = "\033[2m"
@@ -290,7 +323,7 @@ def _apply_launcher_mode(
     has_sandbox = _has_option(out, "--sandbox", "-s") or config_sandbox
 
     if effective_mode == "full-bypass":
-        if has_combined:
+        if explicit_combined is not None:
             return out, (explicit_combined,), None, effective_mode
         if has_approval or has_sandbox:
             return (
@@ -384,9 +417,11 @@ def _drain_esc_pressed() -> bool:
             import msvcrt
         except ImportError:  # pragma: no cover - no raw-key source
             return False
+        key_available = _cast(_Callable[[], bool], getattr(msvcrt, "kbhit"))
+        read_key = _cast(_Callable[[], str], getattr(msvcrt, "getwch"))
         pressed = False
-        while msvcrt.kbhit():  # pragma: no cover - needs a Windows console
-            if msvcrt.getwch() == _ESC:
+        while key_available():  # pragma: no cover - needs a Windows console
+            if read_key() == _ESC:
                 pressed = True
         return pressed
 
@@ -427,8 +462,7 @@ def _prompt_for_temporary_session() -> TemporarySessionChoice:
         file=sys.stderr,
     )
     print(
-        "tokenpak: Start a temporary session without that prior history? "
-        "[y/N]: ",
+        "tokenpak: Start a temporary session without that prior history? [y/N]: ",
         end="",
         file=sys.stderr,
         flush=True,
@@ -446,7 +480,7 @@ def _prompt_for_temporary_session() -> TemporarySessionChoice:
     return TemporarySessionChoice.DECLINED
 
 
-def _holder_state(status) -> str:
+def _holder_state(status: "LockStatus") -> str:
     running = tuple(getattr(status, "running_pids", ()) or ())
     stopped = tuple(getattr(status, "stopped_pids", ()) or ())
     if running and stopped:
@@ -538,13 +572,13 @@ def _coerce_preflight_evaluation(value: object) -> PreflightEvaluation:
 def _preflight_state_lock(
     *,
     home: Path | str | None = None,
-    prober=None,
+    prober: _Callable[[], "LockStatus"] | None = None,
     interactive: bool | None = None,
     timeout_s: float = _LOCK_WAIT_TIMEOUT_S,
     poll_interval_s: float = _LOCK_POLL_INTERVAL_S,
-    esc_pressed=None,
-    sleep=None,
-    monotonic=None,
+    esc_pressed: _Callable[[], bool] | None = None,
+    sleep: _Callable[[float], None] | None = None,
+    monotonic: _Callable[[], float] | None = None,
     deadline: float | None = None,
 ) -> PreflightEvaluation:
     """Preflight Codex-owned SQLite databases before exec.
@@ -575,7 +609,7 @@ def _preflight_state_lock(
     if interactive is None:
         interactive = _stdin_is_tty()
 
-    def invoke_probe():
+    def invoke_probe() -> "LockStatus | BaseException":
         remaining = deadline - monotonic()
         if remaining <= 0:
             return state_lock.LockStatus(
@@ -589,7 +623,7 @@ def _preflight_state_lock(
                 incomplete_reasons=["probe_timeout"],
             )
 
-        results: "queue.SimpleQueue[tuple[bool, object]]" = queue.SimpleQueue()
+        results: "queue.SimpleQueue[tuple[bool, LockStatus | BaseException]]" = queue.SimpleQueue()
 
         def run_probe() -> None:
             try:
@@ -932,13 +966,13 @@ def _is_storage_pressure(exc: BaseException) -> bool:
 
 
 def _run_isolated_retention(
-    session_home,
+    session_home: _SessionHomeModule,
     paths: "SessionPaths",
     *,
     phase: str,
     preserve_home: Path | None,
     remove_all_orphans: bool = False,
-) -> object | None:
+) -> _RetentionResult | None:
     """Run the receipt-governed engine without masking launch results."""
     tokenpak_home = session_home._generated_tokenpak_root(paths.home)
     try:
@@ -956,8 +990,7 @@ def _run_isolated_retention(
         return None
     if cleanup.removed:
         print(
-            f"tokenpak: isolated-home retention {phase} removed "
-            f"{len(cleanup.removed)} orphan(s)",
+            f"tokenpak: isolated-home retention {phase} removed {len(cleanup.removed)} orphan(s)",
             file=sys.stderr,
         )
     if cleanup.errors:
@@ -970,7 +1003,11 @@ def _run_isolated_retention(
 
 
 @contextlib.contextmanager
-def _lease_with_post_retention(lease, session_home, paths: "SessionPaths"):
+def _lease_with_post_retention(
+    lease: _SessionLease,
+    session_home: _SessionHomeModule,
+    paths: "SessionPaths",
+) -> _Iterator[_SessionLease]:
     """Release the exact lease before the final isolated-home sweep."""
     try:
         yield lease
@@ -1106,6 +1143,8 @@ def main(
     # modes fail closed; a typo must never fall back to shared state.
     from . import session_home
 
+    session_home_api = _cast(_SessionHomeModule, session_home)
+
     try:
         paths = session_home.select_paths(workspace_dir=Path.cwd())
     except (session_home.InvalidSessionMode, ValueError) as exc:
@@ -1118,7 +1157,7 @@ def main(
     # to shared/workspace mode and can recover receipt-proven quarantines even
     # when the selected launch later blocks or runs out of storage.
     _run_isolated_retention(
-        session_home,
+        session_home_api,
         paths,
         phase="pre-launch",
         preserve_home=paths.home,
@@ -1206,7 +1245,7 @@ def main(
 
     if lock_exit is not None:
         if receipt_out and run_id:
-            setup = (
+            blocked_setup = (
                 _receipt_only_setup_metadata()
                 if receipt_only
                 else {
@@ -1216,15 +1255,15 @@ def main(
                 }
             )
             if preflight is not None:
-                setup["codex_preflight"] = preflight.as_receipt()
+                blocked_setup["codex_preflight"] = preflight.as_receipt()
             if fallback_metadata is not None:
-                setup.update(fallback_metadata)
+                blocked_setup.update(fallback_metadata)
             try:
                 _write_accounting_receipt(
                     receipt_out=receipt_out,
                     run_id=run_id,
                     codex_args=args,
-                    setup=setup,
+                    setup=blocked_setup,
                     started_at=utc_now(),
                     start_monotonic=time.monotonic(),
                     exit_code=lock_exit,
@@ -1246,7 +1285,7 @@ def main(
             if not _is_storage_pressure(exc):
                 raise
             _run_isolated_retention(
-                session_home,
+                session_home_api,
                 paths,
                 phase="storage-pressure",
                 preserve_home=paths.home,
@@ -1257,14 +1296,14 @@ def main(
         print(f"tokenpak: selected-home setup refused: {exc}", file=sys.stderr)
         failure_exit = original_preflight.exit_code if original_preflight is not None else 1
         failure_exit = failure_exit if failure_exit is not None else 1
-        if fallback_metadata is not None:
+        if fallback_metadata is not None and original_preflight is not None:
             fallback_metadata = _temporary_recovery_metadata(
                 original_preflight,
                 fallback_attempted=True,
                 fallback_result="setup_failed",
             )
         if receipt_out and run_id and original_preflight is not None:
-            setup = {
+            failure_setup = {
                 "setup_completed": False,
                 "session_mode": paths.mode,
                 "codex_home": str(paths.home),
@@ -1276,7 +1315,7 @@ def main(
                     receipt_out=receipt_out,
                     run_id=run_id,
                     codex_args=args,
-                    setup=setup,
+                    setup=failure_setup,
                     started_at=utc_now(),
                     start_monotonic=time.monotonic(),
                     exit_code=failure_exit,
@@ -1291,7 +1330,7 @@ def main(
                 return 1
         return failure_exit
 
-    with _lease_with_post_retention(lease, session_home, paths):
+    with _lease_with_post_retention(lease, session_home_api, paths):
 
         def reusable_home_is_clear() -> bool:
             if paths.mode == session_home.MODE_ISOLATED:
@@ -1318,7 +1357,7 @@ def main(
                 if not _is_storage_pressure(exc):
                     raise
                 _run_isolated_retention(
-                    session_home,
+                    session_home_api,
                     paths,
                     phase="storage-pressure",
                     preserve_home=paths.home,
@@ -1338,7 +1377,7 @@ def main(
                     fallback_result="setup_failed",
                 )
             if receipt_out and run_id and original_preflight is not None:
-                setup = {
+                provisioning_failure_setup = {
                     "setup_completed": False,
                     "session_mode": paths.mode,
                     "codex_home": str(paths.home),
@@ -1350,7 +1389,7 @@ def main(
                         receipt_out=receipt_out,
                         run_id=run_id,
                         codex_args=args,
-                        setup=setup,
+                        setup=provisioning_failure_setup,
                         started_at=utc_now(),
                         start_monotonic=time.monotonic(),
                         exit_code=failure_exit,
@@ -1379,7 +1418,7 @@ def main(
 
         if paths.mode == session_home.MODE_ISOLATED:
             _run_isolated_retention(
-                session_home,
+                session_home_api,
                 paths,
                 phase="post-provision",
                 preserve_home=paths.home,
@@ -1387,8 +1426,8 @@ def main(
 
         if receipt_only:
             assert receipt_out is not None and run_id is not None
-            setup = _receipt_only_setup_metadata()
-            setup.update({"session_mode": paths.mode, "codex_home": str(paths.home)})
+            receipt_setup = _receipt_only_setup_metadata()
+            receipt_setup.update({"session_mode": paths.mode, "codex_home": str(paths.home)})
             env = paths.environment(_vanilla_receipt_env())
             env["TOKENPAK_CODEX_RECEIPT_OUT"] = receipt_out
             env["TOKENPAK_CODEX_RUN_ID"] = run_id
@@ -1418,7 +1457,7 @@ def main(
                     receipt_out=receipt_out,
                     run_id=run_id,
                     codex_args=args,
-                    setup=setup,
+                    setup=receipt_setup,
                     started_at=started_at,
                     start_monotonic=start_monotonic,
                     exit_code=exit_code,
@@ -1523,7 +1562,7 @@ def main(
         }
         if original_preflight is not None:
             setup["codex_preflight"] = original_preflight.as_receipt()
-        if fallback_metadata is not None:
+        if fallback_metadata is not None and original_preflight is not None:
             fallback_metadata = _temporary_recovery_metadata(
                 original_preflight,
                 fallback_attempted=True,

@@ -11,19 +11,32 @@ TokenPak starts as a local proxy that **packs AI requests** before they ship —
 
 ---
 
-## 30-second demo
+## First measured receipt in three commands
+
+Prerequisites: Python 3.10+ and existing `ANTHROPIC_API_KEY` and
+`ANTHROPIC_MODEL` environment variables. Run the commands from a project whose
+existing `README.md` contains at least 8,000 UTF-8 characters of real project
+context. The final command asks the model to review that document, makes a real
+provider request, and may incur provider charges.
 
 ```bash
-pip install tokenpak
-tokenpak serve                          # start proxy at localhost:8766
-tokenpak integrate claude-code --apply  # wire Claude Code to the proxy
+python -m pip install tokenpak
+tokenpak serve --profile aggressive --stats-footer  # terminal 1; leave running
+python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'  # terminal 2
 ```
 
-```
-✅ Applied: Updated ~/.claude/settings.json (2 changes).
-```
+The proxy terminal prints the measured before/after token receipt for that
+request. The dollar figure is estimated from TokenPak's model-pricing table.
+This session-only footer is off by default and does not alter the provider
+response.
 
-Then verify it's working:
+See the [first receipt guide](docs/first-receipt.md) for prerequisites,
+expected output, the five-minute reference target, and routes that are not
+eligible for compression savings.
+
+## Offline fixture demo
+
+To inspect compression without credentials or provider spend:
 
 ```bash
 tokenpak demo
@@ -44,9 +57,10 @@ tokenpak demo
 └──────────────────────────────────────────────────────┘
 ```
 
-> Illustrative fixture — token counts vary by route and workload. Measure your
-> own with `tokenpak savings`; inspect provider-cache vs. TokenPak attribution
-> with `tokenpak status --tip-cache`.
+> This is an illustrative fixture, not a measured first-request receipt. Token
+> counts vary by route and workload. Measure your own with `tokenpak savings`;
+> inspect provider-cache vs. TokenPak attribution with
+> `tokenpak status --tip-cache`.
 
 ---
 
