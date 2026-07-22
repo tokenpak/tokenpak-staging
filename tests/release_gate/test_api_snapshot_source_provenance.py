@@ -32,12 +32,24 @@ def test_script_prefers_own_checkout_over_conflicting_pythonpath(tmp_path):
         "__version__ = '9.9.9'\nWRONG_CHECKOUT_SENTINEL = True\n",
         encoding="utf-8",
     )
-    output = tmp_path / "public-api.json"
-
     env = os.environ.copy()
     env.update({"PYTHONPATH": str(fake_root), "PYTHONDONTWRITEBYTECODE": "1"})
+    probe = """
+import importlib.util
+import json
+import pathlib
+import sys
+
+script = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("source_anchor_probe", script)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+import tokenpak
+print(json.dumps({"origin": tokenpak.__file__, "version": tokenpak.__version__}))
+"""
     result = subprocess.run(
-        [sys.executable, str(_SCRIPT), "--out", str(output)],
+        [sys.executable, "-c", probe, str(_SCRIPT)],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -46,10 +58,9 @@ def test_script_prefers_own_checkout_over_conflicting_pythonpath(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    body = output.read_text(encoding="utf-8")
-    snapshot = json.loads(body)
-    assert snapshot["package_version"] != "9.9.9"
-    assert "WRONG_CHECKOUT_SENTINEL" not in body
+    resolved = json.loads(result.stdout)
+    assert Path(resolved["origin"]).resolve().is_relative_to(_REPO_ROOT / "tokenpak")
+    assert resolved["version"] != "9.9.9"
 
 
 def test_provenance_check_rejects_package_outside_checkout(tmp_path):
