@@ -30,23 +30,34 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict, cast
 
 DEFAULT_LOCK_DIR = Path.home() / ".tokenpak" / "locks"
 DEFAULT_TIMEOUT_S = 600  # 10 minutes
 
 
+class LockRecord(TypedDict, total=False):
+    """Serialized lock ownership record."""
+
+    path: str
+    agent: str
+    acquired: float
+    expires: float
+    pid: int
+    renewed: float
+
+
 class LockConflictError(Exception):
     """Raised when a file is already locked by another agent/process."""
 
-    def __init__(self, path: str, lock_info: dict):
+    def __init__(self, path: str, lock_info: LockRecord):
         self.path = path
         self.lock_info = lock_info
         agent = lock_info.get("agent", "unknown")
         expires = lock_info.get("expires", 0)
         remaining = max(0, expires - time.time())
         super().__init__(
-            f"Lock conflict on '{path}': held by '{agent}', " f"expires in {remaining:.0f}s"
+            f"Lock conflict on '{path}': held by '{agent}', expires in {remaining:.0f}s"
         )
 
 
@@ -89,13 +100,14 @@ class FileLockManager:
     def _lock_file(self, path: str | Path) -> Path:
         return self.lock_dir / f"{self._lock_key(path)}.json"
 
-    def _read_lock(self, lock_file: Path) -> Optional[dict]:
+    def _read_lock(self, lock_file: Path) -> Optional[LockRecord]:
         try:
-            return json.loads(lock_file.read_text())
+            raw = json.loads(lock_file.read_text())
+            return cast(LockRecord, raw) if isinstance(raw, dict) else None
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 
-    def _write_lock(self, lock_file: Path, record: dict) -> None:
+    def _write_lock(self, lock_file: Path, record: LockRecord) -> None:
         tmp = lock_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(record, indent=2))
         tmp.replace(lock_file)  # atomic on POSIX
@@ -106,7 +118,7 @@ class FileLockManager:
         self,
         path: str | Path,
         timeout_s: Optional[int] = None,
-    ) -> dict:
+    ) -> LockRecord:
         """
         Claim a lock on *path*.
 
@@ -127,7 +139,7 @@ class FileLockManager:
             # else: expired — we can steal it
 
         now = time.time()
-        record = {
+        record: LockRecord = {
             "path": abs_path,
             "agent": self.agent_id,
             "acquired": now,
@@ -157,7 +169,7 @@ class FileLockManager:
         except FileNotFoundError:
             return False
 
-    def query(self, path: str | Path) -> Optional[dict]:
+    def query(self, path: str | Path) -> Optional[LockRecord]:
         """Return lock info for *path*, or None if unlocked / expired."""
         abs_path = str(Path(path).resolve())
         lock_file = self._lock_file(abs_path)
@@ -173,10 +185,10 @@ class FileLockManager:
             return None
         return record
 
-    def locks(self) -> list[dict]:
+    def locks(self) -> list[LockRecord]:
         """Return all live (non-expired) lock records."""
         self.prune_expired()
-        result = []
+        result: list[LockRecord] = []
         for lf in self.lock_dir.glob("*.json"):
             record = self._read_lock(lf)
             if record:
@@ -214,7 +226,7 @@ class FileLockManager:
         """
         return [str(c) for c in candidates if self.query(c) is None]
 
-    def renew(self, path: str | Path, timeout_s: Optional[int] = None) -> dict:
+    def renew(self, path: str | Path, timeout_s: Optional[int] = None) -> LockRecord:
         """
         Renew (extend) an existing lock held by this agent.
 
@@ -241,7 +253,7 @@ class FileLockManager:
 
         timeout = timeout_s if timeout_s is not None else self.timeout_s
         now = time.time()
-        updated = dict(existing)
+        updated = cast(LockRecord, dict(existing))
         updated["expires"] = now + timeout
         updated["renewed"] = now
         self._write_lock(lock_file, updated)
