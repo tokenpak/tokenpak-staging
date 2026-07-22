@@ -60,6 +60,7 @@ BUDGET_ALERT_THRESHOLD_PCT: float = float(_os.environ.get("TOKENPAK_BUDGET_ALERT
 # ---------------------------------------------------------------------------
 
 _DB_CONNECTION: sqlite3.Connection | None = None
+_DB_CONNECTION_PATH: str | None = None
 _DB_LOCK = threading.Lock()
 _DB_WRITE_QUEUE: Queue[DbWorkItem | None] | None = None
 _DB_QUEUE_LOCK = threading.Lock()
@@ -253,16 +254,29 @@ def _stop_db_write_queue(timeout: float = 5.0) -> bool:
 
 
 def _get_db_connection(db_path: DbPath) -> sqlite3.Connection:
-    """Get or create persistent SQLite connection with WAL mode enabled."""
-    global _DB_CONNECTION
+    """Get the guarded SQLite writer connection for ``db_path``.
+
+    The write queue is process-global and each work item carries its own
+    database path.  A cached connection therefore cannot be reused after the
+    queue switches paths: doing so silently commits the row to the previous
+    monitor database.  Production normally has one monitor path, while tests,
+    embedders, and recovery tooling may legitimately interleave several.
+    """
+    global _DB_CONNECTION, _DB_CONNECTION_PATH
+    requested_path = os.path.abspath(os.path.expanduser(os.fspath(db_path)))
+    if _DB_CONNECTION is not None and _DB_CONNECTION_PATH != requested_path:
+        _DB_CONNECTION.close()
+        _DB_CONNECTION = None
+        _DB_CONNECTION_PATH = None
     if _DB_CONNECTION is None:
         _DB_CONNECTION = sqlite3.connect(
-            db_path,
+            requested_path,
             check_same_thread=False,  # Required for ThreadedHTTPServer
         )
         _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
         _DB_CONNECTION.execute("PRAGMA synchronous=NORMAL")
         _DB_CONNECTION.execute("PRAGMA busy_timeout=5000")
+        _DB_CONNECTION_PATH = requested_path
     return _DB_CONNECTION
 
 
@@ -522,7 +536,7 @@ class Monitor:
         # Reset the shared writer connection under the writer lock so a
         # concurrent write can't race the swap, and close the old handle
         # instead of leaking it.
-        global _DB_CONNECTION
+        global _DB_CONNECTION, _DB_CONNECTION_PATH
         with _DB_LOCK:
             if _DB_CONNECTION is not None:
                 try:
@@ -530,6 +544,7 @@ class Monitor:
                 except Exception:
                     pass
             _DB_CONNECTION = None  # reset so next call reopens fresh
+            _DB_CONNECTION_PATH = None
 
     def log(
         self,

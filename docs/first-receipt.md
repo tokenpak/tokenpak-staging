@@ -1,26 +1,24 @@
 # First Measured Savings Receipt
 
 This is TokenPak's supported reference path from a clean install to a measured
-receipt from your own real provider request. Its reference target is three shell
+receipt from your own real request. Its reference target is three shell
 commands and no more than five minutes.
 
 ## Before you start
 
-Have these available before starting the three-command path:
+Have these available:
 
 - Python 3.10 or newer.
-- `ANTHROPIC_API_KEY` exported in the shell that will send the request.
-- `ANTHROPIC_MODEL` exported to a model ID available to that account.
-- An existing `README.md` in the current project directory containing at least
-  8,000 UTF-8 characters of real project context. The reference request uses
-  that document; it does not generate filler text.
-- Outbound access to the Anthropic API. The third command is a real provider
-  request and may incur provider charges.
+- A supported client that is already authenticated. The reference path uses
+  Codex with its existing OAuth login.
+- A real project with enough context for a multi-turn request.
+- Outbound provider access. Real usage may count against a subscription or
+  incur provider charges.
 
-Credential acquisition and provider login are prerequisites, not TokenPak
-onboarding commands. Environment-specific package-download or provider latency
-can extend wall-clock time beyond the reference target. TokenPak forwards the
-API-key header for this request but does not persist it.
+An API key and an explicit model override are **not requirements**. TokenPak
+preserves the authentication and model selection owned by the client. If you
+choose an SDK or provider that requires an API key, that key is an optional
+client-specific alternative and is forwarded without being persisted.
 
 ## The three commands
 
@@ -37,36 +35,63 @@ API-key header for this request but does not persist it.
    tokenpak serve --profile aggressive --stats-footer
    ```
 
-3. Leave terminal 1 running. From the project directory containing the eligible
-   `README.md`, use terminal 2 to ask for a real release-readiness review:
+3. From the real project in terminal 2, launch the already-authenticated client:
 
    ```bash
-   python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'
+   tokenpak codex
    ```
 
-After the provider response completes, terminal 1 prints a receipt shaped like:
+   Do not add an API key or `--model` unless you intentionally want to override
+   the client's normal choices. `tokenpak codex` routes through the local proxy
+   when its health check passes; otherwise it states that the client is using
+   its configured upstream.
+
+## Produce the first eligible request
+
+Inside that Codex session, ask for a substantive project review, for example:
 
 ```text
-⚡ TokenPak: -12,345 tokens (61%) | $0.037 saved
+Review this project for release readiness. Read the relevant project files and
+give me a detailed, evidence-based assessment.
+```
+
+Then continue the same topic:
+
+```text
+Turn that assessment into a prioritized release checklist with owners and
+verification steps.
+```
+
+The initial request may correctly save zero because a new conversation has no
+compressible history. A later request becomes eligible when it carries safe,
+historical narrative outside the protected hot window. TokenPak never
+compresses system/developer policy, protected instructions, or the newest two
+message items. The first eligible request prints a receipt shaped like:
+
+```text
+⚡ TokenPak: -1,234 tokens (31%) | $0.004 saved
 ```
 
 The token counts come from that request's before/after proxy measurements. The
-dollar value is an estimate based on TokenPak's model-pricing table. Your values
-will differ by model and payload.
+dollar value is an estimate based on TokenPak's model-pricing table. Values
+differ by client, model, and payload.
 
-## What does not qualify
+## Eligibility and alternatives
 
 - `tokenpak demo` is an offline fixture, not proof from your request.
 - Short, already concise, code-heavy, or protected prompts may correctly save
-  zero tokens.
-- Byte-preserved client routes are intentionally not rewritten and may report
-  zero TokenPak compression savings. Use the direct eligible API path above for
-  the reference receipt.
-- `--stats-footer` is opt-in and applies only to this proxy process. It prints
-  the receipt in the proxy terminal; it does not modify the provider response.
-- `safe` and `transparent` profiles intentionally do not provide a positive
+  zero tokens. Continue normal work; the first eligible request is the proof.
+- Byte-preserved routes are intentionally not rewritten and may report zero
+  TokenPak compression savings.
+- `--stats-footer` is session-scoped. It prints in the proxy terminal and does
+  not modify the provider response.
+- `safe` and `transparent` profiles intentionally do not provide positive
   compression-savings proof.
+- Already-authenticated Codex OAuth is the zero-key reference route. OpenAI,
+  Anthropic, and other SDK/API-key routes remain supported alternatives when a
+  user chooses them; their keys and explicit model arguments are not TokenPak
+  onboarding requirements.
 
-Stop the foreground proxy with `Ctrl-C` when finished. For normal application
-integration after the reference proof, run `tokenpak integrate` and review the
-client-specific instructions before applying changes.
+Stop the foreground proxy with `Ctrl-C` when finished. For other application
+integrations, run `tokenpak integrate`, review the detected clients, and apply
+only the changes you approve.

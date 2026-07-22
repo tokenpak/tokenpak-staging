@@ -92,9 +92,7 @@ class TestProxyGet:
     def test_proxy_get_success(self, mock_urlopen):
         """Test successful proxy request."""
         mock_response = mock.Mock()
-        mock_response.read.return_value = json.dumps(
-            {"status": "ok", "uptime": 3600}
-        ).encode()
+        mock_response.read.return_value = json.dumps({"status": "ok", "uptime": 3600}).encode()
         mock_urlopen.return_value = mock_response
 
         result = _proxy_get("/health", port=8766)
@@ -166,9 +164,7 @@ class TestCalculateData:
     @mock.patch("tokenpak.cli.daily_report._get_savings_report")
     @mock.patch("tokenpak.cli.daily_report._proxy_get")
     @mock.patch("time.time")
-    def test_calculate_data_with_live_proxy(
-        self, mock_time, mock_proxy_get, mock_savings
-    ):
+    def test_calculate_data_with_live_proxy(self, mock_time, mock_proxy_get, mock_savings):
         """Test _calculate_data with mocked live proxy responses."""
         # Mock time (1 hour ago)
         mock_time.return_value = 1000000.0
@@ -230,6 +226,7 @@ class TestCalculateData:
     @mock.patch("tokenpak.cli.daily_report._proxy_get")
     def test_calculate_data_zero_input_tokens(self, mock_proxy_get, mock_savings):
         """Test compression percent calculation with zero input tokens."""
+
         def proxy_side_effect(path, port=None):
             responses = {
                 "/health": {"stats": {"start_time": 0}},
@@ -520,7 +517,7 @@ _SAMPLE_ROWS = [
     ModelCompressionRow(
         model="claude-opus-4-6",
         request_count=10,
-        avg_compression_ratio=1.0,   # no compression data
+        avg_compression_ratio=1.0,  # no compression data
         tokens_saved=0,
         savings_amount=0.0,
     ),

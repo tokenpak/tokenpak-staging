@@ -34,16 +34,19 @@ def _health_p99_ceiling_ms() -> float:
     when CI=true / GITHUB_ACTIONS=true we widen the ceiling to 2000ms. The
     test still asserts upper-bound responsiveness and zero functional errors.
     """
-    if os.environ.get("CI", "").lower() in ("1", "true") or \
-       os.environ.get("GITHUB_ACTIONS", "").lower() in ("1", "true"):
+    if os.environ.get("CI", "").lower() in ("1", "true") or os.environ.get(
+        "GITHUB_ACTIONS", ""
+    ).lower() in ("1", "true"):
         return 2000.0
     return 500.0
+
 
 from tokenpak.proxy.server import ProxyServer
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def proxy():
@@ -57,6 +60,7 @@ def proxy():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fetch(url: str) -> Tuple[int, float]:
     """Return (status_code, latency_ms). On error returns (0, latency_ms)."""
@@ -130,6 +134,7 @@ def _load_burst(
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestHealthEndpointLoad:
     """Load tests for /health at 100 req/sec."""
 
@@ -148,14 +153,14 @@ class TestHealthEndpointLoad:
 
         print(f"\n/health load test — {total} reqs @ 100 rps:")
         print(f"  p50={p50:.1f}ms  p95={p95:.1f}ms  p99={p99:.1f}ms")
-        print(f"  errors={errors}/{total} ({error_rate*100:.2f}%)")
+        print(f"  errors={errors}/{total} ({error_rate * 100:.2f}%)")
 
         ceiling = _health_p99_ceiling_ms()
         assert p99 < ceiling, (
             f"p99={p99:.1f}ms exceeds {ceiling:.0f}ms ceiling "
             f"(local strict 500ms; CI widens to 2000ms to absorb GHA runner variance)"
         )
-        assert error_rate < 0.001, f"Error rate {error_rate*100:.3f}% exceeds 0.1% SLA"
+        assert error_rate < 0.001, f"Error rate {error_rate * 100:.3f}% exceeds 0.1% SLA"
 
     def test_health_100rps_p50_under_5ms(self, proxy):
         """Median latency for /health must be < 5ms — healthy baseline."""
@@ -187,10 +192,10 @@ class TestStatsEndpointLoad:
 
         print(f"\n/stats load test — {total} reqs @ 100 rps:")
         print(f"  p50={p50:.1f}ms  p95={p95:.1f}ms  p99={p99:.1f}ms")
-        print(f"  errors={errors}/{total} ({error_rate*100:.2f}%)")
+        print(f"  errors={errors}/{total} ({error_rate * 100:.2f}%)")
 
         assert p99 < 30.0, f"p99={p99:.1f}ms exceeds 30ms SLA"
-        assert error_rate < 0.001, f"Error rate {error_rate*100:.3f}% exceeds 0.1% SLA"
+        assert error_rate < 0.001, f"Error rate {error_rate * 100:.3f}% exceeds 0.1% SLA"
 
 
 class TestSLATargets:
@@ -227,6 +232,7 @@ class TestSLATargets:
         the new timeouts only mask scheduling jitter on shared runners.
         """
         import json
+
         url = f"http://127.0.0.1:{proxy.port}/health"
         results = []
         errors = []
@@ -246,5 +252,6 @@ class TestSLATargets:
             t.join(timeout=15)
 
         assert len(errors) == 0, f"Errors under concurrent load: {errors[:3]}"
-        assert all(s in ("ok", "degraded", "shutting_down") for s in results), \
+        assert all(s in ("ok", "degraded", "shutting_down") for s in results), (
             f"Invalid status values: {set(results)}"
+        )

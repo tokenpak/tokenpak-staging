@@ -87,6 +87,11 @@ def test_eligible_first_request_produces_positive_measured_receipt(
     try:
         proxy.wait_ready()
         project_context = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        # Keep the fixture eligible even when normal README editing moves it
+        # just below the request-size threshold. Repetition remains real project
+        # context and gives the deterministic compressor a measurable target.
+        if len(project_context) < 8_000:
+            project_context = f"{project_context}\n\n{project_context}"
         assert len(project_context) >= 8_000
 
         status, _, body = proxy.post_messages(

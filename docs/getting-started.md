@@ -9,8 +9,11 @@ Get TokenPak running in under 5 minutes.
 ## Requirements
 
 - Python 3.10+
-- An existing LLM client (Claude Code, OpenAI client, etc.)
-- Your provider API key (Anthropic, OpenAI, etc.)
+- An existing authenticated LLM client (Codex, Claude Code, an SDK, etc.)
+
+Provider API keys and explicit model overrides are optional client-specific
+choices, not TokenPak installation requirements. The first-receipt reference
+path reuses an existing Codex OAuth login and its normal model selection.
 
 ---
 
@@ -63,10 +66,10 @@ Run the setup wizard once after installing:
 tokenpak setup
 ```
 
-The wizard detects an API key already exported in your environment, asks for a
-provider, port, and compression profile, writes `~/.tokenpak/config.yaml`, and
-starts a background proxy. It does not rewrite client configuration or persist
-your provider key.
+The wizard detects available clients and any optional provider credentials,
+asks for a port and compression profile, writes `~/.tokenpak/config.yaml`, and
+starts a background proxy. It does not require or persist a provider key and
+does not silently rewrite client configuration.
 
 !!! tip "Non-interactive / CI"
  Configure the proxy with environment variables and use the manual client
@@ -135,11 +138,19 @@ You can also configure a client manually:
  export OPENAI_BASE_URL=http://localhost:8766/v1
  ```
 
+=== "Codex OAuth"
+ ```bash
+ tokenpak codex
+ ```
+ When the local proxy is healthy, the TokenPak launcher supplies the base-URL
+ override for this invocation. Codex retains ownership of its OAuth login and
+ selected/default model.
+
 === "Any HTTP client"
  Replace your provider base URL with `http://localhost:8766`.
  TokenPak auto-detects the provider from the `Authorization` header and routes accordingly.
 
-Your credentials pass through unchanged. TokenPak never stores them.
+Client-supplied credentials pass through unchanged. TokenPak never stores them.
 
 ---
 

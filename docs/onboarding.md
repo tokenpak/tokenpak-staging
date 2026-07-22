@@ -2,10 +2,8 @@
 
 Welcome to TokenPak. This guide takes you from a fresh install to running TokenPak in production, one milestone at a time. Each section ends with a checklist — complete it before moving on.
 
-> **Using Claude Code?** Complete the direct eligible first-receipt path below
-> before following the [Claude Code Integration Guide](claude-code-integration.md).
-> The Claude Code route is byte-preserved and is not the reference path for a
-> positive TokenPak compression receipt.
+> **Already signed in to Codex?** The Day 1 path reuses that OAuth session and
+> the client's selected/default model. API keys and model overrides are optional.
 
 ---
 
@@ -15,11 +13,10 @@ Your goal today: install TokenPak, send one eligible real request, and see its
 measured savings receipt in the same session. The supported reference target is
 three commands and no more than five minutes.
 
-Before starting, have Python 3.10+, an exported `ANTHROPIC_API_KEY`, and an
-exported `ANTHROPIC_MODEL` available to that account. Provider credential setup
-is outside TokenPak's three-command path. Run it from a project whose existing
-`README.md` contains at least 8,000 UTF-8 characters of real project context.
-The model reviews that document in a real request that may incur provider
+Before starting, have Python 3.10+ and an already-authenticated supported
+client. The reference path uses Codex OAuth and its normal model selection; it
+does not require an API-key variable or an explicit Anthropic model. Run it in
+a real project. Provider usage may count against a subscription or incur
 charges.
 
 ### Command 1: Install
@@ -39,23 +36,26 @@ tokenpak serve --profile aggressive --stats-footer
 Leave this foreground process running. Both flags are session-scoped. The
 receipt is printed in this terminal and does not modify the provider response.
 
-### Command 3: Send a Real Eligible Request
+### Command 3: Launch Your Authenticated Client
 
 In terminal 2:
 
 ```bash
-python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'
+tokenpak codex
 ```
 
-After the provider response completes, terminal 1 prints the measured
-before/after token receipt. Its dollar figure is an estimate based on the
-model-pricing table. See [First Measured Savings Receipt](first-receipt.md) for
-expected output, troubleshooting, and the exact eligibility boundaries.
+Make a substantive project request, then continue the same topic. A new
+conversation's first request may correctly be ineligible because it has no
+historical context. The first later eligible request prints the measured
+before/after receipt in terminal 1. Its dollar figure is an estimate based on
+the model-pricing table. See
+[First Measured Savings Receipt](first-receipt.md) for the exact flow and
+eligibility boundaries.
 
-This proof deliberately uses your project's long narrative history. Short, protected, or
-already concise inputs may save zero. Byte-preserved routes are intentionally
-not rewritten and are not positive-compression proof paths. `tokenpak demo` is
-an offline fixture, not a receipt from your own provider request.
+Short, protected, or already concise inputs may save zero. Protected policy and
+the newest two messages are never capsulized. Byte-preserved routes are not
+positive-compression proof paths. `tokenpak demo` is an offline fixture, not a
+receipt from your own provider request.
 
 After the proof, use `tokenpak integrate` to review client-specific routing.
 Applying an integration is a separate, consented workflow and is not required
@@ -65,8 +65,8 @@ for the three-command reference path.
 
 - [ ] TokenPak installed with command 1
 - [ ] The receipt-enabled proxy started with command 2
-- [ ] Command 3 completed as a real provider request
-- [ ] The proxy terminal showed a positive measured token receipt
+- [ ] Command 3 launched an already-authenticated client without requiring a key or model override
+- [ ] A real eligible request produced a positive measured token receipt
 - [ ] You understand that the dollar figure is estimated and workload-specific
 
 ---
