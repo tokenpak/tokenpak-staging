@@ -145,9 +145,9 @@ def test_handoff_wire_basic():
 
     pack = TokenPak()
     pack.add(HandoffBlock(type="memory", id="t", content="task state"))
-    h = Handoff(pack=pack, from_agent="cali", to_agent="sue")
-    assert h.from_agent == "cali"
-    assert h.to_agent == "sue"
+    h = Handoff(pack=pack, from_agent="gamma", to_agent="alpha")
+    assert h.from_agent == "gamma"
+    assert h.to_agent == "alpha"
     assert h.id is not None
 
 
@@ -157,11 +157,11 @@ def test_handoff_wire_round_trip():
     pack = TokenPak()
     pack.add(HandoffBlock(type="memory", id="task_state", content="some state"))
     pack.add(HandoffBlock(type="evidence", id="findings", content="research output"))
-    h = Handoff(pack=pack, from_agent="cali", to_agent="sue", summary="Done X")
+    h = Handoff(pack=pack, from_agent="gamma", to_agent="alpha", summary="Done X")
     wire = h.to_wire()
     h2 = Handoff.from_wire(wire)
-    assert h2.from_agent == "cali"
-    assert h2.to_agent == "sue"
+    assert h2.from_agent == "gamma"
+    assert h2.to_agent == "alpha"
     assert h2.id == h.id
     assert h2.summary == "Done X"
     prompt = h2.pack.to_prompt()
@@ -188,8 +188,8 @@ def test_handoff_wire_metadata():
 
     h = Handoff(
         pack=TokenPak(),
-        from_agent="cali",
-        to_agent="sue",
+        from_agent="gamma",
+        to_agent="alpha",
         metadata={"sprint": 7, "priority": "p1"},
     )
     wire = h.to_wire()
@@ -218,8 +218,8 @@ def test_crewai_prepare_receive_wire(tmp_path):
     h = TokenPakHandoff(budget=1000, manager=mgr)
     wire = h.prepare_handoff(
         state={"key": "value", "step": 3},
-        from_agent="cali",
-        to_agent="sue",
+        from_agent="gamma",
+        to_agent="alpha",
         what_was_done="Researched topic",
         whats_next="Write report",
     )
@@ -320,12 +320,12 @@ def test_autogen_prepare_apply_handoff(tmp_path):
     from tokenpak.agentic.handoff import HandoffManager
 
     mgr = HandoffManager(handoff_dir=tmp_path / "hf3")
-    alice = TokenPakAssistant(name="cali", budget=2000, manager=mgr)
-    bob = TokenPakAssistant(name="sue", budget=2000, manager=mgr)
+    alice = TokenPakAssistant(name="gamma", budget=2000, manager=mgr)
+    bob = TokenPakAssistant(name="alpha", budget=2000, manager=mgr)
 
     alice.receive_message("Research quantum computing", sender_name="user")
     wire = alice.prepare_handoff(
-        to_agent="sue",
+        to_agent="alpha",
         what_was_done="Researched quantum computing",
         whats_next="Write the report",
     )
@@ -346,10 +346,10 @@ def test_autogen_handoff_wire_round_trip(tmp_path):
     from tokenpak import Handoff, HandoffBlock
 
     mgr = HandoffManager(handoff_dir=tmp_path / "hf4")
-    a = TokenPakAssistant(name="cali", budget=2000, manager=mgr)
+    a = TokenPakAssistant(name="gamma", budget=2000, manager=mgr)
     extra = [HandoffBlock(type="evidence", id="ev1", content="key finding")]
     wire = a.prepare_handoff(
-        to_agent="sue",
+        to_agent="alpha",
         what_was_done="Done A",
         whats_next="Next B",
         extra_blocks=extra,

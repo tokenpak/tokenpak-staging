@@ -18,19 +18,19 @@ from tokenpak.attribution import (
 
 class TestDetectSource:
     def test_explicit_header(self):
-        assert detect_source({"X-TokenPak-Source": "sue-main"}) == "sue-main"
+        assert detect_source({"X-TokenPak-Source": "alpha-main"}) == "alpha-main"
 
     def test_skill_header(self):
         assert detect_source({"X-OpenClaw-Skill": "claude-code"}) == "skill:claude-code"
 
-    def test_session_header_sue(self):
-        assert detect_source({"X-OpenClaw-Session": "sue-heartbeat"}) == "sue-openclaw"
+    def test_session_header_alpha(self):
+        assert detect_source({"X-OpenClaw-Session": "alpha-heartbeat"}) == "alpha-openclaw"
 
-    def test_session_header_trix(self):
-        assert detect_source({"X-OpenClaw-Session": "trix-coding"}) == "trix-openclaw"
+    def test_session_header_beta(self):
+        assert detect_source({"X-OpenClaw-Session": "beta-coding"}) == "beta-openclaw"
 
-    def test_session_header_cali(self):
-        assert detect_source({"X-OpenClaw-Session": "cali-batch"}) == "cali-openclaw"
+    def test_session_header_gamma(self):
+        assert detect_source({"X-OpenClaw-Session": "gamma-batch"}) == "gamma-openclaw"
 
     def test_user_agent_openclaw(self):
         assert detect_source({"User-Agent": "OpenClaw/1.0"}) == "openclaw"
@@ -47,7 +47,7 @@ class TestDetectSource:
             {
                 "X-TokenPak-Source": "explicit",
                 "X-OpenClaw-Skill": "skill",
-                "X-OpenClaw-Session": "sue-main",
+                "X-OpenClaw-Session": "alpha-main",
             }
         )
         assert src == "explicit"
@@ -57,14 +57,14 @@ class TestAttributionRecord:
     def test_to_dict(self):
         r = AttributionRecord(
             request_id="req-1",
-            source="sue-openclaw",
+            source="alpha-openclaw",
             model="claude-opus-4-6",
             tokens_saved=1000,
             cost_saved=0.50,
             cache_hit=True,
         )
         d = r.to_dict()
-        assert d["source"] == "sue-openclaw"
+        assert d["source"] == "alpha-openclaw"
         assert d["tokens_saved"] == 1000
         assert d["cost_saved"] == 0.5
 
@@ -79,7 +79,7 @@ class TestAttributionTracker:
     def _make_tracker(self, n=10):
         tracker = AttributionTracker()
         now = time.time()
-        sources = ["sue-openclaw", "trix-openclaw", "cali-openclaw", "unknown"]
+        sources = ["alpha-openclaw", "beta-openclaw", "gamma-openclaw", "unknown"]
         models = ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"]
         for i in range(n):
             tracker.record(
@@ -102,9 +102,9 @@ class TestAttributionTracker:
     def test_rollup_by_source(self):
         tracker = self._make_tracker(10)
         rollup = tracker.rollup_by_source()
-        assert "sue-openclaw" in rollup
-        assert rollup["sue-openclaw"]["requests"] >= 1
-        assert rollup["sue-openclaw"]["cost_saved"] > 0
+        assert "alpha-openclaw" in rollup
+        assert rollup["alpha-openclaw"]["requests"] >= 1
+        assert rollup["alpha-openclaw"]["cost_saved"] > 0
 
     def test_rollup_by_model(self):
         tracker = self._make_tracker(10)
@@ -121,7 +121,7 @@ class TestAttributionTracker:
     def test_leakage_zero(self):
         tracker = AttributionTracker()
         for i in range(5):
-            tracker.record(AttributionRecord(source="sue-openclaw", timestamp=time.time()))
+            tracker.record(AttributionRecord(source="alpha-openclaw", timestamp=time.time()))
         assert tracker.leakage_pct() == 0.0
 
     def test_leakage_high(self):
@@ -189,7 +189,7 @@ class TestFormatAttribution:
         for i in range(20):
             tracker.record(
                 AttributionRecord(
-                    source="sue-openclaw",
+                    source="alpha-openclaw",
                     cost_saved=1.0,
                     timestamp=time.time(),
                 )

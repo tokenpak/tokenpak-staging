@@ -81,9 +81,9 @@ class TestParseFilter:
 
     def test_agent_normalized(self):
         """'agent' key normalizes to 'agent_id'."""
-        result = parse_filter("agent:trix")
+        result = parse_filter("agent:beta")
         assert "agent_id" in result
-        assert result["agent_id"] == "trix"
+        assert result["agent_id"] == "beta"
 
     def test_unknown_keys_ignored(self):
         """Unknown filter keys are silently dropped."""
@@ -108,7 +108,7 @@ class TestParseFilter:
 
     def test_all_valid_keys(self):
         f = parse_filter(
-            "provider:openai,model:gpt-4o,agent_id:sue,status:ok,start:2026-01-01,end:2026-12-31"
+            "provider:openai,model:gpt-4o,agent_id:alpha,status:ok,start:2026-01-01,end:2026-12-31"
         )
         assert f.get("provider") == "openai"
         assert f.get("status") == "ok"
