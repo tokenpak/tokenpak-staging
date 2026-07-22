@@ -63,7 +63,7 @@ def seed_monitor_db(db_path: Path) -> None:
 class ProxyProc:
     """A real ProxyServer subprocess wired to a stub upstream."""
 
-    def __init__(self, stub_url: str):
+    def __init__(self, stub_url: str, *, extra_env: dict[str, str] | None = None):
         self.home = make_test_home()
         self.db_path = self.home / "monitor.db"
         seed_monitor_db(self.db_path)
@@ -81,6 +81,8 @@ class ProxyProc:
             # Keep the data path focused: no spend-guard veto, no capture.
             "TOKENPAK_SPEND_GUARD_ENABLED": "0",
         }
+        if extra_env:
+            env.update(extra_env)
         self._stdout_f = open(self.stdout_path, "wb")
         self._stderr_f = open(self.stderr_path, "wb")
         self.proc = subprocess.Popen(
@@ -143,7 +145,23 @@ class ProxyProc:
         request_id_header: str = "X-Request-ID",
         timeout: float = FIRST_REQUEST_TIMEOUT,
     ):
-        """POST a small non-streaming /v1/messages request.
+        """POST a small non-streaming /v1/messages request."""
+        return self.post_messages(
+            [{"role": "user", "content": content}],
+            request_id=request_id,
+            request_id_header=request_id_header,
+            timeout=timeout,
+        )
+
+    def post_messages(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        request_id: str | None = None,
+        request_id_header: str = "X-Request-ID",
+        timeout: float = FIRST_REQUEST_TIMEOUT,
+    ):
+        """POST a non-streaming /v1/messages conversation.
 
         Returns (status, headers, body). Uses http.client rather than
         urllib.request because urllib rewrites header casing
@@ -154,7 +172,7 @@ class ProxyProc:
             {
                 "model": "claude-sonnet-4-5",
                 "max_tokens": 32,
-                "messages": [{"role": "user", "content": content}],
+                "messages": messages,
             }
         ).encode()
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)

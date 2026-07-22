@@ -1,55 +1,69 @@
 # TokenPak Quick Start Guide
 
-Get from zero to savings in 5 minutes. Pick your path:
+The proxy reference path targets a first receipt in three commands and five
+minutes. Pick your path:
 
 | Path | Best for |
 |------|----------|
-| [**Proxy Path**](#proxy-path-zero-config-optimization) | Existing apps — drop-in optimization, no code changes |
+| [**Proxy Path**](#proxy-path-first-measured-receipt) | First measured receipt from a real provider request |
 | [**SDK Path**](#sdk-path-protocol-first) | New projects or when you want protocol-level control |
 
 ---
 
-## Proxy Path: Zero-Config Optimization
+## Proxy Path: First Measured Receipt
 
 **You already write prompts. TokenPak compresses them before they hit the API.**
 
-### Minute 1: Install
+The supported reference path is three commands. Before starting, export an
+existing `ANTHROPIC_API_KEY` and an `ANTHROPIC_MODEL` available to that account.
+Run it from a project whose existing `README.md` contains at least 8,000 UTF-8
+characters of real project context. The request asks the model to review that
+document, is real, and may incur provider charges.
+
+### Command 1: Install
 
 ```bash
-pip install tokenpak
+python -m pip install tokenpak
 ```
 
-### Minute 2: Start the proxy
+### Command 2: Start the receipt-enabled proxy
+
+In terminal 1:
 
 ```bash
-tokenpak start
-# → ✅ Proxy running on http://localhost:8766
+tokenpak serve --profile aggressive --stats-footer
 ```
 
-### Minute 3: Point your app at the proxy
+Leave it running. The flags apply only to this proxy process; the receipt is
+printed in this terminal and is not injected into the provider response.
 
-Run the one-shot configurator for your tool:
+### Command 3: Send one real eligible request
+
+In terminal 2:
 
 ```bash
-tokenpak integrate # list clients + detection status
-tokenpak integrate claude-code --apply # writes ~/.claude/settings.json
-tokenpak integrate cursor --apply # writes Cursor settings.json
-tokenpak integrate continue --apply # writes ~/.continue/config.json
-tokenpak integrate aider --apply # writes ~/.aider.conf.yml
+python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'
 ```
 
-Every `--apply` backs up the existing config and prints a rollback command.
-For clients without auto-apply (Cline, SDKs), `tokenpak integrate <client>` prints the exact snippet to paste.
+Terminal 1 now prints the measured before/after token receipt. The dollar value
+is an estimate based on TokenPak's model-pricing table. See
+[First Measured Savings Receipt](./first-receipt.md) for the expected output,
+five-minute reference target, and truthful exclusions.
 
-### Minute 4: See your savings
+Short or protected inputs may legitimately save zero. Byte-preserved routes are
+also ineligible for TokenPak compression savings. `tokenpak demo` remains useful
+as an offline fixture, but it does not satisfy a real first-request receipt.
+
+### Connect your normal client afterward
 
 ```bash
-tokenpak demo # see compression in action on a sample prompt
-tokenpak cost # view today's spend and tokens saved
-tokenpak status # live snapshot: requests, cache hit rate, models used
+tokenpak integrate # list clients and detection status
 ```
 
-That's it. Every request is now routed through tokenpak.
+Every `tokenpak integrate <client> --apply` operation previews or applies the
+client-specific route, backs up supported config files, and prints rollback
+information. This later integration step is not part of the three-command
+reference receipt path.
 
 ### Editions, security, and compliance
 
@@ -104,7 +118,7 @@ print(pack.compile().report)
 
 ### "I use Claude Code"
 
-Claude Code uses an OpenAI-compatible API. Point it at the proxy:
+Point Claude Code at the proxy:
 
 ```bash
 # Start the proxy
@@ -114,7 +128,10 @@ tokenpak start
 export ANTHROPIC_BASE_URL=http://localhost:8766
 ```
 
-All requests are automatically compressed before reaching Anthropic. No code changes needed.
+Claude Code's supported route is byte-preserved. It can use TokenPak routing and
+telemetry, but it is intentionally not the reference path for proving positive
+TokenPak compression savings. Use the direct eligible request above for that
+receipt.
 
 ### "I use the OpenAI SDK"
 
@@ -175,10 +192,13 @@ TokenPak is a passthrough proxy — it never stores or modifies your credentials
 
 ```bash
 tokenpak cost --week # check a longer time window
-tokenpak demo # verify compression is working
+tokenpak demo # inspect the offline fixture only
 ```
 
-Short prompts compress less. Savings show up most on long conversations and large document contexts.
+Short prompts compress less, and byte-preserved routes may correctly report zero
+TokenPak compression savings. For a real per-request proof, use the
+[three-command first-receipt path](./first-receipt.md); the demo is not a
+substitute for that receipt.
 
 ### "The proxy started but requests aren't going through"
 

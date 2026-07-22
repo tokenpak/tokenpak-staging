@@ -2,94 +2,72 @@
 
 Welcome to TokenPak. This guide takes you from a fresh install to running TokenPak in production, one milestone at a time. Each section ends with a checklist — complete it before moving on.
 
-> **Using Claude Code?** See the [Claude Code Integration Guide](claude-code-integration.md) for mode-specific setup before starting Day 1.
+> **Using Claude Code?** Complete the direct eligible first-receipt path below
+> before following the [Claude Code Integration Guide](claude-code-integration.md).
+> The Claude Code route is byte-preserved and is not the reference path for a
+> positive TokenPak compression receipt.
 
 ---
 
 ## Day 1: Your First Compressed Request
 
-Your goal today: install TokenPak, start the proxy, send one request, and confirm compression is working.
+Your goal today: install TokenPak, send one eligible real request, and see its
+measured savings receipt in the same session. The supported reference target is
+three commands and no more than five minutes.
 
-### Install
+Before starting, have Python 3.10+, an exported `ANTHROPIC_API_KEY`, and an
+exported `ANTHROPIC_MODEL` available to that account. Provider credential setup
+is outside TokenPak's three-command path. Run it from a project whose existing
+`README.md` contains at least 8,000 UTF-8 characters of real project context.
+The model reviews that document in a real request that may incur provider
+charges.
 
-```bash
-pip install "tokenpak[serve]"
-```
-
-The `[serve]` extra installs FastAPI, required for the proxy server. If you only want the compression SDK (no proxy), use plain `pip install tokenpak`.
-
-Confirm it installed:
-
-```bash
-tokenpak --version
-```
-
-### Configure Your LLM Client
-
-Run the setup wizard once. It detects your installed LLM client and writes the proxy URL into the right config file — no manual editing.
+### Command 1: Install
 
 ```bash
-tokenpak setup
+python -m pip install tokenpak
 ```
 
-What it does per client:
+### Command 2: Start the Proxy
 
-- **Claude Code** — writes `ANTHROPIC_BASE_URL=http://localhost:8766` into `~/.claude/settings.json`
-- **OpenAI SDK** — prints the one-line export command to add to your shell config
-- **Google AI SDK** — prints the one-line export command
-
-The wizard never reads or writes API keys — only proxy URLs.
-
-> **Non-interactive / CI:** Run `tokenpak setup` and answer the prompts, or configure the proxy URL manually by editing your LLM client config directly.
-
-### Start the Proxy
+In terminal 1:
 
 ```bash
-tokenpak serve --port 8766
+tokenpak serve --profile aggressive --stats-footer
 ```
 
-You'll see startup output confirming the port and worker count. Leave this terminal open, or run it in the background:
+Leave this foreground process running. Both flags are session-scoped. The
+receipt is printed in this terminal and does not modify the provider response.
+
+### Command 3: Send a Real Eligible Request
+
+In terminal 2:
 
 ```bash
-tokenpak serve --port 8766 &
+python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'
 ```
 
-### Send a Request
+After the provider response completes, terminal 1 prints the measured
+before/after token receipt. Its dollar figure is an estimate based on the
+model-pricing table. See [First Measured Savings Receipt](first-receipt.md) for
+expected output, troubleshooting, and the exact eligibility boundaries.
 
-Use your LLM client as normal — make any request. TokenPak intercepts it transparently and compresses the context before forwarding it to your provider.
+This proof deliberately uses your project's long narrative history. Short, protected, or
+already concise inputs may save zero. Byte-preserved routes are intentionally
+not rewritten and are not positive-compression proof paths. `tokenpak demo` is
+an offline fixture, not a receipt from your own provider request.
 
-### Verify Compression Is Active
-
-```bash
-tokenpak status
-```
-
-Expected output:
-
-```
-✓ Proxy: running on :8766
-✓ Compression: enabled (balanced mode)
-✓ Cost tracking: active
-✓ Session: 1 requests
-```
-
-Then check your first savings:
-
-```bash
-tokenpak cost
-# Requests today: 1 | Cost today: <your measured total>
-# Run tokenpak savings after real traffic for receipt-backed savings.
-```
-
-If receipt-backed savings appear above zero, compression is working for that workload.
+After the proof, use `tokenpak integrate` to review client-specific routing.
+Applying an integration is a separate, consented workflow and is not required
+for the three-command reference path.
 
 ### Day 1 Checklist
 
-- [ ] `tokenpak --version` prints a version string
-- [ ] `tokenpak setup` ran without errors
-- [ ] `tokenpak serve` started on port 8766
-- [ ] `tokenpak status` shows proxy running and compression enabled
-- [ ] `tokenpak cost` shows at least one request processed
+- [ ] TokenPak installed with command 1
+- [ ] The receipt-enabled proxy started with command 2
+- [ ] Command 3 completed as a real provider request
+- [ ] The proxy terminal showed a positive measured token receipt
+- [ ] You understand that the dollar figure is estimated and workload-specific
 
 ---
 
@@ -115,7 +93,8 @@ This shows your cumulative savings since install: total tokens saved, estimated 
 
 A healthy setup measurably reduces tokens on typical mixed workloads — check your own with `tokenpak savings`. If you're seeing little or no reduction, check these:
 
-- Is compression set to `balanced` or `aggressive` mode? (Check `~/.tokenpak/config.json`, key `compression.level`)
+- Is the proxy running with a compression-capable `balanced`, `aggressive`, or
+  `agentic` profile?
 - Are your requests using long system prompts or repetitive context? Those compress best.
 - Run `tokenpak demo` to inspect the offline fixture, then use `tokenpak savings` for receipt-backed savings.
 
@@ -134,7 +113,7 @@ The benchmark runs against the `tests/benchmarks/fixtures/` payloads, which repr
 
 - [ ] `tokenpak cost --week` shows data for at least 2 days
 - [ ] `tokenpak savings` shows a compression ratio
-- [ ] You understand where to find the `compression.level` setting
+- [ ] You understand how the proxy's workflow profile affects eligibility
 
 ---
 
