@@ -41,7 +41,7 @@ try:
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
-    Draft202012Validator = None  # type: ignore[misc,assignment]
+    Draft202012Validator = None
 
 
 # ---------------------------------------------------------------------------

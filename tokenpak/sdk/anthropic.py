@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 try:
     import requests as _requests
@@ -188,7 +188,7 @@ class AnthropicAdapter(TokenPakAdapter):
             )
 
         try:
-            return resp.json()
+            return cast(dict[str, Any], resp.json())
         except Exception as exc:
             raise TokenPakAdapterError(
                 "AnthropicAdapter.send: response body is not valid JSON."

@@ -17,6 +17,8 @@ Sub-package imports:
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 __version__ = "1.13.0"
 __author__ = "TokenPak Contributors"
 __license__ = "Apache-2.0"
@@ -28,9 +30,9 @@ __description__ = "Deterministic compression for multi-agent AI workflows"
 # All names remain importable via `from tokenpak import X` via __getattr__.
 # ---------------------------------------------------------------------------
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy top-level attribute resolution — defers heavy imports until used."""
-    _lazy_map = {
+    _lazy_map: dict[str, Callable[[], Any]] = {
         # Sub-packages
         "connectors": lambda: __import__("tokenpak.sources", fromlist=[""]),
         "proxy": lambda: __import__("tokenpak.proxy", fromlist=[""]),
