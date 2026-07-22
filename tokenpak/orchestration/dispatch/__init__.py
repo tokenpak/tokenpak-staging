@@ -39,10 +39,10 @@ from tokenpak.orchestration.dispatch.registry.capabilities import (
     validate_capabilities,
 )
 from tokenpak.orchestration.dispatch.registry.routes import (
-    DispatchRouteRegistry,
-    RouteResolutionError,
-    bind_route,
-    resolve_station_workers,
+    DispatchRouteRegistry,  # type: ignore[attr-defined]
+    RouteResolutionError,  # type: ignore[attr-defined]
+    bind_route,  # type: ignore[attr-defined]
+    resolve_station_workers,  # type: ignore[attr-defined]
 )
 
 __all__ = [

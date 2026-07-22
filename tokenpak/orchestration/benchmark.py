@@ -1003,7 +1003,7 @@ def run_compression_benchmark(
     for r in results:
         recipe_str = ", ".join(r["recipe_hits"][:3]) if r["recipe_hits"] else "—"
         if len(r["recipe_hits"]) > 3:
-            recipe_str += f" (+{len(r['recipe_hits'])-3})"
+            recipe_str += f" (+{len(r['recipe_hits']) - 3})"
         print(
             f"{r['name']:<25} {r['file_type']:<6} "
             f"{r['tokens_before']:>7,} {r['tokens_after']:>7,} "
@@ -1047,7 +1047,7 @@ def benchmark_tokenization(texts: List[str], iterations: int = 3) -> dict[str, A
     # Cold cache benchmark
     times = []
     for _ in range(iterations):
-        clear_cache()
+        clear_cache()  # type: ignore[no-untyped-call]
         start = time.perf_counter()
         for t in texts:
             count_tokens(t)
@@ -1067,7 +1067,7 @@ def benchmark_tokenization(texts: List[str], iterations: int = 3) -> dict[str, A
     results["cache_speedup"] = results["cold_cache_avg_ms"] / max(
         results["warm_cache_avg_ms"], 0.001
     )
-    results["cache_info"] = str(cache_info())
+    results["cache_info"] = str(cache_info())  # type: ignore[no-untyped-call]
 
     return results
 
@@ -1120,7 +1120,7 @@ def benchmark_indexing_baseline(directory: str, iterations: int = 3) -> dict[str
     times = []
 
     for _ in range(iterations):
-        clear_cache()  # No cache benefit
+        clear_cache()  # type: ignore[no-untyped-call]  # No cache benefit
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = f"{tmpdir}/bench.db"
@@ -1281,7 +1281,7 @@ def benchmark_search(
     return results
 
 
-def run_benchmark(directory: str, iterations: int = 3, compare: bool = False):
+def run_benchmark(directory: str, iterations: int = 3, compare: bool = False) -> None:
     """Run full benchmark suite with optional baseline comparison."""
     print("TokenPak Latency Benchmark")
     print(f"Directory: {directory}")
