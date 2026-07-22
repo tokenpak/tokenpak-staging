@@ -111,7 +111,7 @@ PROXY_PORT = int(os.environ.get("TOKENPAK_PORT", "8766"))
 MAX_CONCURRENCY = int(os.environ.get("TOKENPAK_CONCURRENCY", "200"))
 HTTPX_POOL_SIZE = int(os.environ.get("TOKENPAK_HTTPX_POOL_SIZE", "100"))
 HTTPX_TIMEOUT = float(os.environ.get("TOKENPAK_HTTPX_TIMEOUT", "300"))
-INTERCEPT_HOSTS = {"api.anthropic.com", "api.openai.com"}
+INTERCEPT_HOSTS = {"api.anthropic.com", "api.openai.com", "chatgpt.com"}
 ASYNC_UPSTREAM_CONCURRENCY = int(os.environ.get("TOKENPAK_UPSTREAM_CONCURRENCY", "3"))
 ASYNC_UPSTREAM_ACQUIRE_TIMEOUT = float(os.environ.get("TOKENPAK_UPSTREAM_ACQUIRE_TIMEOUT", "30"))
 
@@ -244,7 +244,7 @@ def _should_intercept(url: str) -> bool:
 
 
 def _is_messages_endpoint(url: str) -> bool:
-    return "/messages" in url or "/chat/completions" in url
+    return any(endpoint in url for endpoint in ("/messages", "/chat/completions", "/responses"))
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +256,10 @@ def _estimate_tokens(body: bytes) -> int:
     try:
         data = json.loads(body)
         total = 0
-        for msg in data.get("messages", []):
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            messages = data.get("input", [])
+        for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, str):
                 total += len(content) // 4

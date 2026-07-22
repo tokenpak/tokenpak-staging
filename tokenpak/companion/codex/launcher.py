@@ -82,7 +82,8 @@ _TEAL = "\033[38;2;0;180;170m"
 _DIM = "\033[2m"
 _RESET = "\033[0m"
 _CLEAR_LINE = "\033[2K"
-_TOKENPAK_CHATGPT_BASE_URL = "http://127.0.0.1:8766/v1"
+_TOKENPAK_OPENAI_BASE_URL = "http://127.0.0.1:8766/v1"
+_TOKENPAK_MODEL_PROVIDER = "tokenpak"
 
 _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
@@ -262,6 +263,59 @@ def _has_option(args: list[str], long_name: str, short_name: str) -> bool:
         or arg.startswith(f"{short_name}=")
         for arg in args
     )
+
+
+def _has_model_route_override(args: list[str]) -> bool:
+    """Return true when argv explicitly owns the Codex model route."""
+    values: list[str] = []
+    for index, arg in enumerate(args):
+        if arg in {"-c", "--config"} and index + 1 < len(args):
+            values.append(args[index + 1])
+        elif arg.startswith(("-c=", "--config=")):
+            values.append(arg.split("=", 1)[1])
+    route_keys = {"openai_base_url", "model_provider"}
+    for value in values:
+        key = value.partition("=")[0].strip().strip("\"'")
+        if key in route_keys or key.startswith("model_providers."):
+            return True
+    return False
+
+
+def _local_proxy_is_healthy(timeout_seconds: float = 0.5) -> bool:
+    """Check the local TokenPak health endpoint without requiring credentials."""
+    from urllib.request import urlopen
+
+    health_url = _TOKENPAK_OPENAI_BASE_URL.rsplit("/v1", 1)[0] + "/health"
+    try:
+        with urlopen(health_url, timeout=timeout_seconds) as response:  # noqa: S310
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read(64 * 1024))
+    except (OSError, TimeoutError, ValueError):
+        return False
+    return isinstance(payload, dict) and payload.get("status") in {"ok", "healthy"}
+
+
+def _with_tokenpak_proxy_route(args: list[str]) -> tuple[list[str], bool]:
+    """Route native Codex through a healthy local proxy unless user-overridden."""
+    if _has_model_route_override(args) or not _local_proxy_is_healthy():
+        return list(args), False
+    provider = _TOKENPAK_MODEL_PROVIDER
+    return [
+        "-c",
+        f'model_provider="{provider}"',
+        "-c",
+        f'model_providers.{provider}.name="TokenPak local proxy"',
+        "-c",
+        f'model_providers.{provider}.base_url="{_TOKENPAK_OPENAI_BASE_URL}"',
+        "-c",
+        f'model_providers.{provider}.wire_api="responses"',
+        "-c",
+        f"model_providers.{provider}.requires_openai_auth=true",
+        "-c",
+        f"model_providers.{provider}.supports_websockets=false",
+        *args,
+    ], True
 
 
 def _config_permission_overrides(args: list[str]) -> tuple[bool, bool]:
@@ -1431,7 +1485,11 @@ def main(
             env = paths.environment(_vanilla_receipt_env())
             env["TOKENPAK_CODEX_RECEIPT_OUT"] = receipt_out
             env["TOKENPAK_CODEX_RUN_ID"] = run_id
-            codex_args = ["codex", *args]
+            routed_args, proxy_routed = _with_tokenpak_proxy_route(args)
+            receipt_setup["traffic_routing"] = (
+                "tokenpak_local_proxy" if proxy_routed else "client_default"
+            )
+            codex_args = ["codex", *routed_args]
             started_at = utc_now()
             start_monotonic = time.monotonic()
             try:
@@ -1456,7 +1514,7 @@ def main(
                 _write_accounting_receipt(
                     receipt_out=receipt_out,
                     run_id=run_id,
-                    codex_args=args,
+                    codex_args=routed_args,
                     setup=receipt_setup,
                     started_at=started_at,
                     start_monotonic=start_monotonic,
@@ -1624,6 +1682,19 @@ def main(
             mode,
             env,
         )
+        forwarded, proxy_routed = _with_tokenpak_proxy_route(forwarded)
+        setup["traffic_routing"] = "tokenpak_local_proxy" if proxy_routed else "client_default"
+        if proxy_routed:
+            print(
+                "tokenpak: Codex traffic routed through the healthy local TokenPak proxy",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "tokenpak: local proxy unavailable or explicitly overridden; "
+                "Codex is using its configured upstream",
+                file=sys.stderr,
+            )
         banner = _launcher_mode_banner(effective_mode, mode_flags, skip_reason)
         if banner:
             print(banner, file=sys.stderr)

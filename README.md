@@ -13,22 +13,25 @@ TokenPak starts as a local proxy that **packs AI requests** before they ship —
 
 ## First measured receipt in three commands
 
-Prerequisites: Python 3.10+ and existing `ANTHROPIC_API_KEY` and
-`ANTHROPIC_MODEL` environment variables. Run the commands from a project whose
-existing `README.md` contains at least 8,000 UTF-8 characters of real project
-context. The final command asks the model to review that document, makes a real
-provider request, and may incur provider charges.
+Prerequisites: Python 3.10+ and an already authenticated supported client. The
+reference path below uses Codex and reuses its existing OAuth login and normal
+default model. An API key or explicit model override is optional, not required.
+Run it from a project with enough real history for an eligible multi-turn
+request; real provider usage may count against your subscription or incur
+provider charges.
 
 ```bash
 python -m pip install tokenpak
 tokenpak serve --profile aggressive --stats-footer  # terminal 1; leave running
-python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'  # terminal 2
+tokenpak codex  # terminal 2; use your existing login and selected/default model
 ```
 
-The proxy terminal prints the measured before/after token receipt for that
-request. The dollar figure is estimated from TokenPak's model-pricing table.
-This session-only footer is off by default and does not alter the provider
-response.
+In Codex, make a normal context-bearing request, then continue that same topic.
+The first request may correctly be ineligible because there is no historical
+context yet; the first eligible request prints the measured before/after token
+receipt in terminal 1. The dollar figure is estimated from TokenPak's
+model-pricing table. This session-only footer is off by default and does not
+alter the provider response.
 
 See the [first receipt guide](docs/first-receipt.md) for prerequisites,
 expected output, the five-minute reference target, and routes that are not

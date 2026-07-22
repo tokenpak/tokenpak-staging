@@ -606,7 +606,7 @@ def classify_message_risk(msg: Mapping[str, object]) -> str:
     else:
         return "narrative"
 
-    if role == "system":
+    if role in {"system", "developer"}:
         return "protected"
     if is_protected_content(content_text):
         return "protected"

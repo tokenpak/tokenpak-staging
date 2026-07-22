@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("tokenpak._internal.team.agent_registry", reason="module not available in current build")
+pytest.importorskip(
+    "tokenpak._internal.team.agent_registry", reason="module not available in current build"
+)
 import time
 
 import pytest
@@ -122,6 +124,7 @@ class TestAgentRegistry:
 # Shared Vault Tests (5.5)
 # ===========================================================================
 
+
 def _make_block(block_id: str, contributor: str = "trix", path: str = "foo.py") -> SharedVaultBlock:
     return SharedVaultBlock(
         block_id=block_id,
@@ -228,6 +231,7 @@ class TestSharedVault:
 # Team Templates Tests (5.10)
 # ===========================================================================
 
+
 class TestTemplate:
     def test_render_substitutes_variables(self):
         t = Template(name="greet", content="Hello, {{name}}!", created_by="admin")
@@ -270,8 +274,12 @@ class TestTemplateStore:
 
     def test_list_templates_visible_to_member(self):
         store = self._store()
-        store.create("public", "content", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_MEMBER)
-        store.create("secret", "secret", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN)
+        store.create(
+            "public", "content", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_MEMBER
+        )
+        store.create(
+            "secret", "secret", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN
+        )
         visible = store.list_templates(actor_role=ROLE_MEMBER)
         names = {t.name for t in visible}
         assert "public" in names
@@ -280,7 +288,9 @@ class TestTemplateStore:
     def test_list_templates_admin_sees_all(self):
         store = self._store()
         store.create("public", "content", created_by="sue", actor_role=ROLE_ADMIN)
-        store.create("secret", "secret", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN)
+        store.create(
+            "secret", "secret", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN
+        )
         visible = store.list_templates(actor_role=ROLE_ADMIN)
         assert len(visible) == 2
 
@@ -292,7 +302,9 @@ class TestTemplateStore:
 
     def test_use_admin_only_template_as_member_raises(self):
         store = self._store()
-        store.create("priv", "secret", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN)
+        store.create(
+            "priv", "secret", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN
+        )
         with pytest.raises(PermissionError):
             store.use("priv", actor_role=ROLE_MEMBER)
 
@@ -311,7 +323,9 @@ class TestTemplateStore:
     def test_stats(self):
         store = self._store()
         store.create("p1", "content", created_by="sue", actor_role=ROLE_ADMIN)
-        store.create("p2", "content", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN)
+        store.create(
+            "p2", "content", created_by="sue", actor_role=ROLE_ADMIN, role_required=ROLE_ADMIN
+        )
         stats = store.stats()
         assert stats["total"] == 2
         assert stats["admin_only"] == 1

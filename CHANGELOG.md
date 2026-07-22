@@ -6,6 +6,82 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.14.0] — 2026-07-21
+
+> Minor release: verified Codex contention recovery with typed diagnostics,
+> fail-closed eligibility, and truthful temporary-lineage receipts.
+
+### Added
+
+- **Verified-contention recovery for `tokenpak codex`.** When another Codex
+  process is confirmed to hold the shared local history, an interactive launch
+  can start a temporary session with a new history lineage. The prompt defaults
+  to refusal and is never offered to CI, non-interactive launches, incomplete
+  diagnostics, permission/storage errors, corruption, or unknown failures.
+- **Typed preflight evidence and policy decisions.** Launcher diagnostics now
+  distinguish clear, live-holder, stopped-holder, last-verified-live timeout,
+  incomplete inspection, permission/storage failure, cancellation, corruption,
+  and unknown failure outcomes. The five additive launcher types are retained
+  as public beta API symbols and captured by the generated API snapshot.
+- **Temporary-lineage accounting evidence.** Codex accounting receipts can
+  additively report the original preflight result, fallback eligibility and
+  outcome, selected session class, continuity mode, prior-history attachment,
+  and the bridge policy version under `tokenpak_setup`. Existing receipt fields
+  and meanings are unchanged.
+- **Provider-neutral first-receipt path.** `tokenpak codex` can route an
+  already-authenticated Codex OAuth session through a healthy local proxy while
+  preserving the client's selected/default model. API keys and explicit model
+  overrides remain optional client-specific alternatives.
+
+### Fixed
+
+- **Contention no longer exposes a technical recovery command as the ordinary
+  UX.** Interactive users receive a consequence-oriented choice after verified
+  contention while the original safe refusal remains the default.
+- **Fallback failures preserve the original diagnosis.** Selection or
+  provisioning failure records both outcomes and exits through the original
+  refusal rather than silently choosing another session location.
+- **Queued monitor writes honor their target database.** The process-global
+  telemetry writer now switches its guarded SQLite connection when queued work
+  targets another monitor database, preventing cross-instance, recovery-tool,
+  and test traffic from being committed to the previous database.
+- **Responses routing distinguishes OAuth from API keys.** OAuth
+  `/v1/responses` traffic is rewritten to the ChatGPT Codex backend, while
+  `Bearer sk-...` Responses traffic remains on the OpenAI API endpoint. Native
+  zstd request entities are decoded before safe processing, and protected
+  system/developer policy is never capsulized.
+
+### Compatibility
+
+- **Breaking changes:** none. Existing launch defaults, environment overrides,
+  non-interactive behavior, and shared-history refusal semantics remain valid.
+- **Deprecations:** none.
+- **Migration:** none. Existing TokenPak and Codex configuration files require
+  no changes.
+- **Version note:** v1.13.1 was never released; v1.14.0 is the next published
+  candidate after v1.13.0.
+
+### Known limitation
+
+The temporary session does not attach the prior shared Codex history and is not
+the future broker-managed parallel-continuity architecture. Normal later
+launches return to the governed shared lineage.
+
+### Upgrade
+
+```bash
+pip install --upgrade tokenpak==1.14.0
+```
+
+### Rollback
+
+```bash
+pip install tokenpak==1.13.0
+```
+
+No TokenPak-home cleanup is required. A temporary Codex history created by
+v1.14.0 remains retention-managed and does not replace the shared lineage.
+
 ## [1.13.0] — 2026-07-20
 
 > Minor release: deterministic memory configuration, Receipt v1 inspection,

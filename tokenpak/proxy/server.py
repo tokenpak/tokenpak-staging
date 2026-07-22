@@ -1061,6 +1061,19 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             session_result["models"] = models
             self._send_json(session_result)
             return
+        if path.startswith("/v1/models"):
+            route = ps.router.route(path, dict(self.headers))
+            if route.auth_type == "oauth":
+                # The OpenAI /v1/models endpoint requires API-platform scope,
+                # which a Codex subscription OAuth session does not carry.
+                # Native Codex already has a bundled model catalog, so report
+                # that this upstream source contributed no additional models
+                # instead of forwarding the bearer to an incompatible API-key
+                # endpoint and surfacing a misleading 403.
+                self._send_json({"models": []})
+                return
+            self._proxy_to(route.full_url, "GET")
+            return
         if path.startswith("http"):
             self._proxy_to(path, "GET")
         else:
@@ -1212,10 +1225,43 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         parsed = urlparse(target_url)
 
         should_log = any(h in target_url for h in INTERCEPT_HOSTS)
-        is_messages = "/messages" in target_url or "/chat/completions" in target_url
+        is_model_request = any(
+            endpoint in target_url for endpoint in ("/messages", "/chat/completions", "/responses")
+        )
 
         content_length = int(self.headers.get("Content-Length", 0))
         body: bytes | None = self.rfile.read(content_length) if content_length > 0 else None
+        _decoded_request_encoding = False
+        if body:
+            try:
+                body, _decoded_request_encoding = _decode_request_entity(
+                    body,
+                    self.headers.get("Content-Encoding", ""),
+                )
+                if _decoded_request_encoding:
+                    if self.headers.get("Content-Length") is not None:
+                        self.headers.replace_header("Content-Length", str(len(body)))
+                    for header_name in tuple(self.headers.keys()):
+                        if header_name.lower() in {"content-encoding", "content-md5"}:
+                            del self.headers[header_name]
+            except ValueError:
+                err_body = json.dumps(
+                    {
+                        "error": {
+                            "type": "unsupported_request_encoding",
+                            "message": (
+                                "TokenPak could not decode the compressed request body. "
+                                "Reinstall TokenPak or send identity, gzip, or zstd content."
+                            ),
+                        }
+                    }
+                ).encode()
+                self.send_response(415)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err_body)))
+                self.end_headers()
+                self.wfile.write(err_body)
+                return
         _original_body = body
         _retry_policy = UpstreamRetryPolicy.from_env(
             body=body,
@@ -1239,7 +1285,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         stop_reason = ""
 
         trace: PipelineTrace | None = None
-        if should_log and is_messages:
+        if should_log and is_model_request:
             trace = PipelineTrace(
                 request_id=str(uuid.uuid4())[:8],
                 timestamp=datetime.now().strftime("%H:%M:%S"),
@@ -1266,7 +1312,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         # Platform adapter detection (feature-flagged via TOKENPAK_PLATFORM_ADAPTERS, default ON)
         _adapters_enabled = os.environ.get("TOKENPAK_PLATFORM_ADAPTERS", "1") != "0"
-        if _adapters_enabled and should_log and is_messages:
+        if _adapters_enabled and should_log and is_model_request:
             import logging as _logging
 
             _platform = detect_platform()
@@ -1284,7 +1330,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Disabled with: spend_guard.enabled=false in config.yaml
         #            or: TOKENPAK_SPEND_GUARD_ENABLED=0
         _sg_admission_ticket = None  # rolling-cap in-flight spend ticket
-        if should_log and is_messages and body:
+        if should_log and is_model_request and body:
             try:
                 from tokenpak.proxy.request_pipeline import _resolve_session_id
                 from tokenpak.proxy.spend_guard import evaluate as _sg_evaluate
@@ -1394,7 +1440,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if (
             os.environ.get("TOKENPAK_DLP_ENABLED", "1") != "0"
             and should_log
-            and is_messages
+            and is_model_request
             and body
         ):
             try:
@@ -1459,7 +1505,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 )
 
         # Run compression pipeline hook if registered
-        if should_log and is_messages and body:
+        if should_log and is_model_request and body:
             try:
                 route = ps.router.route(target_url, dict(self.headers), body)
                 model = route.model
@@ -1608,7 +1654,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         # ── Circuit breaker check ──────────────────────────────────────────
         # Fast-fail immediately if the target provider's circuit is OPEN.
-        if should_log and is_messages:
+        if should_log and is_model_request:
             _cb_provider = provider_from_url(target_url)
             _cb_registry = get_circuit_breaker_registry()
             if not _cb_registry.allow_request(_cb_provider):
@@ -1646,7 +1692,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ── Rate-limit circuit breaker check ──────────────────────────────
         # Fast-fail with 503 if the provider's rate-limit circuit is open
         # (too many 429s in the rolling window).
-        if should_log and is_messages and _cb_provider:
+        if should_log and is_model_request and _cb_provider:
             if get_rate_limit_registry().is_open(_cb_provider):
                 import logging as _logging
 
@@ -1678,7 +1724,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         # Validate credentials for intercepted provider requests
         # Client-supplied key takes precedence over any environment-level key.
-        if should_log and is_messages:
+        if should_log and is_model_request:
             passthrough_cfg = PassthroughConfig(require_auth=True)
             auth_ok, auth_err = validate_auth(dict(self.headers), passthrough_cfg)
             if not auth_ok:
@@ -1753,6 +1799,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _route,
                 client_has_auth=client_has_auth,
             )
+        if _decoded_request_encoding:
+            for header_name in tuple(fwd_headers):
+                if header_name.lower() in {"content-encoding", "content-md5"}:
+                    fwd_headers.pop(header_name, None)
         fwd_headers["Host"] = parsed.netloc
         if body is not None:
             fwd_headers["Content-Length"] = str(len(body))
@@ -1778,11 +1828,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _router_injected = False  # fail-open
 
         # ── Codex OAuth credential injection (legacy default path) ───
-        # OpenAI Codex (Responses API) routes need OAuth token from
-        # ~/.codex/auth.json — similar to how Claude Code uses subscription auth.
+        # Legacy compatibility: inject Codex OAuth only when the client did
+        # not already supply credentials. Native Codex owns and forwards its
+        # authenticated session; TokenPak must not replace or persist it.
         _upstream_provider = provider_from_url(target_url)
+        _client_supplied_upstream_auth = any(
+            header_name.lower() in {"authorization", "x-api-key"}
+            and bool(str(header_value).strip())
+            for header_name, header_value in fwd_headers.items()
+        )
         if (
             not _router_injected
+            and not _client_supplied_upstream_auth
             and _upstream_provider == "openai"
             and (
                 "/v1/responses" in target_url
@@ -1975,7 +2032,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         self.wfile.flush()
                                     except (BrokenPipeError, ConnectionResetError):
                                         break
-                                    if should_log and is_messages:
+                                    if should_log and is_model_request:
                                         sse_buffer += chunk
                     except _retry_policy.retryable_exceptions as _stream_exc:
                         # Once we've committed to writing to the client, can't retry —
@@ -1994,7 +2051,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         continue
                     break
 
-                if should_log and is_messages and sse_buffer:
+                if should_log and is_model_request and sse_buffer:
                     # Forwarding stays raw so entity bytes and Content-Encoding
                     # remain paired. Decode only this isolated telemetry copy.
                     sse_observation_buffer = sse_buffer
@@ -2111,7 +2168,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # Debug header: stable prefix hash for cache determinism verification.
                 # Emitted for all messages requests (not just intercepted hosts)
                 # so integration tests and local stubs can verify determinism.
-                if is_messages:
+                if is_model_request:
                     _ph = _compute_stable_prefix_hash(body)
                     if _ph:
                         self.send_header("X-Tokenpak-Cache-Prefix-Hash", _ph)
@@ -2122,7 +2179,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.wfile.write(resp_body)
                 self.wfile.flush()
 
-                if should_log and is_messages:
+                if should_log and is_model_request:
                     body_for_metrics = resp_body
                     if "gzip" in resp.headers.get("content-encoding", ""):
                         try:
@@ -2195,7 +2252,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
 
-            if should_log and is_messages and input_tokens > 0:
+            if should_log and is_model_request and input_tokens > 0:
                 if _resp_status != 200:
                     # Non-200 responses generate no tokens; log cost=0 to avoid
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
@@ -2507,7 +2564,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 ps.session["errors"] += 1
             latency_ms = int((time.time() - t0) * 1000)
             # Record error event in compression telemetry if this was an intercepted request
-            if should_log and is_messages and input_tokens > 0:
+            if should_log and is_model_request and input_tokens > 0:
                 ps.compression_stats.record_compression(
                     model=model,
                     tokens_in=input_tokens,
@@ -3175,7 +3232,9 @@ def _compute_stable_prefix_hash(body: bytes | None) -> str:
 def _estimate_tokens_from_body(body: bytes) -> int:
     try:
         data = json.loads(body)
-        messages = data.get("messages", [])
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            messages = data.get("input", [])
         total = 0
         for msg in messages:
             content = msg.get("content", "")
@@ -3188,6 +3247,48 @@ def _estimate_tokens_from_body(body: bytes) -> int:
         return total
     except Exception:
         return len(body) // 4
+
+
+def _decode_request_entity(body: bytes, content_encoding: str) -> tuple[bytes, bool]:
+    """Decode a supported HTTP request entity for safe JSON processing.
+
+    Native Codex currently sends Responses API bodies as zstd.  Once decoded,
+    the proxy forwards ordinary JSON and removes Content-Encoding rather than
+    pretending the modified entity is still compressed.  The size cap guards
+    against compressed-body expansion attacks.
+    """
+    encoding = content_encoding.strip().lower()
+    if not body or encoding in {"", "identity"}:
+        return body, False
+
+    try:
+        configured_limit = int(
+            os.environ.get(
+                "TOKENPAK_MAX_DECOMPRESSED_REQUEST_BYTES",
+                str(64 * 1024 * 1024),
+            )
+        )
+    except ValueError:
+        configured_limit = 64 * 1024 * 1024
+    max_output_bytes = max(1, configured_limit)
+    try:
+        if encoding == "gzip":
+            decoded = gzip.decompress(body)
+        elif encoding == "zstd":
+            import zstandard
+
+            decoded = zstandard.ZstdDecompressor().decompress(
+                body,
+                max_output_size=max_output_bytes,
+            )
+        else:
+            raise ValueError("unsupported request content encoding")
+    except Exception as exc:
+        raise ValueError("request body could not be decoded") from exc
+
+    if len(decoded) > max_output_bytes:
+        raise ValueError("decoded request body exceeds configured size limit")
+    return decoded, True
 
 
 def _extract_response_tokens(body: bytes) -> int:

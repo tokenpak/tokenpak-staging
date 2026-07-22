@@ -1379,9 +1379,8 @@ def run_doctor(
     else:
         _record(
             "api_keys",
-            "warn",
-            "API keys            none found — set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "or GOOGLE_API_KEY",
+            "pass",
+            "API keys            none set — optional; authenticated clients may use OAuth/session auth",
             detail=_api_key_setup_detail(),
         )
 

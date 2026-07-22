@@ -143,8 +143,12 @@ class TestFleetRendering(unittest.TestCase):
     def test_render_fleet_table_format(self):
         """AC7: render_fleet_table produces formatted output."""
         stats = [
-            FleetStats(name="sue", requests=100, saved=50000, cache_pct=10.5, compression=98.0, health="✅"),
-            FleetStats(name="trix", requests=50, saved=25000, cache_pct=5.2, compression=95.0, health="✅"),
+            FleetStats(
+                name="sue", requests=100, saved=50000, cache_pct=10.5, compression=98.0, health="✅"
+            ),
+            FleetStats(
+                name="trix", requests=50, saved=25000, cache_pct=5.2, compression=95.0, health="✅"
+            ),
         ]
 
         output = render_fleet_table(stats)
@@ -173,7 +177,9 @@ class TestFleetRendering(unittest.TestCase):
     def test_render_fleet_json_format(self):
         """AC9: render_fleet_json produces valid JSON with machines and totals."""
         stats = [
-            FleetStats(name="sue", requests=100, saved=50000, cache_pct=10.0, compression=98.0, health="✅"),
+            FleetStats(
+                name="sue", requests=100, saved=50000, cache_pct=10.0, compression=98.0, health="✅"
+            ),
         ]
 
         output = render_fleet_json(stats)
@@ -190,8 +196,12 @@ class TestFleetRendering(unittest.TestCase):
     def test_render_fleet_compact_format(self):
         """AC10: render_fleet_table with compact=True produces compact output."""
         stats = [
-            FleetStats(name="sue", requests=100, saved=50000, cache_pct=10.5, compression=98.0, health="✅"),
-            FleetStats(name="trix", requests=50, saved=25000, cache_pct=5.2, compression=95.0, health="✅"),
+            FleetStats(
+                name="sue", requests=100, saved=50000, cache_pct=10.5, compression=98.0, health="✅"
+            ),
+            FleetStats(
+                name="trix", requests=50, saved=25000, cache_pct=5.2, compression=95.0, health="✅"
+            ),
         ]
 
         output = render_fleet_table(stats, compact=True)
@@ -340,6 +350,7 @@ class TestFleetLocalhostOnly(unittest.TestCase):
         machines = [FleetMachine(name="local", host="localhost", port=8766)]
 
         from tokenpak.fleet import query_fleet
+
         stats_list = query_fleet(machines)
 
         self.assertEqual(len(stats_list), 1)
