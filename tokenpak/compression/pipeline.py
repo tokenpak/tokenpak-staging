@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
+    from tokenpak.proxy.adapters.base import FormatAdapter
     from tokenpak.proxy.request import ProxyRequest
 
 from .alias_compressor import AliasCompressor, AliasResult
@@ -226,10 +227,9 @@ def _shadow_validate(original: str, compressed: str) -> bool:
     if not compressed or not original:
         return True
     try:
-        from tokenpak.proxy.shadow_reader import ShadowReader
+        from tokenpak.proxy.shadow_reader import validate
 
-        reader = ShadowReader()
-        result = reader.validate(original=original, compressed=compressed)
+        result = validate(original=original, compressed=compressed)
         return result.passed
     except Exception:
         return True  # fail-open: if shadow reader errors, allow compressed version
@@ -267,7 +267,10 @@ def compact_text(text: str) -> str:
 
 
 def compact_request_body(
-    body_bytes: bytes, adapter=None, *, request: "Optional[ProxyRequest]" = None
+    body_bytes: bytes,
+    adapter: "FormatAdapter | None" = None,
+    *,
+    request: "Optional[ProxyRequest]" = None,
 ) -> Tuple[bytes, int, int, int]:
     """
     Style-contract-aware compaction.
