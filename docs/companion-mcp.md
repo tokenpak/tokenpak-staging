@@ -46,8 +46,11 @@ Start a temporary session without that prior history? [y/N]
 Choosing **Yes** creates a new temporary history lineage for that invocation.
 It does not attach the prior shared history, replace the normal lineage, or
 change the default for future launches. Choosing **No** or pressing Enter
-preserves the safe refusal. TokenPak does not offer the fallback when inspection
-is incomplete or reports a permission, storage, corruption, or unknown failure.
+preserves the safe refusal. A validated live or stopped holder remains eligible
+even when an unrelated process makes the wider `/proc` scan partial: the shared
+home stays closed and the temporary session uses a separate home. TokenPak does
+not offer the fallback when no holder can be validated or inspection reports a
+permission, storage, corruption, or unknown failure.
 
 The temporary session is retention-managed and may remain on disk after Codex
 exits. The prompt is never shown in CI or non-interactive commands.

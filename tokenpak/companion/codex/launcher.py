@@ -59,7 +59,8 @@ _APPROVAL_ARGS = ("--ask-for-approval", "never")
 _SANDBOX_ARGS = ("--sandbox", "danger-full-access")
 
 _TEMPORARY_RECOVERY_POLICY_ID = "tokenpak.codex.temporary-recovery"
-_TEMPORARY_RECOVERY_POLICY_VERSION = "1"
+_TEMPORARY_RECOVERY_POLICY_VERSION = "2"
+_RETENTION_ERROR_DISPLAY_LIMIT = 3
 
 
 class PreflightStatus(str, Enum):
@@ -464,9 +465,25 @@ def _fallback_decision(evidence: PreflightEvidence) -> FallbackDecision:
         PreflightStatus.STOPPED_HOLDER,
         PreflightStatus.HOLDER_TIMEOUT_LAST_VERIFIED_LIVE,
     }
-    eligible = evidence.diagnostics_complete and evidence.status in eligible_statuses
+    # A holder that passed PID-incarnation validation is sufficient evidence
+    # to keep the shared home closed and offer a separate isolated home.  An
+    # unrelated unreadable procfs entry may make the machine-wide scan partial,
+    # but it cannot make that already-validated holder less real.  Wholly
+    # unverified inspection failures remain ineligible and fail closed.
+    verified_holder = bool(evidence.holder_pids) and evidence.holder_state in {
+        "mixed",
+        "running",
+        "stopped",
+    }
+    eligible = evidence.status in eligible_statuses and (
+        evidence.diagnostics_complete or verified_holder
+    )
     reason = (
-        "verified_holder_contention"
+        (
+            "verified_holder_contention"
+            if evidence.diagnostics_complete
+            else "verified_holder_contention_partial_inspection"
+        )
         if eligible
         else "diagnostics_incomplete"
         if not evidence.diagnostics_complete
@@ -650,6 +667,29 @@ def _preflight_state_lock(
             diagnostic_epoch=diagnostic_epoch,
         )
 
+    def incomplete_evaluation(status) -> PreflightEvaluation:
+        """Preserve partial diagnostics while typing any validated holder."""
+        remediation = state_lock.remediation_hint(status)
+        print(remediation, file=sys.stderr)
+        running = tuple(getattr(status, "running_pids", ()) or ())
+        stopped = tuple(getattr(status, "stopped_pids", ()) or ())
+        if stopped:
+            preflight_status = PreflightStatus.STOPPED_HOLDER
+        elif running:
+            preflight_status = PreflightStatus.LIVE_HOLDER
+        else:
+            preflight_status = PreflightStatus.INSPECTION_INCOMPLETE
+        return _preflight_evaluation(
+            status=preflight_status,
+            diagnostics_complete=False,
+            holder_pids=tuple(status.holder_pids),
+            holder_state=_holder_state(status),
+            detail=status.detail,
+            remediation=remediation,
+            exit_code=1,
+            diagnostic_epoch=diagnostic_epoch,
+        )
+
     status = invoke_probe()
     if isinstance(status, BaseException):
         return failure_evaluation(status)
@@ -664,18 +704,7 @@ def _preflight_state_lock(
             diagnostic_epoch=diagnostic_epoch,
         )
     if not getattr(status, "diagnostics_complete", True):
-        remediation = state_lock.remediation_hint(status)
-        print(remediation, file=sys.stderr)
-        return _preflight_evaluation(
-            status=PreflightStatus.INSPECTION_INCOMPLETE,
-            diagnostics_complete=False,
-            holder_pids=tuple(status.holder_pids),
-            holder_state=_holder_state(status),
-            detail=status.detail,
-            remediation=remediation,
-            exit_code=1,
-            diagnostic_epoch=diagnostic_epoch,
-        )
+        return incomplete_evaluation(status)
 
     # A stopped/suspended holder never releases the lock — waiting is
     # futile, so surface direct remediation immediately.
@@ -741,18 +770,7 @@ def _preflight_state_lock(
                 diagnostic_epoch=diagnostic_epoch,
             )
         if not getattr(status, "diagnostics_complete", True):
-            remediation = state_lock.remediation_hint(status)
-            print(remediation, file=sys.stderr)
-            return _preflight_evaluation(
-                status=PreflightStatus.INSPECTION_INCOMPLETE,
-                diagnostics_complete=False,
-                holder_pids=tuple(status.holder_pids),
-                holder_state=_holder_state(status),
-                detail=status.detail,
-                remediation=remediation,
-                exit_code=1,
-                diagnostic_epoch=diagnostic_epoch,
-            )
+            return incomplete_evaluation(status)
         if status.stopped_pids:
             remediation = state_lock.remediation_hint(status)
             print(remediation, file=sys.stderr)
@@ -961,9 +979,15 @@ def _run_isolated_retention(
             file=sys.stderr,
         )
     if cleanup.errors:
+        errors = tuple(str(error) for error in cleanup.errors)
+        displayed = errors[:_RETENTION_ERROR_DISPLAY_LIMIT]
+        remaining = len(errors) - len(displayed)
+        suffix = f"; ... {remaining} more" if remaining else ""
         print(
-            f"tokenpak: isolated-home retention {phase} preserved uncertain home(s): "
-            + "; ".join(cleanup.errors),
+            f"tokenpak: isolated-home retention {phase} preserved "
+            f"{len(errors)} uncertain home(s): "
+            + "; ".join(displayed)
+            + suffix,
             file=sys.stderr,
         )
     return cleanup

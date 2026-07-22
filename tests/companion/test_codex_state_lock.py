@@ -248,14 +248,15 @@ def test_foreign_owner_unreadable_fd_scan_does_not_fail_closed(codex_home, tmp_p
     assert status.diagnostics_complete is True
 
 
-def test_same_owner_known_non_codex_unreadable_fd_is_ignored(codex_home, tmp_path):
+@pytest.mark.parametrize("name", ["(sd-pam)", "gpg-agent", "fusermount3"])
+def test_same_owner_known_non_codex_unreadable_fd_is_ignored(codex_home, tmp_path, name):
     db = _make_db(codex_home)
     proc_root = _complete_empty_proc(tmp_path)
     process = _write_synthetic_process(
         proc_root,
         4245,
         uid=db.stat().st_uid,
-        name="(sd-pam)",
+        name=name,
     )
     fd_dir = process / "fd"
     fd_dir.chmod(0)

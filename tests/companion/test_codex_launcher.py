@@ -167,6 +167,46 @@ def test_preflight_wall_timeout_bounds_a_stuck_probe(capsys):
 
 
 @pytest.mark.parametrize(
+    ("running", "stopped", "expected_status"),
+    [
+        ([123], [], launcher.PreflightStatus.LIVE_HOLDER),
+        ([], [123], launcher.PreflightStatus.STOPPED_HOLDER),
+    ],
+)
+def test_preflight_verified_holder_allows_fallback_when_global_scan_is_partial(
+    running, stopped, expected_status
+):
+    partial = sl.LockStatus(
+        home="/h",
+        db_path="/h/state_5.sqlite",
+        exists=True,
+        locked=True,
+        holder_pids=[123],
+        running_pids=running,
+        stopped_pids=stopped,
+        detail="verified holder; unrelated proc entry unreadable",
+        diagnostics_complete=False,
+        incomplete_reasons=["proc_inspection_incomplete"],
+    )
+
+    result = launcher._preflight_state_lock(
+        prober=lambda: partial,
+        interactive=False,
+        timeout_s=1,
+    )
+
+    assert result.evidence.status is expected_status
+    assert result.evidence.diagnostics_complete is False
+    assert result.evidence.holder_pids == (123,)
+    assert result.fallback_decision.eligible is True
+    assert (
+        result.fallback_decision.decision_reason
+        == "verified_holder_contention_partial_inspection"
+    )
+    assert result.fallback_decision.policy_version == "2"
+
+
+@pytest.mark.parametrize(
     ("failure", "expected_status"),
     [
         (PermissionError("denied"), launcher.PreflightStatus.PERMISSION_ERROR),
@@ -772,6 +812,40 @@ def test_retention_sweep_precedes_selected_home_creation_for_every_mode(
 
     assert launcher.main(["--install-only"]) == 1
     assert events == ["cleanup", "acquire"]
+
+
+def test_retention_uncertainty_output_is_bounded(capsys, tmp_path):
+    class Cleanup:
+        removed = ()
+        errors = tuple(f"home-{index}: uncertain" for index in range(5))
+
+    class FakeSessionHome:
+        @staticmethod
+        def _generated_tokenpak_root(_home):
+            return tmp_path
+
+        @staticmethod
+        def cleanup_isolated_homes(*_args, **_kwargs):
+            return Cleanup()
+
+    class Paths:
+        home = tmp_path / "selected"
+
+    launcher._run_isolated_retention(
+        FakeSessionHome,
+        Paths(),
+        phase="pre-launch",
+        preserve_home=None,
+    )
+
+    error = capsys.readouterr().err
+    assert "preserved 5 uncertain home(s)" in error
+    assert "home-0" in error
+    assert "home-1" in error
+    assert "home-2" in error
+    assert "home-3" not in error
+    assert "home-4" not in error
+    assert "... 2 more" in error
 
 
 @pytest.mark.parametrize("mode", ["shared", "workspace"])

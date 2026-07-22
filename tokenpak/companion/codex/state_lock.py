@@ -49,7 +49,13 @@ _SQLITE_SHM_DMS = 128
 
 _DEAD_STATES = frozenset({"X", "x", "Z"})
 _STOPPED_STATES = frozenset({"T", "t"})
-_BENIGN_UNREADABLE_PROCESSES = frozenset({"sd-pam"})
+# Exact non-dumpable desktop/session helpers that cannot host Codex.  Linux
+# intentionally denies their ``/proc/<pid>/fd`` directories even to the same
+# login user; treating those permission errors as unknown makes every Codex
+# home on the machine look unverifiable.  Keep this allowlist executable-only
+# and deliberately narrow -- generic interpreters and wrappers still fail
+# closed below.
+_BENIGN_UNREADABLE_PROCESSES = frozenset({"fusermount3", "gpg-agent", "sd-pam"})
 
 # Every probe has structural and wall-clock limits.  The values are generous
 # for a developer workstation but finite so a hostile or damaged procfs/home
