@@ -2033,6 +2033,26 @@
     },
     {
       "module": "tokenpak.companion.codex.launcher",
+      "name": "FallbackDecision"
+    },
+    {
+      "module": "tokenpak.companion.codex.launcher",
+      "name": "PreflightEvaluation"
+    },
+    {
+      "module": "tokenpak.companion.codex.launcher",
+      "name": "PreflightEvidence"
+    },
+    {
+      "module": "tokenpak.companion.codex.launcher",
+      "name": "PreflightStatus"
+    },
+    {
+      "module": "tokenpak.companion.codex.launcher",
+      "name": "TemporarySessionChoice"
+    },
+    {
+      "module": "tokenpak.companion.codex.launcher",
       "name": "build_receipt"
     },
     {
