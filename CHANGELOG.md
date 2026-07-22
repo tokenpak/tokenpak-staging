@@ -37,6 +37,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 - **Fallback failures preserve the original diagnosis.** Selection or
   provisioning failure records both outcomes and exits through the original
   refusal rather than silently choosing another session location.
+- **Queued monitor writes honor their target database.** The process-global
+  telemetry writer now switches its guarded SQLite connection when queued work
+  targets another monitor database, preventing cross-instance, recovery-tool,
+  and test traffic from being committed to the previous database.
 
 ### Compatibility
 
