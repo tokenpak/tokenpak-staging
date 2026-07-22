@@ -14,11 +14,10 @@ minutes. Pick your path:
 
 **You already write prompts. TokenPak compresses them before they hit the API.**
 
-The supported reference path is three commands. Before starting, export an
-existing `ANTHROPIC_API_KEY` and an `ANTHROPIC_MODEL` available to that account.
-Run it from a project whose existing `README.md` contains at least 8,000 UTF-8
-characters of real project context. The request asks the model to review that
-document, is real, and may incur provider charges.
+The supported reference path is three commands. Before starting, sign in to a
+supported client. The reference path uses Codex OAuth and its selected/default
+model; API keys and explicit model overrides are optional. Run it from a real
+project. Provider use may count against a subscription or incur charges.
 
 ### Command 1: Install
 
@@ -37,22 +36,27 @@ tokenpak serve --profile aggressive --stats-footer
 Leave it running. The flags apply only to this proxy process; the receipt is
 printed in this terminal and is not injected into the provider response.
 
-### Command 3: Send one real eligible request
+### Command 3: Launch the authenticated client
 
 In terminal 2:
 
 ```bash
-python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'
+tokenpak codex
 ```
 
-Terminal 1 now prints the measured before/after token receipt. The dollar value
-is an estimate based on TokenPak's model-pricing table. See
+Make a substantive project request, then continue the same topic. A new
+conversation can begin with an ineligible request because it has no historical
+context. Terminal 1 prints the measured before/after receipt for the first
+eligible request. The dollar value is an estimate based on TokenPak's
+model-pricing table. See
 [First Measured Savings Receipt](./first-receipt.md) for the expected output,
 five-minute reference target, and truthful exclusions.
 
-Short or protected inputs may legitimately save zero. Byte-preserved routes are
-also ineligible for TokenPak compression savings. `tokenpak demo` remains useful
-as an offline fixture, but it does not satisfy a real first-request receipt.
+Short or protected inputs may legitimately save zero. TokenPak preserves
+system/developer policy and the newest two messages. Byte-preserved routes are
+also ineligible for TokenPak compression savings. `tokenpak demo` remains
+useful as an offline fixture, but it does not satisfy a real first-request
+receipt.
 
 ### Connect your normal client afterward
 
@@ -185,8 +189,8 @@ Check that your client is pointing at `http://localhost:8766` (not `https://`).
 ### "My API key isn't being forwarded"
 
 TokenPak is a passthrough proxy — it never stores or modifies your credentials. Make sure:
-- Your API key is set in your environment: `export ANTHROPIC_API_KEY='sk-...'`
-- Or pass it directly in your client config
+- An OAuth client is already signed in; or
+- If your chosen SDK/provider uses API keys, its optional key is available to that client.
 
 ### "I'm not seeing any savings"
 

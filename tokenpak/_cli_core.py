@@ -973,27 +973,31 @@ def cmd_setup(args: CommandArgs) -> None:
         print("✅ Found Google API key")
         api_keys["google"] = os.environ["GOOGLE_API_KEY"]
 
-    if not api_keys:
-        print("⚠️  No API keys detected in environment variables.")
-        print("   Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
-        print("   Example: export ANTHROPIC_API_KEY='sk-...'")
-        return
-
-    # Auto-detect primary provider
-    available_providers = list(api_keys.keys())
-    default_provider = available_providers[0] if available_providers else "anthropic"
-
-    print(f"\nDetected providers: {', '.join(available_providers)}")
-    provider = input(f"Which provider to proxy? [{default_provider}]: ").strip()
-    if not provider:
-        provider = default_provider
-
-    if provider not in api_keys:
-        print(f"Error: {provider} API key not found.")
-        return
+    provider: str | None = None
+    if api_keys:
+        # Auto-detect a primary provider only for the optional direct-key path.
+        available_providers = list(api_keys.keys())
+        default_provider = available_providers[0]
+        print(f"\nDetected optional provider keys: {', '.join(available_providers)}")
+        provider = (
+            input(f"Which direct-key provider should be the default? [{default_provider}]: ")
+            .strip()
+            .lower()
+            if is_tty
+            else default_provider
+        )
+        if not provider:
+            provider = default_provider
+        if provider not in api_keys:
+            print(f"Error: no API key was detected for {provider}.")
+            return
+    else:
+        print("ℹ️  No provider API keys detected — continuing without them.")
+        print("   Authenticated clients can use their existing OAuth/session credentials.")
+        print("   TokenPak will preserve the client's selected or default model.")
 
     # Ask for port
-    port_input = input("Port number [8766]: ").strip()
+    port_input = input("Port number [8766]: ").strip() if is_tty else ""
     port = int(port_input) if port_input else 8766
 
     # Ask for profile
@@ -1002,17 +1006,20 @@ def cmd_setup(args: CommandArgs) -> None:
     print("  [2] balanced   — compression + caching + routing (recommended, ~30% savings)")
     print("  [3] aggressive — all modules enabled (maximum savings, ~40%+)")
 
-    profile_input = input("\nProfile [2]: ").strip()
+    profile_input = input("\nProfile [2]: ").strip() if is_tty else ""
     profile_map = {"1": "minimal", "2": "balanced", "3": "aggressive"}
     profile_name = profile_map.get(profile_input, "balanced")
 
     # Build base config
+    proxy_config: JsonObject = {"port": port, "host": "localhost"}
+    if provider is not None:
+        proxy_config["provider"] = provider
     config: JsonObject = {
-        "proxy": {
-            "port": port,
-            "host": "localhost",
-            "provider": provider,
-        },
+        "proxy": proxy_config,
+        # Provider keys are optional and remain client-owned.  Keep the legacy
+        # field present for older validators without persisting environment
+        # credentials into TokenPak configuration.
+        "api_keys": {},
         "modules": {},
     }
 
@@ -1126,8 +1133,11 @@ def cmd_start(args: CommandArgs) -> None:
             for _err in _errors:
                 print(f"  {_err}", file=_sys.stderr)
             print("\nFix config and retry:", file=_sys.stderr)
-            print("  • Run 'tokenpak setup' to configure API keys interactively", file=_sys.stderr)
-            print("  • Or set ANTHROPIC_API_KEY / OPENAI_API_KEY env vars", file=_sys.stderr)
+            print("  • Run 'tokenpak setup' to regenerate the local config", file=_sys.stderr)
+            print(
+                "  • Provider API keys are optional when the client supplies OAuth/session auth",
+                file=_sys.stderr,
+            )
             print("  • Or use: tokenpak config-check <file>", file=_sys.stderr)
             return
     except Exception as _e:

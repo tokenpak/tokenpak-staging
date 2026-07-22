@@ -247,7 +247,9 @@ def _estimate_tokens(body: bytes) -> int:
         import json
 
         data = json.loads(body)
-        messages = data.get("messages", [])
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            messages = data.get("input", [])
         total_chars = 0
         for msg in messages:
             content = msg.get("content", "")

@@ -107,22 +107,24 @@ tokenpak status # verify proxy is reachable
 ### First measured receipt check
 
 Before treating a local deployment as value-ready, run the supported
-[three-command first-receipt path](first-receipt.md). It assumes existing
-`ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` environment variables. The
-current project's existing `README.md` must contain at least 8,000 UTF-8
-characters of real project context. The third command asks the model to review
-that document in a real provider request and may incur provider charges.
+[three-command first-receipt path](first-receipt.md). It uses an existing Codex
+OAuth login and the client's selected/default model. Provider API keys and
+explicit model overrides are optional alternatives, not deployment
+requirements. Real requests may count against a subscription or incur provider
+charges.
 
 ```bash
 python -m pip install tokenpak
 tokenpak serve --profile aggressive --stats-footer  # terminal 1; leave running
-python -c 'import json, os, pathlib, sys, urllib.request as u; p=pathlib.Path("README.md"); context=p.read_text(encoding="utf-8"); len(context) >= 8000 or sys.exit("README.md must contain at least 8,000 UTF-8 characters of real project context"); data=json.dumps({"model": os.environ["ANTHROPIC_MODEL"], "max_tokens": 256, "messages": [{"role": "user", "content": f"Project document README.md:\n\n{context}"}, {"role": "assistant", "content": "Project context received."}, {"role": "user", "content": "Review this project context and identify five concrete release-readiness risks, citing the README.md section for each."}]}).encode(); req=u.Request("http://127.0.0.1:8766/v1/messages", data=data, headers={"content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": os.environ["ANTHROPIC_API_KEY"]}, method="POST"); print(u.urlopen(req, timeout=120).read().decode())'  # terminal 2
+tokenpak codex  # terminal 2; make a substantive request, then continue the topic
 ```
 
 The proxy prints the measured token receipt to its own standard error; it does
 not inject the receipt into the provider response. The displayed dollar value
-is estimated. Offline demo output, short/protected inputs, and byte-preserved
-routes do not establish a positive first-request compression receipt.
+is estimated. A new conversation may begin with an ineligible request; the
+first later eligible request is the proof. Offline demo output,
+short/protected inputs, and byte-preserved routes do not establish a positive
+compression receipt.
 
 ---
 
@@ -398,7 +400,9 @@ For high throughput, run multiple instances behind a load balancer.
 
 **Requirements when load-balancing:**
 - Replace SQLite telemetry with a shared database (see below)
-- All instances must have the same API keys
+- If the deployment injects provider API keys, all instances must receive the
+  same key set. Client-owned OAuth/session traffic does not require server-side
+  provider keys.
 - Session stickiness is **not required** — TokenPak is stateless per-request
 
 **nginx load balancer config:**

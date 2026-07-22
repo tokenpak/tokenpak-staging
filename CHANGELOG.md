@@ -28,6 +28,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   outcome, selected session class, continuity mode, prior-history attachment,
   and the bridge policy version under `tokenpak_setup`. Existing receipt fields
   and meanings are unchanged.
+- **Provider-neutral first-receipt path.** `tokenpak codex` can route an
+  already-authenticated Codex OAuth session through a healthy local proxy while
+  preserving the client's selected/default model. API keys and explicit model
+  overrides remain optional client-specific alternatives.
 
 ### Fixed
 
@@ -41,6 +45,11 @@ This project follows [Semantic Versioning](https://semver.org/).
   telemetry writer now switches its guarded SQLite connection when queued work
   targets another monitor database, preventing cross-instance, recovery-tool,
   and test traffic from being committed to the previous database.
+- **Responses routing distinguishes OAuth from API keys.** OAuth
+  `/v1/responses` traffic is rewritten to the ChatGPT Codex backend, while
+  `Bearer sk-...` Responses traffic remains on the OpenAI API endpoint. Native
+  zstd request entities are decoded before safe processing, and protected
+  system/developer policy is never capsulized.
 
 ### Compatibility
 

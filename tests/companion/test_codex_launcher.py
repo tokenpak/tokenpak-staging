@@ -174,9 +174,7 @@ def test_preflight_wall_timeout_bounds_a_stuck_probe(capsys):
         (RuntimeError("unexpected"), launcher.PreflightStatus.UNKNOWN_FAILURE),
     ],
 )
-def test_preflight_probe_failures_are_typed_and_never_fallback_eligible(
-    failure, expected_status
-):
+def test_preflight_probe_failures_are_typed_and_never_fallback_eligible(failure, expected_status):
     result = launcher._preflight_state_lock(
         prober=lambda: (_ for _ in ()).throw(failure),
         interactive=False,
@@ -256,10 +254,7 @@ def test_temporary_session_prompt_accepts_explicit_yes(monkeypatch, capsys, answ
     _allow_temporary_session_prompt(monkeypatch)
     monkeypatch.setattr(builtins, "input", lambda: answer)
 
-    assert (
-        launcher._prompt_for_temporary_session()
-        is launcher.TemporarySessionChoice.ACCEPTED
-    )
+    assert launcher._prompt_for_temporary_session() is launcher.TemporarySessionChoice.ACCEPTED
     err = capsys.readouterr().err
     assert "shared local history" in err
     assert "temporary session without that prior history" in err
@@ -271,10 +266,7 @@ def test_temporary_session_prompt_defaults_to_refusal(monkeypatch, answer):
     _allow_temporary_session_prompt(monkeypatch)
     monkeypatch.setattr(builtins, "input", lambda: answer)
 
-    assert (
-        launcher._prompt_for_temporary_session()
-        is launcher.TemporarySessionChoice.DECLINED
-    )
+    assert launcher._prompt_for_temporary_session() is launcher.TemporarySessionChoice.DECLINED
 
 
 @pytest.mark.parametrize("env_name", ["CI", "TOKENPAK_NONINTERACTIVE"])
@@ -287,10 +279,7 @@ def test_temporary_session_prompt_never_prompts_automation(monkeypatch, env_name
         lambda: (_ for _ in ()).throw(AssertionError("automation was prompted")),
     )
 
-    assert (
-        launcher._prompt_for_temporary_session()
-        is launcher.TemporarySessionChoice.NOT_AVAILABLE
-    )
+    assert launcher._prompt_for_temporary_session() is launcher.TemporarySessionChoice.NOT_AVAILABLE
 
 
 def test_temporary_session_prompt_never_prompts_non_tty_or_dumb_term(monkeypatch):
@@ -302,17 +291,11 @@ def test_temporary_session_prompt_never_prompts_non_tty_or_dumb_term(monkeypatch
     )
 
     monkeypatch.setattr(launcher, "_stdin_is_tty", lambda: False)
-    assert (
-        launcher._prompt_for_temporary_session()
-        is launcher.TemporarySessionChoice.NOT_AVAILABLE
-    )
+    assert launcher._prompt_for_temporary_session() is launcher.TemporarySessionChoice.NOT_AVAILABLE
 
     monkeypatch.setattr(launcher, "_stdin_is_tty", lambda: True)
     monkeypatch.setenv("TERM", "dumb")
-    assert (
-        launcher._prompt_for_temporary_session()
-        is launcher.TemporarySessionChoice.NOT_AVAILABLE
-    )
+    assert launcher._prompt_for_temporary_session() is launcher.TemporarySessionChoice.NOT_AVAILABLE
 
 
 def test_temporary_session_prompt_ctrl_c_cancels(monkeypatch, capsys):
@@ -323,10 +306,7 @@ def test_temporary_session_prompt_ctrl_c_cancels(monkeypatch, capsys):
         lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
 
-    assert (
-        launcher._prompt_for_temporary_session()
-        is launcher.TemporarySessionChoice.CANCELLED
-    )
+    assert launcher._prompt_for_temporary_session() is launcher.TemporarySessionChoice.CANCELLED
     assert "cancelled" in capsys.readouterr().err
 
 
@@ -355,6 +335,7 @@ def _stub_session_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TOKENPAK_HOME", str(tmp_path / "tokenpak-home"))
     monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "isolated")
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setattr(launcher, "_local_proxy_is_healthy", lambda: False)
     monkeypatch.chdir(tmp_path)
 
 
@@ -538,9 +519,7 @@ def test_temporary_session_selection_failure_preserves_typed_original_receipt(
     )
 
 
-def test_temporary_session_provision_failure_records_both_outcomes(
-    monkeypatch, tmp_path
-):
+def test_temporary_session_provision_failure_records_both_outcomes(monkeypatch, tmp_path):
     _stub_setup(monkeypatch, tmp_path)
     monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
     monkeypatch.setattr(launcher, "_preflight_state_lock", lambda **_kwargs: _preflight_result())
