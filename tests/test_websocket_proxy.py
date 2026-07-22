@@ -36,7 +36,9 @@ class _InlineExecutor:
 def _websocket(*, path: str = "/ws", payload: dict | None = None):
     ws = SimpleNamespace()
     ws.request = SimpleNamespace(path=path, headers={})
-    ws.recv = AsyncMock(return_value=json.dumps(payload or {"model": "claude-sonnet-4-6", "messages": []}))
+    ws.recv = AsyncMock(
+        return_value=json.dumps(payload or {"model": "claude-sonnet-4-6", "messages": []})
+    )
     ws.send = AsyncMock()
     ws.close = AsyncMock()
     return ws
@@ -80,7 +82,10 @@ def test_ws_connect_and_stream():
 
 
 def test_ws_compression_applied_and_forwarded():
-    raw_payload = {"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "hello " * 50}]}
+    raw_payload = {
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hello " * 50}],
+    }
     compressed = b'{"model":"claude-sonnet-4-6","messages":[],"stream":true}'
     ws = _websocket(payload=raw_payload)
     compact = MagicMock(return_value=(compressed, 5, 100, 0))
