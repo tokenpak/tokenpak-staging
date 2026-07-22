@@ -141,8 +141,21 @@ async def _async_upstream_inflight_delta(
         return count
 
 
-async def _close_async_response(resp: httpx.Response) -> None:
-    await resp.aclose()
+async def _close_async_response(resp: object) -> None:
+    """Close a real httpx response or a response-shaped test double.
+
+    ``httpx.Response`` exposes an async close method.  A few maintained unit
+    tests deliberately use lightweight response doubles whose ``close`` method
+    is synchronous, so the retry path must retain that compatibility without
+    assuming every response-shaped object is awaitable.
+    """
+    if isinstance(resp, httpx.Response):
+        await resp.aclose()
+        return
+
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 # ---------------------------------------------------------------------------
