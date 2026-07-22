@@ -36,7 +36,7 @@ import json
 import logging
 import os
 import urllib.request
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class WebhookNotificationHook:
     def __init__(
         self,
         url: str,
-        headers: Optional[Dict[str, str]] = None,
+        headers: Optional[dict[str, str]] = None,
         timeout: int = 15,
     ) -> None:
         self.url = url
@@ -185,8 +185,9 @@ def _send_telegram(text: str, chat_id: Optional[str] = None) -> bool:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-            if body.get("ok"):
+            loaded: object = json.loads(resp.read())
+            body = cast(dict[str, object], loaded) if isinstance(loaded, dict) else {}
+            if body.get("ok") is True:
                 logger.info("auth_alert: Telegram alert sent via direct API")
                 return True
             logger.warning("auth_alert: Telegram API returned ok=false: %s", body)
@@ -266,11 +267,20 @@ def _auto_register_from_env() -> None:
     url = os.environ.get("TOKENPAK_ALERT_WEBHOOK_URL", "").strip()
     if not url:
         return
-    headers: Dict[str, str] = {}
+    headers: dict[str, str] = {}
     raw_headers = os.environ.get("TOKENPAK_ALERT_WEBHOOK_HEADERS", "").strip()
     if raw_headers:
         try:
-            headers = json.loads(raw_headers)
+            loaded_headers: object = json.loads(raw_headers)
+            if isinstance(loaded_headers, dict) and all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in loaded_headers.items()
+            ):
+                headers = cast(dict[str, str], loaded_headers)
+            else:
+                logger.warning(
+                    "auth_alert: TOKENPAK_ALERT_WEBHOOK_HEADERS must map strings to strings — ignoring"
+                )
         except json.JSONDecodeError:
             logger.warning(
                 "auth_alert: TOKENPAK_ALERT_WEBHOOK_HEADERS is not valid JSON — ignoring"

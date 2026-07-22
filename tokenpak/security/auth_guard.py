@@ -10,6 +10,8 @@ Usage in proxy.py:
     AUTH_GUARD.record_response(provider="anthropic", status_code=status)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -17,9 +19,12 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict
+from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+AuthFailureDetails = dict[str, object]
+AuthFailureHandler = Callable[[str, str, AuthFailureDetails], None]
 
 # ---------------------------------------------------------------------------
 # Config (override via env vars)
@@ -47,9 +52,9 @@ class AuthGuard:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         # provider_name → consecutive failure count
-        self._counters: Dict[str, int] = {}
+        self._counters: dict[str, int] = {}
         # provider_name → last alert timestamp (epoch float)
-        self._last_alert: Dict[str, float] = {}
+        self._last_alert: dict[str, float] = {}
         # Registered event handlers: (provider, event_name, details) -> None
         self._handlers: list[AuthFailureHandler] = []
 
