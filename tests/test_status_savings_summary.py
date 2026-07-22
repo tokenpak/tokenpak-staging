@@ -130,7 +130,7 @@ def test_client_cache_is_observed_but_not_credited_to_tokenpak():
             cache_origin={"client": 50_000, "proxy": 0, "unknown": 0},
         ),
     )
-    assert "client: 50K" in out
+    assert "client: 50.0K" in out
     assert "Proxy cache" not in out
     assert "Wire-side (proxy)             $0.00" in out
 
@@ -145,7 +145,7 @@ def test_proxy_owned_cache_is_credited_separately():
         ),
     )
     assert "Proxy cache" in out
-    assert "proxy: 50K" in out
+    assert "proxy: 50.0K" in out
 
 
 def test_unknown_cache_origin_is_reported_without_proxy_credit():
@@ -157,7 +157,7 @@ def test_unknown_cache_origin_is_reported_without_proxy_credit():
             cache_origin={"client": 0, "proxy": 0, "unknown": 12_000},
         ),
     )
-    assert "unknown: 12K" in out
+    assert "unknown: 12.0K" in out
     assert "Proxy cache" not in out
 
 

@@ -26,6 +26,13 @@ class _Response:
         return next(self._chunks, b"")
 
 
+class _InlineExecutor:
+    """Execute handler blocking-call adapters inline for deterministic unit tests."""
+
+    async def run_in_executor(self, _executor, func, *args):
+        return func(*args)
+
+
 def _websocket(*, path: str = "/ws", payload: dict | None = None):
     ws = SimpleNamespace()
     ws.request = SimpleNamespace(path=path, headers={})
@@ -46,6 +53,7 @@ def _run_handler(ws, compact, response: _Response | None = None) -> MagicMock:
     with (
         patch.object(ws_proxy.http.client, "HTTPSConnection", return_value=conn),
         patch.object(ws_proxy.ssl, "create_default_context"),
+        patch.object(ws_proxy.asyncio, "get_event_loop", return_value=_InlineExecutor()),
     ):
         asyncio.run(ws_proxy._ws_handler(ws, compact))
     return conn
