@@ -53,7 +53,8 @@ TELEGRAM_CHAT_ID: str = os.environ.get("TOKENPAK_TELEGRAM_CHAT_ID", "")
 # A notification hook is any callable with the signature:
 #   (provider: str, event: str, details: dict) -> None
 # This matches the AuthGuard.on_auth_failure handler interface exactly.
-NotificationHook = Callable[[str, str, dict], None]
+AuthFailureDetails = dict[str, object]
+NotificationHook = Callable[[str, str, AuthFailureDetails], None]
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ class WebhookNotificationHook:
         self.headers = headers or {}
         self.timeout = timeout
 
-    def __call__(self, provider: str, event: str, details: dict) -> None:
+    def __call__(self, provider: str, event: str, details: AuthFailureDetails) -> None:
         if event != "auth-failure-detected":
             return
         payload = json.dumps(
@@ -124,7 +125,7 @@ class WebhookNotificationHook:
 class NullNotificationHook:
     """A no-op hook — swallows all events. Useful for testing."""
 
-    def __call__(self, provider: str, event: str, details: dict) -> None:
+    def __call__(self, provider: str, event: str, details: AuthFailureDetails) -> None:
         logger.debug(
             "auth_alert: NullNotificationHook received event=%s provider=%s", event, provider
         )
@@ -135,7 +136,7 @@ class NullNotificationHook:
 # ---------------------------------------------------------------------------
 
 
-def _build_alert_message(provider: str, details: dict) -> str:
+def _build_alert_message(provider: str, details: AuthFailureDetails) -> str:
     """Build a human-readable alert message for an auth failure event."""
     count = details.get("consecutive_failures", "?")
     ts = details.get("timestamp", "unknown")
@@ -200,7 +201,7 @@ def _send_telegram(text: str, chat_id: Optional[str] = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _on_auth_failure(provider: str, event: str, details: dict) -> None:
+def _on_auth_failure(provider: str, event: str, details: AuthFailureDetails) -> None:
     """Default handler: sends a Telegram alert when auth-failure-detected fires.
 
     Registered automatically by register_auth_alert_hook().
@@ -250,7 +251,10 @@ def register_auth_alert_hook(hook: Optional[NotificationHook] = None) -> None:
 
     effective_hook = hook if hook is not None else _on_auth_failure
     AUTH_GUARD.on_auth_failure(effective_hook)
-    logger.info("auth_alert: registered notification hook: %s", getattr(effective_hook, "__name__", type(effective_hook).__name__))
+    logger.info(
+        "auth_alert: registered notification hook: %s",
+        getattr(effective_hook, "__name__", type(effective_hook).__name__),
+    )
 
 
 def _auto_register_from_env() -> None:
