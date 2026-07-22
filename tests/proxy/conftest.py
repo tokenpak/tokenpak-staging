@@ -108,6 +108,7 @@ class _StubUpstreamHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
 
         self.server.request_count += 1  # type: ignore[attr-defined]
+        self.server.last_request_body = raw  # type: ignore[attr-defined]
 
         is_streaming = False
         try:
@@ -135,6 +136,7 @@ class _StubUpstreamHandler(BaseHTTPRequestHandler):
 class _CountingHTTPServer(HTTPServer):
     """HTTPServer with a request_count attribute for test assertions."""
     request_count: int = 0
+    last_request_body: bytes | None = None
 
 
 @pytest.fixture()

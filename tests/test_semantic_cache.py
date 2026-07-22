@@ -20,10 +20,14 @@ from __future__ import annotations
 
 import json
 import time
+from typing import cast
+
+import pytest
 
 from tokenpak.cache.semantic_cache import (
     SemanticCache,
     SemanticCacheConfig,
+    SemanticCacheEntry,
     SemanticCacheLookup,
     _hash,
     _jaccard,
@@ -52,6 +56,37 @@ def _store_json(sc: SemanticCache, query: str, response: bytes = RESPONSE_A_BYTE
 def _store_sse(sc: SemanticCache, query: str, response: bytes = SSE_RESPONSE_BYTES) -> None:
     """Helper: store an SSE-format entry."""
     sc.store(query, response, content_type="text/event-stream; charset=utf-8", wire_format="sse")
+
+
+class TestResponseTypeBoundary:
+    def test_store_rejects_dict_response_before_cache_mutation(self):
+        sc = make_cache()
+
+        with pytest.raises(TypeError, match="response_bytes must be bytes"):
+            sc.store("legacy dict response", cast(bytes, {"content": "response"}))
+
+        assert sc.size() == 0
+
+    def test_lookup_evicts_preexisting_legacy_dict_entry(self, caplog):
+        sc = make_cache()
+        query = "legacy persisted response"
+        normalized = _normalise(query)
+        query_hash = _hash(normalized)
+        sc._store[f"{query_hash}:json"] = SemanticCacheEntry(
+            query_normalized=normalized,
+            query_hash=query_hash,
+            response=cast(bytes, {"content": "legacy"}),
+            content_type="application/json",
+            wire_format="json",
+            created_at=time.monotonic(),
+        )
+
+        with caplog.at_level("WARNING", logger="tokenpak.cache.semantic_cache"):
+            result = sc.lookup(query, expected_format="json")
+
+        assert result.hit is False
+        assert sc.size() == 0
+        assert "evicting old-schema entry" in caplog.text
 
 
 # ===========================================================================

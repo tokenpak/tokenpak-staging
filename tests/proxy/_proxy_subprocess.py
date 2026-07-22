@@ -143,6 +143,7 @@ class ProxyProc:
         *,
         request_id: str | None = None,
         request_id_header: str = "X-Request-ID",
+        extra_headers: dict[str, str] | None = None,
         timeout: float = FIRST_REQUEST_TIMEOUT,
     ):
         """POST a small non-streaming /v1/messages request."""
@@ -150,6 +151,7 @@ class ProxyProc:
             [{"role": "user", "content": content}],
             request_id=request_id,
             request_id_header=request_id_header,
+            extra_headers=extra_headers,
             timeout=timeout,
         )
 
@@ -159,6 +161,7 @@ class ProxyProc:
         *,
         request_id: str | None = None,
         request_id_header: str = "X-Request-ID",
+        extra_headers: dict[str, str] | None = None,
         timeout: float = FIRST_REQUEST_TIMEOUT,
     ):
         """POST a non-streaming /v1/messages conversation.
@@ -183,6 +186,8 @@ class ProxyProc:
             conn.putheader("Content-Length", str(len(body)))
             if request_id is not None:
                 conn.putheader(request_id_header, request_id)
+            for name, value in (extra_headers or {}).items():
+                conn.putheader(name, value)
             conn.endheaders(body)
             resp = conn.getresponse()
             return resp.status, dict(resp.getheaders()), resp.read()

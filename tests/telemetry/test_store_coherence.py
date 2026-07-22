@@ -535,6 +535,49 @@ class TestPipelineTruthfulness:
 
 
 class TestCwdIndependence:
+    def test_cost_engine_default_honors_scoped_home_and_creates_parent(
+        self, tmp_path, monkeypatch
+    ):
+        from tokenpak.telemetry.cost import CostEngine
+
+        home = tmp_path / "nested" / "tokenpak-home"
+        monkeypatch.setenv("TOKENPAK_HOME", str(home))
+
+        engine = CostEngine()
+
+        assert Path(engine.db_path) == home / "telemetry.db"
+        assert (home / "telemetry.db").is_file()
+
+    def test_cost_tracker_default_honors_scoped_home_and_creates_parent(
+        self, tmp_path, monkeypatch
+    ):
+        from tokenpak.telemetry.cost_tracker import CostTracker
+
+        home = tmp_path / "nested" / "tokenpak-home"
+        monkeypatch.setenv("TOKENPAK_HOME", str(home))
+
+        tracker = CostTracker()
+
+        assert Path(tracker._db_path) == home / "cost.db"
+        assert (home / "cost.db").is_file()
+
+    def test_cost_paths_expand_tilde_and_create_explicit_parent(
+        self, tmp_path, monkeypatch
+    ):
+        from tokenpak.telemetry.cost import CostEngine
+        from tokenpak.telemetry.cost_tracker import CostTracker
+
+        fake_home = tmp_path / "operator-home"
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        engine = CostEngine("~/telemetry/nested/pricing.db")
+        tracker = CostTracker("~/telemetry/nested/requests.db")
+
+        assert Path(engine.db_path) == fake_home / "telemetry/nested/pricing.db"
+        assert Path(tracker._db_path) == fake_home / "telemetry/nested/requests.db"
+        assert Path(engine.db_path).is_file()
+        assert Path(tracker._db_path).is_file()
+
     def test_routing_ledger_default_ignores_cwd(self, tmp_path, monkeypatch):
         from tokenpak.routing.routing_ledger import RoutingLedger
 
