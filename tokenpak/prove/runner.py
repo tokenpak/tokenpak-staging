@@ -103,7 +103,7 @@ def run_proof(
         tp_tag = " + TokenPak" if arm_cfg.via_tokenpak else ""
         print(f"  [{arm_num}/{n_arms}] {arm_cfg.name}{tp_tag}...", file=sys.stderr)
 
-        def on_turn(turn_num: int, tr: TurnResult, _arm=arm_num) -> None:
+        def on_turn(turn_num: int, tr: TurnResult, _arm: int = arm_num) -> None:
             if tr.error:
                 print(f"    Turn {turn_num}/{n_turns} ERROR: {tr.error}", file=sys.stderr)
             else:

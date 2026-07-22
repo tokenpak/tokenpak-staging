@@ -13,7 +13,7 @@ import sqlite3
 import urllib.request
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -63,7 +63,7 @@ COMPRESSION_MODES = {
 def _proxy_get(path: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
     try:
         with urllib.request.urlopen(f"{PROXY_BASE}{path}", timeout=timeout) as r:
-            return json.loads(r.read())
+            return cast(Dict[str, Any], json.loads(r.read()))
     except Exception:
         return None
 
@@ -492,7 +492,7 @@ try:
     @click.option("--verbose", "-v", is_flag=True, help="Per-block analysis")
     @click.option("--json", "as_json", is_flag=True, help="Machine-readable JSON output")
     @click.option("--apply", is_flag=True, help="Auto-apply recommendations")
-    def optimize_cmd(verbose, as_json, apply):
+    def optimize_cmd(verbose: bool, as_json: bool, apply: bool) -> None:
         """Analyze session for cost + token efficiency."""
         run_optimize(verbose=verbose, as_json=as_json, apply=apply)
 

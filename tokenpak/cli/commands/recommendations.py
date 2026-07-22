@@ -63,7 +63,9 @@ def cmd_recommendations(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentParser:
+def build_parser(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> argparse.ArgumentParser:
     """Register ``tokenpak recommendations`` on a subparsers action."""
     p = sub.add_parser(
         "recommendations",

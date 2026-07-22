@@ -11,9 +11,13 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from tokenpak.orchestration.handoff import Handoff
 
 SEP = "────────────────────────────────────"
 
@@ -32,7 +36,7 @@ def _fmt_ttl(seconds: float) -> str:
     return f"{h}h {m}m"
 
 
-def _print_handoff(h) -> None:
+def _print_handoff(h: Handoff) -> None:
     """Print a single handoff in detail view."""
     status_icon = {
         "pending": "⏳",
@@ -77,7 +81,7 @@ def _print_handoff(h) -> None:
     print(SEP)
 
 
-def handoff_cmd(args) -> None:
+def handoff_cmd(args: argparse.Namespace) -> None:
     """Dispatch handoff subcommand."""
     from tokenpak.orchestration.handoff import ContextRef, HandoffManager, HandoffStatus
 

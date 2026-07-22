@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import io
 import json
@@ -123,7 +124,11 @@ def _compute_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _format_json(rows: list[dict[str, Any]], summary: dict[str, Any], filters: dict) -> str:
+def _format_json(
+    rows: list[dict[str, Any]],
+    summary: dict[str, Any],
+    filters: dict[str, Any],
+) -> str:
     envelope = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -154,7 +159,7 @@ def _format_csv(rows: list[dict[str, Any]], summary: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def cmd_telemetry_export(args) -> None:
+def cmd_telemetry_export(args: argparse.Namespace) -> None:
     """Handle `tokenpak telemetry export`."""
     fmt = getattr(args, "format", "json")
     since_str = getattr(args, "since", None)

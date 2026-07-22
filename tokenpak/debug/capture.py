@@ -26,7 +26,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -342,11 +342,11 @@ def export_capture(
     hash_path = base / f"{trace_id}.hash"
 
     if hash_path.exists():
-        return json.loads(hash_path.read_text())
+        return cast(dict[str, Any], json.loads(hash_path.read_text()))
 
     if enc_path.exists():
         blob = enc_path.read_bytes()
-        return decrypt_blob(blob, key=key)
+        return cast(dict[str, Any], decrypt_blob(blob, key=key))
 
     raise FileNotFoundError(
         f"No capture found for trace_id={trace_id!r} in {base}"

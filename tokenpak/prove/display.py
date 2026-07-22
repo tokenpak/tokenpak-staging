@@ -56,7 +56,7 @@ class LiveDisplay:
         self.arm_b_log = arm_b_log
         self._method: Optional[str] = None
         self._tmux_pane_id: Optional[str] = None
-        self._subprocesses: list[subprocess.Popen] = []
+        self._subprocesses: list[subprocess.Popen[bytes]] = []
 
     def start(self) -> Optional[str]:
         """Start the live display. Returns a description, or None if skipped."""

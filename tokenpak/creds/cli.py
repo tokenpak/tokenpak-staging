@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 from . import store
 from .doctor import Issue
@@ -44,7 +45,7 @@ def _format_expiry_display(cred: Credential) -> str:
         return "-"
 
 
-def cmd_list(args) -> int:
+def cmd_list(args: list[str]) -> int:
     """Render discovered credentials as a padded table."""
     creds = discover_all()
     if not creds:
@@ -77,7 +78,7 @@ def cmd_list(args) -> int:
     return 0
 
 
-def cmd_doctor(args) -> int:
+def cmd_doctor(args: list[str]) -> int:
     """Run hazard checks and print a grouped report. Non-zero on any error."""
     creds = discover_all()
     issues = doctor_run(creds)
@@ -235,7 +236,7 @@ def cmd_add(args: list[str]) -> int:
 
     account_hint = parsed.get("--account")
 
-    entry: dict = {"platform": platform, "kind": kind}
+    entry: dict[str, Any] = {"platform": platform, "kind": kind}
     if kind == "api_key":
         entry["key"] = secret
     else:

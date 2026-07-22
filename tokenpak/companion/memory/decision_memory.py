@@ -53,7 +53,7 @@ class DecisionMemoryDB:
     Confidence scores are updated based on observed outcomes.
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None) -> None:
         """
         Initialize the database.
 
@@ -68,7 +68,7 @@ class DecisionMemoryDB:
 
         self._init_schema()
 
-    def _init_schema(self):
+    def _init_schema(self) -> None:
         """Initialize the database schema if it doesn't exist."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -346,7 +346,8 @@ class DecisionMemoryDB:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM decisions")
-            return cursor.fetchone()[0]
+            row = cursor.fetchone()
+            return int(row[0]) if row is not None else 0
 
     def delete(self, record_id: str) -> bool:
         """

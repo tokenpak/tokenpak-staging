@@ -7,7 +7,7 @@ DASHBOARD_DIR = Path(__file__).parent
 CCI09_DASHBOARD_MODES = ("cli", "tui", "tmux", "sdk", "ide", "cron")
 
 
-def get_dashboard_files():
+def get_dashboard_files() -> dict[str, Path]:
     """Return paths to dashboard files."""
     return {
         "index.html": DASHBOARD_DIR / "index.html",

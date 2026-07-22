@@ -132,7 +132,7 @@ def load_rules(path: Optional[Path] = None) -> list[Rule]:
     return rules
 
 
-def _to_tuple(val) -> tuple[str, ...]:
+def _to_tuple(val: object) -> tuple[str, ...]:
     if val is None:
         return ()
     if isinstance(val, str):

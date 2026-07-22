@@ -198,7 +198,7 @@ def cmd_home_explain(args: Any) -> int:
     """
     from tokenpak import _paths
 
-    file_cfg: dict = {}
+    file_cfg: dict[str, Any] = {}
     cfg_path = _paths.under("config.json")
     if cfg_path.exists():
         try:
@@ -304,7 +304,7 @@ def cmd_home_migrate(args: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _starter_config() -> dict:
+def _starter_config() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "port": 8766,

@@ -31,6 +31,7 @@ import os
 import random
 import sys
 from pathlib import Path
+from typing import Any, TextIO
 
 from .config import CompanionConfig
 
@@ -66,7 +67,11 @@ def _fleet_mode_enabled() -> bool:
         return False
 
 
-def _apply_fleet_mode(claude_args: list[str], fleet: bool, stream=None) -> list[str]:
+def _apply_fleet_mode(
+    claude_args: list[str],
+    fleet: bool,
+    stream: TextIO | None = None,
+) -> list[str]:
     """Inject the bypass flag + print the mandatory banner when fleet is on.
 
     Returns a new list (never mutates the input). The stderr banner is the
@@ -407,7 +412,7 @@ def _write_settings(config: CompanionConfig) -> str:
         f"bash {session_name_hook}" if session_name_hook.is_file() else None
     )
 
-    settings: dict = {}
+    settings: dict[str, Any] = {}
     user_settings_path = Path.home() / ".claude" / "settings.json"
     if user_settings_path.is_file():
         try:
