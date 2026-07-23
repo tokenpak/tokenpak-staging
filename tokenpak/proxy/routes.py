@@ -241,8 +241,92 @@ class ProxyRoutesMixin:
     # ------------------------------------------------------------------
 
     def _route_health(self) -> None:
-        """Handle GET /health from the canonical proxy server state."""
-        self._send_json(self._ps.health())
+        """Handle the legacy mixin's cached ``GET /health`` contract.
+
+        ``ProxyRoutesMixin`` is a public, snapshotted compatibility surface but
+        is not the handler used by :class:`ProxyServer`.  Keep its v1.13 payload
+        and one-second cache separate from the canonical, uncached
+        ``ProxyServer.health()`` endpoint.
+        """
+        from tokenpak.proxy.request_pipeline import (
+            _HEALTH_CACHE_TTL,
+            _health_cache,
+        )
+
+        now = time.monotonic()
+        cached = _health_cache["data"]
+        if cached is not None and (now - _health_cache["ts"]) < _HEALTH_CACHE_TTL:
+            self._send_json(cached)
+            return
+
+        health_data = self._build_legacy_health_payload()
+        _health_cache["data"] = health_data
+        _health_cache["ts"] = now
+        self._send_json(health_data)
+
+    def _build_legacy_health_payload(self) -> dict[str, object]:
+        """Build the v1.13 mixin payload from current compatibility shims."""
+        from tokenpak.core.runtime.proxy import SESSION
+        from tokenpak.proxy.config import (
+            BUDGET_TOTAL_TOKENS,
+            COMPILATION_MODE,
+            QUERY_EXPANSION_ENABLED,
+            ROUTER_ENABLED,
+            SHADOW_ENABLED,
+            TERM_RESOLVER_ENABLED,
+            TERM_RESOLVER_MAX_BYTES,
+            TERM_RESOLVER_TOP_K,
+            UPSTREAM_TIMEOUT,
+            VAULT_INDEX_PATH,
+            skeleton_active,
+        )
+        from tokenpak.proxy.fallback import _provider_circuits
+        from tokenpak.proxy.request_pipeline import _router_health
+        from tokenpak.proxy.stats import build_health_response
+        from tokenpak.proxy.vault_bridge import (
+            get_capsule_builder,
+            get_term_resolver,
+            get_vault_index,
+        )
+
+        vault_index = get_vault_index()
+        raw_blocks = getattr(vault_index, "blocks", None)
+        if isinstance(raw_blocks, (dict, list, tuple, set)):
+            block_count = len(raw_blocks)
+        else:
+            raw_count = getattr(vault_index, "block_count", 0)
+            block_count = raw_count if isinstance(raw_count, int) else 0
+
+        return build_health_response(
+            session=SESSION,
+            compilation_mode=COMPILATION_MODE,
+            vault_info={
+                "available": bool(getattr(vault_index, "available", False)),
+                "blocks": block_count,
+                "path": str(getattr(vault_index, "tokenpak_dir", VAULT_INDEX_PATH)),
+            },
+            router_info=_router_health(),
+            router_enabled=ROUTER_ENABLED,
+            capsule_available=get_capsule_builder() is not None,
+            # The removed canon/tool-registry singletons have no current
+            # equivalent.  Report them unavailable instead of inventing state.
+            canon_available=False,
+            skeleton_enabled=skeleton_active(),
+            shadow_enabled=SHADOW_ENABLED,
+            budget_total_tokens=BUDGET_TOTAL_TOKENS,
+            tool_registry_stats={},
+            tool_registry_available=False,
+            term_resolver_enabled=TERM_RESOLVER_ENABLED,
+            term_resolver_available=get_term_resolver() is not None,
+            term_resolver_top_k=TERM_RESOLVER_TOP_K,
+            term_resolver_max_bytes=TERM_RESOLVER_MAX_BYTES,
+            query_expansion_enabled=QUERY_EXPANSION_ENABLED,
+            upstream_timeout=UPSTREAM_TIMEOUT,
+            provider_circuits=_provider_circuits,
+            # The legacy global latency deque no longer exists.  Empty means
+            # unavailable/no observations and preserves the v1.13 wire shape.
+            request_latencies=[],
+        )
 
     def _route_stats(self) -> None:
         """Handle GET /stats."""

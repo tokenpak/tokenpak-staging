@@ -1094,24 +1094,17 @@ def run(
     # tokenpak actively manages cache behavior via:
     # - apply_stable_cache_control: places cache_control breakpoints at system
     #   prompt, tools, conversation midpoint, second-to-last assistant
-    # - tool_schema_registry: normalizes tool JSON to byte-identical across
-    #   requests, preventing cache busts from non-deterministic ordering
     # - classify_system_blocks: separates stable vs volatile content, placing
     #   breakpoints before volatile blocks so stable prefix stays cached
     # Pull tokenpak-specific cache stats from the live proxy's /cache-stats
-    tp_cache_hit_rate = 0.0
-    tp_cache_misses_prevented = 0
+    tp_cache_hit_rate: float | None = None
     tp_cache_hits = 0
     tp_cache_misses = 0
     if cache:
         tp_cache_hits = cache.get("cache_hits", 0)
         tp_cache_misses = cache.get("cache_misses", 0)
         tp_total = tp_cache_hits + tp_cache_misses
-        tp_cache_hit_rate = (tp_cache_hits / tp_total * 100) if tp_total > 0 else 0.0
-        # Schema changes absorbed = misses prevented by tool normalization
-        tp_cache_misses_prevented = (
-            health.get("tool_schema_registry", {}).get("schema_changes", 0) if health else 0
-        )
+        tp_cache_hit_rate = (tp_cache_hits / tp_total * 100) if tp_total > 0 else None
 
     # =====================================================================
     # RENDER
@@ -1170,9 +1163,13 @@ def run(
     print(
         f"     Token cache rate     {provider_cache_pct:>9.0f}%   {_fmt_num(cache_read_tok)} of {_fmt_num(total_cache_handled)} input tokens"
     )
-    print(
-        f"     Request hit rate     {tp_cache_hit_rate:>9.0f}%   {tp_cache_hits:,} of {tp_cache_hits + tp_cache_misses:,} requests"
-    )
+    if tp_cache_hit_rate is None:
+        print("     Request hit rate           n/a   no cache observations")
+    else:
+        print(
+            f"     Request hit rate     {tp_cache_hit_rate:>9.0f}%   "
+            f"{tp_cache_hits:,} of {tp_cache_hits + tp_cache_misses:,} requests"
+        )
     if cache_read_tok > 0 or cache_proxy_tok or cache_client_tok or cache_unknown_tok:
         print(
             f"     Origin               "
@@ -1180,8 +1177,6 @@ def run(
             f"  proxy: {_fmt_num(cache_proxy_tok)}"
             f"  unknown: {_fmt_num(cache_unknown_tok)}"
         )
-    if tp_cache_misses_prevented > 0:
-        print(f"     Schema normalized    {tp_cache_misses_prevented:>10}   tool changes absorbed")
     if cache:
         miss_reasons = cache.get("miss_reasons", {})
         if miss_reasons:
@@ -1530,47 +1525,77 @@ def run_full(
 
     if raw:
         # Fetch everything and dump
-        session = _fetch(f"{proxy_base}/stats/session") or {}
-        deg = _fetch(f"{proxy_base}/degradation") or {}
+        session = _fetch(f"{proxy_base}/stats/session")
+        deg = _fetch(f"{proxy_base}/degradation")
         print(json.dumps({"health": health, "session": session, "degradation": deg}, indent=2))
         return
 
     # --- Fetch session stats ---
-    session = _fetch(f"{proxy_base}/stats/session") or {}
+    session_payload = _fetch(f"{proxy_base}/stats/session")
+    session = session_payload if isinstance(session_payload, dict) else None
     deg = _fetch(f"{proxy_base}/degradation") or {}
 
     # Core fields
-    is_degraded = health.get("is_degraded", False)
-    status_icon = "⚠️ " if is_degraded else "●"
-    status_text = "DEGRADED" if is_degraded else "Active"
-    uptime_s = health.get("uptime_seconds", 0)
-    uptime_h = uptime_s // 3600
-    uptime_m = (uptime_s % 3600) // 60
-    uptime_str = f"{uptime_h}h {uptime_m}m" if uptime_h else f"{uptime_m}m"
+    is_degraded_value = health.get("is_degraded")
+    is_degraded = is_degraded_value if isinstance(is_degraded_value, bool) else None
+    health_status = health.get("status")
+    status_known = health_status in {"ok", "degraded", "shutting_down"}
+    uptime_value = health.get("uptime_seconds")
+    if isinstance(uptime_value, (int, float)) and not isinstance(uptime_value, bool):
+        uptime_s = max(0, int(uptime_value))
+        uptime_h = uptime_s // 3600
+        uptime_m = (uptime_s % 3600) // 60
+        uptime_str = f"{uptime_h}h {uptime_m}m" if uptime_h else f"{uptime_m}m"
+    else:
+        uptime_str = "unknown"
 
-    requests = session.get("session_requests", 0)
-    tokens_saved = session.get("tokens_saved", 0)
-    tokens_raw = session.get("tokens_raw", 0)
-    total_cost = session.get("total_cost", 0.0)
-    cost_saved = session.get("session_total_saved", 0.0)
-    avg_savings = session.get("avg_savings_pct", 0.0)
-    errors = session.get("errors", 0)
-    compression_avg = health.get("compression_ratio_avg", 0.0)
+    def _metric(name: str) -> int | float | None:
+        value = session.get(name) if session is not None else None
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def _count(value: int | float | None) -> str:
+        return f"{int(value):,}" if value is not None else "unknown"
+
+    def _money(value: int | float | None) -> str:
+        return f"${float(value):.4f}" if value is not None else "unknown"
+
+    requests = _metric("session_requests")
+    tokens_saved = _metric("tokens_saved")
+    tokens_raw = _metric("tokens_raw")
+    total_cost = _metric("total_cost")
+    cost_saved = _metric("session_total_saved")
+    avg_savings = _metric("avg_savings_pct")
+    errors = _metric("errors")
+    compression_avg = health.get("compression_ratio_avg")
 
     if minimal:
-        mark = "⚠️ DEGRADED" if is_degraded else "● Active"
-        pct = f"{avg_savings:.1f}% saved" if tokens_raw else "n/a"
-        print(f"{mark} | {requests:,} req | {pct}")
+        if is_degraded is True:
+            mark = "⚠️ DEGRADED"
+        elif status_known:
+            mark = "● Active"
+        else:
+            mark = "? Health unknown"
+        pct = (
+            f"{avg_savings:.1f}% saved"
+            if avg_savings is not None and tokens_raw is not None and tokens_raw > 0
+            else "n/a"
+        )
+        print(f"{mark} | {_count(requests)} req | {pct}")
         return
 
     print("\nTOKENPAK  |  Status (Full)")
     print(SEP_LEGACY)
 
-    print(f"{'✅  Proxy running':<28}port {proxy_base.split(':')[-1]} — hybrid mode")
+    proxy_label = "✅  Proxy running" if status_known else "⚠️  Proxy health"
+    proxy_state = str(health_status) if status_known else "unknown"
+    print(f"{proxy_label:<28}port {proxy_base.split(':')[-1]} — {proxy_state}")
     print(f"{'✅  Uptime':<28}{uptime_str}")
-    print(
-        f"{'✅  Health':<28}OK (0 errors)" if errors == 0 else f"{'⚠️  Health':<28}{errors} errors"
-    )
+    if errors == 0 and status_known:
+        print(f"{'✅  Health':<28}OK (0 errors)")
+    elif errors is not None:
+        print(f"{'⚠️  Health':<28}{_count(errors)} errors")
+    else:
+        print(f"{'⚠️  Health':<28}error count unknown")
 
     agent_concurrency = health.get("agent_concurrency") or {}
     if agent_concurrency.get("enabled"):
@@ -1592,30 +1617,53 @@ def run_full(
     print()
 
     # Calculate and display savings summary
-    savings_data = _estimate_session_savings(session) if session else None
+    pricing_inputs = (tokens_raw, tokens_saved, _metric("cache_read_tokens"))
+    savings_data = (
+        _estimate_session_savings(session)
+        if session is not None and all(value is not None for value in pricing_inputs)
+        else None
+    )
     if savings_data is not None:
         print("💰  Session Savings")
-        print(f"    Requests:      {requests:,}")
-        print(f"    Input tokens:  {tokens_raw:,}")
-        print(f"    Tokens saved:  {tokens_saved:,} ({avg_savings:.1f}% compression)")
-        print(
-            f"    Cache reads:   {session.get('cache_read_tokens', 0):,} ({savings_data.get('cache_hit_rate', 0):.0f}% hit rate)"
+        print(f"    Requests:      {_count(requests)}")
+        print(f"    Input tokens:  {_count(tokens_raw)}")
+        compression = f"{avg_savings:.1f}%" if avg_savings is not None else "unknown"
+        print(f"    Tokens saved:  {_count(tokens_saved)} ({compression} compression)")
+        cache_read = _metric("cache_read_tokens")
+        hit_rate = savings_data.get("cache_hit_rate")
+        hit_rate_text = (
+            f"{float(hit_rate):.0f}%"
+            if isinstance(hit_rate, (int, float)) and not isinstance(hit_rate, bool)
+            else "unknown"
         )
-        print(f"    Est. saved:    ${savings_data.get('total_cost_saved', 0):.2f}")
+        print(f"    Cache reads:   {_count(cache_read)} ({hit_rate_text} hit rate)")
+        total_saved = savings_data.get("total_cost_saved")
+        total_saved_text = (
+            f"${float(total_saved):.2f}"
+            if isinstance(total_saved, (int, float)) and not isinstance(total_saved, bool)
+            else "unknown"
+        )
+        print(f"    Est. saved:    {total_saved_text}")
         print()
     else:
         # Fallback without pricing module
-        print(f"{'Session Requests:':<28}{requests:,}")
-        print(f"{'Errors:':<28}{errors:,}")
-        print(f"{'Tokens (raw):':<28}{tokens_raw:,}")
-        print(f"{'Tokens (saved):':<28}{tokens_saved:,}")
-        print(f"{'Avg Compression:':<28}{avg_savings:.1f}%  (ratio {compression_avg:.3f})")
-        print(f"{'Cost (this session):':<28}${total_cost:.4f}")
-        print(f"{'Cost Saved:':<28}${cost_saved:.4f}")
+        print(f"{'Session Requests:':<28}{_count(requests)}")
+        print(f"{'Errors:':<28}{_count(errors)}")
+        print(f"{'Tokens (raw):':<28}{_count(tokens_raw)}")
+        print(f"{'Tokens (saved):':<28}{_count(tokens_saved)}")
+        ratio_suffix = (
+            f"  (ratio {compression_avg:.3f})"
+            if isinstance(compression_avg, (int, float)) and not isinstance(compression_avg, bool)
+            else ""
+        )
+        avg_text = f"{avg_savings:.1f}%" if avg_savings is not None else "unknown"
+        print(f"{'Avg Compression:':<28}{avg_text}{ratio_suffix}")
+        print(f"{'Cost (this session):':<28}{_money(total_cost)}")
+        print(f"{'Cost Saved:':<28}{_money(cost_saved)}")
         print()
 
     # --- Degradation block ---
-    if is_degraded or deg.get("recent_events"):
+    if is_degraded is True or deg.get("recent_events"):
         print()
         print(SEP_LEGACY)
         deg.get("status", "unknown")
@@ -1640,7 +1688,7 @@ def run_full(
                 print(f"  {recovered} [{ts}] {etype}: {detail[:70]}")
 
     print(SEP_LEGACY)
-    if is_degraded:
+    if is_degraded is True:
         print("ℹ️  Running degraded — requests still served. Run `tokenpak doctor` for details.")
     else:
         print("ℹ️  Run `tokenpak status` for savings overview.")

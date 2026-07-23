@@ -65,6 +65,58 @@ def _proxy_get(path: str, port: int | None = None, timeout: int = 3) -> dict[str
         return None
 
 
+_CANONICAL_HEALTH_FIELDS = {
+    "status",
+    "uptime_seconds",
+    "version",
+    "requests_total",
+    "requests_errors",
+    "compression_ratio_avg",
+    "is_degraded",
+    "is_shutting_down",
+    "in_flight_requests",
+    "memory_guard",
+    "admission",
+    "agent_concurrency",
+    "timestamp",
+    "connection_pool",
+    "circuit_breakers",
+}
+
+
+def _validate_canonical_health(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Validate the stable basic-health envelope before reporting a pass."""
+
+    if set(payload) != _CANONICAL_HEALTH_FIELDS:
+        return False, "top-level health fields do not match the canonical contract"
+    if payload.get("status") not in {"ok", "degraded", "shutting_down"}:
+        return False, "health status is missing or unknown"
+    if not isinstance(payload.get("version"), str) or not payload["version"]:
+        return False, "health version is missing or malformed"
+    if not isinstance(payload.get("timestamp"), str) or not payload["timestamp"]:
+        return False, "health timestamp is missing or malformed"
+    for field in ("uptime_seconds", "requests_total", "requests_errors", "in_flight_requests"):
+        value = payload.get(field)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+            return False, f"health {field} is missing or malformed"
+    compression = payload.get("compression_ratio_avg")
+    if not isinstance(compression, (int, float)) or isinstance(compression, bool):
+        return False, "health compression_ratio_avg is missing or malformed"
+    for field in ("is_degraded", "is_shutting_down"):
+        if not isinstance(payload.get(field), bool):
+            return False, f"health {field} is missing or malformed"
+    for field in (
+        "memory_guard",
+        "admission",
+        "agent_concurrency",
+        "connection_pool",
+        "circuit_breakers",
+    ):
+        if not isinstance(payload.get(field), dict):
+            return False, f"health {field} is missing or malformed"
+    return True, ""
+
+
 # Canonical proxy URL the routed Claude Code config is expected to point at.
 # Mirrors install.PROXY_URL so the route check compares against the same value
 # `tokenpak setup` writes. Overridable via TOKENPAK_PROXY_URL for non-default ports.
@@ -660,36 +712,36 @@ def run_doctor(
             f"~/.tpk/ boundary    {tokenpak_dir}",
         )
 
-    # === Check 1: Proxy health with latency =====================================
+    # === Check 1: Canonical proxy health ========================================
     proxy_port = int(os.environ.get("TOKENPAK_PORT", "8766"))
     health = _proxy_get("/health", port=proxy_port)
     if health is not None:
-        latency = health.get("latency", {})
-        p50 = latency.get("p50_latency_ms")
-        p95 = latency.get("p95_latency_ms")
-        p99 = latency.get("p99_latency_ms")
-        samples = latency.get("samples", 0)
-        outlier = latency.get("outlier_detected", False)
-        mode = health.get("compilation_mode", "unknown")
-        requests_total = health.get("stats", {}).get("requests", 0)
+        health_valid, health_reason = _validate_canonical_health(health)
+        status = health.get("status", "unknown")
+        requests_total = health.get("requests_total")
+        requests_errors = health.get("requests_errors")
+        is_degraded = health.get("is_degraded")
+        requests_text = str(requests_total) if requests_total is not None else "unavailable"
+        errors_text = str(requests_errors) if requests_errors is not None else "unavailable"
 
-        if p50 is not None:
-            if p95 is not None:
-                latency_str = f"p50={p50:.0f}ms p95={p95:.0f}ms p99={p99:.0f}ms ({samples} samples)"
-            else:
-                latency_str = f"p50={p50:.0f}ms p99={p99:.0f}ms ({samples} samples)"
-            if outlier:
-                latency_str += " ⚠️ outlier detected (API congestion likely, not proxy)"
+        if health_valid:
+            _record(
+                "proxy_health",
+                "pass",
+                f"Proxy reachable     port {proxy_port} — status={status}, "
+                f"{requests_text} reqs, {errors_text} errors",
+                detail=(
+                    f"status={status} requests_total={requests_total} "
+                    f"requests_errors={requests_errors} is_degraded={is_degraded}"
+                ),
+            )
         else:
-            latency_str = "no latency data"
-
-        _record(
-            "proxy_health",
-            "pass",
-            f"Proxy reachable     port {proxy_port} — {mode} mode, "
-            f"{requests_total} reqs, {latency_str}",
-            detail=f"compilation_mode={mode} requests={requests_total} p95={p95} p99={p99} outlier={outlier}",
-        )
+            _record(
+                "proxy_health",
+                "warn",
+                f"Proxy reachable     port {proxy_port} — health payload unavailable",
+                detail=health_reason,
+            )
 
         # Attribution coverage — % of ledger rows with a genuinely known origin
         # (non-empty attribution_source). Internal gate measure; NOT a public
@@ -892,38 +944,31 @@ def run_doctor(
                 f"Budget controller   could not check: {exc}",
             )
 
-    # === Check 5: Shadow reader status/failures =================================
-    if health is not None:
-        sr = health.get("shadow_reader", {})
-        sr_enabled = sr.get("enabled", False)
-        sr_failures = sr.get("failures", 0)
-        if sr_enabled:
-            if sr_failures and sr_failures > 0:
-                _record(
-                    "shadow_reader",
-                    "warn",
-                    f"Shadow reader       enabled — {sr_failures} failure(s) recorded",
-                    detail=str(sr),
-                )
-            else:
-                _record(
-                    "shadow_reader",
-                    "pass",
-                    "Shadow reader       enabled — no failures",
-                    detail=str(sr),
-                )
+    # === Check 5: Shadow reader configuration ===================================
+    # Feature-specific state is not part of canonical /health. Inspect the
+    # resolved proxy configuration instead of treating a missing field as a
+    # measured disabled or failure state.
+    try:
+        from tokenpak.proxy.config import SHADOW_ENABLED
+
+        if SHADOW_ENABLED:
+            _record(
+                "shadow_reader",
+                "pass",
+                "Shadow reader       enabled by resolved proxy configuration",
+            )
         else:
             _record(
                 "shadow_reader",
                 "warn",
-                "Shadow reader       disabled (set TOKENPAK_SHADOW_READER=1)",
-                detail=str(sr),
+                "Shadow reader       disabled by resolved proxy configuration",
             )
-    else:
+    except Exception as exc:
         _record(
             "shadow_reader",
             "warn",
-            "Shadow reader       unknown — proxy not reachable",
+            "Shadow reader       configuration unavailable",
+            detail=str(exc),
         )
 
     # === Check 6: Trace enabled =================================================
@@ -944,88 +989,42 @@ def run_doctor(
         )
 
     # === Check 7: Vault index freshness =========================================
-    # Primary: check from health endpoint, secondary: file mtime
-    if health is not None:
-        vi = health.get("vault_index", {})
-        vi_available = vi.get("available", False)
-        vi_blocks = vi.get("blocks", 0)
-        vi_path = vi.get("path", "")
-
-        if vi_available and vi_blocks > 0:
-            # Also check file mtime
-            index_path = tokenpak_dir / "index.json"
-            if index_path.exists():
-                age_hours = (time.time() - os.path.getmtime(index_path)) / 3600
-                if age_hours > 24:
-                    _record(
-                        "vault_index",
-                        "warn",
-                        f"Vault index         {vi_blocks:,} blocks — "
-                        f"stale ({age_hours:.1f}h old, run: tokenpak index)",
-                        detail=f"path={vi_path} blocks={vi_blocks} age_hours={age_hours:.1f}",
-                    )
-                else:
-                    _record(
-                        "vault_index",
-                        "pass",
-                        f"Vault index         {vi_blocks:,} blocks — fresh ({age_hours:.1f}h old)",
-                        detail=f"path={vi_path} blocks={vi_blocks} age_hours={age_hours:.1f}",
-                    )
+    # Vault state is not part of canonical /health. Read the durable index
+    # directly so absent telemetry cannot become a false zero or disabled state.
+    index_path = tokenpak_dir / "index.json"
+    if index_path.exists():
+        try:
+            data = json.loads(index_path.read_text())
+            block_count = len(data.get("blocks", []))
+            age_hours = (time.time() - os.path.getmtime(index_path)) / 3600
+            if block_count > 0:
+                status = "warn" if age_hours > 24 else "pass"
+                age_note = (
+                    f"stale ({age_hours:.1f}h)" if age_hours > 24 else f"{age_hours:.1f}h old"
+                )
+                _record(
+                    "vault_index",
+                    status,
+                    f"Vault index         {index_path} — {block_count:,} blocks, {age_note}",
+                )
             else:
                 _record(
                     "vault_index",
-                    "pass",
-                    f"Vault index         {vi_blocks:,} blocks — loaded from {vi_path}",
-                    detail=f"path={vi_path} blocks={vi_blocks}",
+                    "warn",
+                    f"Vault index         {index_path} — 0 blocks (run: tokenpak index)",
                 )
-        elif not vi_available:
+        except json.JSONDecodeError:
             _record(
                 "vault_index",
-                "warn",
-                "Vault index         not available — run: tokenpak index <path>",
-            )
-        else:
-            _record(
-                "vault_index",
-                "warn",
-                "Vault index         0 blocks — run: tokenpak index <path>",
+                "fail",
+                f"Vault index         {index_path} — invalid JSON",
             )
     else:
-        # Fallback: check file on disk
-        index_path = tokenpak_dir / "index.json"
-        if index_path.exists():
-            try:
-                data = json.loads(index_path.read_text())
-                block_count = len(data.get("blocks", []))
-                age_hours = (time.time() - os.path.getmtime(index_path)) / 3600
-                if block_count > 0:
-                    status = "warn" if age_hours > 24 else "pass"
-                    age_note = (
-                        f"stale ({age_hours:.1f}h)" if age_hours > 24 else f"{age_hours:.1f}h old"
-                    )
-                    _record(
-                        "vault_index",
-                        status,
-                        f"Vault index         {index_path} — {block_count:,} blocks, {age_note}",
-                    )
-                else:
-                    _record(
-                        "vault_index",
-                        "warn",
-                        f"Vault index         {index_path} — 0 blocks (run: tokenpak index)",
-                    )
-            except json.JSONDecodeError:
-                _record(
-                    "vault_index",
-                    "fail",
-                    f"Vault index         {index_path} — invalid JSON",
-                )
-        else:
-            _record(
-                "vault_index",
-                "warn",
-                "Vault index         not found (run: tokenpak index <path>)",
-            )
+        _record(
+            "vault_index",
+            "warn",
+            "Vault index         not found (run: tokenpak index <path>)",
+        )
 
     # === Check 7b: Registered vault paths staleness ============================
     # Reads vault.yaml under the resolved TokenPak home + per-path index

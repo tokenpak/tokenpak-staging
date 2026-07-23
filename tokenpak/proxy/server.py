@@ -3995,28 +3995,41 @@ class ProxyServer:
         if deep:
             import shutil
 
-            import psutil  # optional; fall back gracefully
-
             # providers: list active providers with their circuit-breaker status
             providers = [
                 {"name": name, "status": info.get("state", "unknown")}
                 for name, info in cb_statuses.items()
             ]
-            # memory usage in MB
+
+            # Deep probes are independent and additive.  Missing optional
+            # dependencies or probe failures stay JSON-serialisable, never
+            # become a fabricated zero, and never suppress the other probes.
+            memory: dict[str, object] = {"rss_mb": None, "available": False}
             try:
-                proc = psutil.Process()
-                mem_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+                import psutil
+            except ImportError:
+                memory["reason"] = "optional_dependency_unavailable"
             except Exception:
-                mem_mb = None
-            # disk available in GB
+                memory["reason"] = "probe_failed"
+            else:
+                try:
+                    proc = psutil.Process()
+                    memory["rss_mb"] = round(proc.memory_info().rss / (1024 * 1024), 1)
+                    memory["available"] = True
+                except Exception:
+                    memory["reason"] = "probe_failed"
+
+            disk_info: dict[str, object] = {"available_gb": None, "available": False}
             try:
                 disk = shutil.disk_usage("/")
-                disk_available_gb = round(disk.free / (1024**3), 2)
+                disk_info["available_gb"] = round(disk.free / (1024**3), 2)
+                disk_info["available"] = True
             except Exception:
-                disk_available_gb = None
+                disk_info["reason"] = "probe_failed"
+
             result["providers"] = providers
-            result["memory"] = {"rss_mb": mem_mb}
-            result["disk"] = {"available_gb": disk_available_gb}
+            result["memory"] = memory
+            result["disk"] = disk_info
         return result
 
     def status(self) -> dict[str, object]:

@@ -12,10 +12,10 @@ from unittest.mock import patch
 from tokenpak.cli.commands import status
 
 
-def _health(*, schema_changes: int = 0) -> dict:
+def _health() -> dict:
     return {
-        "status": "healthy",
-        "tool_schema_registry": {"schema_changes": schema_changes},
+        "status": "ok",
+        "uptime_seconds": 3600,
     }
 
 
@@ -175,17 +175,18 @@ def test_cache_rates_come_from_cache_observations():
 def test_no_cache_observations_are_not_fabricated_from_uptime():
     out = _render(health=_health(), stats=_stats(cache_read=0), cache=None)
     assert "Token cache rate             0%" in out
-    assert "Request hit rate             0%" in out
+    assert "Request hit rate           n/a" in out
+    assert "no cache observations" in out
     assert "Schema normalized" not in out
 
 
-def test_schema_normalization_uses_health_registry_observation():
+def test_removed_health_registry_observation_is_not_invented():
     out = _render(
-        health=_health(schema_changes=4),
+        health={**_health(), "tool_schema_registry": {"schema_changes": 4}},
         stats=_stats(),
         cache={"cache_hits": 0, "cache_misses": 1, "miss_reasons": {}},
     )
-    assert "Schema normalized             4" in out
+    assert "Schema normalized" not in out
 
 
 def test_proxy_errors_produce_actionable_health_message():

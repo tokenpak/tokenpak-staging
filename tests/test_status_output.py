@@ -22,6 +22,7 @@ import pytest
 
 
 MOCK_STATS = {
+    "compilation_mode": "hybrid",
     "session": {
         "requests": 6016,
         "input_tokens": 74_500_000,
@@ -76,22 +77,17 @@ MOCK_STATS = {
 
 MOCK_HEALTH = {
     "status": "ok",
-    "compilation_mode": "hybrid",
-    "stats": {
-        "start_time": 1_770_000_000.0,
-        "requests": 6016,
-        "errors": 5,
-    },
-    "vault_index": {"available": True, "blocks": 6366},
-    "skeleton": {"enabled": True},
-    "shadow_reader": {"enabled": True},
-    "canon": {"enabled": True},
-    "capsule_available": True,
+    "uptime_seconds": 400_000,
+    "requests_total": 6016,
+    "requests_errors": 5,
     "circuit_breakers": {
-        "anthropic": {"open": False, "failures": 0},
-        "openai": {"open": False, "failures": 0},
+        "enabled": True,
+        "any_open": False,
+        "providers": {
+            "anthropic": {"state": "closed", "failures": 0},
+            "openai": {"state": "closed", "failures": 0},
+        },
     },
-    "router": {"enabled": True, "components": {}},
 }
 
 MOCK_CACHE = {
@@ -262,9 +258,10 @@ class TestFullOutput:
         out, _ = run_cmd_status(make_args(full=True), capsys)
         assert "Cache hit rate" in out
 
-    def test_full_shows_features(self, capsys):
+    def test_full_does_not_invent_removed_health_features(self, capsys):
         out, _ = run_cmd_status(make_args(full=True), capsys)
-        assert "Features" in out
+        assert "Features" not in out
+        assert "Vault Index" not in out
 
     def test_full_does_not_show_savings_header(self, capsys):
         out, _ = run_cmd_status(make_args(full=True), capsys)

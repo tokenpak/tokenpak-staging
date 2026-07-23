@@ -100,7 +100,7 @@ def test_healthy_install_all_9_pass(tmp_home, monkeypatch):
 
     def mock_http_get(url, timeout=4):
         if "/health" in url:
-            return 200, json.dumps({"compilation_mode": "hybrid"}).encode()
+            return 200, json.dumps({"status": "ok"}).encode()
         if "/stats" in url:
             return 200, json.dumps({"session": {"active_profile": "balanced"}}).encode()
         if "/v1/sessions" in url:
@@ -194,7 +194,7 @@ def test_check2_proxy_unreachable(monkeypatch):
 def test_check2_proxy_reachable(monkeypatch):
     """Check 2 passes when proxy returns 200 from /health."""
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8766")
-    health_body = json.dumps({"compilation_mode": "hybrid"}).encode()
+    health_body = json.dumps({"status": "ok"}).encode()
 
     with mock.patch(
         "tokenpak.cli.commands.doctor_claude_code._http_get", return_value=(200, health_body)
@@ -202,7 +202,7 @@ def test_check2_proxy_reachable(monkeypatch):
         result = _check_proxy_reachable()
 
     assert result["status"] == "pass"
-    assert "hybrid" in result["message"]
+    assert "status=ok" in result["message"]
 
 
 # ---------------------------------------------------------------------------

@@ -84,9 +84,15 @@ def _detect_proxy() -> tuple[bool, list[str]]:
         if not isinstance(health, dict):
             _proxy_detection_cache = (False, [])
             return False, []
-        # circuit_breakers keys are the active providers
+        # Providers live below the canonical circuit-breaker envelope.  The
+        # envelope's metadata keys (enabled/any_open) are not providers.
         breakers = health.get("circuit_breakers")
-        providers = [str(provider) for provider in breakers] if isinstance(breakers, dict) else []
+        provider_states = breakers.get("providers") if isinstance(breakers, dict) else None
+        providers = (
+            [str(provider) for provider in provider_states]
+            if isinstance(provider_states, dict)
+            else []
+        )
         _proxy_detection_cache = (True, providers)
         return True, providers
     except Exception:

@@ -297,14 +297,14 @@ def _check_proxy_reachable() -> CheckResult:
     if status_code == 200:
         try:
             data = json.loads(body)
-            mode = data.get("compilation_mode", "unknown")
+            proxy_status = data.get("status", "unknown")
         except Exception:
-            mode = "unknown"
+            proxy_status = "unknown"
         return CheckResult(
             check="proxy_reachable",
             status="pass",
-            message=f"Check 2  Proxy reachable      {health_url} — mode={mode}",
-            detail=f"status={status_code} mode={mode}",
+            message=f"Check 2  Proxy reachable      {health_url} — status={proxy_status}",
+            detail=f"http_status={status_code} proxy_status={proxy_status}",
             remediation="",
         )
     if status_code == 0:
