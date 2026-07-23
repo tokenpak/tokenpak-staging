@@ -268,20 +268,23 @@ def _check_proxy(verbose: bool, port: int) -> DiagResult:
     try:
         resp = _urlreq.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
         health = json.loads(resp.read())
-        mode = health.get("compilation_mode", "unknown")
+        status = health.get("status", "unknown")
+        requests_total = health.get("requests_total")
         uptime = health.get("uptime_seconds")
         uptime_str = ""
         if uptime is not None:
             h, m = divmod(int(uptime) // 60, 60)
             uptime_str = f", up {h}h {m}m"
+        requests_str = f", {requests_total} requests" if requests_total is not None else ""
         return DiagResult(
             "proxy",
             OK,
-            f"Proxy: Listening on 0.0.0.0:{port} ({mode} mode{uptime_str})",
+            f"Proxy: Listening on 0.0.0.0:{port} (status={status}{requests_str}{uptime_str})",
             data={
                 "port": port,
                 "running": True,
-                "mode": mode,
+                "status": status,
+                "requests_total": requests_total,
                 "uptime_seconds": uptime,
             },
         )

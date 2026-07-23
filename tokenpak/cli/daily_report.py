@@ -16,7 +16,6 @@ __all__ = (
 
 import json
 import os
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Literal, TypedDict, cast
@@ -38,28 +37,28 @@ class DailySavingsData:
     """Daily savings summary data."""
 
     timestamp: str  # ISO format
-    requests: int
-    savings_amount: float
-    savings_percent: float
-    cache_hit_rate: float
-    compression_percent: float
+    requests: int | Literal["unknown"]
+    savings_amount: float | Literal["unknown"]
+    savings_percent: float | Literal["unknown"]
+    cache_hit_rate: float | Literal["unknown"]
+    compression_percent: float | Literal["unknown"]
     top_model: str
-    top_model_savings: float
+    top_model_savings: float | Literal["unknown"]
     uptime_hours: int | Literal["unknown"]
-    uptime_minutes: int
-    errors: int
-    estimated_monthly_rate: float
+    uptime_minutes: int | Literal["unknown"]
+    errors: int | Literal["unknown"]
+    estimated_monthly_rate: float | Literal["unknown"]
     model_compression: list[ModelCompressionRow] = field(default_factory=list)
 
 
 class SavingsSummary(TypedDict):
     """Fields consumed from a one-day telemetry savings report."""
 
-    total_cost: float
-    estimated_without_compression: float
-    savings_amount: float
-    savings_pct: float
-    cache_hit_rate: float
+    total_cost: float | Literal["unknown"]
+    estimated_without_compression: float | Literal["unknown"]
+    savings_amount: float | Literal["unknown"]
+    savings_pct: float | Literal["unknown"]
+    cache_hit_rate: float | Literal["unknown"]
 
 
 def _proxy_get(path: str, port: int | None = None) -> dict[str, object] | None:
@@ -110,63 +109,110 @@ def _get_savings_report() -> SavingsSummary:
         }
     except Exception:
         return {
-            "total_cost": 0.0,
-            "estimated_without_compression": 0.0,
-            "savings_amount": 0.0,
-            "savings_pct": 0.0,
-            "cache_hit_rate": 0.0,
+            "total_cost": "unknown",
+            "estimated_without_compression": "unknown",
+            "savings_amount": "unknown",
+            "savings_pct": "unknown",
+            "cache_hit_rate": "unknown",
         }
 
 
 def _calculate_data() -> DailySavingsData:
     """Collect live proxy stats and calculate daily summary."""
-    health = _proxy_get("/health") or {}
-    stats = _proxy_get("/stats") or {}
-    cache = _proxy_get("/cache-stats") or {}
+    health_payload = _proxy_get("/health")
+    stats_payload = _proxy_get("/stats")
+    cache_payload = _proxy_get("/cache-stats")
+    health = health_payload if isinstance(health_payload, dict) else {}
+    stats = stats_payload if isinstance(stats_payload, dict) else {}
+    cache = cache_payload if isinstance(cache_payload, dict) else {}
     telemetry = _get_savings_report()
 
-    # Extract stats
-    health_stats = health.get("stats", {})
-    start_time = health_stats.get("start_time") if isinstance(health_stats, dict) else None
-    if start_time is None:
+    # Uptime and request counters are canonical top-level /health fields.
+    uptime_value = health.get("uptime_seconds")
+    if not isinstance(uptime_value, (int, float)) or isinstance(uptime_value, bool):
         uptime_h: int | Literal["unknown"] = "unknown"
-        uptime_m = 0
-    elif isinstance(start_time, (int, float)):
-        uptime_s = max(0, time.time() - start_time)
+        uptime_m: int | Literal["unknown"] = "unknown"
+    else:
+        uptime_s = max(0.0, float(uptime_value))
         uptime_h = int(uptime_s // 3600)
         uptime_m = int((uptime_s % 3600) // 60)
-    else:
-        uptime_h = "unknown"
-        uptime_m = 0
 
     # Requests and errors
-    requests_value = stats.get("requests", 0)
-    errors_value = stats.get("errors", 0)
-    requests = int(requests_value) if isinstance(requests_value, (int, float)) else 0
-    errors = int(errors_value) if isinstance(errors_value, (int, float)) else 0
+    requests_value = health.get("requests_total")
+    errors_value = health.get("requests_errors")
+    requests: int | Literal["unknown"] = (
+        int(requests_value)
+        if isinstance(requests_value, (int, float)) and not isinstance(requests_value, bool)
+        else "unknown"
+    )
+    errors: int | Literal["unknown"] = (
+        int(errors_value)
+        if isinstance(errors_value, (int, float)) and not isinstance(errors_value, bool)
+        else "unknown"
+    )
 
-    # Tokens
-    input_value = stats.get("input_tokens", 0)
-    saved_value = stats.get("saved_tokens", 0)
-    input_tokens = float(input_value) if isinstance(input_value, (int, float)) else 0.0
-    saved_tokens = float(saved_value) if isinstance(saved_value, (int, float)) else 0.0
-    compression_pct = (saved_tokens / input_tokens * 100) if input_tokens > 0 else 0
+    # Token counters live in the /stats session object, not /health.
+    stats_session_value = stats.get("session")
+    stats_session = stats_session_value if isinstance(stats_session_value, dict) else {}
+    input_value = stats_session.get("input_tokens")
+    saved_value = stats_session.get("saved_tokens")
+    input_tokens = (
+        float(input_value)
+        if isinstance(input_value, (int, float)) and not isinstance(input_value, bool)
+        else None
+    )
+    saved_tokens = (
+        float(saved_value)
+        if isinstance(saved_value, (int, float)) and not isinstance(saved_value, bool)
+        else None
+    )
+    compression_pct: float | Literal["unknown"] = (
+        saved_tokens / input_tokens * 100
+        if input_tokens is not None and input_tokens > 0 and saved_tokens is not None
+        else "unknown"
+    )
 
     # Cache
-    hits_value = cache.get("cache_hits", 0)
-    misses_value = cache.get("cache_misses", 0)
-    cache_hits = float(hits_value) if isinstance(hits_value, (int, float)) else 0.0
-    cache_misses = float(misses_value) if isinstance(misses_value, (int, float)) else 0.0
-    cache_total = cache_hits + cache_misses
-    cache_hit_rate = (cache_hits / cache_total) if cache_total > 0 else 0.0
+    hits_value = cache.get("cache_hits")
+    misses_value = cache.get("cache_misses")
+    cache_hits = (
+        float(hits_value)
+        if isinstance(hits_value, (int, float)) and not isinstance(hits_value, bool)
+        else None
+    )
+    cache_misses = (
+        float(misses_value)
+        if isinstance(misses_value, (int, float)) and not isinstance(misses_value, bool)
+        else None
+    )
+    cache_total = (
+        cache_hits + cache_misses if cache_hits is not None and cache_misses is not None else None
+    )
+    cache_hit_rate: float | Literal["unknown"] = (
+        cache_hits / cache_total
+        if cache_hits is not None and cache_total is not None and cache_total > 0
+        else "unknown"
+    )
 
     # Savings from telemetry
-    savings_amount = telemetry.get("savings_amount", 0.0)
-    savings_percent = telemetry.get("savings_pct", 0.0)
+    savings_amount_value = telemetry.get("savings_amount")
+    savings_percent_value = telemetry.get("savings_pct")
+    savings_amount: float | Literal["unknown"] = (
+        float(savings_amount_value)
+        if isinstance(savings_amount_value, (int, float))
+        and not isinstance(savings_amount_value, bool)
+        else "unknown"
+    )
+    savings_percent: float | Literal["unknown"] = (
+        float(savings_percent_value)
+        if isinstance(savings_percent_value, (int, float))
+        and not isinstance(savings_percent_value, bool)
+        else "unknown"
+    )
 
     # Top model (from telemetry or fallback)
     top_model = "unknown"
-    top_model_savings = 0.0
+    top_model_savings: float | Literal["unknown"] = "unknown"
     try:
         from tokenpak.telemetry.query_dsl import get_model_usage
 
@@ -179,18 +225,30 @@ def _calculate_data() -> DailySavingsData:
                 model_costs[u.model] = u.request_count
             if model_costs:
                 top_model = max(model_costs, key=lambda model: model_costs[model])
-                top_model_savings = savings_amount  # Proxy: assume savings proportional
+                # No per-model savings attribution is available from this
+                # request-count ranking, so do not assign the aggregate value.
     except Exception:
         pass
 
     # Estimated monthly rate
-    if requests > 0 and savings_amount > 0:
+    if (
+        isinstance(requests, int)
+        and requests > 0
+        and isinstance(savings_amount, float)
+        and savings_amount > 0
+    ):
         # Rough estimate: daily savings * 30 / time elapsed
         days_running = max(uptime_h / 24, 0.1) if uptime_h != "unknown" else 0.1
         daily_savings = savings_amount / max(days_running, 0.1)
         estimated_monthly = daily_savings * 30
     else:
-        estimated_monthly = 0.0
+        estimated_monthly: float | Literal["unknown"] = (
+            0.0
+            if isinstance(requests, int)
+            and isinstance(savings_amount, float)
+            and (requests == 0 or savings_amount == 0)
+            else "unknown"
+        )
 
     # Per-model compression breakdown
     model_compression = _get_model_compression_breakdown()
@@ -240,14 +298,36 @@ def _format_terminal(data: DailySavingsData) -> str:
         "📊 TokenPak Daily Report",
         "─" * 40,
         f"  Date:       {data.timestamp.split('T')[0]}",
-        f"  Requests:   {data.requests:,}",
-        f"  Saved:      ${data.savings_amount:.2f} ({data.savings_percent:.1f}%)",
-        f"  Cache Hit:  {data.cache_hit_rate * 100:.0f}%",
-        f"  Compression: {data.compression_percent:.1f}%",
+        f"  Requests:   {data.requests:,}"
+        if isinstance(data.requests, int)
+        else "  Requests:   unknown",
+        (
+            f"  Saved:      ${data.savings_amount:.2f} ({data.savings_percent:.1f}%)"
+            if isinstance(data.savings_amount, float) and isinstance(data.savings_percent, float)
+            else "  Saved:      unknown"
+        ),
+        (
+            f"  Cache Hit:  {data.cache_hit_rate * 100:.0f}%"
+            if isinstance(data.cache_hit_rate, float)
+            else "  Cache Hit:  unknown"
+        ),
+        (
+            f"  Compression: {data.compression_percent:.1f}%"
+            if isinstance(data.compression_percent, float)
+            else "  Compression: unknown"
+        ),
         f"  Top Model:  {data.top_model}",
-        f"  Uptime:     {data.uptime_hours}h {data.uptime_minutes:02d}m",
+        (
+            f"  Uptime:     {data.uptime_hours}h {data.uptime_minutes:02d}m"
+            if isinstance(data.uptime_hours, int) and isinstance(data.uptime_minutes, int)
+            else "  Uptime:     unknown"
+        ),
         f"  Errors:     {data.errors}",
-        f"  Monthly Rate: ${data.estimated_monthly_rate:.0f}/mo",
+        (
+            f"  Monthly Rate: ${data.estimated_monthly_rate:.0f}/mo"
+            if isinstance(data.estimated_monthly_rate, float)
+            else "  Monthly Rate: unknown"
+        ),
     ]
     lines.extend(_format_compression_table_terminal(data.model_compression or []))
     return "\n".join(lines)
@@ -262,14 +342,36 @@ def _format_markdown(data: DailySavingsData) -> str:
         "",
         "| Metric | Value |",
         "| ------ | ----- |",
-        f"| Requests | {data.requests:,} |",
-        f"| Savings | ${data.savings_amount:.2f} ({data.savings_percent:.1f}%) |",
-        f"| Cache Hit Rate | {data.cache_hit_rate * 100:.0f}% |",
-        f"| Compression | {data.compression_percent:.1f}% |",
+        f"| Requests | {data.requests:,} |"
+        if isinstance(data.requests, int)
+        else "| Requests | unknown |",
+        (
+            f"| Savings | ${data.savings_amount:.2f} ({data.savings_percent:.1f}%) |"
+            if isinstance(data.savings_amount, float) and isinstance(data.savings_percent, float)
+            else "| Savings | unknown |"
+        ),
+        (
+            f"| Cache Hit Rate | {data.cache_hit_rate * 100:.0f}% |"
+            if isinstance(data.cache_hit_rate, float)
+            else "| Cache Hit Rate | unknown |"
+        ),
+        (
+            f"| Compression | {data.compression_percent:.1f}% |"
+            if isinstance(data.compression_percent, float)
+            else "| Compression | unknown |"
+        ),
         f"| Top Model | {data.top_model} |",
-        f"| Uptime | {data.uptime_hours}h {data.uptime_minutes:02d}m |",
+        (
+            f"| Uptime | {data.uptime_hours}h {data.uptime_minutes:02d}m |"
+            if isinstance(data.uptime_hours, int) and isinstance(data.uptime_minutes, int)
+            else "| Uptime | unknown |"
+        ),
         f"| Errors | {data.errors} |",
-        f"| Est. Monthly | ${data.estimated_monthly_rate:.0f}/mo |",
+        (
+            f"| Est. Monthly | ${data.estimated_monthly_rate:.0f}/mo |"
+            if isinstance(data.estimated_monthly_rate, float)
+            else "| Est. Monthly | unknown |"
+        ),
     ]
     rows = data.model_compression or []
     if rows:

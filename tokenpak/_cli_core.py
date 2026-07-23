@@ -116,33 +116,38 @@ class ProxyCounters(TypedDict, total=False):
     cost_saved: float
 
 
-class VaultIndexStatus(TypedDict, total=False):
-    available: bool
-    blocks: int
-
-
 class CircuitStatus(TypedDict, total=False):
-    open: bool
+    state: str
+
+
+class CircuitBreakersPayload(TypedDict, total=False):
+    enabled: bool
+    any_open: bool
+    providers: dict[str, CircuitStatus]
 
 
 class HealthPayload(TypedDict, total=False):
-    stats: ProxyCounters
-    circuit_breakers: dict[str, CircuitStatus]
-    vault_index: VaultIndexStatus
-    compilation_mode: str
+    admission: JsonObject
+    agent_concurrency: JsonObject
+    circuit_breakers: CircuitBreakersPayload
+    compression_ratio_avg: float | None
+    connection_pool: JsonObject
+    in_flight_requests: int
+    is_degraded: bool
+    is_shutting_down: bool
+    memory_guard: JsonObject
+    requests_errors: int
+    requests_total: int
+    status: str
+    timestamp: str
+    uptime_seconds: float
     version: str
-    uptime: int
-    pythonVersion: str
-    configHash: str
-    skeleton: JsonObject | bool
-    shadow_reader: JsonObject | bool
-    canon: JsonObject | bool
-    capsule_available: JsonObject | bool
 
 
 class StatsPayload(TypedDict, total=False):
     session: ProxyCounters
     today: ProxyCounters
+    compilation_mode: str
 
 
 class CachePayload(TypedDict, total=False):
@@ -1085,10 +1090,12 @@ def cmd_setup(args: CommandArgs) -> None:
         import urllib.request
 
         health_resp = urllib.request.urlopen(f"http://localhost:{port}/health", timeout=2)
-        health_data = json.loads(health_resp.read().decode())
-        mode = health_data.get("compilation_mode", "hybrid")
+        json.loads(health_resp.read().decode())
+        stats_data = _proxy_get("/stats", port=port) or {}
+        mode = stats_data.get("compilation_mode")
 
-        print(f"✅ Proxy running on http://localhost:{port} (mode: {mode})")
+        mode_suffix = f" (mode: {mode})" if isinstance(mode, str) and mode else ""
+        print(f"✅ Proxy running on http://localhost:{port}{mode_suffix}")
     except Exception:
         print(f"✅ Proxy launched (PID {proc.pid}, port {port})")
 
@@ -1146,9 +1153,11 @@ def cmd_start(args: CommandArgs) -> None:
     # Check if proxy is already responding (covers systemd, manual, PID file)
     health = _proxy_get("/health", port=port)
     if health:
-        mode = health.get("compilation_mode", "unknown")
-        reqs = _as_int(_json_object(health.get("stats")).get("requests"))
-        print(f"Proxy already running (port {port}, mode={mode}, {reqs} requests).")
+        stats = _proxy_get("/stats", port=port) or {}
+        mode = stats.get("compilation_mode")
+        reqs = health.get("requests_total", "unknown")
+        mode_text = f", mode={mode}" if isinstance(mode, str) and mode else ""
+        print(f"Proxy already running (port {port}{mode_text}, {reqs} requests).")
         return
 
     # Check stale PID file
@@ -1202,8 +1211,10 @@ def cmd_start(args: CommandArgs) -> None:
     _t.sleep(1.5)
     health = _proxy_get("/health", port=port)
     if health:
-        mode = health.get("compilation_mode", "hybrid")
-        print(f"\n✅ Proxy running on http://localhost:{port} (mode: {mode})\n")
+        stats = _proxy_get("/stats", port=port) or {}
+        mode = stats.get("compilation_mode")
+        mode_suffix = f" (mode: {mode})" if isinstance(mode, str) and mode else ""
+        print(f"\n✅ Proxy running on http://localhost:{port}{mode_suffix}\n")
         print("Next steps:")
         print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
         print("  2. Run: tokenpak status    (check health)")
@@ -3814,35 +3825,32 @@ def build_parser() -> argparse.ArgumentParser:
 def _get_active_providers(health: HealthPayload) -> list[str]:
     """Extract active provider names from health endpoint circuit breakers."""
     cbs = health.get("circuit_breakers", {})
-    if not cbs:
+    providers = cbs.get("providers", {})
+    if not providers:
         return []
     # All providers with circuit breakers are "active" in the proxy config
-    return sorted([p for p in cbs.keys() if p])
+    return sorted([provider for provider in providers if provider])
 
 
-def _get_vault_index_status(health: HealthPayload) -> VaultIndexStatus:
-    """Extract vault index status from health endpoint."""
-    vault = health.get("vault_index", {})
-    return {
-        "available": vault.get("available", False),
-        "blocks": vault.get("blocks", 0),
-    }
-
-
-def _get_cache_hit_rate(cache: CachePayload) -> float:
-    """Calculate cache hit rate as percentage."""
+def _get_cache_hit_rate(cache: CachePayload) -> float | None:
+    """Calculate cache hit rate, preserving no-observation as unavailable."""
     if not cache:
-        return 0.0
-    hits = cache.get("cache_hits", 0)
-    misses = cache.get("cache_misses", 0)
+        return None
+    hits = cache.get("cache_hits")
+    misses = cache.get("cache_misses")
+    if (
+        not isinstance(hits, (int, float))
+        or isinstance(hits, bool)
+        or not isinstance(misses, (int, float))
+        or isinstance(misses, bool)
+    ):
+        return None
     total = hits + misses
-    return (hits / total * 100) if total > 0 else 0.0
+    return (hits / total * 100) if total > 0 else None
 
 
 def _cmd_status_legacy(args: CommandArgs) -> None:
     """Show system status — legacy technical output (now accessible via --full)."""
-    import time as _time
-
     mode = resolve_mode(args)
     fmt = OutputFormatter("Status", mode=mode, minimal=getattr(args, "minimal", False))
 
@@ -3860,8 +3868,7 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
                     "stats": stats.get("session") if stats else None,
                     "cache": cache,
                     "active_providers": _get_active_providers(health) if health else [],
-                    "vault_index": _get_vault_index_status(health) if health else {},
-                    "cache_hit_rate": _get_cache_hit_rate(cache) if cache else 0.0,
+                    "cache_hit_rate": _get_cache_hit_rate(cache) if cache else None,
                 }
             )
         )
@@ -3871,11 +3878,29 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
     print()
 
     if health:
-        s = health.get("stats", {})
-        uptime_s = _time.time() - s.get("start_time", _time.time())
-        h, rem = divmod(int(uptime_s), 3600)
-        m = rem // 60
-        uptime_str = f"{h}h {m:02d}m" if h else f"{m}m"
+        session_value = stats.get("session") if stats else None
+        s = session_value if isinstance(session_value, dict) else None
+
+        def _number(container: dict[str, Any] | None, key: str) -> int | float | None:
+            value = container.get(key) if container is not None else None
+            return (
+                value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+            )
+
+        def _count(value: int | float | None) -> str:
+            return f"{int(value):,}" if value is not None else "unknown"
+
+        def _cost(value: int | float | None) -> str:
+            return f"${float(value):.4f}" if value is not None else "unknown"
+
+        uptime_value = health.get("uptime_seconds")
+        if isinstance(uptime_value, (int, float)) and not isinstance(uptime_value, bool):
+            uptime_s = max(0.0, float(uptime_value))
+            h, rem = divmod(int(uptime_s), 3600)
+            m = rem // 60
+            uptime_str = f"{h}h {m:02d}m" if h else f"{m}m"
+        else:
+            uptime_str = "unknown"
 
         # Proxy status line
         print(
@@ -3886,18 +3911,9 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
             )
         )
         print(f"  Uptime:          {uptime_str}")
-        print(f"  Requests:        {s.get('requests', 0):,}")
-        print(f"  Errors:          {s.get('errors', 0)}")
-        print(f"  Compilation:     {health.get('compilation_mode', 'unknown')}")
-        print()
-
-        # Vault Index Status (NEW)
-        vault_status = _get_vault_index_status(health)
-        if vault_status.get("available"):
-            blocks = vault_status.get("blocks", 0)
-            print(fmt.signal(FS.ENABLED, f"Vault Index: loaded ({blocks:,} blocks)", tone="info"))
-        else:
-            print(fmt.signal(FS.DISABLED, "Vault Index: not loaded", tone="warn"))
+        print(f"  Requests:        {health.get('requests_total', 'unknown')}")
+        print(f"  Errors:          {health.get('requests_errors', 'unknown')}")
+        print(f"  Compilation:     {(stats or {}).get('compilation_mode', 'unknown')}")
         print()
 
         # Active Providers (NEW)
@@ -3916,49 +3932,44 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
         print()
 
         # Token savings
-        inp = s.get("input_tokens", 0)
-        sent = s.get("sent_input_tokens", 0)
-        saved = s.get("saved_tokens", 0)
-        protected = s.get("protected_tokens", 0)
-        pct = (saved / inp * 100) if inp > 0 else 0
-        print(f"  Tokens in:       {inp:,}")
-        print(f"  Tokens sent:     {sent:,}")
-        print(f"  Tokens saved:    {saved:,} ({pct:.1f}%)")
-        print(f"  Protected:       {protected:,}")
+        inp = _number(s, "input_tokens")
+        sent = _number(s, "sent_input_tokens")
+        saved = _number(s, "saved_tokens")
+        protected = _number(s, "protected_tokens")
+        pct = saved / inp * 100 if inp is not None and inp > 0 and saved is not None else None
+        pct_text = f"{pct:.1f}%" if pct is not None else "unknown"
+        print(f"  Tokens in:       {_count(inp)}")
+        print(f"  Tokens sent:     {_count(sent)}")
+        print(f"  Tokens saved:    {_count(saved)} ({pct_text})")
+        print(f"  Protected:       {_count(protected)}")
         print()
 
         # Cost
-        cost = s.get("cost", 0)
-        cost_saved = s.get("cost_saved", 0)
-        print(f"  Cost:            ${cost:.4f}")
-        if cost_saved > 0:
-            print(f"  Cost saved:      ${cost_saved:.4f}")
+        cost = _number(s, "cost")
+        cost_saved = _number(s, "cost_saved")
+        print(f"  Cost:            {_cost(cost)}")
+        if cost_saved is not None:
+            print(f"  Cost saved:      {_cost(cost_saved)}")
         print()
 
-        # Savings summary — prominent 💰 line
-        # cache_read_tokens is in /stats session, not /health stats
-        _stats_session = (stats or {}).get("session", {})
-        cache_read = _stats_session.get("cache_read_tokens", s.get("cache_read_tokens", 0))
-        saved_tok = s.get("saved_tokens", 0)
-        _hits = s.get("cache_hits", 0)
-        _misses = s.get("cache_misses", 0)
-        _total_cache = _hits + _misses
-        _hit_rate = (_hits / _total_cache * 100) if _total_cache > 0 else 0
-        # Cache reads save (full_price - cache_read_price) per token.
-        # Using Anthropic claude-sonnet-4 rates: $3.00/MTok input, $0.30/MTok cache read.
-        _cache_savings = cache_read * 2.70 / 1_000_000
-        # Compression savings: tokens eliminated entirely, valued at input rate.
-        _compression_savings = saved_tok * 3.00 / 1_000_000
-        _total_saved = _cache_savings + _compression_savings
-        # Compact savings status bar — prefer today's stats over session stats
-        _today = (stats or {}).get("today", {})
-        _today_input = _today.get("input_tokens", 0)
-        _today_compressed = _today.get("compressed_tokens", 0)
-        _today_cache_read = _today.get("cache_read_tokens", 0)
-        _today_total_saved_tok = _today_compressed + _today_cache_read
+        # Compact savings status bar — prefer today's stats over session stats.
+        today_value = stats.get("today") if stats else None
+        _today = today_value if isinstance(today_value, dict) else None
+        _today_input = _number(_today, "input_tokens")
+        _today_compressed = _number(_today, "compressed_tokens")
+        _today_cache_read = _number(_today, "cache_read_tokens")
+        _today_total_saved_tok = (
+            _today_compressed + _today_cache_read
+            if _today_compressed is not None and _today_cache_read is not None
+            else None
+        )
 
         # Compression % from today's data
-        _avg_compression = (_today_compressed / _today_input * 100) if _today_input > 0 else 0.0
+        _avg_compression = (
+            _today_compressed / _today_input * 100
+            if _today_input is not None and _today_input > 0 and _today_compressed is not None
+            else None
+        )
 
         # Token count formatter: K/M/raw
         def _fmt_tokens(n: float) -> str:
@@ -3969,25 +3980,27 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
             return str(n)
 
         # Cost saved from DB (injected by get_savings_report, read below)
-        _db_cost_saved = 0.0
+        _db_cost_saved: float | None = None
         try:
             from .telemetry.query_dsl import get_savings_report as _gsr
 
             _db_report = _gsr(days=1)
-            _db_cost_saved = _db_report.savings_amount if _db_report else 0.0
+            _db_cost_saved = float(_db_report.savings_amount) if _db_report else None
         except Exception:
             pass
 
         _savings_parts = []
-        if _avg_compression > 0:
+        if _avg_compression is not None and _avg_compression > 0:
             _savings_parts.append(f"{_avg_compression:.1f}% avg compression")
-        if _today_total_saved_tok > 0:
+        if _today_total_saved_tok is not None and _today_total_saved_tok > 0:
             _savings_parts.append(f"{_fmt_tokens(_today_total_saved_tok)} tokens saved today")
-        if _db_cost_saved > 0:
+        if _db_cost_saved is not None and _db_cost_saved > 0:
             _savings_parts.append(f"~${_db_cost_saved:.2f} saved today")
 
         if _savings_parts:
             print(f"  💰 Savings: {' | '.join(_savings_parts)}")
+        elif stats is None and _db_cost_saved is None:
+            print("  💰 Savings: unavailable (stats endpoint not available)")
         else:
             print("  💰 Savings: no data yet (run some requests first)")
         print()
@@ -4013,13 +4026,20 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
 
         # Cache (with NEW cache hit rate display)
         if cache:
-            hits = cache.get("cache_hits", 0)
-            misses = cache.get("cache_misses", 0)
-            total = hits + misses
+            hits = _number(cache, "cache_hits")
+            misses = _number(cache, "cache_misses")
             hit_rate = _get_cache_hit_rate(cache)
-            read_tokens = cache.get("cache_read_tokens", 0)
-            print(f"  Cache hit rate:  {hit_rate:.0f}% ({hits} hits / {misses} misses)")
-            print(f"  Cache reads:     {read_tokens:,} tokens")
+            read_tokens = _number(cache, "cache_read_tokens")
+            if hits is None or misses is None:
+                print("  Cache hit rate:  unavailable")
+            elif hit_rate is None:
+                print("  Cache hit rate:  no cache observations yet")
+            else:
+                print(
+                    f"  Cache hit rate:  {hit_rate:.0f}% "
+                    f"({_count(hits)} hits / {_count(misses)} misses)"
+                )
+            print(f"  Cache reads:     {_count(read_tokens)} tokens")
             miss_reasons = cache.get("miss_reasons", {})
             if miss_reasons and any(v > 0 for v in miss_reasons.values()):
                 reasons = [f"{k}={v}" for k, v in miss_reasons.items() if v > 0]
@@ -4046,24 +4066,14 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
         except Exception:
             pass
 
-        # Features
-        features = []
-        for feat_name, feat_data in [
-            ("skeleton", health.get("skeleton", {})),
-            ("shadow", health.get("shadow_reader", {})),
-            ("canon", health.get("canon", {})),
-            ("capsule", health.get("capsule_available", {})),
-        ]:
-            enabled = (
-                feat_data.get("enabled", False) if isinstance(feat_data, dict) else bool(feat_data)
-            )
-            features.append(f"{feat_name} {'✅' if enabled else '❌'}")
-        print(f"  Features:        {' | '.join(features)}")
-
         # Circuit breakers
         cbs = health.get("circuit_breakers", {})
-        if cbs:
-            cb_parts = [f"{k} {'✅' if not v.get('open') else '🔴'}" for k, v in cbs.items()]
+        providers = cbs.get("providers", {})
+        if providers:
+            cb_parts = [
+                f"{provider} {'🔴' if state.get('state') == 'open' else '✅'}"
+                for provider, state in providers.items()
+            ]
             print(f"  Circuits:        {' | '.join(cb_parts)}")
     else:
         print(fmt.signal(FS.DISABLED, "Proxy: not reachable", tone="warn"))
