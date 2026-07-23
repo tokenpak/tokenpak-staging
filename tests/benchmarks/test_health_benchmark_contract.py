@@ -7,6 +7,7 @@ import csv
 import importlib.util
 import json
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -327,6 +328,31 @@ def test_child_environment_is_deny_by_default(
         "PYTHONUNBUFFERED",
         "TOKENPAK_HOME",
     }
+
+
+def test_target_interpreter_probes_ignore_controller_working_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contaminated = tmp_path / "controller-checkout"
+    neutral = tmp_path / "neutral"
+    metadata = contaminated / "controller_only_drift.egg-info"
+    metadata.mkdir(parents=True)
+    neutral.mkdir()
+    (metadata / "PKG-INFO").write_text(
+        "Metadata-Version: 2.1\nName: controller-only-drift\nVersion: 9.9.9\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(contaminated)
+    probe = (
+        "import importlib.metadata as m;"
+        "print(any((d.metadata.get('Name') or '') == 'controller-only-drift' "
+        "for d in m.distributions()))"
+    )
+
+    assert BENCHMARK.command_text([sys.executable, "-c", probe]) == "True"
+    assert BENCHMARK.command_text([sys.executable, "-c", probe], cwd=neutral) == "False"
+    receipt = BENCHMARK.dependency_receipt(Path(sys.executable), neutral_cwd=neutral)
+    assert all(name != "controller-only-drift" for name, _version in receipt["packages"])
 
 
 def test_matrix_child_command_binds_each_governed_argument_once(tmp_path: Path) -> None:

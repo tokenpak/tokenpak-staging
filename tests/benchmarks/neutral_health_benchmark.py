@@ -152,10 +152,14 @@ def safe_text(path: Path) -> str:
         return f"unavailable:{type(exc).__name__}:{exc}"
 
 
-def command_text(command: Sequence[str], timeout: float = 15.0) -> str:
+def command_text(command: Sequence[str], timeout: float = 15.0, *, cwd: Path | None = None) -> str:
     try:
         return subprocess.check_output(
-            list(command), stderr=subprocess.STDOUT, text=True, timeout=timeout
+            list(command),
+            cwd=cwd,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
         ).strip()
     except (OSError, subprocess.SubprocessError) as exc:
         return f"unavailable:{type(exc).__name__}:{exc}"
@@ -977,14 +981,14 @@ def o3_success_results(
     }
 
 
-def dependency_receipt(target_python: Path) -> dict[str, Any]:
+def dependency_receipt(target_python: Path, *, neutral_cwd: Path) -> dict[str, Any]:
     snippet = (
         "import importlib.metadata as m,json,platform;"
         "print(json.dumps({'python':platform.python_version(),"
         "'implementation':platform.python_implementation(),"
         "'packages':sorted((d.metadata.get('Name',''),d.version) for d in m.distributions())}))"
     )
-    raw = command_text([str(target_python), "-c", snippet], timeout=30)
+    raw = command_text([str(target_python), "-c", snippet], timeout=30, cwd=neutral_cwd)
     try:
         result = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -1200,7 +1204,7 @@ def verify_artifact_provenance(
     }
 
 
-def verify_subject(args: argparse.Namespace) -> dict[str, Any]:
+def verify_subject(args: argparse.Namespace, *, neutral_cwd: Path) -> dict[str, Any]:
     commit_result = subprocess.run(
         ["git", "-C", str(args.repo), "cat-file", "-e", f"{args.commit}^{{commit}}"],
         stdout=subprocess.DEVNULL,
@@ -1219,7 +1223,8 @@ def verify_subject(args: argparse.Namespace) -> dict[str, Any]:
                 "import importlib.metadata as m,json;d=m.distribution('tokenpak');"
                 "print(json.dumps({'version':d.version,'root':str(d.locate_file(''))}))"
             ),
-        ]
+        ],
+        cwd=neutral_cwd,
     )
     try:
         distribution = json.loads(distribution_raw)
@@ -1409,8 +1414,10 @@ def initial_receipt(
     env: dict[str, str],
     denied_environment: list[str],
     removed_secrets: list[str],
+    *,
+    neutral_cwd: Path,
 ) -> dict[str, Any]:
-    dependencies = dependency_receipt(args.target_python)
+    dependencies = dependency_receipt(args.target_python, neutral_cwd=neutral_cwd)
     return {
         "schema": SCHEMA,
         "suite_version": SUITE_VERSION,
@@ -1612,8 +1619,16 @@ def run_one(args: argparse.Namespace) -> int:
     try:
         governed = verify_governed_inputs(args)
         env, denied_environment, removed_secrets = subject_environment(directory)
-        receipt = initial_receipt(args, governed, env, denied_environment, removed_secrets)
-        subject = verify_subject(args)
+        neutral_cwd = directory / "subject-home"
+        receipt = initial_receipt(
+            args,
+            governed,
+            env,
+            denied_environment,
+            removed_secrets,
+            neutral_cwd=neutral_cwd,
+        )
+        subject = verify_subject(args, neutral_cwd=neutral_cwd)
         receipt["subject"].update(subject)
         if not subject["verified"]:
             raise ContractError("subject source/artifact/interpreter identity did not verify")
