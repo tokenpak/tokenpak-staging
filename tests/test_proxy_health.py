@@ -133,11 +133,20 @@ def test_health_required_fields_present(proxy):
 
 @pytest.mark.quick
 def test_health_canonical_wire_contract_is_exact_and_uncached(proxy):
-    """The shipped handler keeps the 15-field/73-path canonical basic shape."""
+    """The shipped handler keeps the 15-field/73-static-path basic shape."""
     _, first = _get_health()
 
     assert set(first) == CANONICAL_HEALTH_TOP_LEVEL
-    assert len(_recursive_health_paths(first)) == 73
+    # Provider names and their breaker-status fields are a dynamic keyed map.
+    # Earlier tests may legitimately populate that process-global registry, so
+    # exclude only descendants of the map while keeping the map path itself in
+    # the exact static-shape assertion.
+    static_paths = {
+        path
+        for path in _recursive_health_paths(first)
+        if not path.startswith("$.circuit_breakers.providers.")
+    }
+    assert len(static_paths) == 73
     assert set(first["memory_guard"]) == {
         "enabled",
         "state",
