@@ -232,6 +232,67 @@ def test_wheel_payload_is_bound_to_declared_source_commit(tmp_path: Path) -> Non
     assert third["payload_mismatches"] == ["tokenpak/core.py"]
 
 
+def test_wheel_payload_accepts_tracked_relative_symlink_bytes(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    target = repo / "tokenpak/models/data/seed_catalog.json"
+    link = repo / "tokenpak/telemetry/data/pricing_catalog.json"
+    target.parent.mkdir(parents=True)
+    link.parent.mkdir(parents=True)
+    _git(repo, "init", "-q")
+    payload = b'{"model":"test"}\n'
+    target.write_bytes(payload)
+    link.symlink_to("../../models/data/seed_catalog.json")
+    commit = _commit(repo, "tracked-relative-symlink")
+    wheel = tmp_path / "tokenpak-1.0.0-py3-none-any.whl"
+    _write_test_wheel(
+        wheel,
+        {
+            "tokenpak/models/data/seed_catalog.json": payload,
+            "tokenpak/telemetry/data/pricing_catalog.json": payload,
+        },
+    )
+
+    result = BENCHMARK.wheel_source_correlation(wheel, repo, commit)
+
+    assert result["verified"] is True
+    assert result["resolved_source_links"] == ["tokenpak/telemetry/data/pricing_catalog.json"]
+    assert result["source_resolution_errors"] == {}
+
+
+@pytest.mark.parametrize(
+    ("links", "expected_error"),
+    [
+        ({"tokenpak/absolute.py": "/outside.py"}, "absolute archive link target"),
+        ({"tokenpak/escape.py": "../../outside.py"}, "escapes repository"),
+        ({"tokenpak/dangling.py": "missing.py"}, "archive member is missing"),
+        (
+            {"tokenpak/a.py": "b.py", "tokenpak/b.py": "a.py"},
+            "archive link cycle",
+        ),
+    ],
+)
+def test_wheel_payload_rejects_unsafe_tracked_symlinks(
+    tmp_path: Path, links: dict[str, str], expected_error: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    for name, target in links.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+    commit = _commit(repo, "unsafe-symlink")
+    wheel = tmp_path / "tokenpak-1.0.0-py3-none-any.whl"
+    first_name = next(iter(links))
+    _write_test_wheel(wheel, {first_name: b"untrusted\n"})
+
+    result = BENCHMARK.wheel_source_correlation(wheel, repo, commit)
+
+    assert result["verified"] is False
+    assert expected_error in result["source_resolution_errors"][first_name]
+    assert first_name not in result["missing_from_source"]
+
+
 def test_provider_credentials_are_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for key in BENCHMARK.PROVIDER_SECRET_ENV:
         monkeypatch.setenv(key, "must-not-survive")

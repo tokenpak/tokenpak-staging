@@ -31,7 +31,7 @@ import time
 import traceback
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Sequence
 
 SCHEMA = "tokenpak-health-benchmark/v1"
@@ -1000,6 +1000,79 @@ def dependency_receipt(target_python: Path) -> dict[str, Any]:
     return result
 
 
+def _archive_link_target(member_name: str, link_name: str, *, hardlink: bool) -> str:
+    """Return a normalized repository-contained target for a tar link."""
+
+    link = PurePosixPath(link_name)
+    if link.is_absolute():
+        raise ContractError("absolute archive link target")
+    parts = [] if hardlink else list(PurePosixPath(member_name).parent.parts)
+    for part in link.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                raise ContractError("archive link target escapes repository")
+            parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        raise ContractError("archive link target resolves to repository root")
+    return PurePosixPath(*parts).as_posix()
+
+
+def _git_archive_payloads(
+    source_tar: bytes, requested: set[str]
+) -> tuple[dict[str, bytes], dict[str, str], list[str]]:
+    """Resolve requested Git-archive members without following unsafe links."""
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(source_tar), mode="r:") as archive:
+            members = {member.name: member for member in archive.getmembers()}
+            regular_payloads: dict[str, bytes] = {}
+            for name, member in members.items():
+                if not member.isfile():
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is not None:
+                    regular_payloads[name] = extracted.read()
+
+            resolved_payloads: dict[str, bytes] = {}
+            resolution_errors: dict[str, str] = {}
+            resolved_links: list[str] = []
+
+            def resolve(name: str, chain: tuple[str, ...] = ()) -> bytes:
+                if name in regular_payloads:
+                    return regular_payloads[name]
+                if name in chain:
+                    cycle = " -> ".join((*chain, name))
+                    raise ContractError(f"archive link cycle: {cycle}")
+                member = members.get(name)
+                if member is None:
+                    raise ContractError("archive member is missing")
+                if not (member.issym() or member.islnk()):
+                    raise ContractError(f"unsupported archive member type: {member.type!r}")
+                target = _archive_link_target(
+                    name,
+                    member.linkname,
+                    hardlink=member.islnk(),
+                )
+                return resolve(target, (*chain, name))
+
+            for name in sorted(requested):
+                if name not in members:
+                    continue
+                try:
+                    resolved_payloads[name] = resolve(name)
+                    if members[name].issym() or members[name].islnk():
+                        resolved_links.append(name)
+                except ContractError as exc:
+                    resolution_errors[name] = str(exc)
+            return resolved_payloads, resolution_errors, resolved_links
+    except (tarfile.TarError, OSError) as exc:
+        raise ContractError(f"declared source archive is unreadable: {exc}") from exc
+
+
 def wheel_source_correlation(artifact: Path, repo: Path, commit: str) -> dict[str, Any]:
     """Correlate every wheel payload byte with the declared source commit.
 
@@ -1018,18 +1091,6 @@ def wheel_source_correlation(artifact: Path, repo: Path, commit: str) -> dict[st
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ContractError(f"declared source archive unavailable: {exc}") from exc
-    source_members: dict[str, bytes] = {}
-    try:
-        with tarfile.open(fileobj=io.BytesIO(source_tar), mode="r:") as archive:
-            for member in archive.getmembers():
-                if not member.isfile():
-                    continue
-                extracted = archive.extractfile(member)
-                if extracted is not None:
-                    source_members[member.name] = extracted.read()
-    except (tarfile.TarError, OSError) as exc:
-        raise ContractError(f"declared source archive is unreadable: {exc}") from exc
-
     try:
         wheel = zipfile.ZipFile(artifact)
     except (OSError, zipfile.BadZipFile) as exc:
@@ -1046,7 +1107,13 @@ def wheel_source_correlation(artifact: Path, repo: Path, commit: str) -> dict[st
                 continue
             wheel_members[name] = wheel.read(name)
 
-    missing_from_source = sorted(set(wheel_members) - set(source_members))
+    source_members, source_resolution_errors, resolved_source_links = _git_archive_payloads(
+        source_tar, set(wheel_members)
+    )
+
+    missing_from_source = sorted(
+        set(wheel_members) - set(source_members) - set(source_resolution_errors)
+    )
     payload_mismatches = sorted(
         name
         for name in set(wheel_members) & set(source_members)
@@ -1061,11 +1128,13 @@ def wheel_source_correlation(artifact: Path, repo: Path, commit: str) -> dict[st
         if name in source_members
     }
     result = {
-        "strategy": "wheel_payload_equals_declared_git_archive/v1",
+        "strategy": "wheel_payload_equals_declared_git_archive/v2",
         "payload_members": len(wheel_members),
         "compared_members": len(set(wheel_members) & set(source_members)),
         "unsafe_members": unsafe_members,
         "missing_from_source": missing_from_source,
+        "source_resolution_errors": source_resolution_errors,
+        "resolved_source_links": resolved_source_links,
         "payload_mismatches": payload_mismatches,
         "wheel_payload_manifest_sha256": canonical_sha256(wheel_hashes),
         "source_payload_manifest_sha256": canonical_sha256(source_hashes),
@@ -1074,6 +1143,7 @@ def wheel_source_correlation(artifact: Path, repo: Path, commit: str) -> dict[st
         wheel_members
         and not unsafe_members
         and not missing_from_source
+        and not source_resolution_errors
         and not payload_mismatches
         and result["wheel_payload_manifest_sha256"] == result["source_payload_manifest_sha256"]
     )
