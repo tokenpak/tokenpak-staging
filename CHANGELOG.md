@@ -9,7 +9,8 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [1.14.0] — 2026-07-21
 
 > Minor release: verified Codex contention recovery with typed diagnostics,
-> fail-closed eligibility, and truthful temporary-lineage receipts.
+> fail-closed eligibility, truthful temporary-lineage receipts, and a restored
+> health compatibility contract.
 
 ### Added
 
@@ -50,11 +51,25 @@ This project follows [Semantic Versioning](https://semver.org/).
   `Bearer sk-...` Responses traffic remains on the OpenAI API endpoint. Native
   zstd request entities are decoded before safe processing, and protected
   system/developer policy is never capsulized.
+- **`/health` compatibility is explicit.** The canonical endpoint returns one
+  documented, uncached basic schema on every request; `?deep=true` adds bounded
+  diagnostics. The deprecated route-mixin payload and one-second cache remain
+  available for one compatibility window instead of changing silently.
+- **Health performance checks distinguish startup from steady state.** Cold
+  listener admission and first-health observations are recorded separately
+  from the blocking warmed 100-requests-per-second check, preventing startup
+  backlog from being mislabeled as sustained endpoint latency. The warmed gate
+  retains full latency vectors, host telemetry, and fail-closed provenance.
+- **Strict typing and generated-surface provenance are enforced.** Runtime,
+  CLI, proxy, telemetry, vault, and SDK boundaries now pass the strict type
+  baseline, while public API snapshots are generated from and correlated to
+  the declared source checkout.
 
 ### Compatibility
 
 - **Breaking changes:** none. Existing launch defaults, environment overrides,
-  non-interactive behavior, and shared-history refusal semantics remain valid.
+  non-interactive behavior, shared-history refusal semantics, and the supported
+  basic `/health` response remain valid.
 - **Deprecations:** none.
 - **Migration:** none. Existing TokenPak and Codex configuration files require
   no changes.
