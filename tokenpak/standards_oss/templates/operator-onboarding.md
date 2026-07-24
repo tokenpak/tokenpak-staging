@@ -70,8 +70,8 @@ instruction is not a boundary.>
 
 | Order | Document |
 |---|---|
-| 1 | `START-HERE.md` §2 and §8 |
-| 2 | `GOVERNANCE.md` §3 and §4 |
+| 1 | `START-HERE.md` section 2 and section 8 |
+| 2 | `GOVERNANCE.md` section 3 and section 4 |
 | 3 | The compiled effective profile for this work |
 | 4 | <role-specific standards> |
 

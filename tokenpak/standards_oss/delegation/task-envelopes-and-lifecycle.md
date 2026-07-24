@@ -2,7 +2,7 @@
 id: BS-DELEGATION-TASK-ENVELOPES-AND-LIFECYCLE
 layer: delegation
 risk_class: high
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [work.accept, work.scope-change, spend.paid-action]
 ---
 

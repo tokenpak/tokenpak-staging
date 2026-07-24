@@ -17,7 +17,7 @@ operators do not ship software, and the ones who do need the spine first.
 
 **What it is not:** enforcement, a compliance framework, or a certification. This corpus provides
 `declared` and `validated` assurance only — your configuration can be checked for consistency;
-nothing here bounds behaviour at runtime. `GOVERNANCE.md` §7 states this precisely, and the pack
+nothing here bounds behaviour at runtime. `GOVERNANCE.md` section 7 states this precisely, and the pack
 holds itself to the same claim discipline it asks of you.
 
 ## The idea it is built on
@@ -72,8 +72,8 @@ believe a control is stricter than it is.
 5. Run `validate`.
 
 Nothing is applied to your project automatically, and nothing here ever writes to your agent
-instruction files. Your copy is yours to change — `GOVERNANCE.md` §11 gives you the lifecycle for
-amending it, and §11 R39 asks only that you supersede rather than delete, so you can still see why
+instruction files. Your copy is yours to change — `GOVERNANCE.md` section 11 gives you the lifecycle for
+amending it, and section 11 R39 asks only that you supersede rather than delete, so you can still see why
 you changed your mind.
 
 ## Versioning
@@ -91,4 +91,4 @@ licence, it reports that fact and stops there: what licence your work carries de
 how anyone else may use it, and that is a decision with legal consequence that belongs to you, not
 to tooling (`GOVERNANCE.md` R47–R49, `domains/software-delivery/documentation-and-presentation.md`
 R20–R24). If you have already settled the question, record it as a standing order and the notice
-stops (`GOVERNANCE.md` §13b).
+stops (`GOVERNANCE.md` section 13b).

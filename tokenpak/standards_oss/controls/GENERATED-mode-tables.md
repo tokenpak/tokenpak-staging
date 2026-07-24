@@ -1,5 +1,5 @@
 <!-- GENERATED FILE — DO NOT EDIT BY HAND. -->
-<!-- generator: tools/standards.py · source-hash: 7b80e500b192aad0 -->
+<!-- generator: tools/standards.py · source-hash: 7877d31b08a0440b -->
 
 # Mode tables (generated)
 

@@ -2,7 +2,7 @@
 id: BS-GOVERNANCE
 standards_version: 1.0.0
 risk_class: critical
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 ---
 
 # Governance
@@ -172,7 +172,7 @@ Canonical per-control fields:
 | `executor` | yes | Who or what performs it |
 | `authorizer` | yes | Who authorizes it |
 | `authorization_type` | yes | `explicit` · `standing-envelope` · `none-required` |
-| `independence_requirement` | yes | `none` · `separate-actor` · `independent` (§3a) |
+| `independence_requirement` | yes | `none` · `separate-actor` · `independent` (section 3a) |
 | `mode_override_allowed` | yes | Whether an authority profile may change these values |
 | `authorization_timing` | no | `before` · `before-and-revalidated` · `after-within-sla` |
 | `scope_or_envelope` | no | Limits on what the authorization covers |
@@ -198,10 +198,10 @@ Three, plus a tightening example. Each sets a default value per control class.
 |---|---|
 | `assisted` | Operator authorizes all substantive actions |
 | `supervised` | Named control points route to operator or reviewer; the rest proceeds with a record |
-| `bounded-autonomous` | Work proceeds on evidence with batched notification; §4 protections unchanged |
+| `bounded-autonomous` | Work proceeds on evidence with batched notification; section 4 protections unchanged |
 
 **R20.** No authority profile may alter a `mode_override_allowed: false` control. `bounded-autonomous`
-is bounded by §4, permanently and by construction.
+is bounded by section 4, permanently and by construction.
 
 **R21.** Authority resolves **per control point**, not globally. A profile is a set of defaults; an
 operator may tighten any individual control without forking a profile or a document.
@@ -318,7 +318,7 @@ pointing to what replaced it. Deleting the record destroys the reasoning.
 | Substantive | Changes a requirement's meaning or adds one | Operator or designated reviewer |
 | Structural | Changes the authority model, a protected category, or the conformance ladder | Operator only |
 
-**R41.** A change touching §2, §4, or §7 is structural by definition.
+**R41.** A change touching section 2, section 4, or section 7 is structural by definition.
 
 **R42.** The corpus SHOULD be reviewed on a stated cadence. A standard that has not been read since
 it was written is not known to be true. Record the review date; an unreviewed standard is a
@@ -373,7 +373,7 @@ continues. Where the absent answer *does* gate a protected action, R14 applies a
 
 **R51.** An operator MAY record **standing orders** — durable instructions about how their work is to
 be run — in their adoption file. Standing orders **take precedence over this corpus's defaults and
-recommendations**, including over the behaviour in §13a: where a standing order already answers a
+recommendations**, including over the behaviour in section 13a: where a standing order already answers a
 question, the tooling follows it and does not re-surface the gap.
 
 **R52.** A standing order MUST record its author and the date it took effect, so precedence can be
@@ -399,9 +399,9 @@ their behaviour.
 | **Authority profile** | Who authorizes what |
 | **Effective profile** | Compiled result of coverage + authority + local tightening, all fields resolved |
 | **Envelope** | The bounded scope within which delegated authority is valid |
-| **Independent** | Satisfying all four tests in §3a |
+| **Independent** | Satisfying all four tests in section 3a |
 | **Instance** | A concrete action registered against an action class by a domain module |
-| **Protected action** | An action in a §4 category; not overridable by profile |
+| **Protected action** | An action in a section 4 category; not overridable by profile |
 | **Receipt** | Retained evidence that a specific check ran and what it found |
 | **Supersede** | Replace a rule while preserving the record of the old one |
 

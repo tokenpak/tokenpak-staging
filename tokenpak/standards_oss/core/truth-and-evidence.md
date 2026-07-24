@@ -2,7 +2,7 @@
 id: BS-CORE-TRUTH-AND-EVIDENCE
 layer: core
 risk_class: critical
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points: [work.accept, publish.external-revocable, publish.external-irreversible]
 ---
 

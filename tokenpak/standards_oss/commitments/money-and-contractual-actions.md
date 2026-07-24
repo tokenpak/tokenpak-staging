@@ -2,7 +2,7 @@
 id: BS-COMMITMENTS-MONEY-AND-CONTRACTUAL-ACTIONS
 layer: commitments
 risk_class: critical
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points:
   [finance.payment-authorize, finance.payment-destination-new, legal.commitment, commit.external-promise]
 ---

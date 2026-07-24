@@ -2,7 +2,7 @@
 id: BS-INFORMATION-SECURITY-ACCESS-AND-CREDENTIALS
 layer: information
 risk_class: critical
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points: [access.credential-change, access.key-custody-transfer, access.grant-escalation]
 ---
 

@@ -3,7 +3,7 @@
 **Trigger:** the work ships installable, versioned software that other people run.
 
 If that is not your work, skip this module. The spine already covers you, and
-`domains/README.md` §3 maps common non-software work onto it.
+`domains/README.md` section 3 maps common non-software work onto it.
 
 ## What this module adds
 

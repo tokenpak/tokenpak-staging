@@ -2,7 +2,7 @@
 id: BS-COMMITMENTS-STAKEHOLDER-AND-SUPPORT
 layer: commitments
 risk_class: high
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [commit.external-promise, work.scope-change, data.disclose-external]
 ---
 

@@ -2,7 +2,7 @@
 id: BS-CONTINUITY-WORKSPACE-AND-FILE-SAFETY
 layer: continuity
 risk_class: high
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [record.history-alter, data.destroy]
 ---
 

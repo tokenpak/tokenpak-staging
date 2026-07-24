@@ -2,7 +2,7 @@
 id: BS-DELEGATION-ROLES-AND-AUTHORITY
 layer: delegation
 risk_class: high
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [access.grant-escalation, escalation.stop, work.scope-change]
 ---
 
@@ -24,7 +24,7 @@ people do the work.**
 
 ### Roles are functions
 
-**R1.** Assign the five functions in `GOVERNANCE.md` §3 — operator, delegate, reviewer, executor,
+**R1.** Assign the five functions in `GOVERNANCE.md` section 3 — operator, delegate, reviewer, executor,
 auditor — to actual actors. One person may hold several. An agent may hold executor, and may hold
 reviewer for work it did not produce.
 

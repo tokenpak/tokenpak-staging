@@ -1,7 +1,7 @@
 # Waiver — <requirement being waived>
 
 > Template. Replace everything in angle brackets. Delete this line.
-> Referenced by: `GOVERNANCE.md` §9.
+> Referenced by: `GOVERNANCE.md` section 9.
 > **Any missing field below means no waiver exists.** This is not a formality — an unexpiring,
 > unowned waiver is how a standard quietly stops applying.
 

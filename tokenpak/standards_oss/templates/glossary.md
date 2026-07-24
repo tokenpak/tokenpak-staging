@@ -18,7 +18,7 @@ yours below it. Redefining a normative term silently changes what every standard
 | **Envelope** | The bounded scope within which delegated authority or a task is valid |
 | **Expedited** | Compressed or reordered, never exempt from authorization or correctness |
 | **Hard floor** | The protected categories no profile can weaken |
-| **Independent** | Satisfying all four tests in `GOVERNANCE.md` §3a |
+| **Independent** | Satisfying all four tests in `GOVERNANCE.md` section 3a |
 | **Instance** | A concrete action registered against an action class by a domain module |
 | **Lane** | The single integration route into a shared surface |
 | **Managed write** | A tool-performed write to a user-owned file, under preview and consent |

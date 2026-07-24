@@ -1,7 +1,7 @@
 # Coverage profile — starter
 #
 # For anyone beginning, or for work that is small and personal. These eight documents are the
-# onboarding path in START-HERE.md §6. Everything else waits until it is triggered.
+# onboarding path in START-HERE.md section 6. Everything else waits until it is triggered.
 #
 # Coverage adds; it never subtracts (GOVERNANCE.md R13). Protected-action definitions and the
 # universal invariants remain loaded regardless of this profile.
@@ -32,4 +32,4 @@ triggers_that_expand_this_profile:
   - trigger: work_ships_installable_or_versioned_software
     adds_profile: product-delivery
   - trigger: multiple_executors_work_concurrently_on_shared_resources
-    adds_profile: multi-agent-fleet
+    adds_profile: multi-agent

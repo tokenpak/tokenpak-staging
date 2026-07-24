@@ -50,7 +50,7 @@ approval to seek — your copy is yours. `authority/strict.yaml` is a worked exa
 
 Two things a profile cannot do, however you write it:
 
-- It cannot alter a protected control (GOVERNANCE.md §4, R20).
+- It cannot alter a protected control (GOVERNANCE.md section 4, R20).
 - It cannot let an executor accept its own work (R5).
 
 ## 4. Reading a compiled profile

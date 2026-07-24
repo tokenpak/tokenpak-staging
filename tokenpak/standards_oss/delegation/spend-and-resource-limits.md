@@ -2,7 +2,7 @@
 id: BS-DELEGATION-SPEND-AND-RESOURCE-LIMITS
 layer: delegation
 risk_class: critical
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points: [spend.paid-action, spend.limit-change, finance.payment-authorize]
 ---
 

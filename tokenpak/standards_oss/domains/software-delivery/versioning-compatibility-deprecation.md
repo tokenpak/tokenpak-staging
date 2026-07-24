@@ -2,7 +2,7 @@
 id: BS-SWDEL-VERSIONING-COMPATIBILITY-DEPRECATION
 layer: domains/software-delivery
 risk_class: high
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [publish.external-irreversible, commit.external-promise]
 ---
 

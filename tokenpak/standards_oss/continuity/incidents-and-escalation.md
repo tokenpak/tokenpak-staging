@@ -2,7 +2,7 @@
 id: BS-CONTINUITY-INCIDENTS-AND-ESCALATION
 layer: continuity
 risk_class: critical
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points: [escalation.stop, recovery.rollback, governance.waiver]
 ---
 

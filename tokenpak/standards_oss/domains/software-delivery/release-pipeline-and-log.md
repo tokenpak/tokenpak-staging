@@ -2,7 +2,7 @@
 id: BS-SWDEL-RELEASE-PIPELINE-AND-LOG
 layer: domains/software-delivery
 risk_class: critical
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points:
   [publish.external-irreversible, publish.external-revocable, governance.waiver, integrate.shared-baseline]
 ---

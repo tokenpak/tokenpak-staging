@@ -2,7 +2,7 @@
 id: BS-SWDEL-CHANGE-AND-CODE-PRACTICE
 layer: domains/software-delivery
 risk_class: moderate
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [integrate.shared-baseline, work.scope-change]
 ---
 

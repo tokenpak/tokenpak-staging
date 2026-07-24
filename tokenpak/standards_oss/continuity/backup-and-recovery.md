@@ -2,7 +2,7 @@
 id: BS-CONTINUITY-BACKUP-AND-RECOVERY
 layer: continuity
 risk_class: high
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [data.destroy, recovery.rollback]
 ---
 

@@ -8,8 +8,8 @@
 # that performs it. Domain modules register concrete instances against a class; an instance may
 # tighten its class, never loosen it (R16).
 #
-# Field reference: GOVERNANCE.md §5.
-# Protected controls (GOVERNANCE.md §4) carry mode_override_allowed: false and populate all
+# Field reference: GOVERNANCE.md section 5.
+# Protected controls (GOVERNANCE.md section 4) carry mode_override_allowed: false and populate all
 # canonical fields (R18). Authority profiles MUST NOT contain entries for them (R20).
 
 schema: baseline-standards/controls/1.0

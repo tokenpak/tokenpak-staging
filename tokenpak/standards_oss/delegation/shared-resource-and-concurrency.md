@@ -2,7 +2,7 @@
 id: BS-DELEGATION-SHARED-RESOURCE-AND-CONCURRENCY
 layer: delegation
 risk_class: high
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [integrate.shared-baseline, work.scope-change]
 ---
 

@@ -2,7 +2,7 @@
 id: BS-CORE-RECORDS-AND-AUDITABILITY
 layer: core
 risk_class: high
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points: [record.history-alter, governance.waiver, governance.standard-change]
 ---
 

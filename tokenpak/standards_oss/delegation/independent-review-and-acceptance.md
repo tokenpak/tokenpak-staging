@@ -2,7 +2,7 @@
 id: BS-DELEGATION-INDEPENDENT-REVIEW-AND-ACCEPTANCE
 layer: delegation
 risk_class: critical
-default_coverage_profiles: [delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [delegated-work, product-delivery, multi-agent]
 control_points: [work.accept, integrate.shared-baseline]
 ---
 
@@ -23,7 +23,7 @@ Any work reviewed by anyone other than its author — which, above a risk thresh
 
 ### Independence
 
-**R1.** A reviewer is independent only if all four tests in `GOVERNANCE.md` §3a hold: it did not
+**R1.** A reviewer is independent only if all four tests in `GOVERNANCE.md` section 3a hold: it did not
 author the work; it does not share the author's session or take the author's assumptions as sole
 input; it cannot write to the evidence it evaluates; and it does not share the author's incentive to
 declare completion.

@@ -15,11 +15,11 @@ project:
   description: REPLACE_ME
 
 profiles:
-  coverage: starter               # starter | delegated-work | product-delivery | multi-agent-fleet
+  coverage: starter               # starter | delegated-work | product-delivery | multi-agent
   authority: supervised           # assisted | supervised | bounded-autonomous | <your own>
 
 # ---------------------------------------------------------------------------
-# Capability declarations — START-HERE.md §4
+# Capability declarations — START-HERE.md section 4
 #
 # value: yes | no | unknown.  `unknown` on a capability tied to a protected action BLOCKS that
 # action (GOVERNANCE.md R14). Silence is never evidence of absence — only this file speaks.
@@ -100,7 +100,7 @@ budgets:
   measurement_unavailable: stop-cleanly    # fail closed; never "assume within budget"
 
 # ---------------------------------------------------------------------------
-# Escalation — START-HERE.md §5 step 5
+# Escalation — START-HERE.md section 5 step 5
 #
 # The target is not a blocker by default. Say what happens when nobody answers.
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ local_requirements: []
   # Requirements you add that this corpus does not contain. Free-form; yours.
 
 # ---------------------------------------------------------------------------
-# Standing orders — GOVERNANCE.md §13b
+# Standing orders — GOVERNANCE.md section 13b
 #
 # Durable instructions about how your work is run. These TAKE PRECEDENCE over this corpus's
 # defaults and recommendations: where a standing order already answers a question, the tooling

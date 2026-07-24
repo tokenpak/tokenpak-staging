@@ -2,7 +2,7 @@
 id: BS-CORE-WORK-INTAKE-AND-ACCEPTANCE
 layer: core
 risk_class: high
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points: [work.accept, work.scope-change]
 ---
 

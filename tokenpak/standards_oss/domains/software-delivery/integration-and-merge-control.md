@@ -2,7 +2,7 @@
 id: BS-SWDEL-INTEGRATION-AND-MERGE-CONTROL
 layer: domains/software-delivery
 risk_class: high
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [integrate.shared-baseline, access.grant-escalation, record.history-alter]
 ---
 

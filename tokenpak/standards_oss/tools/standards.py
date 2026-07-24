@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
 
 try:
     import jsonschema  # type: ignore
+
     HAVE_JSONSCHEMA = True
 except ImportError:
     HAVE_JSONSCHEMA = False
@@ -102,7 +103,9 @@ class Report:
             print(f"ERROR:   {e}")
 
         if self.decisions:
-            print("\nOPEN DECISIONS — these are yours to make; nothing here has been decided for you:")
+            print(
+                "\nOPEN DECISIONS — these are yours to make; nothing here has been decided for you:"
+            )
             for missing, why, who in self.decisions:
                 print(f"  · {missing}")
                 print(f"      why it matters: {why}")
@@ -183,8 +186,14 @@ def load_instances() -> list[dict]:
 def schema_validate(rep: Report) -> None:
     pairs = [
         (ROOT / "controls" / "controls.yaml", "control.schema.json"),
-        *[(p, "coverage-profile.schema.json") for p in sorted((ROOT / "profiles" / "coverage").glob("*.yaml"))],
-        *[(p, "authority-profile.schema.json") for p in sorted((ROOT / "profiles" / "authority").glob("*.yaml"))],
+        *[
+            (p, "coverage-profile.schema.json")
+            for p in sorted((ROOT / "profiles" / "coverage").glob("*.yaml"))
+        ],
+        *[
+            (p, "authority-profile.schema.json")
+            for p in sorted((ROOT / "profiles" / "authority").glob("*.yaml"))
+        ],
     ]
     adoption = ROOT / "profiles" / "project-adoption.yaml"
     if adoption.exists():
@@ -231,21 +240,33 @@ def semantic_validate(rep: Report) -> None:
             rep.error(f"control {cid}: protected but no protected_category")
         if ctl.get("protected_category") == "non-delegable":
             if ctl.get("baseline", {}).get("executor") != "operator":
-                rep.error(f"control {cid}: non-delegable but executor is not operator (GOVERNANCE 4a)")
+                rep.error(
+                    f"control {cid}: non-delegable but executor is not operator (GOVERNANCE 4a)"
+                )
         needs_full = protected or ctl.get("reversibility_class") == "irreversible"
         if needs_full:
-            for field in ("scope_or_envelope", "expiration", "required_evidence", "fallback", "enforcement"):
+            for field in (
+                "scope_or_envelope",
+                "expiration",
+                "required_evidence",
+                "fallback",
+                "enforcement",
+            ):
                 if field not in ctl:
                     rep.error(f"control {cid}: protected/irreversible but missing '{field}' (R18)")
             if "authorization_timing" not in ctl.get("baseline", {}):
-                rep.error(f"control {cid}: protected/irreversible but baseline lacks authorization_timing (R18)")
+                rep.error(
+                    f"control {cid}: protected/irreversible but baseline lacks authorization_timing (R18)"
+                )
 
     # --- authority profiles must not touch protected controls (R20)
     for prof_path in sorted((ROOT / "profiles" / "authority").glob("*.yaml")):
         prof = load_yaml(prof_path) or {}
         rel = prof_path.relative_to(ROOT)
         if prof.get("standards_version") != version:
-            rep.error(f"{rel}: standards_version {prof.get('standards_version')} != corpus {version} (R45)")
+            rep.error(
+                f"{rel}: standards_version {prof.get('standards_version')} != corpus {version} (R45)"
+            )
         for cid, overrides in (prof.get("controls") or {}).items():
             if cid not in controls:
                 rep.error(f"{rel}: unknown control '{cid}'")
@@ -263,7 +284,9 @@ def semantic_validate(rep: Report) -> None:
         # Executors never accept their own work (R5).
         accept = (prof.get("controls") or {}).get("work.accept", {})
         if accept.get("independence_requirement") == "none":
-            rep.error(f"{rel}: work.accept independence 'none' — an executor would accept its own work (R5)")
+            rep.error(
+                f"{rel}: work.accept independence 'none' — an executor would accept its own work (R5)"
+            )
 
     # --- coverage profiles reference real standards
     coverage_ids = set()
@@ -298,7 +321,9 @@ def semantic_validate(rep: Report) -> None:
         fm = read_frontmatter(path)
         for cid in fm.get("control_points") or []:
             if cid not in controls:
-                rep.error(f"{path.relative_to(ROOT)}: control_points references unknown control '{cid}'")
+                rep.error(
+                    f"{path.relative_to(ROOT)}: control_points references unknown control '{cid}'"
+                )
 
     # --- domain instances map onto real classes and only tighten (domains/README M3)
     for inst in load_instances():
@@ -308,12 +333,19 @@ def semantic_validate(rep: Report) -> None:
             rep.error(f"{src}: instance '{iid}' maps to unknown control class '{cls}'")
             continue
         base = controls[cls]
-        merged = {**base.get("baseline", {}), **{k: v for k, v in base.items() if k in CANONICAL_FIELDS}}
+        merged = {
+            **base.get("baseline", {}),
+            **{k: v for k, v in base.items() if k in CANONICAL_FIELDS},
+        }
         for field, value in (inst.get("tightens") or {}).items():
             if field in LATTICE:
                 order = LATTICE[field]
                 current = merged.get(field)
-                if current in order and value in order and order.index(value) < order.index(current):
+                if (
+                    current in order
+                    and value in order
+                    and order.index(value) < order.index(current)
+                ):
                     rep.error(
                         f"{src}: instance '{iid}' loosens {field} from '{current}' to '{value}' — "
                         f"instances may only tighten (M3)"
@@ -324,7 +356,9 @@ def semantic_validate(rep: Report) -> None:
     if adoption_path.exists():
         validate_adoption(rep, adoption_path, controls, version)
     else:
-        rep.note("no profiles/project-adoption.yaml — copy project-adoption.example.yaml to create one")
+        rep.note(
+            "no profiles/project-adoption.yaml — copy project-adoption.example.yaml to create one"
+        )
 
     surface_open_decisions(rep, controls)
 
@@ -348,7 +382,7 @@ def find_project_root() -> Path:
 
 
 def standing_orders() -> dict[str, dict]:
-    """Operator standing orders, keyed by the subject they settle (GOVERNANCE.md §13b)."""
+    """Operator standing orders, keyed by the subject they settle (GOVERNANCE.md section 13b)."""
     data = load_yaml(ROOT / "profiles" / "project-adoption.yaml") or {}
     return {o["covers"]: o for o in (data.get("standing_orders") or []) if o.get("covers")}
 
@@ -384,8 +418,11 @@ def surface_open_decisions(rep: Report, controls: dict) -> None:
 
     # --- licensing
     if not settled("licensing"):
-        found = [p.name for p in project_root.iterdir()
-                 if p.is_file() and p.name.split(".")[0].upper() in {"LICENSE", "LICENCE", "COPYING"}]
+        found = [
+            p.name
+            for p in project_root.iterdir()
+            if p.is_file() and p.name.split(".")[0].upper() in {"LICENSE", "LICENCE", "COPYING"}
+        ]
         if not found:
             rep.decision(
                 f"No licence file found in {project_root}",
@@ -632,7 +669,9 @@ def main() -> int:
             print("ERROR: generated tables missing — run: python tools/standards.py generate")
             return 1
         if GENERATED.read_text(encoding="utf-8") != render_tables():
-            print("ERROR: generated tables have drifted from their sources (regenerate; never edit)")
+            print(
+                "ERROR: generated tables have drifted from their sources (regenerate; never edit)"
+            )
             return 1
         print("generated output is current.")
         return 0

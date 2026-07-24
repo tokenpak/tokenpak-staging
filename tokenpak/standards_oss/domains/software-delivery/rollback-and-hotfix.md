@@ -2,7 +2,7 @@
 id: BS-SWDEL-ROLLBACK-AND-HOTFIX
 layer: domains/software-delivery
 risk_class: critical
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [recovery.rollback, publish.external-irreversible, record.history-alter, governance.waiver]
 ---
 

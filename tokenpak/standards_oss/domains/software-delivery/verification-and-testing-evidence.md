@@ -2,7 +2,7 @@
 id: BS-SWDEL-VERIFICATION-AND-TESTING-EVIDENCE
 layer: domains/software-delivery
 risk_class: high
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [work.accept, integrate.shared-baseline]
 ---
 
@@ -83,7 +83,7 @@ risk into a false assurance (`GOVERNANCE.md` R24).
 to blocking ones teach people to ignore both.
 
 **R16.** A check disabled to unblock work is a **waiver**: recorded, with an expiry and an owner
-(`GOVERNANCE.md` §9).
+(`GOVERNANCE.md` section 9).
 
 ---
 

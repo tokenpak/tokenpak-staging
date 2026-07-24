@@ -1,4 +1,4 @@
-# Coverage profile — multi-agent-fleet
+# Coverage profile — multi-agent
 #
 # For work where several executors act concurrently against shared resources. Nothing new is
 # selected here; what changes is that concurrency control and records stop being optional practice
@@ -6,7 +6,7 @@
 
 schema: baseline-standards/coverage-profile/1.0
 standards_version: 1.0.0
-id: multi-agent-fleet
+id: multi-agent
 extends: product-delivery
 
 description: >

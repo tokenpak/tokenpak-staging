@@ -4,7 +4,7 @@
 # recommend; you decide.
 #
 # This file sets values ONLY for controls with mode_override_allowed: true.
-# Protected controls (GOVERNANCE.md §4) are not listed and cannot be set here — the validator
+# Protected controls (GOVERNANCE.md section 4) are not listed and cannot be set here — the validator
 # rejects any profile that tries (GOVERNANCE.md R20).
 
 schema: baseline-standards/authority-profile/1.0

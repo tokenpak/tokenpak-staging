@@ -2,7 +2,7 @@
 id: BS-CORE-RISK-AND-PROTECTED-ACTIONS
 layer: core
 risk_class: critical
-default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent-fleet]
+default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 control_points:
   [publish.external-irreversible, record.history-alter, data.destroy, data.disclose-external,
    access.credential-change, access.key-custody-transfer, access.grant-escalation,
@@ -44,7 +44,7 @@ it was public.
 
 ### The three protected categories
 
-**R4.** The protected categories in `GOVERNANCE.md` §4 bind in every authority profile, including
+**R4.** The protected categories in `GOVERNANCE.md` section 4 bind in every authority profile, including
 `bounded-autonomous`. No profile, preset, configuration, or urgency changes this.
 
 **R5.** **Non-delegable** actions are performed by a human. An agent MAY prepare, stage, verify, and

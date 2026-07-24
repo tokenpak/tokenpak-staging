@@ -2,7 +2,7 @@
 id: BS-COMMITMENTS-EXTERNAL-CLAIMS-AND-EVIDENCE
 layer: commitments
 risk_class: high
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [publish.external-revocable, publish.external-irreversible, commit.external-promise]
 ---
 

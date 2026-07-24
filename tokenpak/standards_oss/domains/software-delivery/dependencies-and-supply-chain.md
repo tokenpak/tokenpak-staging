@@ -2,7 +2,7 @@
 id: BS-SWDEL-DEPENDENCIES-AND-SUPPLY-CHAIN
 layer: domains/software-delivery
 risk_class: high
-default_coverage_profiles: [product-delivery, multi-agent-fleet]
+default_coverage_profiles: [product-delivery, multi-agent]
 control_points: [work.accept, publish.external-irreversible, access.credential-change]
 ---
 
