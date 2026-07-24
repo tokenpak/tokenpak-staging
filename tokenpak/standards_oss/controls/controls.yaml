@@ -13,7 +13,7 @@
 # canonical fields (R18). Authority profiles MUST NOT contain entries for them (R20).
 
 schema: baseline-standards/controls/1.0
-standards_version: 1.0.0
+standards_version: 1.1.0
 
 # ---------------------------------------------------------------------------
 # Vocabulary used below

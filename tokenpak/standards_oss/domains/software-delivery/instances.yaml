@@ -5,7 +5,7 @@
 # (domains/README.md M3).
 
 schema: baseline-standards/instances/1.0
-standards_version: 1.0.0
+standards_version: 1.1.0
 module: software-delivery
 trigger: work_ships_installable_or_versioned_software
 

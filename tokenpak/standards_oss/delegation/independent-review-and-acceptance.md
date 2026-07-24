@@ -90,6 +90,32 @@ everywhere makes routine work expensive and trains people to route around it.
 **R16.** Where multiple reviewers are used, their **basis for agreeing** matters more than the count.
 Three reviewers given the same summary have checked the summary.
 
+### When no acceptor is available
+
+**R19.** Where the required acceptance path cannot be satisfied by any available actor — most often
+because the only candidate authored the work — the correct response is to **convene a separate
+acceptance lane**. Self-accepting and stalling indefinitely are both wrong, and the absence of a
+reviewer is not a reason to lower the acceptance path (R5).
+
+**R20.** An acceptance lane is: a named actor or role outside the producing context, given the
+acceptance criteria and the evidence, with real authority to return *not accepted*. It may be a
+person, another team, a differently-constituted agent, a scheduled governor review, or an external
+reviewer.
+
+**R21.** **Convening a lane is the producer's job; staffing it is not.** The producer may open the
+lane, supply evidence, and set the deadline. They MUST NOT staff it with themselves, nor with any
+actor failing one of the four independence tests in `GOVERNANCE.md` section 3a.
+
+**R22.** A lane MUST carry a deadline and a declared behaviour on no response — escalate, or hold.
+**Never auto-accept.** Silence is not acceptance, in any authority profile.
+
+**R23.** Where no lane can be convened at all, that is a finding about capacity: record it, and the
+work holds at `submitted`. Work is never accepted for want of a reviewer.
+
+**R24.** This applies with full force when the artifact being accepted is the governance itself.
+Authority to proceed and independent acceptance are separate things (`GOVERNANCE.md` R37); being
+authorized to act does not make you the right party to judge your own output.
+
 ### Escalating deliberation
 
 **R17.** Where a decision is contested and consequential, deliberation SHOULD be **advisory first**:
@@ -118,9 +144,9 @@ Note that `work.accept` requires at least `separate-actor` in **every** authorit
 
 ## Exceptions and stop conditions
 
-**Stop** when the required acceptance path is unavailable — no independent reviewer exists, or the
-only candidate fails a test. The correct responses are: wait, find another reviewer, or reduce the
-scope until it fits a lower risk class honestly. Proceeding with a review you know is not independent
+**Stop and convene a lane** (R19-R23) when the required acceptance path is unavailable — no
+independent reviewer exists, or the only candidate fails a test. Waiting without opening a lane is
+just a slower version of stalling. Proceeding with a review you know is not independent
 while recording it as one is a false record.
 
 ## Anti-patterns
@@ -142,3 +168,4 @@ while recording it as one is a false record.
 | Version | Change |
 |---|---|
 | 1.0.0 | Initial. |
+| 1.1.0 | Added R19-R24: convene an acceptance lane when no acceptor is available. |
