@@ -250,6 +250,7 @@ tokenpak = [
     "companion/hooks/*.sh",
     "companion/codex/*.sh",
     "companion/codex/skills/*/SKILL.md",
+    "standards_oss/**/*",
 ]
 
 [tool.setuptools.dynamic]
