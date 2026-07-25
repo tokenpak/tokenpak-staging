@@ -42,8 +42,8 @@ def test_docs_index_has_trust_and_editions_section():
 def test_cli_reference_labels_audit_and_compliance_as_surfaces():
     text = _read("docs/cli-reference.md")
 
-    assert "Audit log surface (Pro/Enterprise)" in text
-    assert "Compliance report surface (Pro/Enterprise)" in text
+    assert "Audit log surface (Pro)" in text
+    assert "Compliance report surface (Pro)" in text
 
 
 def test_compliance_stub_points_to_docs(capsys):
@@ -52,7 +52,7 @@ def test_compliance_stub_points_to_docs(capsys):
 
     assert args.func(args) is None
     out = capsys.readouterr().out
-    assert "Pro/Enterprise" in out
+    assert "(Pro)" in out
     assert "docs/guides/enterprise/compliance-mapping.md" in out
 
 
@@ -62,18 +62,18 @@ def test_audit_stub_points_to_security_docs(capsys):
 
     assert args.func(args) is None
     out = capsys.readouterr().out
-    assert "Pro/Enterprise" in out
+    assert "(Pro)" in out
     assert "docs/guides/enterprise/security-architecture.md" in out
 
 
-def test_registry_describes_pro_enterprise_report_surfaces():
+def test_registry_describes_pro_report_surfaces():
     payload = json.loads(_read("tokenpak/core/registry/commands.json"))
     commands = {item["command"]: item for item in payload["commands"]}
 
     compliance = commands["compliance"]
     audit = commands["audit"]
-    assert "Pro/Enterprise" in compliance["description"]
+    assert "(Pro)" in compliance["description"]
     assert "compliance-mapping.md" in compliance["detail"]
     assert "does not unlock compliance reports" in compliance["detail"]
-    assert "Pro/Enterprise" in audit["description"]
+    assert "(Pro)" in audit["description"]
     assert "security-architecture.md" in audit["detail"]

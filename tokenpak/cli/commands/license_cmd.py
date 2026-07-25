@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """CLI handlers for `tokenpak license`, `tokenpak plan`, `tokenpak activate`,
-`tokenpak deactivate`. Free-tier today; Pro/Team/Enterprise surface ready.
+`tokenpak deactivate`. Free-tier today; Pro surface ready.
 """
 
 from __future__ import annotations

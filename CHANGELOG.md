@@ -6,6 +6,69 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+> Next release is **v1.16.0 (MINOR)** and carries two **BREAKING** changes: the `crewai` extra
+> is removed, and the license tier ladder drops its two top rungs. It cannot be cut as a PATCH.
+
+### Changed
+
+- **BREAKING — the tier ladder is now `free < pro`.** The two tiers above Pro are
+  retired and Pro introduces every feature they used to: `tokenpak_server`,
+  `seat_management`, `team_analytics`, `audit_log` and `sla` all resolve to
+  `pro`. This supersedes the ladder described under 1.15.0 below.
+
+  No license above Pro could be issued, so every feature gated above Pro was
+  unreachable by anyone holding a real license — including `tokenpak_server`,
+  which gates the daemon that the paid tier is defined by. A valid Pro licensee
+  could not run it.
+
+  `required_tier_for` returns `"pro"` for all of the above. The two retired
+  members are gone from the `LicenseTier` enum, so code that names one, or that
+  assumes four rungs, no longer imports; the ladder is available from
+  `LicenseTier.ladder()` and the tier names from
+  `tokenpak.licensing.known_tiers()` rather than being hardcoded.
+
+- The per-key rate-limit table in the (unshipped) intelligence server collapses
+  to `free: 20/min`, `pro: 100/min`.
+
+### Added
+
+- `tokenpak.licensing.known_tiers()` — tier names in ascending capability
+  order, so callers rendering a tier list do not hardcode one.
+
+### Removed
+
+- **BREAKING — the `crewai` optional extra.** `pip install tokenpak[crewai]` no longer resolves.
+
+  It was the only path by which `chromadb` entered the dependency graph, and every published
+  chromadb 1.x is covered by CVE-2026-45829 with no fixed release available — crewai pins
+  `chromadb~=1.1.0`, so there was no version to move to and the constraint was not ours to relax.
+  Carrying an unfixable critical advisory for an integration that is not a focus was the wrong
+  trade, so the extra is gone rather than documented around.
+
+  **No capability is lost.** The CrewAI adapter under `tokenpak/sdk/crewai/` never imported crewai —
+  it is a set of context and handoff wrappers — and it continues to work unchanged. If you use it,
+  install crewai yourself alongside TokenPak:
+
+  ```
+  pip install tokenpak crewai
+  ```
+
+  **Read this before following that line.** Installing crewai yourself brings `chromadb~=1.1.0` and
+  therefore CVE-2026-45829, exactly as the extra did. The advisory left TokenPak's dependency graph;
+  it did not stop existing for anyone who takes this path. See `SECURITY.md` for what that does and
+  does not mean. We would rather say this plainly than let the removal read as a fix it is not.
+
+  This also removes the `json-repair` advisory (GHSA-xf7x-x43h-rpqh), which reached the project only
+  through the same path, and drops the resolved dependency set from 256 packages to 196 — including
+  `uvicorn`'s optional speedups (`httptools`, `uvloop`, `watchfiles`), which chromadb was the sole
+  requester of. Nothing imports them and installs from PyPI never had them.
+
+  **On the absence of a deprecation window.** This project normally requires notice before removing a
+  published surface. Removal here was directed by the project owner on the record, on the grounds
+  that the integration is not a focus and carrying an unfixable critical advisory for it is not a
+  trade worth making. That ruling is what authorises the compressed timeline; it is recorded here
+  rather than left implicit.
+
 ## [1.15.0] — 2026-07-24
 
 > Minor release: a canonical, importable map from paid features to the license
