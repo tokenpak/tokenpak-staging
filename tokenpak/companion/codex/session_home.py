@@ -2431,15 +2431,14 @@ class SessionLease:
             raise RuntimeError(f"launcher PID {owner_pid} is not running")
         validated_session_id = _validated_session_id(session_id)
 
-        # Set by claim() when the shared home's slot is already held by a live
-        # session.  Concurrent shared sessions are supported, so this launch
-        # runs alongside it rather than refusing; it simply does not own the
-        # sentinel and must not mutate it.
-        shares_live_home = False
-
         def claim(sentinel: PidSentinel) -> bool:
-            """Take the sentinel; return whether this session owns it."""
-            nonlocal shares_live_home
+            """Take the sentinel; return whether this session owns it.
+
+            False means the shared home's slot is already held by a live
+            session.  Concurrent shared sessions are supported, so this launch
+            runs alongside it rather than refusing; it simply does not own the
+            sentinel and must not mutate it.
+            """
             with _lease_guard(paths.home, home_fd=home_fd):
                 _recover_sentinel_temps(
                     paths.pid_sentinel,
@@ -2476,7 +2475,6 @@ class SessionLease:
                             raise HomeInUseError(
                                 f"{paths.home} is already claimed by PID {existing.pid}"
                             )
-                        shares_live_home = True
                         return False
                     if liveness == _PROCESS_UNKNOWN:
                         raise HomeInUseError(

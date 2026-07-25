@@ -55,6 +55,11 @@ TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex
 TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex
 ```
 
+Unlike the default, `workspace` allows only one session per project at a time —
+TokenPak generates and provisions that home, so a second concurrent session in
+the same project is refused rather than racing the first one's setup. Use the
+default or `isolated` to run several at once.
+
 The MCP server is the same stdio JSON-RPC program in both cases:
 `python3 -m tokenpak.companion.mcp.server`. Only the discovery mechanism
 differs between clients.
