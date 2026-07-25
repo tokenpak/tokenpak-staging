@@ -52,12 +52,20 @@ are TokenPak-generated and provisioned, so admitting concurrent sessions there
 would race two provisioning passes over one home. Running several sessions in
 one project still requires `shared` (the default) or `isolated`.
 
-Breaking (beta surface): the launcher's preflight result types are removed
-along with the mechanism that produced them — `PreflightStatus`,
-`PreflightEvidence`, `FallbackDecision`, `PreflightEvaluation`, and
-`TemporarySessionChoice`. They were published as additive beta API in v1.14.0
-and described a launch gate that no longer exists; they were never usable
-independently of it. The interactive "start a temporary session without the
-prior shared history" recovery prompt is removed for the same reason — there is
-no longer a block for it to recover from. Receipts no longer carry the
-`codex_preflight` or temporary-recovery members.
+Removed: the launcher's preflight result types, along with the mechanism that
+produced them — `PreflightStatus`, `PreflightEvidence`, `FallbackDecision`,
+`PreflightEvaluation`, and `TemporarySessionChoice`. They were published as
+additive beta API in v1.14.0 and described a launch gate that no longer exists;
+they were never usable independently of it. The interactive "start a temporary
+session without the prior shared history" recovery prompt is removed for the
+same reason — there is no longer a block for it to recover from. Receipts no
+longer carry the `codex_preflight` or temporary-recovery members.
+
+These symbols were importable, but importing them was never required to use
+TokenPak: the CLI, the proxy, the companion, and the launchers are the supported
+surfaces, and none of them oblige a caller to reference launcher internals.
+TokenPak's importable API is strictly optional and never mandatory — nothing
+TokenPak ships requires you to build against it — so retiring a beta symbol set
+whose only purpose was to describe a removed mechanism does not break a
+supported integration path. Anything that must keep working goes through the
+command-line and configuration surfaces, which are unchanged here.
