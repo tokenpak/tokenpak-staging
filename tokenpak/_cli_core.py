@@ -2983,13 +2983,9 @@ def _build_stub_parsers(sub: Subparsers) -> None:
     instead of a traceback.
     """
     _STUBS = {
-        "audit": (
-            "Audit log surface (Pro); see "
-            "docs/guides/enterprise/security-architecture.md"
-        ),
+        "audit": ("Audit log surface (Pro); see docs/guides/enterprise/security-architecture.md"),
         "compliance": (
-            "Compliance report surface (Pro); see "
-            "docs/guides/enterprise/compliance-mapping.md"
+            "Compliance report surface (Pro); see docs/guides/enterprise/compliance-mapping.md"
         ),
         "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
     }
