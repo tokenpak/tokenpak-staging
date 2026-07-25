@@ -197,7 +197,7 @@ prevent. Stopping is always in scope and never requires permission.
 
 ## 9. Amending your copy
 
-Your copy is yours. `GOVERNANCE.md` section 9 gives you the lifecycle: propose → decide → record →
+Your copy is yours. `GOVERNANCE.md` section 11 gives you the lifecycle: propose → decide → record →
 supersede. Two rules make it survivable:
 
 - **Supersede; do not delete.** A superseded rule stays readable with a pointer to what replaced it.

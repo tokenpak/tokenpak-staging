@@ -78,40 +78,6 @@ resolution recorded. It MUST NOT be resolved by whoever is more persistent.
 **R13.** Dissent MUST be preserved. Where a reviewer objected and was overruled, the objection stays
 in the record. It is the most useful thing in the file when the decision turns out badly.
 
-### Staffing the lane — the operator is not a reviewer of first resort
-
-**R25.** A lane MUST be staffed from the reviewers actually available, **including a
-differently-constituted automated reviewer**. Routing a routine acceptance to the operator is not an
-acceptance path. It converts the accountable human into the default blocker, which is already
-forbidden (`GOVERNANCE.md` R8), and it scales worse the more work you delegate.
-
-**R26.** An automated reviewer satisfies acceptance for any control whose authorizer is not required
-to be human, provided it meets the independence tests in `GOVERNANCE.md` section 3a. Being automated
-neither grants nor removes independence — a fresh session with no write access to the evidence and no
-stake in declaring completion is independent; a continuation of the producer's own session is not,
-however it is labelled.
-
-**R27.** Protected actions are unaffected. An automated reviewer may accept the *result*; it never
-supplies the human authorization a protected action requires. Acceptance and authorization are
-separate acts (`GOVERNANCE.md` R37), and only the second is reserved to a human here.
-
-**R28.** The operator is engaged only at a **hard stop**:
-
-| Hard stop | Not a hard stop |
-|---|---|
-| An action in a protected category needs its human authorization | You would like a second opinion |
-| A capability declaration bearing on a protected action is `unknown` | The change feels significant |
-| A decision only the operator owns — legal, money, licence, external commitment | You are uncertain and an available reviewer could resolve it |
-| No available actor can clear the blocker | Reviewing it yourself feels awkward |
-
-**R29.** Escalating to the operator without a hard stop is **itself a defect**, recorded as one. The
-cost is not the interruption; it is that a system which asks for confirmation by default trains its
-operator to grant it by default, and the approval stops carrying information.
-
-**R30.** Where an automated reviewer's verdict is used, record what reviewed, on what basis, its
-verdict, and its independence position — exactly as for a human reviewer (R11). An unrecorded
-automated review is indistinguishable from no review.
-
 ### Verification diversity
 
 **R14.** For decisions that are critical **and** depend on judgement rather than a checkable fact,
@@ -149,6 +115,67 @@ work holds at `submitted`. Work is never accepted for want of a reviewer.
 **R24.** This applies with full force when the artifact being accepted is the governance itself.
 Authority to proceed and independent acceptance are separate things (`GOVERNANCE.md` R37); being
 authorized to act does not make you the right party to judge your own output.
+
+### Staffing the lane — the operator is not a reviewer of first resort
+
+**R25.** A lane MUST be staffed from the reviewers actually available, **including a
+differently-constituted automated reviewer**. Routing a routine acceptance to the operator is not an
+acceptance path. It converts the accountable human into the default blocker, which is already
+forbidden (`GOVERNANCE.md` R8), and it scales worse the more work you delegate.
+
+**R26.** An automated reviewer satisfies acceptance for any control whose authorizer is not required
+to be human, provided it meets the independence tests in `GOVERNANCE.md` section 3a. Being automated
+neither grants nor removes independence — a fresh session with no write access to the evidence and no
+stake in declaring completion is independent; a continuation of the producer's own session is not,
+however it is labelled.
+
+**R27.** Protected actions are unaffected. An automated reviewer may accept the *result*; it never
+supplies the human authorization a protected action requires. Acceptance and authorization are
+separate acts (`GOVERNANCE.md` R37), and only the second is reserved to a human here.
+
+**R28.** The operator is engaged only at a **hard stop**:
+
+| Hard stop | Not a hard stop |
+|---|---|
+| An action in a protected category needs its human authorization | You would like a second opinion |
+| A capability declaration bearing on a protected action is `unknown` | The change feels significant |
+| A decision only the operator owns — legal, money, licence, external commitment | You are uncertain and an available reviewer could resolve it |
+| No available actor can clear the blocker | Reviewing it yourself feels awkward |
+
+**R29.** Escalating to the operator without a hard stop is **itself a defect**, recorded as one. The
+cost is not the interruption; it is that a system which asks for confirmation by default trains its
+operator to grant it by default, and the approval stops carrying information.
+
+**R30.** Where an automated reviewer's verdict is used, record what reviewed, on what basis, its
+verdict, and its independence position — exactly as for a human reviewer (R11). An unrecorded
+automated review is indistinguishable from no review.
+
+**R31.** **Failing to escalate at a genuine hard stop is a defect of exactly the same standing as
+R29.** R29 alone would penalise one direction of a two-way judgement made by the party that benefits
+from getting it wrong — the loophole R6 already names. Both directions carry a recorded cost, or
+neither constrains anything.
+
+**R32.** The determination is made by the delegated actor, in the moment, against R28 — and it is
+**determined by the nature of the action, not by preference or confidence**:
+
+- The action is in a protected category, is irreversible, or is one only the operator owns
+  (legal, money, licence, external commitment) → **hard stop**, regardless of how routine it feels.
+- Otherwise → **convene a lane**, regardless of how significant it feels.
+
+Confidence is not an input. "I am unsure" resolves to a lane; "this is important" does not resolve to
+a hard stop. The determination is recorded and is reviewable after the fact, and a wrong call in
+either direction is a finding against the actor who made it.
+
+**R33.** **The strongest consequence of R25–R32, stated plainly:** work that is critical and
+judgement-dependent, but touches no protected category, may be produced, reviewed, and accepted with
+no human involved at any point. That is deliberate, and a reader of R4's table would not otherwise
+infer it.
+
+What bounds it is not human attention but enumeration: protected categories are defined by **action**
+(`GOVERNANCE.md` section 4), not by anyone's assessment of importance. If an action can cause harm
+that ought to require a human, the correct remedy is to enumerate it as protected — not to hope
+someone escalates. An operator who finds this consequence unacceptable for some class of work should
+add that class to their protected enumeration (R15), where it binds every mode.
 
 ### Escalating deliberation
 
@@ -207,3 +234,4 @@ while recording it as one is a false record.
 | 1.0.0 | Initial. |
 | 1.1.0 | Added R19-R24: convene an acceptance lane when no acceptor is available. |
 | 1.2.0 | Added R25-R30: staff lanes from available reviewers including automated ones; operator engaged only at a hard stop. |
+| 1.3.0 | Added R31-R33: missed hard stops are defects too; the determination is by action, not confidence; the fully-automated consequence stated plainly. |

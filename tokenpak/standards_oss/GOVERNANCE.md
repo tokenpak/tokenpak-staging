@@ -1,6 +1,6 @@
 ---
 id: BS-GOVERNANCE
-standards_version: 1.2.0
+standards_version: 1.3.0
 risk_class: critical
 default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 ---
@@ -331,7 +331,11 @@ liability, not an asset.
 
 ## 12. Versioning
 
-**R43.** The corpus carries **one** version, in this file's frontmatter, and nowhere else.
+**R43.** The corpus's version is **authoritative in exactly one place**: this file's frontmatter.
+Other files MAY carry `standards_version` only as a **compatibility declaration**, never as an
+independent statement of the version. Every such declaration MUST equal the authoritative value, and
+the validator MUST check each one — an unchecked copy is a second source of truth wearing a different
+name (R26, R27).
 
 **R44.** The version is semantic: **major** for a change that invalidates existing conformant
 configurations, **minor** for added requirements or controls, **patch** for editorial change.

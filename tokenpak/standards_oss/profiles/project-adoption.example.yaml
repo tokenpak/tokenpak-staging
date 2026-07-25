@@ -7,7 +7,7 @@
 # than silently becoming policy (GOVERNANCE.md R28).
 
 schema: baseline-standards/project-adoption/1.0
-standards_version: 1.2.0
+standards_version: 1.3.0
 
 project:
   name: REPLACE_ME

@@ -183,7 +183,7 @@ def load_instances() -> list[dict]:
 # --------------------------------------------------------------------------- schema
 
 
-def schema_validate(rep: Report) -> None:
+def schema_validate(rep: Report, allow_unvalidated: bool = False) -> None:
     pairs = [
         (ROOT / "controls" / "controls.yaml", "control.schema.json"),
         *[
@@ -200,12 +200,22 @@ def schema_validate(rep: Report) -> None:
         pairs.append((adoption, "project-adoption.schema.json"))
 
     if not HAVE_JSONSCHEMA:
-        # Honest reporting: not-run is not pass (BS-CORE-TRUTH-AND-EVIDENCE R2).
-        rep.warn(
-            "jsonschema not installed — full schema validation NOT RUN (this is 'not-measured', "
-            "not 'pass'). Structural and semantic checks below still ran. "
-            "Install with: pip install jsonschema"
-        )
+        # not-run is not pass (BS-CORE-TRUTH-AND-EVIDENCE R2) -- and the exit status is what CI
+        # consumes, so stating it in prose while exiting 0 is exactly the false assurance
+        # GOVERNANCE.md R24 forbids. Schema validation is also the independent second check on the
+        # protected-control invariant, so losing it silently removes real redundancy.
+        if allow_unvalidated:
+            rep.warn(
+                "jsonschema not installed — full schema validation NOT RUN, permitted explicitly "
+                "for this run. The protected-control invariant was checked once, not twice."
+            )
+        else:
+            rep.error(
+                "jsonschema not installed — full schema validation NOT RUN. That is "
+                "'not-measured', not 'pass', so it fails rather than reporting green. Install it "
+                "(pip install jsonschema), or pass --allow-unvalidated-schema to accept a "
+                "single-layer check deliberately."
+            )
         return
 
     for data_path, schema_name in pairs:
@@ -230,6 +240,20 @@ def semantic_validate(rep: Report) -> None:
 
     if not version:
         rep.error("GOVERNANCE.md frontmatter has no standards_version (R43)")
+
+    # R43: authoritative in GOVERNANCE.md only. Every other copy is a compatibility declaration and
+    # MUST equal it. Discovered by scan so a newly-added copy cannot slip through unchecked.
+    for vf in sorted(ROOT.rglob("*")):
+        if not vf.is_file() or vf.suffix not in {".yaml", ".yml"}:
+            continue
+        vdata = load_yaml(vf)
+        if not isinstance(vdata, dict) or "standards_version" not in vdata:
+            continue
+        if vdata["standards_version"] != version:
+            rep.error(
+                f"{vf.relative_to(ROOT)}: standards_version {vdata['standards_version']!r} != "
+                f"authoritative {version!r} in GOVERNANCE.md (R43)"
+            )
 
     # --- protected-control integrity (GOVERNANCE.md R11, R18)
     for cid, ctl in controls.items():
@@ -423,7 +447,16 @@ def surface_open_decisions(rep: Report, controls: dict) -> None:
             for p in project_root.iterdir()
             if p.is_file() and p.name.split(".")[0].upper() in {"LICENSE", "LICENCE", "COPYING"}
         ]
-        if not found:
+        if found and project_root != ROOT.parent:
+            rep.decision(
+                f"A licence exists at {project_root} ({', '.join(sorted(found))}), but it belongs "
+                f"to an enclosing project, not to the work this corpus governs",
+                "Inheriting an enclosing project's licence by proximity is not the same as choosing "
+                "one. Confirm it is intended to govern this work, or state this work's licence "
+                "explicitly.",
+                "You.",
+            )
+        elif not found:
             rep.decision(
                 f"No licence file found in {project_root}",
                 "Without a licence, others have no stated permission to use, modify, or "
@@ -433,7 +466,7 @@ def surface_open_decisions(rep: Report, controls: dict) -> None:
                 "agent, so no option is suggested here.",
             )
         else:
-            rep.note(f"licence file present: {', '.join(sorted(found))}")
+            rep.note(f"licence file present in {project_root}: {', '.join(sorted(found))}")
 
     # --- escalation contact
     adoption = load_yaml(ROOT / "profiles" / "project-adoption.yaml")
@@ -640,7 +673,12 @@ def render_tables() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Baseline Standards validator")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("validate", help="schema + cross-file semantic validation")
+    v = sub.add_parser("validate", help="schema + cross-file semantic validation")
+    v.add_argument(
+        "--allow-unvalidated-schema",
+        action="store_true",
+        help="continue when jsonschema is unavailable instead of failing (records a warning)",
+    )
     c = sub.add_parser("compile", help="resolve and print the effective profile")
     c.add_argument("--authority", default="supervised")
     c.add_argument("--coverage", default="starter")
@@ -650,7 +688,7 @@ def main() -> int:
 
     if args.cmd == "validate":
         rep = Report()
-        schema_validate(rep)
+        schema_validate(rep, allow_unvalidated=args.allow_unvalidated_schema)
         semantic_validate(rep)
         return rep.emit()
 

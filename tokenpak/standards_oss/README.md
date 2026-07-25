@@ -11,7 +11,7 @@ configured.
 
 ## What this is
 
-Twenty-six standards, a control registry, two kinds of profile, eleven templates, and one validator.
+Twenty-six standards, a control registry, two kinds of profile, twelve templates, and one validator.
 The spine is domain-neutral. Software delivery is an opt-in module, not the foundation — most
 operators do not ship software, and the ones who do need the spine first.
 
