@@ -8,7 +8,7 @@
 # and you stop being a bottleneck everywhere else.
 
 schema: baseline-standards/authority-profile/1.0
-standards_version: 1.3.0
+standards_version: 1.4.0
 id: supervised
 anchor: decision-points-routed
 

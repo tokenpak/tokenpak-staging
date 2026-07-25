@@ -1,6 +1,6 @@
 ---
 id: BS-GOVERNANCE
-standards_version: 1.3.0
+standards_version: 1.4.0
 risk_class: critical
 default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 ---

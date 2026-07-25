@@ -4,7 +4,7 @@
 # TokenPak operators want.
 
 schema: baseline-standards/coverage-profile/1.0
-standards_version: 1.3.0
+standards_version: 1.4.0
 id: delegated-work
 extends: starter
 

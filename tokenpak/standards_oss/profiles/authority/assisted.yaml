@@ -8,7 +8,7 @@
 # rejects any profile that tries (GOVERNANCE.md R20).
 
 schema: baseline-standards/authority-profile/1.0
-standards_version: 1.3.0
+standards_version: 1.4.0
 id: assisted
 anchor: operator-approves-all
 

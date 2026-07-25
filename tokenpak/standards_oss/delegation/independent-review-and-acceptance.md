@@ -150,10 +150,25 @@ operator to grant it by default, and the approval stops carrying information.
 verdict, and its independence position — exactly as for a human reviewer (R11). An unrecorded
 automated review is indistinguishable from no review.
 
-**R31.** **Failing to escalate at a genuine hard stop is a defect of exactly the same standing as
-R29.** R29 alone would penalise one direction of a two-way judgement made by the party that benefits
-from getting it wrong — the loophole R6 already names. Both directions carry a recorded cost, or
-neither constrains anything.
+**R31.** **Failing to escalate at a genuine hard stop is a defect, and a graver one than escalating
+unnecessarily.** R29 alone would penalise one direction of a two-way judgement made by the party that
+benefits from getting it wrong — the loophole R6 already names.
+
+The two directions are **not equivalent and MUST NOT be weighted as though they were**. An
+unnecessary escalation costs the operator attention and is fully recoverable. A missed hard stop
+means an unauthorised protected action, or a legal, money, or licence decision, has **already
+happened** — R32 defines that class as protected or irreversible. Where an actor cannot avoid erring,
+it errs toward escalating.
+
+**R31.1.** A determination **not** to escalate MUST record the R28 limb relied on. The escalating
+branch produces its own artifact — the operator receives a message — while the non-escalating branch
+leaves nothing behind unless this is required, which would make R31 unenforceable against the only
+branch it exists to constrain.
+
+**R31.2.** Reviewing that record is part of the lane's work. **A lane's acceptance is incomplete
+until it has checked the escalation determination**, and a determination later judged wrong is a
+finding against the actor who made it. Without a named reviewer, R31 is a rule with no detection
+path.
 
 **R32.** The determination is made by the delegated actor, in the moment, against R28 — and it is
 **determined by the nature of the action, not by preference or confidence**:
@@ -162,20 +177,51 @@ neither constrains anything.
   (legal, money, licence, external commitment) → **hard stop**, regardless of how routine it feels.
 - Otherwise → **convene a lane**, regardless of how significant it feels.
 
-Confidence is not an input. "I am unsure" resolves to a lane; "this is important" does not resolve to
-a hard stop. The determination is recorded and is reviewable after the fact, and a wrong call in
-either direction is a finding against the actor who made it.
+Confidence is not an input. "This is important" does not resolve to a hard stop.
+
+**"I am unsure" splits, and the split matters more than anything else in this section:**
+
+| Unsure about | Governed by | Resolves to |
+|---|---|---|
+| The substantive decision — which option is right | R32 | **Convene a lane** |
+| Whether the action *is* protected, irreversible, or operator-owned | **R17** — ambiguity takes the more protected classification | **Hard stop** |
+
+An actor that cannot classify its own action has not established that a lane is sufficient. Read
+without this split, R32 would hand such an actor textual cover to skip a hard stop it merely failed
+to recognise — silently weakening R17 in exactly the case R17 exists for.
+
+The determination is recorded (R31.1) and reviewed (R31.2), and a wrong call in either direction is a
+finding against the actor who made it.
 
 **R33.** **The strongest consequence of R25–R32, stated plainly:** work that is critical and
 judgement-dependent, but touches no protected category, may be produced, reviewed, and accepted with
 no human involved at any point. That is deliberate, and a reader of R4's table would not otherwise
 infer it.
 
-What bounds it is not human attention but enumeration: protected categories are defined by **action**
-(`GOVERNANCE.md` section 4), not by anyone's assessment of importance. If an action can cause harm
-that ought to require a human, the correct remedy is to enumerate it as protected — not to hope
-someone escalates. An operator who finds this consequence unacceptable for some class of work should
-add that class to their protected enumeration (R15), where it binds every mode.
+What bounds it is enumeration rather than human attention. `GOVERNANCE.md` section 4 enumerates a
+baseline set **by action**, not by anyone's assessment of importance, and R15 requires the operator to
+extend that set with the concrete actions of their own work.
+
+**Be clear about where this bound is weak.** The baseline is fixed and mechanical; the operator's
+extension is neither, and R15's sanction for an incomplete one is definitional rather than corrective
+— an unnamed protected action is simply unprotected. So this control **fails silently**: an
+under-enumerated operator receives fully autonomous acceptance on precisely the class of harm they
+did not think of, and nothing surfaces the gap. That is a different failure signature from
+human-in-the-loop review, which degrades noisily because someone sees something that alarms them.
+
+Three things follow, and none of them is optional:
+
+**R33.1.** Enumeration and escalation are not the only controls. **Periodic sampling or post-hoc audit
+of autonomous acceptances** is the standard control for a silent-degradation failure shape, and it is
+complementary to both. An operator relying on full autonomy for critical work SHOULD run one.
+
+**R33.2.** A near-miss, or a determination later judged wrong under R32, **MUST feed back as a
+proposed addition to the operator's enumeration** (R15). Otherwise the remedy in this section is
+available only to operators who already anticipated the harm, which is the population that needs it
+least.
+
+**R33.3.** An operator who finds this consequence unacceptable for some class of work adds that class
+to their enumeration, where it binds every mode.
 
 ### Escalating deliberation
 
@@ -235,3 +281,4 @@ while recording it as one is a false record.
 | 1.1.0 | Added R19-R24: convene an acceptance lane when no acceptor is available. |
 | 1.2.0 | Added R25-R30: staff lanes from available reviewers including automated ones; operator engaged only at a hard stop. |
 | 1.3.0 | Added R31-R33: missed hard stops are defects too; the determination is by action, not confidence; the fully-automated consequence stated plainly. |
+| 1.4.0 | Second-lane review: R32 reconciled with R17 (classification uncertainty is a hard stop, not a lane); R31 weighted against the unrecoverable branch, with a recorded artifact and a named reviewer; R33 concedes silent failure, adds sampling and an enumeration-revision trigger. |
