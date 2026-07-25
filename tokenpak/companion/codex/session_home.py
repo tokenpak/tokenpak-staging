@@ -5,7 +5,9 @@
 
 ``shared``
     Use the existing user Codex home.  This preserves the pre-isolation
-    behavior and is intentionally single-session when local state is in use.
+    behavior.  Concurrent sessions are supported: Codex's local databases run
+    in write-ahead-logging mode, which coordinates many readers and a
+    serialized writer across processes.
 ``workspace``
     Use a deterministic home derived from the resolved project directory.
 ``isolated``
@@ -17,8 +19,10 @@ to the externally refreshed ``auth.json`` credential; databases, WAL/SHM
 sidecars, history, logs, sessions, and every other runtime file stay behind.
 
 The ``codex.pid`` file is a lifecycle lease, not lock-attribution evidence.
-Actual SQLite holders are discovered from kernel lock and file-descriptor
-state by :mod:`tokenpak.companion.codex.state_lock`.
+When an isolated home is reclaimed, :mod:`tokenpak.companion.codex.state_lock`
+discovers actual SQLite holders from kernel lock and file-descriptor state so
+cleanup never deletes files under a live session.  That check guards deletion
+only; it does not gate launching.
 """
 
 from __future__ import annotations

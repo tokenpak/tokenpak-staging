@@ -1,0 +1,45 @@
+---
+"tokenpak": minor
+---
+
+Let `tokenpak codex` run parallel sessions, the way native `codex` already does.
+
+Codex keeps its local state in write-ahead-logging SQLite databases, which
+coordinate many concurrent readers and a serialized writer across processes.
+Concurrent sessions against one Codex home are therefore a supported, normal
+operation. The launcher never opens those databases, so it has no stake in
+their lock state and nothing to gate a launch on.
+
+The launcher previously ran a kernel-level holder inspection before every
+launch and refused to start when it saw contention. That was wrong in premise
+and unreliable in practice:
+
+- A held shared-range or dead-man-switch lock is the steady state of a healthy
+  write-ahead-logging connection, not evidence of a conflict, so ordinary
+  concurrent use was reported as contention.
+- The inspection walked every process on the machine and failed closed when it
+  could not read `/proc/<pid>/fd` for any same-user process. Setuid and
+  non-dumpable daemons that never open a Codex database at all — `gpg-agent`,
+  `tailscaled`, `fusermount3` and others — marked the scan incomplete and
+  blocked the launch. On an affected machine `tokenpak codex` could not start
+  at all, and no environment variable bypassed it.
+- The refusal message claimed "SQLite lock evidence" on a code path reached
+  precisely when no lock evidence and no holder had been found.
+
+Launch is no longer gated. Holder inspection is retained only where it guards
+a genuinely destructive operation — uninstalling a Codex home and reclaiming an
+isolated one — because deleting files under a live session loses data. That
+remaining check no longer treats a readable non-Codex process name as unknown,
+so unrelated non-dumpable daemons can no longer block an uninstall either. A
+real Codex session is same-user and dumpable, so the descriptor scan still
+observes it directly.
+
+Breaking (beta surface): the launcher's preflight result types are removed
+along with the mechanism that produced them — `PreflightStatus`,
+`PreflightEvidence`, `FallbackDecision`, `PreflightEvaluation`, and
+`TemporarySessionChoice`. They were published as additive beta API in v1.14.0
+and described a launch gate that no longer exists; they were never usable
+independently of it. The interactive "start a temporary session without the
+prior shared history" recovery prompt is removed for the same reason — there is
+no longer a block for it to recover from. Receipts no longer carry the
+`codex_preflight` or temporary-recovery members.
