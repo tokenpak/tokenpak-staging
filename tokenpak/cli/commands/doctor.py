@@ -415,9 +415,12 @@ def build_lifecycle_summary(
     elif proxy_state == "starting":
         rows.append(("Proxy", "yellow", "starting", "wait for boot to finish"))
     elif proxy_state == "stopped":
-        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak restart"))
+        # `start`, not `restart`. Telling someone to restart a proxy that has
+        # never run is the same incoherence as setup starting a daemon and
+        # then instructing them to stop it.
+        rows.append(("Proxy", "yellow", "stopped", "Run: tokenpak start"))
     else:  # unknown
-        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak restart"))
+        rows.append(("Proxy", "yellow", "Unknown", "Run: tokenpak status"))
 
     # Update — from the cached L1 check only.
     if update_state == "available":
@@ -711,17 +714,38 @@ def run_doctor(
         print(_lifecycle_panel())
         print()
 
-    counts = {"pass": 0, "warn": 0, "fail": 0}
+    counts = {"pass": 0, "warn": 0, "fail": 0, "expected": 0}
     fixes: list[tuple[str, Path]] = []
     checks: list[dict[str, str]] = []
+
+    # A virgin install used to raise ~10 warnings that were all the same fact
+    # said ten ways: no config, so no proxy, so no traffic, so no monitor.db,
+    # so no error rate and no savings. A first-run user cannot tell which of
+    # those they are supposed to act on, and the honest answer is one action.
+    #
+    # When nothing has been configured yet, checks whose failure is *entailed*
+    # by that are recorded as "expected" rather than "warn": still listed,
+    # still in --json, but not counted against the user and not competing with
+    # the one instruction that resolves them.
+    # Same predicate the lifecycle panel uses, so the panel and the check list
+    # cannot disagree about whether this install has been set up.
+    pre_setup = not _paths.is_configured()
 
     def _record(
         name: str,
         status: str,
         message: str,
         detail: str = "",
+        entailed_by_setup: bool = False,
     ) -> None:
-        """Record a check result and optionally print it."""
+        """Record a check result and optionally print it.
+
+        ``entailed_by_setup`` marks a check that cannot pass before setup has
+        run. Before setup it degrades to "expected"; after setup it is a real
+        warning, because then the cause is something else.
+        """
+        if entailed_by_setup and pre_setup and status == "warn":
+            status = "expected"
         checks.append({"check": name, "status": status, "message": message, "detail": detail})
         counts[status] += 1
         if not output_json:
@@ -729,6 +753,8 @@ def run_doctor(
                 print(Colors.ok(message))
             elif status == "warn":
                 print(Colors.warn(message))
+            elif status == "expected":
+                print(f"   ·  {message}")
             else:
                 print(Colors.fail(message))
             if verbose and detail:
@@ -834,7 +860,8 @@ def run_doctor(
                 _record(
                     "proxy_health",
                     "warn",
-                    f"Proxy not running   port {proxy_port} — start with: tokenpak restart",
+                    f"Proxy not running   port {proxy_port} — start with: tokenpak start",
+                    entailed_by_setup=True,
                 )
         except Exception:
             _record(
@@ -869,6 +896,7 @@ def run_doctor(
             "routing",
             "warn",
             "Routing             Claude Code → TokenPak proxy (not routed) — run: tokenpak integrate claude-code",
+            entailed_by_setup=True,
             detail="No ANTHROPIC_BASE_URL in ~/.claude/settings.json (or file absent)",
         )
     else:  # unknown
@@ -913,6 +941,7 @@ def run_doctor(
             "db_rowcount",
             "warn",
             f"Monitor DB          not found — {db_path} (starts populating on first request)",
+            entailed_by_setup=True,
         )
 
     # === Check 3: DB schema version =============================================
@@ -1029,20 +1058,41 @@ def run_doctor(
         )
 
     # === Check 6: Trace enabled =================================================
-    trace_enabled = bool(
-        os.environ.get("TOKENPAK_TRACE", "0").strip() not in ("0", "", "false", "False")
-    )
+    # Report the *resolved* setting and say where it came from. Reading
+    # os.environ alone was wrong twice over: proxy config used to setdefault
+    # the whole profile at import, so this printed "enabled (TOKENPAK_TRACE=1)"
+    # for a variable the user never set; and a config-file or profile value
+    # that genuinely enabled tracing was invisible here.
+    active_profile = ""
+    try:
+        from tokenpak.proxy import config as _pxcfg
+
+        trace_enabled = bool(_pxcfg.TRACE_ENABLED)
+        trace_origin = _pxcfg.setting_origin("TOKENPAK_TRACE")
+        active_profile = _pxcfg.ACTIVE_PROFILE
+    except Exception:
+        raw = os.environ.get("TOKENPAK_TRACE", "0").strip()
+        trace_enabled = raw.lower() not in ("0", "", "false")
+        trace_origin = "env" if os.environ.get("TOKENPAK_TRACE") is not None else "default"
+
+    _origin_note = {
+        "env": "TOKENPAK_TRACE in your environment",
+        "profile": f"profile default: {active_profile}" if active_profile else "profile default",
+        "default": "built-in default",
+        "config": "config file",
+    }.get(trace_origin, trace_origin)
+
     if trace_enabled:
         _record(
             "trace_enabled",
             "pass",
-            "Trace mode          enabled (TOKENPAK_TRACE=1)",
+            f"Trace mode          enabled ({_origin_note})",
         )
     else:
         _record(
             "trace_enabled",
             "pass",
-            "Trace mode          disabled (TOKENPAK_TRACE not set — normal)",
+            f"Trace mode          disabled ({_origin_note}) — normal",
         )
 
     # === Check 7: Vault index freshness =========================================
@@ -1214,6 +1264,7 @@ def run_doctor(
             "recent_error_rate",
             "warn",
             "Recent error rate   monitor.db not found",
+            entailed_by_setup=True,
         )
 
     # === Check 9: Token savings summary from last 100 requests ==================
@@ -1270,6 +1321,7 @@ def run_doctor(
             "token_savings",
             "warn",
             "Token savings       monitor.db not found",
+            entailed_by_setup=True,
         )
 
     # === Check 10: Env var conflicts ============================================
@@ -1571,7 +1623,12 @@ def run_doctor(
     missing_dirs = [d for d in required_dirs if not d.exists()]
     if missing_dirs:
         missing_names = ", ".join(str(d.name) for d in missing_dirs)
-        _record("required_dirs", "warn", f"Required dirs       missing: {missing_names}")
+        _record(
+            "required_dirs",
+            "warn",
+            f"Required dirs       missing: {missing_names}",
+            entailed_by_setup=True,
+        )
         if fix:
             for d in missing_dirs:
                 d.mkdir(parents=True, exist_ok=True)
@@ -1842,6 +1899,21 @@ def run_doctor(
     err_s = "s" if counts["fail"] != 1 else ""
     warn_s = "s" if counts["warn"] != 1 else ""
     print(f"{counts['fail']} error{err_s}, {counts['warn']} warning{warn_s}.")
+
+    # Before setup, most of what is "wrong" is just not-yet-done. Say that
+    # once, with the single action that resolves it, instead of leaving the
+    # user to work out which of ten warnings they caused.
+    if pre_setup:
+        expected_n = counts["expected"]
+        if expected_n:
+            plural = "s" if expected_n != 1 else ""
+            print(
+                f"\nTokenPak is not set up yet — {expected_n} check{plural} above "
+                f"(marked ·) are waiting on that, not faults."
+            )
+        else:
+            print("\nTokenPak is not set up yet.")
+        print("Run: tokenpak setup")
 
     # === Auto-fix ===============================================================
     if fix and fixes:

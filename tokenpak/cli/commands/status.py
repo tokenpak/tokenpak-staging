@@ -69,36 +69,28 @@ def _estimate_session_savings(
 # Meme lines — 28 curated by Kevin, random pick per invocation
 # ---------------------------------------------------------------------------
 
-MEME_LINES = [
-    "Keep my tokens out yo damn prompt.",
-    "Your API bill called. It's crying.",
-    "Caching harder than your ex caches grudges.",
-    "We don't do full price around here.",
-    "Less tokens, more problems solved.",
-    "Your wallet says thanks.",
-    "Built different. Billed different.",
-    "Making Anthropic wonder where the traffic went.",
-    "Every token saved is a token earned.",
-    "Compression: because your prompts are 90% filler.",
-    "Cache hits > cache fits.",
-    "TokenPak: putting tokens on a diet since 2026.",
-    "Your prompt was long. We made it strong.",
-    "Running lean so you don't run broke.",
-    "Saving tokens while you sleep.",
-    "Less input, same output. That's the deal.",
-    "Prompt obesity is a real condition.",
-    "We compress so you don't stress.",
-    "Cache is king. Tokens are pawns.",
-    "Your bill just got TokenPak'd.",
-    "Proxy running. Savings stacking.",
-    "Token diet starts now.",
-    "Why pay full price? We don't.",
-    "Smart routing > dumb spending.",
-    "Compressing prompts. Expanding wallets.",
-    "Vault blocks: loaded. Savings: automatic.",
-    "Turning token waste into token taste.",
-    "Your API provider hates this one trick.",
+TAGLINES = [
+    "Every request measured. Every number sourced.",
+    "Local proxy. Your keys, your machine, your logs.",
+    "No code changes. No cloud. No credentials stored.",
+    "Receipts, not estimates.",
+    "Measure first. Optimize second.",
+    "What you did not send is the saving.",
+    "Compression is reported only where it was applied.",
+    "Routing decisions are logged and replayable.",
+    "Unmeasured is shown as unmeasured, never as zero.",
+    "Your traffic is yours. TokenPak just accounts for it.",
 ]
+
+# The previous list was written in clickbait register — "Your API provider
+# hates this one trick.", "Prompt obesity is a real condition." — and printed
+# directly beneath the spend figures, which is the one place on the surface
+# that has to read as a receipt. Two of the lines also asserted numbers
+# ("90% filler") that no measurement supports.
+#
+# `--no-meme` and this alias stay for compatibility with the flag users and
+# the companion launcher already depend on.
+MEME_LINES = TAGLINES
 
 # ---------------------------------------------------------------------------
 # Constants

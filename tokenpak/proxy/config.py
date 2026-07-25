@@ -140,24 +140,35 @@ except ImportError:
     )
 
 
+def _coerce(
+    value: str, converter: Optional[Callable[[str], _ConfigValue]]
+) -> _ConfigValue:
+    """Convert a raw string setting to its declared type."""
+    if converter is bool:
+        return cast(_ConfigValue, value.lower() in ("1", "true", "yes", "on"))
+    return converter(value) if converter else cast(_ConfigValue, value)
+
+
 def _cfg(
     key: str,
     default: _ConfigValue,
     env_var: Optional[str] = None,
     converter: Optional[Callable[[str], _ConfigValue]] = None,
 ) -> _ConfigValue:
-    """Read one typed setting through the full loader or env-only fallback."""
+    """Read one typed setting through the full loader or env-only fallback.
+
+    Precedence, highest first: explicit environment variable, config file,
+    active profile preset, hardcoded default. The profile contributes a
+    *default*, which is why it is folded in here rather than written into
+    ``os.environ`` — see ``_profile_default``.
+    """
+    default = _profile_default(env_var, default, converter)
     if _loaded_cfg is not None:
         return cast(_ConfigValue, _loaded_cfg(key, default, env_var, converter))
     if env_var:
         value = os.environ.get(env_var)
         if value is not None:
-            if converter is bool:
-                return cast(
-                    _ConfigValue,
-                    value.lower() in ("1", "true", "yes", "on"),
-                )
-            return converter(value) if converter else cast(_ConfigValue, value)
+            return _coerce(value, converter)
     return default
 
 
@@ -209,14 +220,59 @@ _PROFILE_PRESETS: dict[str, dict[str, str]] = {
 
 ACTIVE_PROFILE: str = os.environ.get("TOKENPAK_PROFILE", "balanced").lower()
 if ACTIVE_PROFILE in _PROFILE_PRESETS:
-    for _pk, _pv in _PROFILE_PRESETS[ACTIVE_PROFILE].items():
-        os.environ.setdefault(_pk, _pv)
     _logging.getLogger("tokenpak.proxy.config").info("Profile: %s", ACTIVE_PROFILE)
 else:
     _logging.getLogger("tokenpak.proxy.config").warning(
         "Unknown TOKENPAK_PROFILE=%r — ignoring", ACTIVE_PROFILE
     )
     ACTIVE_PROFILE = "custom"
+
+
+def profile_preset() -> dict[str, str]:
+    """The active profile's settings. Empty for an unknown/custom profile."""
+    return dict(_PROFILE_PRESETS.get(ACTIVE_PROFILE, {}))
+
+
+def _profile_default(
+    env_var: Optional[str],
+    default: _ConfigValue,
+    converter: Optional[Callable[[str], _ConfigValue]],
+) -> _ConfigValue:
+    """Fold the active profile in as a default for *env_var*.
+
+    This used to be ``os.environ.setdefault`` over the whole preset at import
+    time, which meant any command that transitively imported proxy config
+    gained ~8 environment variables the user never set. Doctor then reported
+    ``Trace mode enabled (TOKENPAK_TRACE=1)`` for a variable TokenPak had set
+    on itself, and its own env-conflict check was evaluated against the
+    mutated environment — wrong in both directions.
+
+    Folding the preset in as a *default* keeps the documented precedence
+    ("profile is a floor: explicit env always wins") and leaves the process
+    environment as the user left it, so it remains an honest signal of intent.
+    """
+    if not env_var:
+        return default
+    preset = _PROFILE_PRESETS.get(ACTIVE_PROFILE)
+    if not preset or env_var not in preset:
+        return default
+    try:
+        return _coerce(preset[env_var], converter)
+    except (TypeError, ValueError):
+        return default
+
+
+def setting_origin(env_var: str) -> str:
+    """Where *env_var*'s effective value comes from: env, profile, or default.
+
+    Lets a caller distinguish "the user turned this on" from "the profile
+    turns this on" without inspecting a mutated environment.
+    """
+    if os.environ.get(env_var) is not None:
+        return "env"
+    if env_var in _PROFILE_PRESETS.get(ACTIVE_PROFILE, {}):
+        return "profile"
+    return "default"
 
 PROXY_PORT = _cfg("port", 8766, "TOKENPAK_PORT", int)
 LISTEN_ADDRESS = _cfg("listen_address", "127.0.0.1", "TOKENPAK_BIND_ADDRESS", str)

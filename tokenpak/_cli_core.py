@@ -70,15 +70,6 @@ class PreviewResult(TypedDict):
     duration_ms: float
 
 
-class ModelLeaderboardRow(TypedDict):
-    model: str
-    requests: int
-    cost: float
-    saved: float
-    cache_pct: int
-    compress_pct: float
-
-
 class MonitorModelRow(TypedDict):
     model: str
     requests: int
@@ -285,14 +276,19 @@ def _get_monitor_db_path() -> Optional[Path]:
         return None
 
 
-def _monitor_db_cost(period: str = "daily") -> float:
-    """Return total estimated_cost from monitor.db for the given period."""
+def _monitor_db_cost(period: str = "daily") -> Optional[float]:
+    """Total estimated_cost from monitor.db for *period*, or ``None``.
+
+    ``None`` means no request store exists or it could not be read. That is a
+    different fact from "you spent nothing", and rendering both as $0.0000
+    told a user with no data that we had measured their spend and it was zero.
+    """
     import sqlite3
     from datetime import date, timedelta
 
     db = _get_monitor_db_path()
     if db is None:
-        return 0.0
+        return None
 
     today = date.today()
     if period == "daily":
@@ -313,7 +309,7 @@ def _monitor_db_cost(period: str = "daily") -> float:
         conn.close()
         return total
     except Exception:
-        return 0.0
+        return None
 
 
 def _monitor_db_savings(days: int = 30) -> MonitorSavingsData | None:
@@ -860,28 +856,43 @@ def cmd_help(args: CommandArgs) -> None:
 # ── Alias commands ────────────────────────────────────────────────────────────
 
 
-def cmd_init(args: CommandArgs) -> None:
+def cmd_init(args: CommandArgs) -> int:
     """Guided first-run setup wizard: API key, port, vault path."""
-    import json as _json
     import os as _os
     from pathlib import Path as _Path
 
     import click
 
     from tokenpak import _paths as _p
+    from tokenpak.cli.exit_codes import EXIT_OK, EXIT_USAGE
 
     config_dir = _p.write_home()
-    config_file = config_dir / "config.json"
+    # Canonical writes go to config.yaml. This wrote config.json, which the
+    # rest of the product treats as a *read-compatibility* format — so a user
+    # who ran `init` produced state that `setup` would not have produced and
+    # that nothing else writes.
+    config_file = _p.config_write_path()
+    existing_config = _p.config_read_path()
     env_file = config_dir / ".env"
 
+    # `init` is interactive by nature. Every prompt below aborts on a closed
+    # stdin, and click raises Abort — which surfaced as a raw traceback and a
+    # bare exit 1. Fail once, at the top, with the same contract `setup` uses:
+    # EOF is not an answer.
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        click.echo("`tokenpak init` is interactive and stdin is not a terminal.")
+        click.echo("For a scripted run, use setup, which takes its answers as flags:")
+        click.echo("  tokenpak setup --profile balanced --yes")
+        return EXIT_USAGE
+
     # Non-destructive: warn if already configured
-    if config_file.exists():
+    if existing_config is not None:
         overwrite = click.confirm(
-            f"Config already exists at {config_file}. Overwrite?", default=False
+            f"Config already exists at {existing_config}. Overwrite?", default=False
         )
         if not overwrite:
             click.echo("Init cancelled. Run `tokenpak start` to start the proxy.")
-            return
+            return EXIT_OK
 
     click.echo("\n✨ TokenPak Init — Guided Setup\n")
 
@@ -889,7 +900,9 @@ def cmd_init(args: CommandArgs) -> None:
     click.echo("Step 1/3: API Key")
     click.echo("  Choose how to provide your Anthropic API key:")
     click.echo("  [1] Environment variable (already set, e.g. ANTHROPIC_API_KEY)")
-    click.echo("  [2] Enter key now (saved to ~/.tokenpak/.env)")
+    # Print the resolved path, not a hardcoded ~/.tokenpak/ that is wrong on
+    # every install using TOKENPAK_HOME or the canonical home.
+    click.echo(f"  [2] Enter key now (saved to {env_file})")
 
     key_choice = click.prompt("Choice", type=click.Choice(["1", "2"]), default="1")
 
@@ -922,7 +935,7 @@ def cmd_init(args: CommandArgs) -> None:
         api_key = click.prompt("  Paste your Anthropic API key", hide_input=True).strip()
         if not api_key:
             click.echo("  \u274c API key cannot be empty.")
-            return
+            return EXIT_USAGE
         # Write to .env file
         config_dir.mkdir(parents=True, exist_ok=True)
         env_file.write_text(f"ANTHROPIC_API_KEY={api_key}\n")
@@ -948,7 +961,7 @@ def cmd_init(args: CommandArgs) -> None:
     ).strip()
     vault_path = str(_Path(vault_input).expanduser()) if vault_input else ""
 
-    # ── Write config.json ────────────────────────────────────────────────────
+    # ── Write the canonical config ───────────────────────────────────────────
     config: JsonObject = {
         "version": "1.0",
         "port": port,
@@ -957,10 +970,13 @@ def cmd_init(args: CommandArgs) -> None:
     if vault_path:
         config["vault_path"] = vault_path
 
+    import yaml as _yaml
+
+    _p.ensure_home()
     config_dir.mkdir(parents=True, exist_ok=True)
     with open(config_file, "w") as f:
-        _json.dump(config, f, indent=2)
-    config_file.chmod(0o600)
+        _yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    _p.secure_file(config_file)
 
     # ── Done ─────────────────────────────────────────────────────────────────
     click.echo("\n" + "\u2500" * 50)
@@ -972,6 +988,7 @@ def cmd_init(args: CommandArgs) -> None:
     click.echo()
     click.echo("Next step:")
     click.echo("   tokenpak start\n")
+    return EXIT_OK
 
 
 def cmd_setup(args: CommandArgs) -> int:
@@ -1144,6 +1161,20 @@ def cmd_setup(args: CommandArgs) -> int:
 
     print(f"\n✅ Configuration saved to {config_file}")
     print(f"   Profile: {profile_name} — {profile['description']}")
+
+    # Starting a background daemon is opt-in. Setup used to spawn one
+    # unasked and then tell the user, in its own next-steps, to stop it
+    # before taking a first measured receipt — creating a state it
+    # immediately instructed them to undo. Configuring and running are two
+    # decisions; setup owns the first one.
+    if not bool(getattr(args, "start", False)):
+        print("\nConfigured. No proxy was started.")
+        print("\nNext steps:")
+        print(f"  1. Start it when you want it:  tokenpak start   (port {port})")
+        print("  2. Route your client:          tokenpak integrate")
+        print("  3. Check state any time:       tokenpak status")
+        print("\n  To configure and start in one step: tokenpak setup --start")
+        return 0
 
     # Start the proxy
     print("\n🚀 Starting proxy...\n")
@@ -3741,6 +3772,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite an existing config without confirming",
     )
+    p_setup.add_argument(
+        "--start",
+        action="store_true",
+        help="Also start the proxy after writing config (default: config only)",
+    )
     p_setup.set_defaults(func=cmd_setup)
 
     p_start = sub.add_parser(
@@ -4662,7 +4698,7 @@ def cmd_savings(args: CommandArgs) -> None:
 def cmd_compare(args: CommandArgs) -> None:
     """Show before/after cost comparison for last N requests."""
 
-    from .telemetry.pricing_rates import calculate_request_cost, calculate_request_cost_baseline
+    from .telemetry.pricing_rates import calculate_request_cost_baseline
     from .telemetry.query_dsl import get_recent_events
 
     limit = getattr(args, "last", 1)
@@ -4672,32 +4708,52 @@ def cmd_compare(args: CommandArgs) -> None:
         print("No recent requests found.")
         return
 
-    # Show comparison for each request
+    # This used to invent its own inputs: cache_read was assumed to be 30% of
+    # input ("adjust per actual data"), the request duration defaulted to a
+    # hardcoded 5.1s, and the baseline was priced at flat Opus rates for every
+    # model. It then printed the difference as "💰 Saved: $X (Y% cheaper)".
+    # Every number on the line was constructed, and none was labelled as such.
+    #
+    # What the store actually records per request: model, billed input, billed
+    # output, and the actual cost. There is no per-request cache-read split, so
+    # that comparison is not available and is reported as unavailable rather
+    # than assumed.
+    print("Per-request cost — measured against list-price baseline")
+    print("─" * 56)
+    print()
+
     for idx, evt in enumerate(recent[:limit], 1):
         model = str(evt.get("model") or "unknown")
         input_tokens = _as_int(evt.get("input_tokens"))
         output_tokens = _as_int(evt.get("output_tokens"))
+        actual_cost = evt.get("cost")
 
-        # For this demo, assume cache_read is 30% of input (adjust per actual data)
-        # In production, we'd fetch actual cache_read from tp_usage table
-        cache_read = int(input_tokens * 0.30)
-        sent_input = input_tokens - cache_read
+        print(f"Request #{idx}: {model}")
+        print(f"  Tokens            {input_tokens:,} in / {output_tokens:,} out  (billed)")
 
-        without_cache = calculate_request_cost_baseline(model, input_tokens, output_tokens)
-        with_cache = calculate_request_cost(model, sent_input, cache_read, output_tokens)
-        saved = without_cache - with_cache
-        pct_saved = (saved / without_cache * 100) if without_cache > 0 else 0
+        if input_tokens <= 0 and output_tokens <= 0:
+            print("  Cost              unavailable — no billed token counts recorded")
+            print()
+            continue
 
-        duration_s = getattr(args, "duration_s", 5.1)
+        baseline = calculate_request_cost_baseline(model, input_tokens, output_tokens)
+        print(f"  List-price basis  ${baseline:.4f}  (computed from billed tokens × published rates)")
 
-        print(f"Request #{idx}: {model} ({duration_s:.1f}s)")
-        print(
-            f"  Without TokenPak: ${without_cache:.2f} ({input_tokens:,} input tokens × ${15 / 1e6:.2e})"
-        )
-        print(
-            f"  With TokenPak:    ${with_cache:.2f} ({sent_input:,} sent + {cache_read:,} cached)"
-        )
-        print(f"  💰 Saved: ${saved:.2f} ({pct_saved:.0f}% cheaper)")
+        if isinstance(actual_cost, (int, float)) and actual_cost >= 0:
+            print(f"  Charged           ${float(actual_cost):.4f}  (measured)")
+            delta = baseline - float(actual_cost)
+            if delta > 0 and baseline > 0:
+                print(f"  Difference        ${delta:.4f}  ({delta / baseline * 100:.1f}% below basis)")
+            elif delta < 0:
+                # Never render a negative saving as a saving.
+                print(f"  Difference        ${abs(delta):.4f} above basis")
+            else:
+                print("  Difference        none")
+        else:
+            print("  Charged           unavailable — no cost recorded for this request")
+            print("  Difference        unavailable")
+
+        print("  Cache split       unavailable — not recorded per request")
         print()
 
 
@@ -4714,59 +4770,73 @@ def cmd_leaderboard(args: CommandArgs) -> None:
         print("Run requests through the proxy to gather metrics.")
         return
 
-    # Calculate per-model stats
-    model_stats: list[ModelLeaderboardRow] = []
+    # Every column here used to be a constant.
+    #
+    #   cost         = Opus list price applied to every model, whatever it was
+    #   saved        = cost * 0.35   ("assume 30% cache + 5% compression")
+    #   cache_pct    = 96 / 94 / 98, selected by substring-matching the model name
+    #   compress_pct = 5.1 / 8.2 / 3.2, likewise
+    #
+    # so "🏆 Most Efficient" ranked models by which literal the name matched —
+    # anything that was not opus or sonnet won at 98%, always — and the table
+    # presented all of it as per-model measurement.
+    #
+    # Per-model compression and savings ARE recorded, in tp_costs; this now
+    # reads them. Per-model cache-hit rate is not recorded anywhere, so that
+    # column is gone rather than invented.
+    from .telemetry.pricing_rates import calculate_request_cost_baseline
+    from .telemetry.query_dsl import get_model_compression_breakdown
+
+    measured = {b.model: b for b in get_model_compression_breakdown(days=days)}
+
+    model_stats: list[dict[str, object]] = []
     for u in usage:
         model = u.model or "unknown"
-        cost = (u.total_input_tokens / 1_000_000) * 15 + (u.total_output_tokens / 1_000_000) * 75
-        # Estimate savings (assume 30% cache + 5% compression for demo)
-        estimated_saved = cost * 0.35
-        cache_pct = 96 if "opus" in model.lower() else 94 if "sonnet" in model.lower() else 98
-        compress_pct = 5.1 if "opus" in model.lower() else 8.2 if "sonnet" in model.lower() else 3.2
-
+        cost = calculate_request_cost_baseline(
+            model, u.total_input_tokens, u.total_output_tokens
+        )
+        obs = measured.get(model)
         model_stats.append(
             {
                 "model": model,
                 "requests": u.request_count,
                 "cost": cost,
-                "saved": estimated_saved,
-                "cache_pct": cache_pct,
-                "compress_pct": compress_pct,
+                # None means "not measured", and prints as such. It is never 0.
+                "saved": (obs.savings_amount if obs is not None else None),
+                "tokens_saved": (obs.tokens_saved if obs is not None else None),
             }
         )
 
-    # Sort by cost (highest spender first)
-    model_stats.sort(key=lambda x: x["cost"], reverse=True)
+    model_stats.sort(key=lambda x: cast(float, x["cost"]), reverse=True)
 
-    print("TokenPak Model Leaderboard")
-    print("──────────────────────────")
+    print(f"TokenPak model usage — last {days} day(s)")
+    print("─" * 62)
+    print("Cost is billed tokens priced at published rates. Savings are")
+    print("measured from recorded baselines; blank means not measured.")
     print()
 
-    if model_stats:
-        # Show top 3 insights
-        most_efficient = max(model_stats, key=lambda x: x["cache_pct"])
-        biggest_spender = max(model_stats, key=lambda x: x["cost"])
-        best_compression = max(model_stats, key=lambda x: x["compress_pct"])
-
-        print(
-            f"🏆 Most Efficient:   {most_efficient['model']}  ({most_efficient['cache_pct']}% cached, ${most_efficient['saved'] / most_efficient['requests']:.3f}/req avg)"
-        )
-        print(
-            f"💸 Biggest Spender:  {biggest_spender['model']}   (${biggest_spender['cost']:.2f} today, but ${biggest_spender['saved']:.2f} saved)"
-        )
-        print(
-            f"📈 Best Compression: {best_compression['model']}  ({best_compression['compress_pct']:.1f}% rate)"
-        )
-        print()
-
-    # Table of all models
-    print(
-        f"{'Model':<20} {'Requests':>10} {'Cost':>10} {'Saved':>10} {'Cache%':>8} {'Compress%':>10}"
-    )
-    print("-" * 70)
+    print(f"{'Model':<26} {'Requests':>9} {'Cost':>11} {'Saved':>11}")
+    print("-" * 62)
     for stat in model_stats:
+        saved = stat["saved"]
+        saved_col = f"${saved:>10.4f}" if isinstance(saved, (int, float)) else f"{'—':>11}"
         print(
-            f"{stat['model']:<20} {stat['requests']:>10} ${stat['cost']:>9.2f} ${stat['saved']:>9.2f} {stat['cache_pct']:>7}% {stat['compress_pct']:>9.1f}%"
+            f"{cast(str, stat['model']):<26} {cast(int, stat['requests']):>9} "
+            f"${cast(float, stat['cost']):>10.4f} {saved_col}"
+        )
+
+    # Aggregate savings come from the report that carries the measured-data
+    # contract, so "we could not read the store", "nothing measured yet" and
+    # "measured zero" stay distinguishable.
+    print()
+    if not savings.available:
+        print("Total savings:  unavailable — telemetry store could not be read")
+    elif savings.observations == 0:
+        print("Total savings:  not yet measured — no compression observations recorded")
+    else:
+        print(
+            f"Total savings:  ${savings.savings_amount:.4f} "
+            f"({savings.savings_pct:.1f}%) over {savings.observations:,} observation(s)"
         )
 
 
@@ -7001,11 +7071,20 @@ def cmd_cost(args: CommandArgs) -> None:
 
     # Prefer monitor.db (proxy's live database) over budget tracker
     monitor_total = _monitor_db_cost(period)
-    total = monitor_total if monitor_total > 0 else tracker.total_spent(period)
+    tracked = tracker.total_spent(period)
     label = {"daily": "Today", "weekly": "This week", "monthly": "This month"}[period]
 
     print(f"TokenPak Cost Summary — {label}")
-    print(f"  Spent:  ${total:.4f}")
+    if monitor_total is not None and monitor_total > 0:
+        print(f"  Spent:  ${monitor_total:.4f}")
+    elif tracked > 0:
+        print(f"  Spent:  ${tracked:.4f}")
+    elif monitor_total is None:
+        # No request store at all — nothing has been measured.
+        print("  Spent:  no measurements yet — no request database exists")
+    else:
+        # The store exists and genuinely records no spend for this period.
+        print("  Spent:  $0.0000  (measured: no requests in this period)")
 
     # Show live proxy session cost if available
     stats = _proxy_get("/stats")
@@ -8598,10 +8677,15 @@ def _run_compression_demo() -> None:
     print("│  Stages: " + stages_str + " " * (W - 12 - len(stages_str)) + "│")
     print("└" + "─" * (W - 2) + "┘")
     print()
-    print("  Try it with your own traffic:")
-    print("    tokenpak serve        → start the proxy (zero-config)")
-    print("    tokenpak cost         → track receipt-backed savings")
-    print("    tokenpak demo --list  → browse 50 built-in compression recipes")
+    # These used to open with `tokenpak serve` described as "zero-config",
+    # which contradicted both setup's own instructions and doctor's
+    # "no config → Run: tokenpak setup". The real first step is setup.
+    print("  Measure this on your own traffic:")
+    print("    tokenpak setup        → choose a profile and write config")
+    print("    tokenpak start        → run the proxy")
+    print("    tokenpak integrate    → point your client at it")
+    print("    tokenpak savings      → your measured numbers, once traffic flows")
+    print("    tokenpak demo --list  → browse built-in compression recipes")
     print()
 
 
