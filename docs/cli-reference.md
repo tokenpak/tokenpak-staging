@@ -1009,11 +1009,11 @@ Replay captured sessions
 
 ### `tokenpak audit`
 
-Audit log surface (Pro/Enterprise)
+Audit log surface (Pro)
 
 ### `tokenpak compliance`
 
-Compliance report surface (Pro/Enterprise)
+Compliance report surface (Pro)
 
 ### `tokenpak validate`
 
@@ -1129,7 +1129,7 @@ Show every feature TokenPak knows about and whether the current license entitles
 **Flags:**
 
 - `--json` — Emit JSON instead of text
-- `--tier` — Filter to a specific tier: free|pro|team|enterprise
+- `--tier` — Filter to a specific tier: free|pro
 
 **Subcommands:**
 

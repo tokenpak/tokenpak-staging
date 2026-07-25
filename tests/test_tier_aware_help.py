@@ -13,7 +13,7 @@ import pytest
 # `_is_visible` is the canonical tier-visibility helper exported by
 # `tokenpak.cli.commands.help` on full / Pro builds; on slim OSS it is
 # not currently exposed. Tests below probe it for OSS / Pro / Team /
-# Enterprise tier filtering. Skip cleanly when absent.
+# Tier-aware filtering. Skip cleanly when absent.
 try:
     from tokenpak.cli.commands.help import _is_visible  # noqa: F401
 except ImportError as _exc:

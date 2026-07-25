@@ -3034,7 +3034,7 @@ def _build_stub_parsers(sub: Subparsers) -> None:
 
     p_activate = sub.add_parser(
         "activate",
-        help="Store a Pro/Team/Enterprise license key",
+        help="Store a Pro license key",
     )
     p_activate.add_argument("key", nargs="?", default="", help="Your license key")
     p_activate.add_argument("--email", default="", help="Optional email for the license")

@@ -100,6 +100,15 @@ _TIER_ORDER = {
 }
 
 
+def known_tiers() -> tuple[str, ...]:
+    """Tier names in ascending capability order.
+
+    Derived from ``_TIER_ORDER`` so callers rendering a tier list never
+    hardcode one (per ``feedback_always_dynamic``).
+    """
+    return tuple(sorted(_TIER_ORDER, key=lambda t: _TIER_ORDER[t]))
+
+
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------

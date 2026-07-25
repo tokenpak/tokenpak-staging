@@ -10,6 +10,12 @@ Key concepts
     - pro         → 100 req/min
   A ``None`` entry in ``TIER_RATE_LIMITS`` means unlimited; no shipped
   tier uses it today.
+
+.. note::
+   This server is not currently wired to any console entry point and
+   nothing outside this package imports it. The per-tier request rates
+   above are therefore internal defaults, not a published product limit
+   — revisit them if and when the server ships.
 * On a rate-limit breach the server returns HTTP 429 with
   ``Retry-After`` and ``X-RateLimit-Reset`` headers.
 * PII scrubbing: the logging filter removes bearer tokens and

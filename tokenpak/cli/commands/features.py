@@ -38,10 +38,12 @@ def build_features_parser(sub: Any) -> None:
         action="store_true",
         help="Emit JSON instead of text",
     )
+    from tokenpak.licensing import known_tiers
+
     p.add_argument(
         "--tier",
         default=None,
-        help="Filter to a specific tier: free|pro|team|enterprise",
+        help="Filter to a specific tier: " + "|".join(known_tiers()),
     )
     p.set_defaults(func=cmd_features_list)
 
