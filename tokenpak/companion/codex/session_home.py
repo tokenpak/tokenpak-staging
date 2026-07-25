@@ -2242,8 +2242,20 @@ def _recover_sentinel_temps(
     *,
     dir_fd: int | None,
     proc_root: Path,
+    shared_home: bool = False,
 ) -> None:
-    """Recover only positively identified crash artifacts under the guard."""
+    """Recover only positively identified crash artifacts under the guard.
+
+    ``shared_home`` marks the user's own Codex home, where concurrent sessions
+    are supported.  There, an artifact belonging to a *live* process is not a
+    crash leftover — it is another session mid-handoff, between publishing its
+    transfer marker and adopting the child PID.  Refusing on it would reinstate
+    the serialization this home is explicitly allowed to avoid, on a window
+    every parallel launch passes through.  Such artifacts are left untouched
+    and skipped; ownership is then decided by the main sentinel, which the live
+    session still holds.  A generated home belongs to exactly one session, so a
+    live artifact there remains a hard refusal.
+    """
     getuid = getattr(os, "geteuid", None)
     location = dir_fd if dir_fd is not None else path.parent
     try:
@@ -2297,10 +2309,19 @@ def _recover_sentinel_temps(
             proc_root=proc_root,
         )
         if liveness == _PROCESS_LIVE:
+            if shared_home:
+                # Another live session's handoff marker. Not ours to reclaim,
+                # and not a reason to refuse this launch.
+                continue
             raise HomeInUseError(
                 f"live sentinel recovery artifact claims PID {candidate.pid}: {path.parent / name}"
             )
         if liveness == _PROCESS_UNKNOWN:
+            if shared_home:
+                # Cannot prove the owner is gone, so leave the artifact alone
+                # rather than deleting it or blocking a supported concurrent
+                # launch on unprovable evidence.
+                continue
             raise HomeInUseError(
                 f"incomplete sentinel recovery evidence for PID {candidate.pid}: "
                 f"{path.parent / name}"
@@ -2444,6 +2465,7 @@ class SessionLease:
                     paths.pid_sentinel,
                     dir_fd=home_fd,
                     proc_root=proc_root,
+                    shared_home=paths.mode == MODE_SHARED,
                 )
                 if _sentinel_stat(paths.pid_sentinel, home_fd) is not None:
                     existing = read_pid_sentinel(paths.pid_sentinel, dir_fd=home_fd)

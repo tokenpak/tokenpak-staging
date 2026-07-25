@@ -36,9 +36,9 @@ through `codex mcp add` so it shows up in `codex mcp list`.
 
 Run as many as you like. `tokenpak codex` uses your existing local Codex
 history and does not require exclusive access to it, exactly like running
-`codex` directly: Codex stores its local state in write-ahead-logging SQLite
+`codex` directly: Codex keeps its session state in write-ahead-logging SQLite
 databases, which coordinate concurrent readers and a serialized writer across
-processes. TokenPak never opens those databases, so it has no reason to
+processes. TokenPak never opens Codex's local state, so it has no reason to
 serialize your sessions and does not try to.
 
 Sessions started this way share one history lineage, so each will see work the

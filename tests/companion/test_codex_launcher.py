@@ -172,6 +172,44 @@ def test_launcher_never_opens_codex_databases(monkeypatch, tmp_path):
     assert not [target for target in opened if "state_" in str(target)]
 
 
+def test_retention_uncertainty_output_is_bounded(capsys, tmp_path):
+    """Every uncertain home is preserved; only the report is capped.
+
+    Salvaged from the superseded competing PR, whose diagnosis of the retention
+    output was correct and independent of the launch-gate disagreement: one line
+    per preserved home buries an ordinary launch once several are uncertain.
+    """
+
+    class Cleanup:
+        removed = ()
+        errors = tuple(f"home-{index}: uncertain" for index in range(5))
+
+    class FakeSessionHome:
+        @staticmethod
+        def _generated_tokenpak_root(_home):
+            return tmp_path
+
+        @staticmethod
+        def cleanup_isolated_homes(*_args, **_kwargs):
+            return Cleanup()
+
+    class Paths:
+        home = tmp_path / "selected"
+
+    launcher._run_isolated_retention(
+        FakeSessionHome,
+        Paths(),
+        phase="pre-launch",
+        preserve_home=None,
+    )
+
+    error = capsys.readouterr().err
+    assert "preserved 5 uncertain home(s)" in error
+    assert "home-0" in error and "home-1" in error and "home-2" in error
+    assert "home-3" not in error and "home-4" not in error
+    assert "... 2 more" in error
+
+
 def test_invalid_mode_fails_before_any_filesystem_write(monkeypatch, tmp_path):
     _stub_session_env(monkeypatch, tmp_path)
     monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "automatic")

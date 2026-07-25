@@ -86,6 +86,7 @@ _BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 _BYPASS_ENV_VAR = "TOKENPAK_CODEX_BYPASS_APPROVALS_AND_SANDBOX"
 _TRUTHY = {"1", "true", "yes"}
 _STORAGE_PRESSURE_ERRNOS = {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
+_RETENTION_ERROR_DISPLAY_LIMIT = 3
 _APPROVAL_ARGS = ("--ask-for-approval", "never")
 _SANDBOX_ARGS = ("--sandbox", "danger-full-access")
 
@@ -502,9 +503,17 @@ def _run_isolated_retention(
             file=sys.stderr,
         )
     if cleanup.errors:
+        # One line per preserved home turns an ordinary launch into a wall of
+        # text once a few homes are uncertain. Report the count, show a bounded
+        # sample, and say how many were withheld — every home is still
+        # preserved either way; only the output is capped.
+        errors = tuple(str(error) for error in cleanup.errors)
+        displayed = errors[:_RETENTION_ERROR_DISPLAY_LIMIT]
+        remaining = len(errors) - len(displayed)
+        suffix = f"; ... {remaining} more" if remaining else ""
         print(
-            f"tokenpak: isolated-home retention {phase} preserved uncertain home(s): "
-            + "; ".join(cleanup.errors),
+            f"tokenpak: isolated-home retention {phase} preserved "
+            f"{len(errors)} uncertain home(s): " + "; ".join(displayed) + suffix,
             file=sys.stderr,
         )
     return cleanup
