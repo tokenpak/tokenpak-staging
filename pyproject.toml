@@ -167,19 +167,6 @@ otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.24.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.24.0",
 ]
-crewai = [
-    # Floor is 1.15.6, not a nominal 0.1.0: earlier releases pin
-    # json-repair~=0.25.2, which carries GHSA-xf7x-x43h-rpqh. 1.15.6 is the
-    # first release requiring the patched json-repair~=0.60.1.
-    #
-    # This does not change the default install -- pip already prefers the newest
-    # release. Its function is to stop a constrained resolve from BACKTRACKING
-    # into a vulnerable pin. One consequence worth knowing: all crewai 1.x
-    # requires Python <3.14, while this package allows >=3.10 uncapped, so on
-    # 3.14 this extra now fails to resolve outright instead of backtracking to a
-    # 2023 release that would install and not work.
-    "crewai>=1.15.6",
-]
 autogen = [
     "pyautogen>=0.2.0",
 ]
