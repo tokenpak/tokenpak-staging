@@ -128,6 +128,27 @@ def test_parallel_sessions_are_not_gated(monkeypatch, tmp_path):
         holder.close()
 
 
+def test_parallel_sessions_are_not_gated_by_the_lifecycle_lease(monkeypatch, tmp_path):
+    """End-to-end guard for the second gate on the same path.
+
+    Removing the database preflight is not sufficient on its own: the
+    ``codex.pid`` lifecycle lease is a single slot, and claiming it
+    exclusively refused a concurrent shared session with "already claimed by
+    PID N" well after the preflight had passed. Hold a live lease on the
+    shared home and require ``main()`` to launch anyway.
+    """
+    _stub_setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("TOKENPAK_CODEX_SESSION_MODE", "shared")
+    paths = sh.select_paths(mode="shared", workspace_dir=tmp_path)
+    held = sh.SessionLease.acquire(paths, session_id="already-running")
+    try:
+        assert launcher.main(["--install-only"]) == 0
+        # The concurrent launch must leave the running session's lease intact.
+        assert sh.read_pid_sentinel(paths.pid_sentinel) == held.sentinel
+    finally:
+        held.release()
+
+
 def test_launcher_never_opens_codex_databases(monkeypatch, tmp_path):
     """Contention is SQLite's to resolve because the launcher is not a reader.
 

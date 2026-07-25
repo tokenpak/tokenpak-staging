@@ -32,25 +32,17 @@ tokenpak codex           # launches Codex with the companion active
 `tokenpak codex` does the equivalent for Codex, registering the same MCP server
 through `codex mcp add` so it shows up in `codex mcp list`.
 
-### When another Codex session is already running
+### Running more than one Codex session at once
 
-TokenPak normally uses your existing local Codex history. If another Codex
-session still holds that history, TokenPak waits briefly for it to become safe.
-After verified contention, an interactive launch offers a temporary session:
+Run as many as you like. `tokenpak codex` uses your existing local Codex
+history and does not require exclusive access to it, exactly like running
+`codex` directly: Codex stores its local state in write-ahead-logging SQLite
+databases, which coordinate concurrent readers and a serialized writer across
+processes. TokenPak never opens those databases, so it has no reason to
+serialize your sessions and does not try to.
 
-```text
-Another Codex session is using your shared local history.
-Start a temporary session without that prior history? [y/N]
-```
-
-Choosing **Yes** creates a new temporary history lineage for that invocation.
-It does not attach the prior shared history, replace the normal lineage, or
-change the default for future launches. Choosing **No** or pressing Enter
-preserves the safe refusal. TokenPak does not offer the fallback when inspection
-is incomplete or reports a permission, storage, corruption, or unknown failure.
-
-The temporary session is retention-managed and may remain on disk after Codex
-exits. The prompt is never shown in CI or non-interactive commands.
+Sessions started this way share one history lineage, so each will see work the
+others have committed.
 
 Advanced operators can still select an explicit compatibility mode for
 diagnostics, recovery, or automation:

@@ -308,6 +308,13 @@ def test_main_proxy_detection_exception_path(tmp_path):
             "TOKENPAK_COMPANION_PROXY_URL": "",  # no explicit proxy
         },
     ):
+        # The launcher passes a copy of the ambient environment to the child, so
+        # an inherited ANTHROPIC_BASE_URL would satisfy the assertion below
+        # without the launcher having set anything.  Anyone running Claude
+        # through TokenPak's own proxy exports exactly that variable, so this
+        # test would fail on the machines it most needs to hold on.  patch.dict
+        # restores the whole mapping on exit, so popping here is scoped.
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
         with patch.object(
             CompanionConfig, "run_dir", new_callable=lambda: property(lambda self: run_dir)
         ):

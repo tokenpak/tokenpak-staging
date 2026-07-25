@@ -34,6 +34,24 @@ so unrelated non-dumpable daemons can no longer block an uninstall either. A
 real Codex session is same-user and dumpable, so the descriptor scan still
 observes it directly.
 
+The `codex.pid` lifecycle lease was a second, independent gate on the same
+path. It is a single slot per home, and claiming it exclusively refused a
+concurrent shared session with "already claimed by PID N" well after the
+database inspection had passed, so removing the inspection alone did not
+actually permit parallel sessions. Owning that slot exclusively is correct for
+a home TokenPak generated and may later reclaim — retention must never delete a
+directory a live session is using — but the user's own shared home is neither
+generated nor ever deleted by TokenPak, and Codex coordinates concurrent
+sessions on it. A shared-home launch that finds the slot held by a live session
+now proceeds without owning it rather than refusing, and every lease mutation
+is a no-op for a non-owner so it can never disturb the owner's sentinel.
+Generated homes are unchanged and still refuse a second claim.
+
+Deterministic per-project (`workspace`) homes also keep exclusive claims: they
+are TokenPak-generated and provisioned, so admitting concurrent sessions there
+would race two provisioning passes over one home. Running several sessions in
+one project still requires `shared` (the default) or `isolated`.
+
 Breaking (beta surface): the launcher's preflight result types are removed
 along with the mechanism that produced them — `PreflightStatus`,
 `PreflightEvidence`, `FallbackDecision`, `PreflightEvaluation`, and
