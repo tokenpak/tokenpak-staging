@@ -240,8 +240,8 @@ diff /tmp/my-context/notes.md /tmp/restored/notes.md
 ## 7. License & features
 
 TokenPak ships as a single binary; the Free tier covers the full
-OSS feature set. Pro/Team/Enterprise tiers unlock additional
-capabilities via license activation. List what you have today:
+OSS feature set. Upgrading to Pro adds further capabilities via
+license activation. List what you have today:
 
 ```bash
 tokenpak plan

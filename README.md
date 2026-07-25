@@ -1,45 +1,81 @@
-# TokenPak — Cut your LLM token spend — guided setup
+# TokenPak — the open logistics layer for AI context
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-green.svg)](LICENSE)
 <!-- CI badge: pending repo transfer to tokenpak/tokenpak — add after transfer is confirmed -->
 
-> **The open logistics layer for AI context.**
+**Your agent starts every session not knowing what you already decided.**
 
-TokenPak starts as a local proxy that **packs AI requests** before they ship — reducing wasted context and giving teams receipts for what changed. Fewer tokens, lower cost. No code changes, no cloud, no credentials stored.
+So it asks again. Or it doesn't ask, and rebuilds something you ruled out last week. The
+context exists — in your repo, your notes, your last session — but nothing puts it in front of
+the model at the moment the model needs it.
+
+TokenPak is a local proxy that closes that gap. On every eligible request, **before the model
+is given the task**, it searches your indexed vault, fits the best matches to a token budget,
+and splices them into the request. Then it tells you what it added and where each piece came
+from.
+
+No cloud. No credentials stored. If retrieval fails, your request goes through unchanged.
 
 ---
 
-## First measured receipt in three commands
+## Why this is different from a retrieval tool
 
-Prerequisites: Python 3.10+ and an already authenticated supported client. The
-reference path below uses Codex and reuses its existing OAuth login and normal
-default model. An API key or explicit model override is optional, not required.
-Run it from a project with enough real history for an eligible multi-turn
-request; real provider usage may count against your subscription or incur
-provider charges.
+Most integrations expose retrieval as a tool and wait for the model to call it. That leaves the
+decision to a model that has usually already formed a plan — and a model that has formed a plan
+does not know it was missing something.
+
+| Model-invoked retrieval | TokenPak |
+|---|---|
+| The model decides whether to retrieve | The proxy evaluates every eligible request |
+| Behaviour varies by model | The same rules apply regardless of model |
+| Retrieval costs an extra agent turn | Context arrives with the first inference |
+| Easy to skip, and invisible when skipped | The receipt shows what was included |
+
+---
+
+## What you get
+
+### 1. The agent doesn't have to remember to look
+
+Retrieval runs in the request path, not as a tool call. Requests are matched against your
+indexed vault, ranked, fitted to a budget, and forwarded.
+
+Eligibility is deliberate and inspectable: prompts below a size threshold, small fast models,
+and weak matches are skipped rather than padded. See
+[docs/configuration](docs/configuration/) for the thresholds and how to change them.
+
+### 2. You see exactly what was added, and why
+
+Every injection reports its sources and its token cost. This is the point — a component that
+edits your prompts should be auditable, not trusted on faith.
 
 ```bash
-python -m pip install tokenpak
-tokenpak serve --profile aggressive --stats-footer  # terminal 1; leave running
-tokenpak codex  # terminal 2; use your existing login and selected/default model
+tokenpak status --tip-cache   # what was reused vs re-sent
+tokenpak savings              # measured on your own traffic
 ```
 
-In Codex, make a normal context-bearing request, then continue that same topic.
-The first request may correctly be ineligible because there is no historical
-context yet; the first eligible request prints the measured before/after token
-receipt in terminal 1. The dollar figure is estimated from TokenPak's
-model-pricing table. This session-only footer is off by default and does not
-alter the provider response.
+### 3. It doesn't change your bytes
 
-See the [first receipt guide](docs/first-receipt.md) for prerequisites,
-expected output, the five-minute reference target, and routes that are not
-eligible for compression savings.
+On the Claude Code route, TokenPak splices at the byte level and never re-serialises your
+JSON — because re-serialising changes how the request is billed. Byte-preservation is a
+correctness requirement, not an optimisation.
 
-## Offline fixture demo
+### 4. Local, and reversible
 
-To inspect compression without credentials or provider spend:
+The proxy runs on `127.0.0.1`. Nothing leaves your machine except the request you were already
+sending. Retrieval failures fail open. Removal is one command:
+
+```bash
+pip uninstall tokenpak
+```
+
+---
+
+## Try it without credentials
+
+Inspect the compression stage offline, with no provider spend:
 
 ```bash
 tokenpak demo
@@ -60,18 +96,47 @@ tokenpak demo
 └──────────────────────────────────────────────────────┘
 ```
 
-> This is an illustrative fixture, not a measured first-request receipt. Token
-> counts vary by route and workload. Measure your own with `tokenpak savings`;
-> inspect provider-cache vs. TokenPak attribution with
-> `tokenpak status --tip-cache`.
+> This is a fixture, not a measurement of your workload. Token counts vary by route and
+> workload. Measure your own with `tokenpak savings`.
+
+---
+
+## First measured receipt in three commands
+
+Prerequisites: Python 3.10+ and an already authenticated supported client. The reference path
+below uses Codex and reuses its existing OAuth login and default model. An API key or explicit
+model override is optional, not required. Run it from a project with enough real history for an
+eligible multi-turn request; real provider usage may count against your subscription or incur
+provider charges.
+
+```bash
+python -m pip install tokenpak
+tokenpak serve --profile aggressive --stats-footer  # terminal 1; leave running
+tokenpak codex  # terminal 2; uses your existing login and default model
+```
+
+Make a normal context-bearing request, then continue that same topic. The first request may
+correctly be ineligible because there is no historical context yet; the first eligible request
+prints the measured before/after token receipt in terminal 1. The dollar figure is estimated
+from TokenPak's model-pricing table. This session-only footer is off by default and does not
+alter the provider response.
+
+See the [first receipt guide](docs/first-receipt.md) for prerequisites, expected output, and
+routes that are not eligible for compression savings.
 
 ---
 
 ## Works with
 
-**Claude Code** · **Cursor** · **Cline** · **Continue.dev** · **Aider** · **OpenAI SDK** · **Anthropic SDK** · **LiteLLM** · **Codex**
+**Tested SDK adapters** — OpenAI SDK · Anthropic SDK · LiteLLM
 
-Run `tokenpak integrate` to see the full client list with setup guides for each.
+**First-class integration** — Claude Code (`tokenpak integrate claude-code`)
+
+**Compatibility targets, not yet verified** — Cursor · Cline · Continue · Aider · Codex
+
+Run `tokenpak integrate` for setup guides. Current status is tracked in
+[docs/adapter-compatibility-matrix.md](docs/adapter-compatibility-matrix.md) — that file is the
+ground truth, not this list.
 
 ---
 
@@ -81,21 +146,22 @@ Run `tokenpak integrate` to see the full client list with setup guides for each.
 pip install tokenpak
 ```
 
-See [docs/quickstart.md](docs/quickstart.md) for virtual-env setup and per-client configuration.
+Retrieval needs an index before it can return anything. See
+[docs/quickstart.md](docs/quickstart.md) for virtual-env setup, indexing, and per-client
+configuration.
 
 Requirements: Python 3.10+. No external dependencies for core functionality.
 
-Exposing the proxy beyond `127.0.0.1`? Set `TOKENPAK_PROXY_AUTH_TOKEN` to a
-shared secret to require `Authorization: Bearer <token>` on remote requests
-(see [docs/configuration/proxy-auth.md](docs/configuration/proxy-auth.md)).
+Exposing the proxy beyond `127.0.0.1`? Set `TOKENPAK_PROXY_AUTH_TOKEN` to a shared secret to
+require `Authorization: Bearer <token>` on remote requests (see
+[docs/configuration/proxy-auth.md](docs/configuration/proxy-auth.md)).
 
 ---
 
 ## Runnable examples
 
-The PyPI wheel keeps the install slim and does not bundle the repository's
-top-level examples. To run them after a normal package install, clone or
-download the source tree for the example files:
+The PyPI wheel keeps the install slim and does not bundle the repository's top-level examples.
+To run them after a normal package install, clone or download the source tree:
 
 ```bash
 git clone https://github.com/tokenpak/tokenpak.git
@@ -106,41 +172,58 @@ python -m pip install -U tokenpak
 python examples/basic_compression.py
 ```
 
-`examples/basic_compression.py` is local-first and does not require provider
-credentials. See [examples/README.md](examples/README.md) for the full examples
-index and developer editable-install path.
+`examples/basic_compression.py` is local-first and does not require provider credentials. See
+[examples/README.md](examples/README.md) for the full examples index and the developer
+editable-install path.
 
 ---
 
 ## What's included (Free)
 
-> **Dispatch (v0.1-alpha preview):** turn a request into a scoped, resumable, reviewable workflow from the CLI. It is a source/`main`-branch preview and is not yet part of a released `pip install tokenpak`; see the [Dispatch guide](docs/guides/dispatch.md).
+> **Dispatch (v0.1-alpha preview):** turn a request into a scoped, resumable, reviewable
+> workflow from the CLI. It is a source/`main`-branch preview and is not yet part of a released
+> `pip install tokenpak`; see the [Dispatch guide](docs/guides/dispatch.md).
 
-- **Context compression** — deterministic token reduction on real agent
-  workloads, <50ms latency. Savings are route-specific: direct API, CLI, and
-  uncached repeated-agent loops are the best fit, while Claude Code/TUI routes
-  may show lower incremental savings when the provider cache already handled
-  repeated context. Measure your own savings with `tokenpak savings`; inspect
-  attribution with `tokenpak status --tip-cache` (reproduce the headline
-  benchmark with `make benchmark-headline`).
-- **Client integration** — one command wires Claude Code, Cursor, Aider, and 6 other clients
-- **Model routing** — send requests to the right model automatically, with fallback rules
+- **Pre-inference context injection** — indexed-vault retrieval in the request path, budgeted
+  and source-attributed, on every eligible request
+- **Context compression** — deterministic token reduction on real agent workloads. Savings are
+  route-specific: direct API, CLI, and uncached repeated-agent loops are the best fit, while
+  Claude Code/TUI routes may show lower incremental savings when the provider cache already
+  handled repeated context. Measure your own with `tokenpak savings`; overhead is documented in
+  [docs/LATENCY.md](docs/LATENCY.md)
+- **Client integration** — one command wires the clients listed under *Works with*
+- **Routing policy** — routing rules and fallback policy are configurable from the CLI as
+  scaffolding; in-flight enforcement is not active by default
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
-- **TIP Spend Guard** — pre-send circuit breaker; blocks runaway requests before provider call. Yes/No release or `[TIP: allow=once max=$X]` directive. Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative tracking. See [docs/spend-guard.md](docs/spend-guard.md).
-- **Vault indexing + semantic search** — index your codebase; search without an LLM call
-- **MultiPak Pro Phase 1 OSS surface** — read-only Vault Pak adapter, companion journal promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. Full MultiPak (capture pipeline, recall ranking, Handoff Paks, anchor hydration) requires `tokenpak-paid` (Pro). See [docs/multipak.md](docs/multipak.md).
+- **Spend Guard** — pre-send circuit breaker; blocks runaway requests before the provider call.
+  Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative
+  tracking. See [docs/spend-guard.md](docs/spend-guard.md)
+- **Vault indexing + search** — index your codebase; search without an LLM call
+- **MultiPak Phase 1 OSS surface** — read-only Vault Pak adapter, companion journal
+  promotion-candidate marking, `tokenpak pak` CLI, `/pak/v1/*` proxy stubs. Scored recall
+  ranking, the capture pipeline, Handoff Paks, and anchor hydration require `tokenpak-paid`
+  (Pro). See [docs/multipak.md](docs/multipak.md)
 - **CLI + proxy server** — `tokenpak serve`, `tokenpak cost`, `tokenpak savings`
-- **Value proof** — `tokenpak prove run` benchmarks direct API vs. TokenPak on your own prompt workload and prints a side-by-side cost/token report. See the [value proof guide](docs/guides/value-proof.md).
+- **Value proof** — `tokenpak prove run` benchmarks direct API vs. TokenPak on your own prompt
+  workload and prints a side-by-side cost/token report. See the
+  [value proof guide](docs/guides/value-proof.md)
 - **A/B testing and replay/debug** — compare compression configs, replay past requests
-- **50 built-in compression recipes** — YAML, customizable
+- **Built-in compression recipes** — YAML, customizable
 
-Repeated context is reused from cache instead of re-sent on every call. See [docs/quickstart.md](docs/quickstart.md) and [docs/api-tpk-v1.md](docs/api-tpk-v1.md) to get started.
+---
+
+## About cost
+
+Sending less repeated context costs less. That follows from the mechanism — it isn't the reason
+to run it, and it isn't a number we will quote at you. Route, workload, and provider caching all
+move it. Measure yours with `tokenpak savings` and `tokenpak prove run`.
 
 ---
 
 ## Open source & editions
 
-TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are proprietary. Commercial packaging is not published yet.
+TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are proprietary.
+Commercial packaging is not published yet.
 
 ---
 
@@ -155,8 +238,13 @@ TokenPak's core is Apache-2.0 open source; TokenPak Pro and hosted services are 
 
 ## License
 
-The TokenPak open-source core is licensed under the Apache License 2.0 — see [LICENSE](LICENSE). TokenPak Pro and hosted services are proprietary.
+The TokenPak open-source core is licensed under the Apache License 2.0 — see [LICENSE](LICENSE).
+TokenPak Pro and hosted services are proprietary.
 
 ### Trademark
 
-"TokenPak", the TokenPak name, logo, and brand assets are trademarks of TokenPak and are **not** licensed under Apache-2.0 (Apache-2.0 §6 grants no trademark rights). Nominative and reference use — for example "works with TokenPak" or "a plugin for TokenPak" — is fine. Using the name or logo in a way that implies endorsement, sponsorship, or affiliation, or naming a fork, product, or service "TokenPak" (or something confusingly similar), is not.
+"TokenPak", the TokenPak name, logo, and brand assets are trademarks of TokenPak and are
+**not** licensed under Apache-2.0 (Apache-2.0 §6 grants no trademark rights). Nominative and
+reference use — for example "works with TokenPak" or "a plugin for TokenPak" — is fine. Using
+the name or logo in a way that implies endorsement, sponsorship, or affiliation, or naming a
+fork, product, or service "TokenPak" (or something confusingly similar), is not.
