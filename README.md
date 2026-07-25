@@ -1,4 +1,4 @@
-# TokenPak — the open logistics layer for AI context
+# TokenPak
 
 [![PyPI version](https://img.shields.io/pypi/v/tokenpak.svg)](https://pypi.org/project/tokenpak/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/tokenpak.svg)](https://pypi.org/project/tokenpak/)
@@ -17,6 +17,8 @@ and splices them into the request. Then it tells you what it added and where eac
 from.
 
 No cloud. No credentials stored. If retrieval fails, your request goes through unchanged.
+
+> **The open logistics layer for AI context.**
 
 ---
 

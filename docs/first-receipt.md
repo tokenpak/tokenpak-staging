@@ -1,8 +1,12 @@
-# First Measured Savings Receipt
+# Your First Receipt
 
-This is TokenPak's supported reference path from a clean install to a measured
-receipt from your own real request. Its reference target is three shell
-commands and no more than five minutes.
+This is TokenPak's supported reference path from a clean install to a receipt
+from your own real request — what TokenPak did to it, and what that cost. Its
+reference target is three shell commands and no more than five minutes.
+
+The receipt is the point. A component that edits your prompts should be
+auditable rather than trusted, and this is the fastest way to see it working on
+traffic you recognise.
 
 ## Before you start
 
