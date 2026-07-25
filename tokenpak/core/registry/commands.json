@@ -145,7 +145,7 @@
       "command": "activate",
       "tier": "oss",
       "category": "Control",
-      "description": "Activate a Pro/Team/Enterprise license key",
+      "description": "Activate a Pro license key",
       "aliases": [],
       "usage": "/tokenpak activate <key>",
       "detail": "Validates and stores a license key. Enables features for your tier immediately.",
@@ -415,20 +415,20 @@
       "command": "compliance",
       "tier": "enterprise",
       "category": "Governance",
-      "description": "Generate compliance reports (Pro/Enterprise)",
+      "description": "Generate compliance reports (Pro)",
       "aliases": [],
       "usage": "/tokenpak compliance [report|export] [--format JSON|CSV|PDF]",
-      "detail": "Pro/Enterprise report surface. For OSS trust review, start with docs/guides/enterprise/compliance-mapping.md and docs/guides/enterprise/security-architecture.md; the OSS package does not unlock compliance reports without the Pro/Enterprise surface.",
+      "detail": "Pro report surface. For OSS trust review, start with docs/guides/enterprise/compliance-mapping.md and docs/guides/enterprise/security-architecture.md; the OSS package does not unlock compliance reports without the Pro surface.",
       "related": ["audit", "policy"]
     },
     {
       "command": "audit",
       "tier": "enterprise",
       "category": "Governance",
-      "description": "Enterprise audit log management (Pro/Enterprise)",
+      "description": "Audit log management (Pro)",
       "aliases": [],
       "usage": "/tokenpak audit [list|export|purge] [--since DATE]",
-      "detail": "Pro/Enterprise audit-log surface. For the current trust model and deployment controls, start with docs/guides/enterprise/security-architecture.md.",
+      "detail": "Pro audit-log surface. For the current trust model and deployment controls, start with docs/guides/enterprise/security-architecture.md.",
       "related": ["compliance", "policy"]
     },
     {

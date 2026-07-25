@@ -502,8 +502,8 @@ _COMMAND_GROUPS = {
         ("lock", "File lock management"),
         ("run", "Schedule macro runs"),
         ("replay", "Replay captured sessions"),
-        ("audit", "Audit log surface (Pro/Enterprise)"),
-        ("compliance", "Compliance report surface (Pro/Enterprise)"),
+        ("audit", "Audit log surface (Pro)"),
+        ("compliance", "Compliance report surface (Pro)"),
         ("validate", "Validate JSON files"),
         ("config-check", "Validate config"),
         ("diff", "Show context changes"),
@@ -2984,11 +2984,11 @@ def _build_stub_parsers(sub: Subparsers) -> None:
     """
     _STUBS = {
         "audit": (
-            "Enterprise audit log surface (Pro/Enterprise); see "
+            "Audit log surface (Pro); see "
             "docs/guides/enterprise/security-architecture.md"
         ),
         "compliance": (
-            "Compliance report surface (Pro/Enterprise); see "
+            "Compliance report surface (Pro); see "
             "docs/guides/enterprise/compliance-mapping.md"
         ),
         "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
