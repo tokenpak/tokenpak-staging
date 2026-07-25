@@ -6,8 +6,34 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-> Next release is **v1.16.0 (MINOR)** and carries a **BREAKING** change: the `crewai` extra is
-> removed. It cannot be cut as a PATCH.
+> Next release is **v1.16.0 (MINOR)** and carries two **BREAKING** changes: the `crewai` extra
+> is removed, and the license tier ladder drops its two top rungs. It cannot be cut as a PATCH.
+
+### Changed
+
+- **BREAKING — the tier ladder is now `free < pro`.** The two tiers above Pro are
+  retired and Pro introduces every feature they used to: `tokenpak_server`,
+  `seat_management`, `team_analytics`, `audit_log` and `sla` all resolve to
+  `pro`. This supersedes the ladder described under 1.15.0 below.
+
+  No license above Pro could be issued, so every feature gated above Pro was
+  unreachable by anyone holding a real license — including `tokenpak_server`,
+  which gates the daemon that the paid tier is defined by. A valid Pro licensee
+  could not run it.
+
+  `required_tier_for` returns `"pro"` for all of the above. The two retired
+  members are gone from the `LicenseTier` enum, so code that names one, or that
+  assumes four rungs, no longer imports; the ladder is available from
+  `LicenseTier.ladder()` and the tier names from
+  `tokenpak.licensing.known_tiers()` rather than being hardcoded.
+
+- The per-key rate-limit table in the (unshipped) intelligence server collapses
+  to `free: 20/min`, `pro: 100/min`.
+
+### Added
+
+- `tokenpak.licensing.known_tiers()` — tier names in ascending capability
+  order, so callers rendering a tier list do not hardcode one.
 
 ### Removed
 

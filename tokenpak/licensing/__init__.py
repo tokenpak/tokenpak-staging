@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""License management — Free-tier defaults today, Pro/Team/Enterprise ready.
+"""License management — Free-tier defaults today, Pro ready.
 
 This module implements I7 (License Activation), I8 (License Validation), and
 I9 (License Store) from the Free-tier feature list. No real entitlement
@@ -27,81 +27,86 @@ from typing import Any, Optional
 
 TIER_FREE = "free"
 TIER_PRO = "pro"
-TIER_TEAM = "team"
-TIER_ENTERPRISE = "enterprise"
 
-# Feature → minimum tier required. Mirrors Kevin's Free/Pro/Team/Enterprise
-# split in the canonical feature list. Free features are implicit (not here).
-# Add entries only for gated features; anything absent is treated as Free.
+# Feature → minimum tier required. The product ships two tiers only — OSS
+# (free) and Pro. Free features are implicit (not here). Add entries only for
+# gated features; anything absent is treated as Free.
 _GATES: dict[str, str] = {
     # Compression (Pro)
     "C3_code_compression": TIER_PRO,
     "C5_log_compression": TIER_PRO,
     "C6_json_yaml_compression": TIER_PRO,
     "C12_query_rewriting": TIER_PRO,
-    # Proxy (Pro/Team/Enterprise)
+    # Proxy (Pro)
     "R4_smart_routing": TIER_PRO,
     "R8_intent_policy_routing": TIER_PRO,
-    "R13_oauth_auth_handling": TIER_TEAM,
+    "R13_oauth_auth_handling": TIER_PRO,
     "R14_capsule_integration": TIER_PRO,
     "R15_failover_engine": TIER_PRO,
-    "R7_connection_pooling": TIER_ENTERPRISE,
+    "R7_connection_pooling": TIER_PRO,
     # Cost / telemetry
-    "T3_budget_enforcement": TIER_TEAM,
+    "T3_budget_enforcement": TIER_PRO,
     "T4_session_telemetry": TIER_PRO,
     "T5_cost_report_generation": TIER_PRO,
     "T9_replay_system": TIER_PRO,
     # Dashboard
-    "D2_finops_page": TIER_ENTERPRISE,
+    "D2_finops_page": TIER_PRO,
     "D3_engineering_page": TIER_PRO,
-    "D4_audit_page": TIER_ENTERPRISE,
+    "D4_audit_page": TIER_PRO,
     "D5_csv_export": TIER_PRO,
     "D6_json_export": TIER_PRO,
     "D7_session_filtering": TIER_PRO,
-    "D8_realtime_stats_api": TIER_TEAM,
+    "D8_realtime_stats_api": TIER_PRO,
     # Agentic
     "A1_workflow_engine": TIER_PRO,
     "A2_capabilities_registry": TIER_PRO,
     "A4_failure_memory": TIER_PRO,
     "A6_prefetcher": TIER_PRO,
-    "A7_handoff_system": TIER_TEAM,
+    "A7_handoff_system": TIER_PRO,
     "A8_memory_promoter": TIER_PRO,
     "A9_precondition_gates": TIER_PRO,
     "A10_state_collector": TIER_PRO,
-    "A11_workflow_budget": TIER_TEAM,
+    "A11_workflow_budget": TIER_PRO,
     "A12_workflow_performance": TIER_PRO,
     "A13_validation_framework": TIER_PRO,
-    "A14_runbook_generator": TIER_ENTERPRISE,
-    # CLI (Pro/Team/Enterprise commands)
+    "A14_runbook_generator": TIER_PRO,
+    # CLI (Pro commands)
     "L8_trace": TIER_PRO,
     "L9_replay": TIER_PRO,
     "L10_route_manage": TIER_PRO,
     "L11_route_test": TIER_PRO,
-    "L16_budget_manage": TIER_TEAM,
+    "L16_budget_manage": TIER_PRO,
     "L19_metrics_export": TIER_PRO,
-    "L20_policy": TIER_ENTERPRISE,
+    "L20_policy": TIER_PRO,
     "L24_trigger": TIER_PRO,
     "L25_workflow": TIER_PRO,
     # Advanced
-    "X1_ab_testing": TIER_ENTERPRISE,
-    "X2_shadow_mode": TIER_ENTERPRISE,
-    "X3_regression_detection": TIER_ENTERPRISE,
-    "X4_baseline_registry": TIER_ENTERPRISE,
+    "X1_ab_testing": TIER_PRO,
+    "X2_shadow_mode": TIER_PRO,
+    "X3_regression_detection": TIER_PRO,
+    "X4_baseline_registry": TIER_PRO,
     "X5_artifact_reuse": TIER_PRO,
-    "X6_team_shared_vault": TIER_TEAM,
-    "X7_agent_registry": TIER_TEAM,
-    "X8_teacher_framework": TIER_ENTERPRISE,
+    "X6_team_shared_vault": TIER_PRO,
+    "X7_agent_registry": TIER_PRO,
+    "X8_teacher_framework": TIER_PRO,
     # Infra
-    "I4_security_pii_dlp": TIER_ENTERPRISE,
-    "I10_oauth_manager": TIER_TEAM,
+    "I4_security_pii_dlp": TIER_PRO,
+    "I10_oauth_manager": TIER_PRO,
 }
 
 _TIER_ORDER = {
     TIER_FREE: 0,
     TIER_PRO: 1,
-    TIER_TEAM: 2,
-    TIER_ENTERPRISE: 3,
 }
+
+
+def known_tiers() -> tuple[str, ...]:
+    """Tier names in ascending capability order.
+
+    Derived from ``_TIER_ORDER`` so callers rendering a tier list never
+    hardcode one (per ``feedback_always_dynamic``).
+    """
+    return tuple(sorted(_TIER_ORDER, key=lambda t: _TIER_ORDER[t]))
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +240,7 @@ def _devshim_tier(key: str) -> str:
     per ``feedback_always_dynamic``); defaults to Pro when no tier segment
     is present.
     """
-    paid = {TIER_PRO, TIER_TEAM, TIER_ENTERPRISE}
+    paid = {TIER_PRO}
     for segment in key.lower().split("-"):
         if segment in paid:
             return segment
@@ -477,7 +482,7 @@ def _consult_daemon_for_tier(lic: "License") -> tuple[str, str]:
         return ("unverified", str(payload.get("degraded_reason", "not_valid")))
 
     daemon_tier = str(payload.get("tier", TIER_FREE)).lower()
-    if daemon_tier in (TIER_PRO, TIER_TEAM, TIER_ENTERPRISE):
+    if daemon_tier == TIER_PRO:
         lic.tier = daemon_tier
         lic.status = "active"
         try:
@@ -504,7 +509,7 @@ def is_feature_enabled(feature: str, *, lic: Optional[License] = None) -> bool:
 
     Features absent from _GATES are Free — always enabled. This is the
     single choke point any callsite should route through when guarding
-    Pro/Team/Enterprise functionality.
+    Pro functionality.
     """
     if feature not in _GATES:
         return True
@@ -525,8 +530,6 @@ def describe_tier(tier: str) -> str:
     return {
         TIER_FREE: "Free",
         TIER_PRO: "Pro",
-        TIER_TEAM: "Team",
-        TIER_ENTERPRISE: "Enterprise",
     }.get(tier, tier.title())
 
 
@@ -545,7 +548,7 @@ def discover_plans() -> list[dict[str, Any]]:
 
     Returns a list of dicts:
         {tier, label, feature_count, features, price, blurb}
-    in canonical order Free → Pro → Team → Enterprise.
+    in canonical order Free → Pro.
     """
     # Reverse the gate table: tier → [features]
     tier_features: dict[str, list[str]] = {TIER_FREE: []}
@@ -554,7 +557,7 @@ def discover_plans() -> list[dict[str, Any]]:
 
     pricing = _load_pricing_manifest()
     blurbs = _default_blurbs()
-    order = (TIER_FREE, TIER_PRO, TIER_TEAM, TIER_ENTERPRISE)
+    order = (TIER_FREE, TIER_PRO)
 
     catalog: list[dict[str, Any]] = []
     for tier in order:
@@ -604,15 +607,11 @@ def _default_blurbs() -> dict[str, str]:
         ),
         TIER_PRO: (
             "Adds advanced compression, smart routing, session "
-            "telemetry, trace + replay, CSV/JSON export."
-        ),
-        TIER_TEAM: (
-            "Adds budget enforcement, OAuth, real-time stats API, "
-            "shared vault, handoff system, workflow budgets."
-        ),
-        TIER_ENTERPRISE: (
-            "Adds A/B testing, shadow mode, regression detection, "
-            "FinOps + audit pages, DLP/PII scanning, connection pooling."
+            "telemetry, trace + replay, CSV/JSON export, budget "
+            "enforcement, OAuth, real-time stats API, shared vault, "
+            "handoff system, workflow budgets, A/B testing, shadow "
+            "mode, regression detection, FinOps + audit pages, "
+            "DLP/PII scanning, connection pooling."
         ),
     }
 
@@ -645,8 +644,8 @@ def summary_for_cli(lic: Optional[License] = None) -> dict[str, Any]:
 __all__ = [
     "TIER_FREE",
     "TIER_PRO",
-    "TIER_TEAM",
-    "TIER_ENTERPRISE",
+    "TIER_PRO",
+    "TIER_PRO",
     "License",
     "ActivationResult",
     "load_license",
