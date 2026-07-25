@@ -44,10 +44,12 @@ except ImportError:
 _lic: ModuleType | None
 try:
     from tokenpak import licensing as _lic
-    from tokenpak.cli.commands.upgrade import DEFAULT_UPGRADE_URL
+    from tokenpak.cli.commands.upgrade import upgrade_cta_line
 except ImportError:
     _lic = None
-    DEFAULT_UPGRADE_URL = "https://tokenpak.ai/pro"
+
+    def upgrade_cta_line() -> str:  # type: ignore[misc]
+        return ""
 
 
 def _estimate_session_savings(
@@ -104,8 +106,18 @@ SEP = "────────────────────────�
 
 
 def _free_tier_upgrade_hint() -> Optional[str]:
-    """Return an upgrade hint for Free-tier installs, fail-open on license errors."""
+    """Return an upgrade hint, or ``None`` when no enrollment destination exists.
+
+    Public Pro enrollment is unavailable, so this footer is suppressed by
+    default. It printed on *every* status run and pointed at a URL that returns
+    404, making the most-displayed call-to-action in the product a dead link.
+    ``upgrade_cta_line()`` returns non-empty only when an operator has set
+    ``TOKENPAK_UPGRADE_URL`` for a private cohort.
+    """
     if _lic is None:
+        return None
+    cta = upgrade_cta_line()
+    if not cta:
         return None
     try:
         summary = _lic.summary_for_cli()
@@ -113,7 +125,7 @@ def _free_tier_upgrade_hint() -> Optional[str]:
         return None
     if summary.get("tier") != getattr(_lic, "TIER_FREE", "free"):
         return None
-    return f"  Upgrade to Pro: {DEFAULT_UPGRADE_URL}  (or run `tokenpak upgrade`)"
+    return cta
 
 
 def _print_free_tier_upgrade_hint() -> None:

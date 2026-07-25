@@ -450,7 +450,6 @@ _COMMAND_GROUPS = {
         ("demo", "See compression in action"),
         ("cost", "View API spend"),
         ("status", "Check proxy health"),
-        ("upgrade", "Open the TokenPak Pro upgrade page"),
         ("logs", "Show recent logs"),
     ],
     "Indexing": [

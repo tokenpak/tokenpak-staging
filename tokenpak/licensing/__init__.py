@@ -520,14 +520,48 @@ def is_feature_enabled(feature: str, *, lic: Optional[License] = None) -> bool:
     return _TIER_ORDER.get(lic.tier, 0) >= _TIER_ORDER[required]
 
 
+#: The two editions TokenPak presents publicly. ``free``/``pro``/``team``/
+#: ``enterprise`` remain the *internal* entitlement taxonomy — they decide what
+#: a license unlocks — but only these two names are shown to users. Advertising
+#: Team and Enterprise as purchasable plans described products nobody can buy.
+EDITION_BASE = "TokenPak"
+EDITION_PRO = "TokenPak Pro"
+
+#: Internal tiers that map onto the Pro edition publicly.
+_PRO_EDITION_TIERS = frozenset({TIER_PRO, TIER_TEAM, TIER_ENTERPRISE})
+
+
+def public_edition(tier: str) -> str:
+    """Map an internal entitlement tier onto a public edition name."""
+    return EDITION_PRO if tier in _PRO_EDITION_TIERS else EDITION_BASE
+
+
+def is_public_plan(tier: str) -> bool:
+    """Whether *tier* may be presented as a plan a user can obtain.
+
+    Team and Enterprise are entitlement metadata carried by a verified
+    license, not offerings — so they never appear in a plan catalog.
+    """
+    return tier in (TIER_FREE, TIER_PRO)
+
+
 def describe_tier(tier: str) -> str:
-    """Human-readable tier label."""
+    """Human-readable tier label, in public edition terms.
+
+    Use :func:`internal_tier_label` when the audience is a diagnostic surface
+    that genuinely needs the underlying tier name.
+    """
+    return public_edition(tier)
+
+
+def internal_tier_label(tier: str) -> str:
+    """Underlying entitlement tier name, for diagnostics and license metadata."""
     return {
-        TIER_FREE: "Free",
-        TIER_PRO: "Pro",
-        TIER_TEAM: "Team",
-        TIER_ENTERPRISE: "Enterprise",
-    }.get(tier, tier.title())
+        TIER_FREE: "free",
+        TIER_PRO: "pro",
+        TIER_TEAM: "team",
+        TIER_ENTERPRISE: "enterprise",
+    }.get(tier, tier.lower())
 
 
 def discover_plans() -> list[dict[str, Any]]:
@@ -559,6 +593,10 @@ def discover_plans() -> list[dict[str, Any]]:
     catalog: list[dict[str, Any]] = []
     for tier in order:
         if tier != TIER_FREE and tier not in tier_features:
+            continue
+        # Team/Enterprise features still exist in the gate table and still
+        # unlock for a license that carries them; they are simply not offerings.
+        if not is_public_plan(tier):
             continue
         feats = sorted(tier_features.get(tier, []))
         catalog.append(
@@ -599,8 +637,7 @@ def _load_pricing_manifest() -> dict[str, str]:
 def _default_blurbs() -> dict[str, str]:
     return {
         TIER_FREE: (
-            "Full Free-tier feature set — proxy, vault, basic "
-            "compression, dashboard, savings tracking."
+            "Proxy, vault, compression, dashboard and savings tracking. Everything shipped today."
         ),
         TIER_PRO: (
             "Adds advanced compression, smart routing, session "
