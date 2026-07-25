@@ -429,12 +429,24 @@ def _proxy_get(path: str, port: Optional[int] = None) -> JsonObject | None:
 
 # ── Progressive Disclosure ────────────────────────────────────────────────────
 
+
 #: Name of the first-run marker. Resolved lazily (see ``_first_run_flag``)
 #: rather than bound at import time: a module-level
 #: ``Path.home() / ".tokenpak" / ".seen_intro"`` meant that *any* verb — even
 #: ``tokenpak version`` — created the legacy home before anything else ran,
 #: which pinned path resolution to the legacy directory for the life of the
 #: install and created it at the process umask (0775) instead of 0700.
+def _paths_mod() -> Any:
+    """The canonical path resolver, imported lazily.
+
+    Imported on use so a caller that sets ``TOKENPAK_HOME`` programmatically
+    is not racing a module-level binding.
+    """
+    from tokenpak import _paths
+
+    return _paths
+
+
 _FIRST_RUN_FLAG_NAME = ".seen_intro"
 
 # Commands shown in quick --help (beginner view)
@@ -507,8 +519,8 @@ _COMMAND_GROUPS = {
         ("lock", "File lock management"),
         ("run", "Schedule macro runs"),
         ("replay", "Replay captured sessions"),
-        ("audit", "Audit log surface (Pro/Enterprise)"),
-        ("compliance", "Compliance report surface (Pro/Enterprise)"),
+        ("audit", "Audit log surface (requires an entitlement)"),
+        ("compliance", "Compliance report surface (requires an entitlement)"),
         ("validate", "Validate JSON files"),
         ("config-check", "Validate config"),
         ("diff", "Show context changes"),
@@ -856,7 +868,9 @@ def cmd_init(args: CommandArgs) -> None:
 
     import click
 
-    config_dir = _Path.home() / ".tokenpak"
+    from tokenpak import _paths as _p
+
+    config_dir = _p.write_home()
     config_file = config_dir / "config.json"
     env_file = config_dir / ".env"
 
@@ -1248,12 +1262,23 @@ def cmd_setup(args: CommandArgs) -> int:
     return 0
 
 
-def cmd_start(args: CommandArgs) -> None:
-    """Start the proxy on localhost:8766 (launches proxy.py)."""
+def cmd_start(args: CommandArgs) -> int:
+    """Start the proxy on localhost:8766 (launches proxy.py).
+
+    Returns a documented exit code. It previously returned ``None`` on every
+    path, including the ones where the proxy did not start, so a script that
+    ran `tokenpak start && tokenpak status` saw success after a failed boot.
+    """
     import subprocess
 
+    from tokenpak.cli.exit_codes import (
+        EXIT_NOT_CONFIGURED,
+        EXIT_OK,
+        EXIT_RUNTIME_UNAVAILABLE,
+    )
+    from tokenpak.core.runtime import lifecycle as _lifecycle
+
     port = int(os.environ.get("TOKENPAK_PORT", "8766"))
-    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
 
     # Validate config on boot (P1-T5)
     from tokenpak.core.config_loader import load_config
@@ -1278,29 +1303,50 @@ def cmd_start(args: CommandArgs) -> None:
                 file=_sys.stderr,
             )
             print("  • Or use: tokenpak config-check <file>", file=_sys.stderr)
-            return
+            return EXIT_NOT_CONFIGURED
     except Exception as _e:
         print(f"Warning: Config validation skipped ({_e})")
 
-    # Check if proxy is already responding (covers systemd, manual, PID file)
-    health = _proxy_get("/health", port=port)
-    if health:
+    # One observation of lifecycle state, shared with setup, stop, restart,
+    # status and doctor. These commands previously each decided for themselves
+    # what "running" meant, and they did not agree: start probed the port,
+    # stop read a PID file in a different home than setup wrote it to, so
+    # `tokenpak stop` after `tokenpak setup` reported no proxy was running.
+    snap = _lifecycle.snapshot(port)
+
+    if snap.running:
         stats = _proxy_get("/stats", port=port) or {}
         mode = stats.get("compilation_mode")
-        reqs = health.get("requests_total", "unknown")
+        reqs = snap.health_payload.get("requests_total", "unknown")
         mode_text = f", mode={mode}" if isinstance(mode, str) and mode else ""
         print(f"Proxy already running (port {port}{mode_text}, {reqs} requests).")
-        return
+        return EXIT_OK
 
-    # Check stale PID file
-    if pid_path.exists():
-        try:
-            pid = int(pid_path.read_text().strip())
-            os.kill(pid, 0)
-            print(f"Proxy process exists (PID {pid}) but not responding. Try `tokenpak restart`.")
-            return
-        except (ProcessLookupError, ValueError):
-            pid_path.unlink(missing_ok=True)
+    if snap.health_ok and not snap.pid_alive:
+        # Something is serving that port, but it is not a child we recorded.
+        print(f"A proxy is already answering on port {port}, but this install did not start it.")
+        print("   TokenPak will not manage a process it does not own.")
+        print("   Run `tokenpak status` to inspect it, or choose another port:")
+        print("     TOKENPAK_PORT=<port> tokenpak start")
+        return EXIT_RUNTIME_UNAVAILABLE
+
+    if snap.pid_alive and not snap.health_ok:
+        print(
+            f"Proxy process exists (PID {snap.pid}) but is not answering. Try `tokenpak restart`."
+        )
+        return EXIT_RUNTIME_UNAVAILABLE
+
+    if snap.foreign_listener:
+        print(f"Port {port} is in use by something that is not a TokenPak proxy.")
+        print("   Free the port, or choose another:")
+        print("     TOKENPAK_PORT=<port> tokenpak start")
+        return EXIT_RUNTIME_UNAVAILABLE
+
+    # A PID on file that is not alive is stale — clear it rather than leaving
+    # a record that later reads as a running proxy.
+    recorded_pid, _ = _lifecycle.read_pid()
+    if recorded_pid is not None and not _lifecycle.pid_alive(recorded_pid):
+        _lifecycle.clear_pid()
 
     env = os.environ.copy()
     env["TOKENPAK_PORT"] = str(port)
@@ -1316,7 +1362,7 @@ def cmd_start(args: CommandArgs) -> None:
             print("Error: proxy.py not found. Falling back to legacy server.")
             serve_args = argparse.Namespace(port=port, telemetry=False, ingest=False, workers=1)
             cmd_serve(serve_args)
-            return
+            return EXIT_OK
         proc = subprocess.Popen(
             [sys.executable, str(proxy_path)],
             env=env,
@@ -1334,49 +1380,76 @@ def cmd_start(args: CommandArgs) -> None:
             stderr=subprocess.DEVNULL,
         )
 
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(str(proc.pid))
+    # Verify the child before recording it: a PID file written ahead of the
+    # check is a claim we have not earned, and it is what let a dead child be
+    # reported later as a running proxy.
+    started = _lifecycle.await_start(proc, port)
+    if not started.running:
+        print(f"❌ Proxy did not start on port {port}.")
+        for reason in started.reasons:
+            print(f"   • {reason}")
+        print("   Diagnose with: tokenpak doctor")
+        _lifecycle.clear_pid()
+        return EXIT_RUNTIME_UNAVAILABLE
 
-    # Wait briefly and verify
-    import time as _t
-
-    _t.sleep(1.5)
-    health = _proxy_get("/health", port=port)
-    if health:
-        stats = _proxy_get("/stats", port=port) or {}
-        mode = stats.get("compilation_mode")
-        mode_suffix = f" (mode: {mode})" if isinstance(mode, str) and mode else ""
-        print(f"\n✅ Proxy running on http://localhost:{port}{mode_suffix}\n")
-        print("Next steps:")
-        print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
-        print("  2. Run: tokenpak status    (check health)")
-        print("  3. Run: tokenpak savings   (see your ROI)")
-        print()
-        print("💡 First time? Run: tokenpak setup")
+    _lifecycle.write_pid(proc.pid)
+    stats = _proxy_get("/stats", port=port) or {}
+    mode = stats.get("compilation_mode")
+    mode_suffix = f" (mode: {mode})" if isinstance(mode, str) and mode else ""
+    print(f"\n✅ Proxy running on http://localhost:{port}{mode_suffix}  (PID {proc.pid})\n")
+    print("Next steps:")
+    if started.routed:
+        print("  1. Your client is routed to TokenPak.")
     else:
-        print(f"Proxy launched (PID {proc.pid}, port {port}) — waiting for startup...")
-        print("  Run `tokenpak status` to verify.")
+        print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
+    print("  2. Run: tokenpak status    (check health)")
+    print("  3. Run: tokenpak savings   (see measured savings once traffic flows)")
+    from tokenpak import _paths as _p
+
+    if not _p.is_configured():
+        print()
+        print("💡 No config found yet. Run: tokenpak setup")
+    return EXIT_OK
 
 
 def cmd_stop(args: CommandArgs) -> None:
-    """Stop the running proxy."""
+    """Stop the proxy this install started."""
     import signal as _signal
 
-    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
-    if not pid_path.exists():
-        print("No proxy PID file found. Is the proxy running?")
-        print("Tip: run `tokenpak status` to check.")
+    from tokenpak.core.runtime import lifecycle as _lifecycle
+
+    port = int(os.environ.get("TOKENPAK_PORT", "8766"))
+    pid, source = _lifecycle.read_pid()
+
+    if pid is None:
+        print("No proxy PID on record — this install has not started a proxy.")
+        # Distinguish "nothing running" from "running, but not ours". Saying
+        # "is the proxy running?" while something answers on the port is the
+        # kind of answer that sends people in circles.
+        if _lifecycle.port_in_use(port):
+            print(f"   Something is listening on port {port}, but TokenPak did not start it,")
+            print("   so it will not be stopped. Run `tokenpak status` to inspect it.")
+        else:
+            print("   Tip: run `tokenpak status` to check.")
         return
+
+    if not _lifecycle.pid_alive(pid):
+        _lifecycle.clear_pid()
+        print(f"Proxy was not running (stale PID {pid} from {source} removed).")
+        return
+
     try:
-        pid = int(pid_path.read_text().strip())
         os.kill(pid, _signal.SIGTERM)
-        pid_path.unlink(missing_ok=True)
-        print(f"Proxy stopped (PID {pid}).")
     except ProcessLookupError:
-        pid_path.unlink(missing_ok=True)
-        print("Proxy was not running (stale PID removed).")
+        _lifecycle.clear_pid()
+        print(f"Proxy was not running (stale PID {pid} removed).")
+        return
     except Exception as e:
-        print(f"Error stopping proxy: {e}")
+        print(f"Error stopping proxy (PID {pid}): {e}")
+        return
+
+    _lifecycle.clear_pid()
+    print(f"Proxy stopped (PID {pid}).")
 
 
 def cmd_restart(args: CommandArgs) -> None:
@@ -1388,10 +1461,19 @@ def cmd_restart(args: CommandArgs) -> None:
 
 def cmd_logs(args: CommandArgs) -> None:
     """Show recent proxy logs."""
+    from tokenpak import _paths as _p
+
+    # Resolved across homes, and including the startup log setup captures —
+    # a proxy that dies during boot writes there and nowhere else, which is
+    # exactly the case a user runs `tokenpak logs` to understand.
     log_candidates = [
-        Path.home() / ".tokenpak" / "proxy.log",
-        Path("/tmp/tokenpak-proxy.log"),
-    ]
+        c
+        for c in (
+            _p.resolve_existing("proxy.log"),
+            _p.resolve_existing("proxy-startup.log"),
+        )
+        if c is not None
+    ] + [Path("/tmp/tokenpak-proxy.log")]
     lines = getattr(args, "lines", 50)
     for log_path in log_candidates:
         if log_path.exists():
@@ -2022,7 +2104,7 @@ def _maybe_show_compression_notice(safe: bool) -> None:
         return
     import sys as _sys
 
-    _marker = Path.home() / ".tokenpak" / ".compression-default-notice-shown"
+    _marker = _paths_mod().write_home() / ".compression-default-notice-shown"
     if not _marker.exists():
         print(
             "tokenpak now compresses by default — disable with 'tokenpak serve --safe'",
@@ -2059,7 +2141,7 @@ def cmd_serve(args: CommandArgs) -> None:
 
         from .telemetry.server import create_app
 
-        str(Path.home() / ".tokenpak" / "data" / "session.jsonl")
+        str(_paths_mod().write_home() / "data" / "session.jsonl")
         app = create_app()
         # Phase 5A: register ingest router
         try:
@@ -2556,7 +2638,9 @@ def _cmd_dashboard_public(args: CommandArgs) -> None:
     new_token = getattr(args, "new_token", False)
 
     # Load or create dashboard token
-    token_path = Path.home() / ".tokenpak" / "dashboard_token"
+    # Read an existing token wherever it lives; mint new ones canonically.
+    _pm = _paths_mod()
+    token_path = _pm.resolve_existing("dashboard_token") or (_pm.write_home() / "dashboard_token")
     if new_token or not token_path.exists():
         import secrets
 
@@ -3248,14 +3332,14 @@ def _build_stub_parsers(sub: Subparsers) -> None:
     """
     _STUBS = {
         "audit": (
-            "Enterprise audit log surface (Pro/Enterprise); see "
-            "docs/guides/enterprise/security-architecture.md"
+            "Audit log surface — requires an entitlement this install does "
+            "not carry. See docs/guides/enterprise/security-architecture.md"
         ),
         "compliance": (
-            "Compliance report surface (Pro/Enterprise); see "
-            "docs/guides/enterprise/compliance-mapping.md"
+            "Compliance report surface — requires an entitlement this install "
+            "does not carry. See docs/guides/enterprise/compliance-mapping.md"
         ),
-        "watch": "Live terminal savings dashboard (not yet implemented — use `tokenpak dashboard` instead)",
+        "watch": ("Not implemented. Use `tokenpak dashboard` for savings you can look at."),
     }
 
     def _make_stub(name: str, desc: str) -> CommandHandler:
@@ -5663,7 +5747,15 @@ def cmd_config_migrate(args: CommandArgs) -> None:
 
     from tokenpak.core.config_loader import CONFIG_PATH
 
-    json_path = Path(getattr(args, "config_json", str(Path.home() / ".tokenpak" / "config.json")))
+    # config.json is a read-compatibility format and may sit in either home;
+    # resolve it rather than assuming the legacy one.
+    _pm = _paths_mod()
+    _explicit = getattr(args, "config_json", None)
+    json_path = Path(
+        _explicit
+        if _explicit
+        else (_pm.resolve_existing("config.json") or (_pm.write_home() / "config.json"))
+    )
     dry_run = getattr(args, "dry_run", False)
 
     print("TokenPak Config Migration")
@@ -5910,8 +6002,10 @@ def _build_config_mgmt_parser(sub: Subparsers) -> None:
         "--config-json",
         dest="config_json",
         metavar="FILE",
-        default=str(Path.home() / ".tokenpak" / "config.json"),
-        help="Path to legacy config.json (default: ~/.tokenpak/config.json)",
+        default=None,
+        help=(
+            "Path to legacy config.json (default: resolved across the canonical and legacy homes)"
+        ),
     )
     p_migrate.add_argument(
         "--dry-run",
@@ -6211,31 +6305,44 @@ def main() -> None:
                 uptime_str = "unknown"
             report = get_savings_report(days=1)
 
-            # Compact savings summary
+            # Compact summary. Bare `tokenpak` is the most-run entrypoint in
+            # the product, so it is the last place that should print a number
+            # nobody measured. It previously printed a hardcoded "5.6%
+            # compression" regardless of the data, and attributed 95% of all
+            # savings to whichever model happened to sort first.
             print(f"TokenPak — {uptime_str} uptime")
-            print(
-                f"💰 ${report.savings_amount:.2f} saved today ({report.savings_pct:.0f}% reduction)"
-            )
+
+            if not report.available:
+                print("💰 Savings unavailable — no readable measurement store.")
+            elif report.observations == 0:
+                print("💰 No measurements yet today — savings appear once traffic flows.")
+            else:
+                print(
+                    f"💰 ${report.savings_amount:.2f} saved today "
+                    f"({report.savings_pct:.0f}% reduction)"
+                )
 
             # Get request count from recent events
             from .telemetry.query_dsl import get_recent_events
 
             recent = get_recent_events(limit=1000)
             req_count = len(recent) if recent else 0
-            cache_hit = report.cache_hit_rate * 100 if report.cache_hit_rate else 0
 
-            print(f"📊 {req_count:,} requests | {cache_hit:.0f}% cache hit | 5.6% compression")
+            traffic = f"📊 {req_count:,} requests"
+            if report.available and report.observations > 0:
+                traffic += f" | {report.cache_hit_rate * 100:.0f}% cache hit"
+                traffic += f" | {report.savings_pct:.1f}% reduction"
+            print(traffic)
 
-            # Top model savings
+            # Top model by observed request count. Reporting which model was
+            # used most is a measurement; splitting the savings total across
+            # models by a fixed fraction was not.
             from .telemetry.query_dsl import get_model_usage
 
             usage = get_model_usage(days=1)
             if usage:
                 top = usage[0]
-                top_saved = report.savings_amount * 0.95  # Estimate top model saved ~95% of total
-                print(
-                    f"🔥 Top: {top.model} saved ${top_saved:.0f} across {top.request_count} requests"
-                )
+                print(f"🔥 Most used: {top.model} across {top.request_count} requests")
 
             print()
             print("Run `tokenpak savings` for full breakdown.")

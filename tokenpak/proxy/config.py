@@ -110,6 +110,10 @@ from tokenpak.proxy.adapters import build_default_registry
 if TYPE_CHECKING:
     from tokenpak.cache.semantic_cache import SemanticCache
 
+    # Supplied at runtime by this module's ``__getattr__`` so resolution — which
+    # creates the home directory — happens on first use rather than at import.
+    MONITOR_DB: str
+
 _ConfigValue = TypeVar("_ConfigValue")
 _loaded_cfg: Optional[Callable[..., object]]
 
@@ -221,13 +225,30 @@ DASHBOARD_AUTH_ENABLED = _cfg("dashboard.require_token", False, "TOKENPAK_DASHBO
 
 
 def _resolve_monitor_db() -> str:
+    """Resolve the monitor DB for writing, creating its home if needed."""
     from tokenpak._paths import monitor_db as _monitor_db
 
     result = _monitor_db(mode="write")
     return str(result)
 
 
-MONITOR_DB = _resolve_monitor_db()
+def __getattr__(name: str) -> object:
+    """Resolve ``MONITOR_DB`` on first use, not at import.
+
+    This ran at module import and, because write-mode resolution creates the
+    home directory, merely importing the proxy config created ``~/.tpk`` as a
+    side effect. On a machine whose configuration lived in the legacy home
+    that was destructive in effect: creating an empty canonical home flipped
+    config resolution to a directory containing no config, so the proxy
+    silently ran on defaults instead of the user's settings.
+
+    Importing a module must not touch the filesystem.
+    """
+    if name == "MONITOR_DB":
+        return _resolve_monitor_db()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 BUDGET_DAILY_LIMIT_USD = float(os.environ.get("TOKENPAK_BUDGET_DAILY_LIMIT_USD", "0"))
 BUDGET_ALERT_THRESHOLD_PCT = float(os.environ.get("TOKENPAK_BUDGET_ALERT_PCT", "80"))
 # mutation_audit TTL — prune rows older than this many days

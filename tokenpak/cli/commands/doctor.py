@@ -28,7 +28,7 @@ import urllib.request
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, Optional, TypedDict, cast
 
 
 def _color_enabled() -> bool:
@@ -315,6 +315,20 @@ def _update_state() -> tuple[str, str | None]:
         return ("unknown", None)
 
 
+def _proxy_owned() -> Optional[bool]:
+    """Whether the answering proxy was started by this install.
+
+    ``None`` when it cannot be determined. Kept separate from
+    :func:`_proxy_state` so an existing caller of that function is unaffected.
+    """
+    try:
+        from tokenpak.cli.commands import menu_status
+
+        return menu_status.snapshot(probe=True).owned
+    except Exception:
+        return None
+
+
 def _proxy_state() -> str:
     """Resolve proxy run-state honestly, reusing the scope#1 cached status source.
 
@@ -354,6 +368,7 @@ def build_lifecycle_summary(
     setup_present: bool,
     route_state: str,
     proxy_state: str,
+    proxy_owned: Optional[bool] = None,
     update_state: str,
     update_latest: str | None = None,
 ) -> str:
@@ -390,7 +405,13 @@ def build_lifecycle_summary(
 
     # Proxy — running / stopped / starting / unknown.
     if proxy_state == "running":
-        rows.append(("Proxy", "green", "running", ""))
+        if proxy_owned is False:
+            # Something is serving the port, but not a process this install
+            # started — so `tokenpak stop` and `tokenpak restart` will not act
+            # on it. Reporting a green "running" hides that.
+            rows.append(("Proxy", "yellow", "running (not ours)", "Not started by this install"))
+        else:
+            rows.append(("Proxy", "green", "running", ""))
     elif proxy_state == "starting":
         rows.append(("Proxy", "yellow", "starting", "wait for boot to finish"))
     elif proxy_state == "stopped":
@@ -670,6 +691,7 @@ def run_doctor(
             setup_present=_tp_paths_lc.is_configured(),
             route_state=route_st,
             proxy_state=_proxy_state(),
+            proxy_owned=_proxy_owned(),
             update_state=upd_st,
             update_latest=upd_latest,
         )
@@ -1979,7 +2001,13 @@ import subprocess
 
 import yaml
 
-FLEET_CONFIG_FILE = Path.home() / ".tokenpak" / "fleet.yaml"
+
+def _fleet_config_file() -> Path:
+    from tokenpak import _paths
+
+    found = _paths.resolve_existing("fleet.yaml")
+    return found if found is not None else _paths.write_home() / "fleet.yaml"
+
 
 DEFAULT_FLEET_CONFIG = {
     "agents": [
@@ -2018,17 +2046,17 @@ class DeployDoctorResult(TypedDict):
 
 def load_fleet_config() -> FleetConfig:
     """Load fleet.yaml; create with defaults if missing."""
-    if FLEET_CONFIG_FILE.exists():
+    if _fleet_config_file().exists():
         try:
-            with open(FLEET_CONFIG_FILE) as f:
+            with open(_fleet_config_file()) as f:
                 data = yaml.safe_load(f)
             if isinstance(data, dict) and isinstance(data.get("agents"), list):
                 return cast(FleetConfig, data)
         except Exception:
             pass
     # Create default
-    FLEET_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(FLEET_CONFIG_FILE, "w") as f:
+    _fleet_config_file().parent.mkdir(parents=True, exist_ok=True)
+    with open(_fleet_config_file(), "w") as f:
         yaml.safe_dump(DEFAULT_FLEET_CONFIG, f, default_flow_style=False)
     return cast(FleetConfig, DEFAULT_FLEET_CONFIG)
 

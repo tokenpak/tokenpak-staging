@@ -81,10 +81,16 @@ def get_db_path(name: str = "monitor.db") -> Path:
         from tokenpak._paths import home as _home
 
         return _home() / name
-    dot_dir = Path.home() / ".tokenpak" / name
-    if dot_dir.exists():
-        return dot_dir
+    # Compatibility read first, canonical write target last. This returned
+    # the legacy directory as the *default* even when nothing existed there,
+    # so a fresh install created new state under ~/.tokenpak.
+    from tokenpak._paths import resolve_existing as _resolve
+    from tokenpak._paths import write_home as _write_home
+
+    existing = _resolve(name)
+    if existing is not None:
+        return existing
     repo_path = _REPO_ROOT / name
     if repo_path.exists():
         return repo_path
-    return dot_dir
+    return _write_home() / name

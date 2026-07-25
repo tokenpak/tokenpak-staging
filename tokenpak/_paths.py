@@ -164,6 +164,68 @@ def resolve_existing(*parts: str) -> Optional[Path]:
     return None
 
 
+#: Env override for companion state. Read here rather than in the companion
+#: package because the proxy and the CLI both need to resolve this path, and
+#: the architecture forbids either of them importing ``tokenpak.companion``.
+COMPANION_DIR_ENV = "TOKENPAK_COMPANION_JOURNAL_DIR"
+_COMPANION_SUBDIR = "companion"
+
+
+def companion_write_dir() -> Path:
+    """Directory new companion state is written to.
+
+    Canonical-only: the env override if set, else ``<write_home>/companion``.
+    Never the legacy tree — an install that predates the canonical home keeps
+    its journals readable (see :func:`companion_read_dirs`) without
+    accumulating new ones there.
+
+    Every companion process — hooks, MCP server, launcher, proxy endpoints —
+    must agree on this path or they silently write to different databases.
+    """
+    override = os.environ.get(COMPANION_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return write_home() / _COMPANION_SUBDIR
+
+
+def companion_read_dirs() -> list[Path]:
+    """Existing companion directories to read, most-preferred first.
+
+    Readers must search across homes: a user who installed before the
+    canonical home existed has real journal data in the legacy tree, and
+    reporting $0.00 because we only looked in the new location would be the
+    absent-rendered-as-zero defect in a different costume.
+    """
+    override = os.environ.get(COMPANION_DIR_ENV, "").strip()
+    if override:
+        path = Path(override).expanduser()
+        return [path] if path.exists() else []
+    dirs: list[Path] = []
+    for base in read_candidates():
+        candidate = base / _COMPANION_SUBDIR
+        if candidate.exists() and candidate not in dirs:
+            dirs.append(candidate)
+    return dirs
+
+
+def companion_file(name: str) -> Optional[Path]:
+    """First existing companion file called *name*, or ``None``.
+
+    ``None`` means "no data anywhere", which is a different answer from
+    "zero"; callers must not substitute one for the other.
+    """
+    for base in companion_read_dirs():
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def companion_run_dir() -> Path:
+    """Runtime coordination directory (session markers, generated config)."""
+    return companion_write_dir() / "run"
+
+
 def legacy_home() -> Path:
     """Return the legacy ``~/.tokenpak/`` path (always — for migration probes)."""
     return Path.home() / LEGACY_DIRNAME
@@ -460,6 +522,10 @@ __all__ = [
     "has_legacy",
     "has_canonical",
     "needs_migration",
+    "companion_file",
+    "companion_read_dirs",
+    "companion_run_dir",
+    "companion_write_dir",
     "ensure_home",
     "under",
     "is_legacy_active",

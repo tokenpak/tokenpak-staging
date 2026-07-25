@@ -1,10 +1,12 @@
-"""status command — savings-first proxy health & ROI report.
+"""status command — runtime health, routing, and measured savings.
 
-Default output leads with dollar savings (v3 layout).
-Use ``--full`` for legacy technical output.
+Default output leads with runtime state: is the proxy running, is a client
+actually routed through it, and is it operating on context. Savings follow,
+and only as measured figures — an unmeasured plane reports "unavailable"
+rather than a zero that reads like a result.
 
 Modes:
-    tokenpak status             → savings-first (new default)
+    tokenpak status             → runtime-first (default)
     tokenpak status --full      → current technical output (backward compatible)
     tokenpak status --minimal   → one-liner for scripts
     tokenpak status --tip-cache → compact TIP cache attribution surface
@@ -149,6 +151,19 @@ DB_DEFAULT = os.environ.get(
 # ---------------------------------------------------------------------------
 # Network / DB helpers
 # ---------------------------------------------------------------------------
+
+
+def _proxy_port(proxy_base: str) -> int:
+    """Port from a proxy base URL, falling back to the configured default."""
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(proxy_base)
+        if parsed.port:
+            return int(parsed.port)
+    except (ValueError, TypeError):
+        pass
+    return int(os.environ.get("TOKENPAK_PORT", "8766"))
 
 
 def _fetch(url: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
@@ -707,9 +722,9 @@ def _query_companion_enrichment(days: int = 0, hours: int = 0) -> Optional[tuple
     using ``TOKENPAK_HOME`` or the canonical home reported zero prompt-side
     savings no matter how much the companion had actually saved.
     """
-    from tokenpak.companion.config import resolve_journal_file
+    from tokenpak._paths import companion_file
 
-    journal_path = resolve_journal_file("journal.db")
+    journal_path = companion_file("journal.db")
     if journal_path is None:
         return None
 
@@ -947,6 +962,71 @@ def _print_tip_cache_attribution(
 # ---------------------------------------------------------------------------
 
 
+def _print_runtime_and_routing(
+    proxy_base: str,
+    *,
+    uptime_s: float,
+    errors: int,
+    requests: int,
+) -> None:
+    """Print the runtime and routing frame that every status view leads with.
+
+    Status leads with whether TokenPak is working, not with what it saved.
+    A savings-first layout answered a question the reader has not asked yet:
+    before "how much did this save me" comes "is it running, is my client
+    actually routed through it, and is it operating on my context". A dollar
+    figure at the top of a report about a proxy that is not running — or is
+    running with nothing routed to it — reads as a claim about a system that
+    is not doing anything.
+
+    The lifecycle observation is the same one setup, start, stop, restart and
+    doctor use, so these commands cannot disagree about what is running.
+    """
+    from tokenpak.core.runtime import lifecycle as _lifecycle
+
+    port = _proxy_port(proxy_base)
+    snap = _lifecycle.snapshot(port)
+
+    def row(label: str, value: object, note: str = "") -> None:
+        line = f"     {label:<16}{str(value):>12}"
+        print(f"{line}   {note}" if note else line)
+
+    print()
+    print("  🚦 Runtime")
+    if snap.running:
+        pid_note = f"PID {snap.pid}" if snap.pid else "PID unknown"
+        row("Proxy", "running", f"port {port}, {pid_note}")
+        if snap.owned is False:
+            row("Ownership", "mismatch", "/health reports a different PID")
+    elif snap.health_ok:
+        row("Proxy", "foreign", f"answering on {port}, not started by this install")
+    elif snap.foreign_listener:
+        row("Proxy", "port taken", f"{port} is in use by another process")
+    elif snap.pid_alive:
+        row("Proxy", "unresponsive", f"PID {snap.pid} is alive but not answering")
+    else:
+        row("Proxy", "not running", f"nothing listening on {port}")
+    row(
+        "Config",
+        "found" if snap.configured else "not found",
+        snap.config_path or "run `tokenpak setup`",
+    )
+    if uptime_s > 0:
+        row("Uptime", _fmt_uptime(uptime_s))
+    if errors > 0:
+        row("Errors", errors, "run `tokenpak doctor`")
+
+    print()
+    print("  🔀 Routing")
+    if snap.routed:
+        row("Client routed", "yes", f"base URL → http://127.0.0.1:{port}")
+    else:
+        row("Client routed", "no", "nothing is sending traffic here")
+        print("       Run `tokenpak integrate` for client-specific instructions.")
+    if requests == 0:
+        row("Requests seen", 0, "no traffic observed yet")
+
+
 def run(
     proxy_base: str = PROXY_DEFAULT,
     raw: bool = False,
@@ -1030,13 +1110,27 @@ def run(
     else:
         # Fall back to DB
         if savings_all.get("error"):
-            print(f"\nTOKENPAK {version}")
+            # No traffic has been recorded. Report runtime and routing anyway —
+            # that is precisely the state where a reader most needs to know
+            # whether the proxy is up and whether anything is pointed at it.
+            # The old output printed a bare error and told the user to run
+            # `tokenpak serve`, which is the foreground server, not the setup
+            # path, and said nothing about why there was no data.
+            print(f"\n  TOKENPAK {version}")
             print(SEP)
+            _print_runtime_and_routing(proxy_base, uptime_s=0.0, errors=0, requests=0)
+            print()
             if savings_all.get("error") == "db_not_found":
-                print("\n  Proxy unreachable and no monitor database found.")
-                print("  Start the proxy with `tokenpak serve`.\n")
+                print("  📊 Measured savings")
+                print("     No measurements yet — no request database exists.")
+                print("     Savings are reported after traffic flows, never estimated.")
+                print()
+                print("     Next: `tokenpak setup` if you have not configured TokenPak,")
+                print("           then point a client at it and run this again.")
             else:
-                print(f"\n  {savings_all['error']}\n")
+                print("  📊 Measured savings")
+                print(f"     unavailable — {savings_all['error']}")
+            print()
             _print_free_tier_upgrade_hint()
             return
         t = savings_all["totals"]
@@ -1106,9 +1200,9 @@ def run(
     companion_tokens_avoided = 0
     companion_usd = 0.0
     try:
-        from tokenpak.companion.config import resolve_journal_file
+        from tokenpak._paths import companion_file
 
-        _companion_db = resolve_journal_file("journal.db")
+        _companion_db = companion_file("journal.db")
         if _companion_db is not None and session.get("start_time"):
             _since = float(session["start_time"])
             _c = sqlite3.connect(str(_companion_db))
@@ -1153,7 +1247,9 @@ def run(
     print(f"\n  TOKENPAK {version}")
     print(SEP)
 
-    # --- 1. VALUE CREATED ---
+    _print_runtime_and_routing(proxy_base, uptime_s=uptime_s, errors=errors, requests=total_reqs)
+
+    # --- 3. VALUE CREATED (measured) ---
     # Split honestly: prompt-side (companion, pre-wire) vs wire-side (proxy).
     # Wire-side credits only proxy-caused savings — cache hits placed by the
     # upstream client (byte-preserved passthrough) are shown under Cache as
@@ -1161,7 +1257,17 @@ def run(
     wire_side_usd = tp_compression_usd + proxy_cache_usd
     tp_total_usd = companion_usd + wire_side_usd
     print()
-    print(f"  💰 Value Created ({source_label})")
+    print(f"  💰 Measured savings ({source_label})")
+    if total_reqs == 0 and companion_tokens_avoided == 0:
+        # No requests were observed, so nothing was measured. Printing $0.00
+        # here would be indistinguishable from "measured, and it saved you
+        # nothing" — a claim about a system that has not run yet.
+        print("     No measurements yet — no requests have been observed.")
+        print("     Figures appear here once traffic flows through the proxy.")
+        _print_free_tier_upgrade_hint()
+        if not no_meme:
+            print(f"\n  {random.choice(MEME_LINES)}\n")
+        return
     print(f"     Total saved                {_fmt_cost(tp_total_usd):>10}")
     print(
         f"       Prompt-side (companion)  {_fmt_cost(companion_usd):>10}   {_fmt_num(companion_tokens_avoided)} tokens avoided pre-send"
@@ -1252,10 +1358,9 @@ def run(
         _print_by_source_inline(db_path)
         _print_by_provider_inline(db_path)
 
-    # --- 5. PERFORMANCE ---
+    # --- PERFORMANCE ---
     print()
     print("  ⚡ Performance")
-    uptime_str = _fmt_uptime(uptime_s) if uptime_s > 0 else "n/a"
     latency_str = "n/a"
     if proxy_up and stats:
         avg_lat = session.get("avg_latency_ms", 0)
@@ -1277,17 +1382,14 @@ def run(
                     latency_str = f"{_row[0]:.0f}ms (db)"
         except Exception:
             pass
-    print(f"     Uptime               {uptime_str:>10}")
     print(f"     Proxy overhead       {latency_str:>10}")
 
-    # --- 6. HEALTH ---
-    print()
+    # Runtime state was reported at the top; this line only qualifies the data
+    # source, so a reader knows whether they are looking at a live session or
+    # at history.
     if not proxy_up:
-        print("  ⚠️  Proxy unreachable — showing DB data only")
-    elif errors > 0:
-        print(f"  ⚠️  {errors} error(s) — run `tokenpak doctor`")
-    else:
-        print("  ✅ Healthy")
+        print()
+        print("  ℹ️  Proxy unreachable — figures above come from the local database.")
 
     _print_free_tier_upgrade_hint()
 

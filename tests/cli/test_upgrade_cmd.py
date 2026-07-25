@@ -176,7 +176,7 @@ def test_status_unreachable_path_prints_no_cta(monkeypatch, capsys):
     status.run(no_meme=True)
 
     out = capsys.readouterr().out
-    assert "Proxy unreachable and no monitor database found" in out
+    assert "No measurements yet" in out
     assert "tokenpak.ai/pro" not in out
     assert "Upgrade to Pro" not in out
 

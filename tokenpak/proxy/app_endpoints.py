@@ -444,9 +444,9 @@ def _companion_dir() -> Path:
     Delegates so the proxy, the hooks and the MCP server cannot disagree
     about which database they are talking to.
     """
-    from tokenpak.companion.config import journal_write_dir
+    from tokenpak._paths import companion_write_dir
 
-    return journal_write_dir()
+    return companion_write_dir()
 
 
 def _get_budget_tracker() -> Any:
@@ -1636,9 +1636,9 @@ def _promotion_candidate_count() -> int:
     absent or unreadable — this is a count of rows, so an absent database
     genuinely means zero candidates, not an unmeasured value. Never raises.
     """
-    from tokenpak.companion.config import resolve_journal_file
+    from tokenpak._paths import companion_file
 
-    db_path = resolve_journal_file("journal.db")
+    db_path = companion_file("journal.db")
     if db_path is None:
         return 0
     try:
