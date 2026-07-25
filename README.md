@@ -11,12 +11,14 @@ So it asks again. Or it doesn't ask, and rebuilds something you ruled out last w
 context exists — in your repo, your notes, your last session — but nothing puts it in front of
 the model at the moment the model needs it.
 
-TokenPak is a local proxy that closes that gap. On every eligible request, **before the model
-is given the task**, it searches your indexed vault, fits the best matches to a token budget,
+TokenPak is a local proxy that closes that gap. Once you have indexed a vault, then on every
+**eligible** request — before the model is given the task — it searches that vault, fits the best matches to a token budget,
 and splices them into the request. Then it tells you what it added and where each piece came
 from.
 
-No cloud. No credentials stored. If retrieval fails, your request goes through unchanged.
+No cloud, and no credentials stored. Note what this does mean: retrieved vault content becomes
+part of the request your provider receives — injection adds to what you send. If retrieval
+fails, your request goes through unchanged.
 
 > **The open logistics layer for AI context.**
 
@@ -44,9 +46,9 @@ does not know it was missing something.
 Retrieval runs in the request path, not as a tool call. Requests are matched against your
 indexed vault, ranked, fitted to a budget, and forwarded.
 
-Eligibility is deliberate and inspectable: prompts below a size threshold, small fast models,
-and weak matches are skipped rather than padded. See
-[docs/configuration](docs/configuration/) for the thresholds and how to change them.
+Eligibility is deliberate: prompts below a size threshold, small fast models, and weak matches
+are skipped rather than padded. See the [first receipt guide](docs/first-receipt.md) for which
+requests qualify and why one may not.
 
 ### 2. You see exactly what was added, and why
 
@@ -54,11 +56,13 @@ Every injection reports its sources and its token cost. This is the point — a 
 edits your prompts should be auditable, not trusted on faith.
 
 ```bash
-tokenpak status --tip-cache   # what was reused vs re-sent
-tokenpak savings              # measured on your own traffic
+tokenpak status     # injected tokens per session, and what was reused vs re-sent
+tokenpak savings    # measured on your own traffic
 ```
 
-### 3. It doesn't change your bytes
+Per-source detail is written to the local ledger and surfaced in the dashboard.
+
+### 3. It doesn't re-serialise your JSON
 
 On the Claude Code route, TokenPak splices at the byte level and never re-serialises your
 JSON — because re-serialising changes how the request is billed. Byte-preservation is a
@@ -66,16 +70,17 @@ correctness requirement, not an optimisation.
 
 ### 4. Local, and reversible without loss
 
-The proxy runs on `127.0.0.1`. Nothing leaves your machine except the request you were already
-sending. Retrieval failures fail open. Removal is one command:
+The proxy runs on `127.0.0.1` and stores no credentials. What leaves your machine is the
+request you were sending plus whatever vault content TokenPak spliced into it — that is the
+feature working, and the receipt shows you exactly what it was. Retrieval failures fail open. Removal is one command:
 
 ```bash
 pip uninstall tokenpak
 ```
 
-And what you built stays yours. Paks — the artifacts TokenPak packages context into — are plain
-JSON files with a sha256 checksum, written to your disk. They open with the proxy stopped, and
-they stay readable after TokenPak is uninstalled. Check for yourself:
+Paks — the artifacts TokenPak packages context into — are plain JSON files with a sha256
+checksum, written to your disk. They open with the proxy stopped, and they stay readable after
+TokenPak is uninstalled. The format is not yet stable across versions. Check for yourself:
 
 ```bash
 tokenpak pak create ./docs -o project.pak.json   # package a directory
@@ -83,8 +88,6 @@ tokenpak stop                                    # or never start the proxy at a
 cat project.pak.json                             # plain JSON, checksum included
 ```
 
-Context that only your vendor can read is a lock-in mechanism wearing a memory costume. Yours
-should still be there when the tool isn't.
 
 ---
 
@@ -145,14 +148,15 @@ routes that are not eligible for compression savings.
 
 **First-class integrations** — Codex (`tokenpak codex`) · Claude Code (`tokenpak integrate claude-code`)
 
-Both ship a dedicated launcher, credential reuse, a doctor command, and a proxy path built for
-that client specifically.
+Each ships a dedicated launcher and a proxy path built for that client. Per-client surface and
+coverage differ — see the matrix.
 
 **Tested SDK adapters** — OpenAI SDK · Anthropic SDK · LiteLLM
 
 **Compatibility targets, not yet verified** — Cursor · Cline · Continue · Aider
 
-These work by pointing the client's base URL at the proxy, but are not covered by tests.
+These are expected to work by pointing the client's base URL at the proxy — but that is
+unverified: no dedicated integration surface and no test coverage.
 
 Run `tokenpak integrate` for setup guides. Per-client status and coverage are tracked in
 [docs/adapter-compatibility-matrix.md](docs/adapter-compatibility-matrix.md) — that file is the
@@ -209,11 +213,11 @@ editable-install path.
 - **Context compression** — deterministic token reduction on real agent workloads. Savings are
   route-specific: direct API, CLI, and uncached repeated-agent loops are the best fit, while
   Claude Code/TUI routes may show lower incremental savings when the provider cache already
-  handled repeated context. Measure your own with `tokenpak savings`; overhead is documented in
-  [docs/LATENCY.md](docs/LATENCY.md)
-- **Client integration** — one command wires the clients listed under *Works with*
-- **Routing policy** — routing rules and fallback policy are configurable from the CLI as
-  scaffolding; in-flight enforcement is not active by default
+  handled repeated context. Measure your own with `tokenpak savings`
+- **Client integration** — one command wires the first-class integrations; SDK adapters and
+  compatibility targets are configured by base URL
+- **Routing policy** — routing rules and fallback policy are configurable from the CLI. The
+  proxy does not enforce them on the request path
 - **Cost tracking** — per model, per session, per agent; local SQLite, zero cloud
 - **Spend Guard** — pre-send circuit breaker; blocks runaway requests before the provider call.
   Catches both single-request spikes and the death-by-1000-cuts pattern via session-cumulative

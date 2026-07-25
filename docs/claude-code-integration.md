@@ -515,4 +515,4 @@ Single-host proxy only for now. Multi-user deployments (shared proxy on a LAN or
 
 ---
 
-*See also: [where TokenPak fits](index.md) — the layer TokenPak adds alongside the gateways, routers, and observability tools you may already run.*
+*See also: [the TokenPak documentation index](index.md).*

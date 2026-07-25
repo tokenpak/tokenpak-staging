@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "tokenpak"
 dynamic = ["version"]
 # version sourced from tokenpak/__init__.py via [tool.setuptools.dynamic]
-description = "Local proxy that puts the right project context in front of the model before it starts working — with a receipt for what was added"
+description = "Local proxy that retrieves from your indexed vault and splices matches into eligible requests, with a receipt for what was added"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
