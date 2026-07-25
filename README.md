@@ -62,7 +62,7 @@ On the Claude Code route, TokenPak splices at the byte level and never re-serial
 JSON — because re-serialising changes how the request is billed. Byte-preservation is a
 correctness requirement, not an optimisation.
 
-### 4. Local, and reversible
+### 4. Local, and reversible without loss
 
 The proxy runs on `127.0.0.1`. Nothing leaves your machine except the request you were already
 sending. Retrieval failures fail open. Removal is one command:
@@ -70,6 +70,19 @@ sending. Retrieval failures fail open. Removal is one command:
 ```bash
 pip uninstall tokenpak
 ```
+
+And what you built stays yours. Paks — the artifacts TokenPak packages context into — are plain
+JSON files with a sha256 checksum, written to your disk. They open with the proxy stopped, and
+they stay readable after TokenPak is uninstalled. Check for yourself:
+
+```bash
+tokenpak pak create ./docs -o project.pak.json   # package a directory
+tokenpak stop                                    # or never start the proxy at all
+cat project.pak.json                             # plain JSON, checksum included
+```
+
+Context that only your vendor can read is a lock-in mechanism wearing a memory costume. Yours
+should still be there when the tool isn't.
 
 ---
 
