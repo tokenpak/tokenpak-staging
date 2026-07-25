@@ -3410,7 +3410,12 @@ class ProxyServer:
     ) -> None:
         self.host = host
         self.port = port or int(os.environ.get("TOKENPAK_PORT", "8766"))
-        self.compilation_mode = compilation_mode or os.environ.get("TOKENPAK_MODE", "hybrid")
+        from tokenpak.proxy.config import env_or_profile as _env_or_profile
+
+        # Resolve through the profile, not os.environ alone: a caller can
+        # construct ProxyServer directly without passing an entrypoint that
+        # publishes the profile, and then silently got "hybrid".
+        self.compilation_mode = compilation_mode or _env_or_profile("TOKENPAK_MODE", "hybrid")
         self.shutdown_timeout: float = (
             shutdown_timeout
             if shutdown_timeout is not None
@@ -4152,6 +4157,15 @@ def start_proxy(
     shutdown_timeout: float | None = None,
 ) -> ProxyServer:
     """Create and start a ProxyServer. Returns the server instance."""
+    # Publish the active profile for this process. Proxy config stopped doing
+    # this at import so CLI verbs would stop inheriting ~8 variables the user
+    # never set; the server subsystems that read TOKENPAK_MODE and friends
+    # straight from os.environ still need it, so it happens here, at the point
+    # the server is actually started, whichever entrypoint got us here.
+    from tokenpak.proxy.config import apply_profile_to_environ
+
+    apply_profile_to_environ()
+
     server = ProxyServer(
         host=host,
         port=port,
@@ -4195,6 +4209,10 @@ def main() -> None:
     """
     import argparse
     import logging
+
+    from tokenpak.proxy.config import apply_profile_to_environ
+
+    apply_profile_to_environ()
 
     parser = argparse.ArgumentParser(
         prog="python -m tokenpak.proxy.server",

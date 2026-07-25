@@ -996,7 +996,9 @@ def _handle_session_info_get(handler: Any) -> None:
             "errors": int(sess.get("errors", 0) or 0),
         }
     vault_info = _vault_info_lightweight()
-    compilation_mode = os.environ.get("TOKENPAK_MODE", "hybrid")
+    from tokenpak.proxy.config import env_or_profile as _env_or_profile
+
+    compilation_mode = _env_or_profile("TOKENPAK_MODE", "hybrid")
     profile = os.environ.get("TOKENPAK_PROFILE", "balanced")
     cache_ttl = os.environ.get("TOKENPAK_CACHE_TTL", "5m").strip() or "5m"
     _send_json(

@@ -262,6 +262,52 @@ def _profile_default(
         return default
 
 
+def apply_profile_to_environ() -> list[str]:
+    """Publish the active profile into ``os.environ``. Returns the keys set.
+
+    Call this from the **proxy process entrypoint only**, before the server
+    modules load. Several subsystems — the compilation mode in
+    ``proxy/server``, the capsule builder in ``proxy/vault_bridge`` and
+    ``core/config`` — read these keys straight from the environment rather
+    than through ``_cfg``, so for the process the profile actually configures,
+    the environment has to carry it.
+
+    What must NOT happen is this running at *import* time, which is what it
+    used to do: every CLI verb that transitively imported proxy config gained
+    ~8 variables the user never set, and ``doctor`` then reported them back as
+    the user's own settings and evaluated its env-conflict check against them.
+
+    Existing values are preserved — the profile remains a floor.
+    """
+    preset = _PROFILE_PRESETS.get(ACTIVE_PROFILE)
+    if not preset:
+        return []
+    applied = [k for k in preset if k not in os.environ]
+    for key in applied:
+        os.environ[key] = preset[key]
+    _logging.getLogger("tokenpak.proxy.config").info(
+        "Profile %s applied to environment: %s", ACTIVE_PROFILE, ",".join(applied)
+    )
+    return applied
+
+
+def env_or_profile(env_var: str, default: str) -> str:
+    """Resolve a raw string setting: environment, then profile, then *default*.
+
+    For the handful of call sites that read a profile key straight from
+    ``os.environ`` instead of going through ``_cfg`` — ``ProxyServer``'s
+    compilation mode, the capsule-builder flags. They cannot rely on the
+    profile having been published into the environment, because a caller may
+    construct ``ProxyServer`` directly without going through an entrypoint;
+    the test launcher does exactly that. Resolving here means the profile
+    applies however the server was reached.
+    """
+    value = os.environ.get(env_var)
+    if value is not None:
+        return value
+    return _PROFILE_PRESETS.get(ACTIVE_PROFILE, {}).get(env_var, default)
+
+
 def setting_origin(env_var: str) -> str:
     """Where *env_var*'s effective value comes from: env, profile, or default.
 
