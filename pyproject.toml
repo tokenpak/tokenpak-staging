@@ -168,7 +168,10 @@ otel = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.24.0",
 ]
 crewai = [
-    "crewai>=0.1.0",
+    # Floor is 1.15.6, not a nominal 0.1.0: earlier releases pin
+    # json-repair~=0.25.2, which carries GHSA-xf7x-x43h-rpqh. 1.15.6 is the
+    # first release requiring the patched json-repair~=0.60.1.
+    "crewai>=1.15.6",
 ]
 autogen = [
     "pyautogen>=0.2.0",
