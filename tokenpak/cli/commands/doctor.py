@@ -31,8 +31,26 @@ from pathlib import Path
 from typing import Any, TypedDict, cast
 
 
+def _color_enabled() -> bool:
+    """Whether to emit ANSI, per the shared contract.
+
+    Delegates to ``_formatting.colors.supports_color``, which honours
+    ``NO_COLOR``, ``TOKENPAK_NO_COLOR``, ``FORCE_COLOR`` and ``isatty()``.
+    This module previously defined its own escape constants and emitted them
+    unconditionally, so ``tokenpak doctor`` wrote 27 raw escape sequences into
+    every redirected or piped run — including the "paste your doctor output"
+    bug-report flow that SUPPORT.md asks users to follow.
+    """
+    try:
+        from tokenpak._formatting.colors import supports_color
+
+        return supports_color()
+    except Exception:
+        return False
+
+
 class Colors:
-    """ANSI color codes + emoji markers."""
+    """ANSI color codes + emoji markers, suppressed when color is unsupported."""
 
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
@@ -40,16 +58,22 @@ class Colors:
     RESET = "\033[0m"
 
     @staticmethod
+    def _wrap(ansi: str, glyph: str, text: str, pad: str) -> str:
+        if _color_enabled():
+            return f"{ansi}{glyph}{Colors.RESET}{pad}{text}"
+        return f"{glyph}{pad}{text}"
+
+    @staticmethod
     def ok(text: str) -> str:
-        return f"{Colors.GREEN}✅{Colors.RESET}  {text}"
+        return Colors._wrap(Colors.GREEN, "✅", text, "  ")
 
     @staticmethod
     def warn(text: str) -> str:
-        return f"{Colors.YELLOW}⚠️{Colors.RESET}   {text}"
+        return Colors._wrap(Colors.YELLOW, "⚠️", text, "   ")
 
     @staticmethod
     def fail(text: str) -> str:
-        return f"{Colors.RED}❌{Colors.RESET}  {text}"
+        return Colors._wrap(Colors.RED, "❌", text, "  ")
 
 
 def _proxy_get(path: str, port: int | None = None, timeout: int = 3) -> dict[str, Any] | None:
@@ -69,6 +93,9 @@ _CANONICAL_HEALTH_FIELDS = {
     "status",
     "uptime_seconds",
     "version",
+    # OS pid of the serving process — part of the envelope so the CLI can
+    # verify that a healthy endpoint is the proxy it started.
+    "pid",
     "requests_total",
     "requests_errors",
     "compression_ratio_avg",
@@ -99,6 +126,9 @@ def _validate_canonical_health(payload: dict[str, Any]) -> tuple[bool, str]:
         value = payload.get(field)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
             return False, f"health {field} is missing or malformed"
+    pid_value = payload.get("pid")
+    if not isinstance(pid_value, int) or isinstance(pid_value, bool) or pid_value <= 0:
+        return False, "health pid is missing or malformed"
     compression = payload.get("compression_ratio_avg")
     if not isinstance(compression, (int, float)) or isinstance(compression, bool):
         return False, "health compression_ratio_avg is missing or malformed"
@@ -354,7 +384,7 @@ def build_lifecycle_summary(
     elif route_state == "other":
         rows.append(("Routed", "yellow", "other gateway", "Run: tokenpak setup"))
     elif route_state == "not routed":
-        rows.append(("Routed", "yellow", "not routed", "Run: tokenpak setup"))
+        rows.append(("Routed", "yellow", "not routed", "Run: tokenpak integrate"))
     else:  # unknown
         rows.append(("Routed", "yellow", "Unknown", "Check ~/.claude/settings.json"))
 
@@ -381,7 +411,10 @@ def build_lifecycle_summary(
     elif update_state == "current":
         rows.append(("Update", "green", "up to date", ""))
     else:  # unknown
-        rows.append(("Update", "green", "Unknown", ""))
+        # A check that did not run is not a pass. This row was green, which
+        # made a silently-swallowed ImportError (undeclared `packaging`) look
+        # like a healthy result.
+        rows.append(("Update", "yellow", "not checked", "Run: tokenpak update --check"))
 
     # --- render ---------------------------------------------------------------
     # The status glyphs (✅/⚠️/❌) and the arrow (→) occupy 2 terminal columns
@@ -630,9 +663,11 @@ def run_doctor(
 
         route_st, _ = _route_state()
         upd_st, upd_latest = _update_state()
+        from tokenpak import _paths as _tp_paths_lc
+
         return build_lifecycle_summary(
             version=_ver,
-            setup_present=(tokenpak_dir / "config.json").exists(),
+            setup_present=_tp_paths_lc.is_configured(),
             route_state=route_st,
             proxy_state=_proxy_state(),
             update_state=upd_st,
@@ -811,7 +846,7 @@ def run_doctor(
         _record(
             "routing",
             "warn",
-            "Routing             Claude Code → TokenPak proxy (not routed) — run: tokenpak setup",
+            "Routing             Claude Code → TokenPak proxy (not routed) — run: tokenpak integrate claude-code",
             detail="No ANTHROPIC_BASE_URL in ~/.claude/settings.json (or file absent)",
         )
     else:  # unknown
@@ -1047,7 +1082,7 @@ def run_doctor(
             _record(
                 "vault_paths_staleness",
                 "pass",
-                "Vault paths        no registered paths (register with: tokenpak vault add <path>)",
+                "Vault paths        no registered paths (index one with: tokenpak index <path>)",
             )
         else:
             summary = _vds03.summarize(_vds03_findings)
@@ -1274,27 +1309,45 @@ def run_doctor(
             f"Python version      {py_version} — requires ≥3.10",
         )
 
-    # Config file
-    config_path = tokenpak_dir / "config.json"
-    if config_path.exists():
+    # Config file — resolved through the shared resolver so this check agrees
+    # with what `tokenpak setup` actually wrote (YAML canonical, JSON accepted
+    # for compatibility) and searches every read home. Looking only for
+    # config.json here is what made doctor say "no config" right after a
+    # successful setup.
+    from tokenpak import _paths as _tp_paths
+
+    config_path = _tp_paths.config_read_path()
+    if config_path is not None:
+        parse_error: str | None = None
         try:
-            with open(config_path) as config_file_handle:
-                json.load(config_file_handle)
+            text = config_path.read_text()
+            if config_path.suffix == ".json":
+                json.loads(text)
+            else:
+                import yaml as _yaml
+
+                _yaml.safe_load(text)
+        except Exception as exc:
+            parse_error = f"{type(exc).__name__}: {exc}"
+        if parse_error is None:
             _record("config_file", "pass", f"Config file         {config_path} — valid")
-        except json.JSONDecodeError:
+        else:
             _record(
                 "config_file",
                 "fail",
-                f"Config file         {config_path} — invalid JSON",
+                f"Config file         {config_path} — could not be parsed",
+                detail=parse_error,
             )
             fixes.append(("reset config", config_path))
     else:
+        expected = _tp_paths.config_write_path()
         _record(
             "config_file",
             "warn",
-            f"Config file         {config_path} — not found",
+            f"Config file         {expected} — not found",
+            detail="Run: tokenpak setup",
         )
-        fixes.append(("create config", config_path))
+        fixes.append(("create config", expected))
 
     # Disk usage
     try:

@@ -429,7 +429,13 @@ def _proxy_get(path: str, port: Optional[int] = None) -> JsonObject | None:
 
 # ── Progressive Disclosure ────────────────────────────────────────────────────
 
-_FIRST_RUN_FLAG = Path.home() / ".tokenpak" / ".seen_intro"
+#: Name of the first-run marker. Resolved lazily (see ``_first_run_flag``)
+#: rather than bound at import time: a module-level
+#: ``Path.home() / ".tokenpak" / ".seen_intro"`` meant that *any* verb — even
+#: ``tokenpak version`` — created the legacy home before anything else ran,
+#: which pinned path resolution to the legacy directory for the life of the
+#: install and created it at the process umask (0775) instead of 0700.
+_FIRST_RUN_FLAG_NAME = ".seen_intro"
 
 # Commands shown in quick --help (beginner view)
 _QUICK_COMMANDS = ["setup", "start", "demo", "cost", "status"]
@@ -701,16 +707,34 @@ def _suggest_command(unknown: str) -> Optional[str]:
 
 
 def _mark_intro_seen() -> None:
-    """Write the first-run flag so the welcome message shows only once."""
+    """Write the first-run flag so the welcome message shows only once.
+
+    Writes to the canonical home only. This is frequently the first state
+    TokenPak ever creates, so it is also the call that establishes the home
+    directory's permissions — hence ``ensure_home()`` rather than a bare
+    ``mkdir``.
+    """
     try:
-        _FIRST_RUN_FLAG.parent.mkdir(parents=True, exist_ok=True)
-        _FIRST_RUN_FLAG.touch()
+        from tokenpak import _paths
+
+        _paths.ensure_home()
+        (_paths.write_home() / _FIRST_RUN_FLAG_NAME).touch()
     except Exception:
         pass
 
 
 def _is_first_run() -> bool:
-    return not _FIRST_RUN_FLAG.exists()
+    """True when no home (canonical or legacy) carries the intro marker.
+
+    Reads across both homes so upgrading users are not shown the first-run
+    welcome again.
+    """
+    try:
+        from tokenpak import _paths
+
+        return _paths.resolve_existing(_FIRST_RUN_FLAG_NAME) is None
+    except Exception:
+        return False
 
 
 def _print_quick_help() -> None:
@@ -932,8 +956,13 @@ def cmd_init(args: CommandArgs) -> None:
     click.echo("   tokenpak start\n")
 
 
-def cmd_setup(args: CommandArgs) -> None:
-    """Interactive wizard for first-time TokenPak configuration."""
+def cmd_setup(args: CommandArgs) -> int:
+    """Interactive wizard for first-time TokenPak configuration.
+
+    Scriptable via ``--profile`` / ``--port`` / ``--yes``, because a wizard
+    that can only be driven by a human keyboard cannot be tested in CI or a
+    container — and because EOF must never stand in for an answer.
+    """
     import os
     import subprocess
     import time
@@ -943,24 +972,42 @@ def cmd_setup(args: CommandArgs) -> None:
 
     from .core.profiles import get_profile
 
-    config_dir = Path.home() / ".tokenpak"
-    config_file = config_dir / "config.yaml"
+    from tokenpak import _paths as _tp_paths
+
+    cli_profile = getattr(args, "profile", None)
+    cli_port = getattr(args, "port", None)
+    assume_yes = bool(getattr(args, "yes", False))
+
+    valid_profiles = ("minimal", "balanced", "aggressive")
+    if cli_profile is not None and cli_profile not in valid_profiles:
+        print(f"Error: unknown profile '{cli_profile}'. Choose one of: {', '.join(valid_profiles)}")
+        return 2
+
+    # Writes go to the canonical home; an existing config is honoured wherever
+    # it currently lives so reconfiguring does not silently fork state.
+    config_dir = _tp_paths.write_home()
+    config_file = _tp_paths.config_write_path()
+    existing_config = _tp_paths.config_read_path()
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
-    if config_file.exists():
+    if existing_config is not None:
+        config_file = existing_config
         print(f"Configuration already exists at {config_file}")
-        if not is_tty:
-            print("Non-interactive mode: skipping reconfigure.")
-            return
-        try:
-            response = input("Reconfigure? (yes/no) [no]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\nSetup cancelled.")
-            return
-        if response not in ("yes", "y"):
-            print("Setup cancelled.")
-            return
+        if assume_yes:
+            print("Reconfiguring (--yes).")
+        elif not is_tty:
+            print("Non-interactive mode: skipping reconfigure. Pass --yes to overwrite.")
+            return 0
+        else:
+            try:
+                response = input("Reconfigure? (yes/no) [no]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\nSetup cancelled.")
+                return 1
+            if response not in ("yes", "y"):
+                print("Setup cancelled.")
+                return 0
 
     # Detect API keys from environment
     print("\n🔍 Scanning for API keys...\n")
@@ -995,25 +1042,63 @@ def cmd_setup(args: CommandArgs) -> None:
             provider = default_provider
         if provider not in api_keys:
             print(f"Error: no API key was detected for {provider}.")
-            return
+            return 2
     else:
         print("ℹ️  No provider API keys detected — continuing without them.")
         print("   Authenticated clients can use their existing OAuth/session credentials.")
         print("   TokenPak will preserve the client's selected or default model.")
 
-    # Ask for port
-    port_input = input("Port number [8766]: ").strip() if is_tty else ""
-    port = int(port_input) if port_input else 8766
+    # Port precedence: --port, then TOKENPAK_PORT, then the prompt/default.
+    # TOKENPAK_PORT must be honoured here because the port-conflict message
+    # below tells users to re-run with it — an instruction that has to work.
+    try:
+        env_port: Optional[int] = int(os.environ["TOKENPAK_PORT"])
+    except (KeyError, ValueError):
+        env_port = None
+
+    default_port = cli_port or env_port or 8766
+    if cli_port is not None or env_port is not None:
+        port = default_port
+    else:
+        port_input = input(f"Port number [{default_port}]: ").strip() if is_tty else ""
+        try:
+            port = int(port_input) if port_input else default_port
+        except ValueError:
+            print(f"Error: '{port_input}' is not a valid port number.")
+            return 2
 
     # Ask for profile
     print("\nChoose a compression profile:")
-    print("  [1] minimal    — compression only (safest, ~5% savings)")
-    print("  [2] balanced   — compression + caching + routing (recommended, ~30% savings)")
-    print("  [3] aggressive — all modules enabled (maximum savings, ~40%+)")
+    # No savings percentages here. TokenPak cannot know what a given
+    # workload will save before measuring it, and a number printed at the
+    # moment of choice is read as a promise. Savings are reported only
+    # after measurement, with the input and configuration identified.
+    print("  [1] minimal    — compression only; the most conservative option")
+    print("  [2] balanced   — compression + caching + routing (recommended default)")
+    print("  [3] aggressive — all modules enabled; most aggressive rewriting")
+    print()
+    print("  Savings depend on your traffic. Measure yours with `tokenpak savings`")
+    print("  once requests have flowed through the proxy.")
 
-    profile_input = input("\nProfile [2]: ").strip() if is_tty else ""
     profile_map = {"1": "minimal", "2": "balanced", "3": "aggressive"}
-    profile_name = profile_map.get(profile_input, "balanced")
+    if cli_profile is not None:
+        profile_name = cli_profile
+        print(f"\nProfile: {profile_name} (from --profile)")
+    elif is_tty:
+        profile_input = input("\nProfile [2]: ").strip()
+        profile_name = profile_map.get(profile_input, "balanced")
+    else:
+        # EOF is not consent. Previously `tokenpak setup </dev/null` silently
+        # selected "balanced", wrote a config and spawned a background daemon
+        # without a single answered prompt. Non-interactive runs must state
+        # their intent explicitly.
+        print()
+        print("Cannot prompt for a profile: stdin is not a terminal.")
+        print("Re-run with the choice stated explicitly, for example:")
+        print("  tokenpak setup --profile balanced --yes")
+        print()
+        print("Profiles: minimal | balanced | aggressive")
+        return 2
 
     # Build base config
     proxy_config: JsonObject = {"port": port, "host": "localhost"}
@@ -1033,10 +1118,13 @@ def cmd_setup(args: CommandArgs) -> None:
     config["modules"] = profile["features"]
     config["profile"] = profile_name
 
-    # Create config directory and write config
+    # Create config directory (0700) and write config (0600). The config can
+    # carry provider settings, so it must not be group/world readable.
+    _tp_paths.ensure_home()
     config_dir.mkdir(parents=True, exist_ok=True)
     with open(config_file, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    _tp_paths.secure_file(config_file)
 
     print(f"\n✅ Configuration saved to {config_file}")
     print(f"   Profile: {profile_name} — {profile['description']}")
@@ -1049,71 +1137,113 @@ def cmd_setup(args: CommandArgs) -> None:
     # a local in cmd_setup() and earlier `sys.stdin.isatty()` calls at the
     # top of the function would have raised UnboundLocalError.
 
-    # Find proxy — prefer bundled runtime/ first, then canonical proxy.py
-    candidates = [
-        Path(__file__).resolve().parent / "runtime" / "proxy.py",  # bundled (pip install)
-        Path(__file__).resolve().parent.parent / "proxy.py",  # canonical
-        Path.home() / "tokenpak" / "proxy.py",  # canonical home
-    ]
-    proxy_path = None
-    for c in candidates:
-        if c.exists():
-            proxy_path = c
-            break
+    # Launch via the module entrypoint, which is how the proxy actually runs.
+    #
+    # This previously searched for a `proxy.py` file and ran it as a script. The
+    # first candidate it found — `tokenpak/runtime/proxy.py` — is a four-line
+    # compatibility re-export with no `__main__` block, so the child imported it
+    # and exited 0 without ever serving. Setup's auto-start had therefore been
+    # inert, and the old "probe the port, print ✅ either way" logic is exactly
+    # what kept that invisible.
+    launch_cmd = [sys.executable, "-m", "tokenpak.proxy"]
 
-    if not proxy_path:
-        print("Warning: proxy.py not found. Skipping auto-start.")
-        return
+    from tokenpak.core.runtime import lifecycle as _lifecycle
 
-    # Start proxy
+    # Precheck: a listener already on our port means we cannot verify that any
+    # health response is ours. Report the conflict instead of spawning a child
+    # that will die on bind and then claiming the stranger's /health as success.
+    if _lifecycle.port_in_use(port):
+        existing = _lifecycle.snapshot(port)
+        looks_like_tokenpak = bool(existing.health_payload.get("version")) and bool(
+            existing.health_payload.get("status")
+        )
+        print(f"⚠️  Port {port} is already in use.")
+        if existing.running:
+            print("   A TokenPak proxy that this install started is already running there.")
+            print(f"   Config saved to {config_file}. Nothing further to do —")
+            print("   run `tokenpak status` to check it, or `tokenpak restart` to reload.")
+            return 0
+        if looks_like_tokenpak:
+            ver = existing.health_payload.get("version")
+            print(f"   A TokenPak proxy (v{ver}) is already serving that port, but it was")
+            print("   not started by this install, so TokenPak will not manage or stop it.")
+            print("   If that proxy is yours, you are already set up — run `tokenpak status`.")
+            print("   Otherwise pick another port:")
+        else:
+            print("   The listener there did not identify itself as a TokenPak proxy.")
+            print("   TokenPak did NOT start a proxy, and your client is NOT routed.")
+            print("   Free the port, or pick another:")
+        print(f"     TOKENPAK_PORT=<port> tokenpak setup --profile {profile_name} --yes")
+        return 1
+
     env = os.environ.copy()
     env["TOKENPAK_PORT"] = str(port)
+    # Capture the child's stderr so a startup failure can be reported instead of
+    # discarded. DEVNULL here meant a crashing proxy left the user with nothing.
+    startup_log = config_dir / "proxy-startup.log"
+    try:
+        log_handle: Any = open(startup_log, "w")
+    except OSError:
+        log_handle = subprocess.DEVNULL
     proc = subprocess.Popen(
-        [sys.executable, str(proxy_path)],
+        launch_cmd,
         env=env,
-        cwd=str(proxy_path.parent),
         start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
     )
 
-    pid_path = Path.home() / ".tokenpak" / "proxy.pid"
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_path.write_text(str(proc.pid))
+    # Verify the child before recording it. The PID file is written only for a
+    # process we have confirmed is alive and serving, so a stale PID cannot be
+    # mistaken later for a running proxy.
+    snap = _lifecycle.await_start(proc, port)
+    if not snap.running:
+        print("❌ Proxy did not start.")
+        for reason in snap.reasons:
+            print(f"   • {reason}")
+        tail = ""
+        try:
+            tail = "".join(startup_log.read_text().splitlines(keepends=True)[-8:]).rstrip()
+        except OSError:
+            pass
+        if tail:
+            print("\n   Last output from the proxy:")
+            for line in tail.splitlines():
+                print(f"     {line}")
+            print(f"\n   Full log: {startup_log}")
+        print(f"\n   Config was saved to {config_file}.")
+        print("   Diagnose with: tokenpak doctor")
+        print("   Retry with:    tokenpak start   (or TOKENPAK_PORT=<port> tokenpak start)")
+        _lifecycle.clear_pid()
+        return 1
 
-    # Wait and verify
-    time.sleep(1.5)
+    _lifecycle.write_pid(proc.pid)
+    stats_data = _proxy_get("/stats", port=port) or {}
+    mode = stats_data.get("compilation_mode")
+    mode_suffix = f" (mode: {mode})" if isinstance(mode, str) and mode else ""
+    print(f"✅ Proxy running on http://localhost:{port}{mode_suffix}  (PID {proc.pid})")
+    if snap.owned is None:
+        print("   Note: this proxy build does not report its PID on /health, so")
+        print("         ownership could not be cross-checked.")
 
-    # Try health check
-    try:
-        import json
-        import urllib.request
-
-        health_resp = urllib.request.urlopen(f"http://localhost:{port}/health", timeout=2)
-        json.loads(health_resp.read().decode())
-        stats_data = _proxy_get("/stats", port=port) or {}
-        mode = stats_data.get("compilation_mode")
-
-        mode_suffix = f" (mode: {mode})" if isinstance(mode, str) and mode else ""
-        print(f"✅ Proxy running on http://localhost:{port}{mode_suffix}")
-    except Exception:
-        print(f"✅ Proxy launched (PID {proc.pid}, port {port})")
-
-    # Success message with next steps
+    # Next steps. Routing state is reported honestly rather than assumed: setup
+    # does not route the client, so telling the user they are done would be a
+    # false claim, and doctor would immediately contradict it.
     print("\nNext steps:")
-    print(f"  1. Set your LLM client's base URL to http://localhost:{port}")
-    print("  2. Run: tokenpak status    (check health)")
-    print("  3. Run: tokenpak savings   (see your ROI)")
-    print("  First measured receipt (stop this background proxy first):")
-    print("    tokenpak stop")
-    print("    https://github.com/tokenpak/tokenpak/blob/main/docs/first-receipt.md")
+    if snap.routed:
+        print(f"  1. Your client is already routed to http://localhost:{port}.")
+    else:
+        print(f"  1. Point your LLM client at http://localhost:{port}")
+        print("     Run `tokenpak integrate` for per-client instructions.")
+    print("  2. Run: tokenpak status    (check health and routing)")
+    print("  3. Run: tokenpak savings   (measured savings, once traffic flows)")
     print()
     print("💡 Quick commands:")
-    print("  tokenpak serve      — start the proxy")
     print("  tokenpak stop       — stop the proxy")
     print("  tokenpak status     — check proxy health")
-    print("  tokenpak savings    — view compression savings")
+    print("  tokenpak doctor     — diagnose setup problems")
     print()
+    return 0
 
 
 def cmd_start(args: CommandArgs) -> None:
@@ -1740,7 +1870,29 @@ def cmd_stats(args: CommandArgs) -> None:
         uptime_s = None
 
     avg_latency = file_stats["avg_latency_ms"]
-    pct_reduction = round((1.0 - avg_ratio) * 100, 1) if avg_ratio else 0.0
+
+    # A compression ratio or latency of exactly 0 is not something the pipeline
+    # can produce — it means the rolling window holds no observations. Printing
+    # "0.0% token reduction" / "0ms" told users we measured their traffic and
+    # found no benefit. Report the absence instead.
+    from tokenpak.core.contracts import measured as _measured
+    from tokenpak.core.contracts import no_data as _no_data
+
+    # `ratio` is recorded by the proxy as `saved / input_tokens` — a savings
+    # *fraction*, not a compressed/original ratio (see
+    # proxy/server_async.py: `ratio = round(saved / input_tokens, 4)`).
+    # This previously computed `(1 - ratio) * 100`, which turned a measured 1%
+    # saving into a reported "99.4% token reduction".
+    observed = bool(file_stats.get("requests_total")) or bool(avg_ratio)
+    ratio_m = _measured(avg_ratio) if (observed and avg_ratio) else _no_data("no requests observed")
+    latency_m = (
+        _measured(avg_latency) if (observed and avg_latency) else _no_data("no requests observed")
+    )
+    pct_m = (
+        _measured(round(avg_ratio * 100, 1))
+        if (observed and avg_ratio)
+        else _no_data("no requests observed")
+    )
 
     if uptime_s is not None:
         h, rem = divmod(int(uptime_s), 3600)
@@ -1755,8 +1907,8 @@ def cmd_stats(args: CommandArgs) -> None:
                 {
                     "requests_total": requests_total,
                     "requests_errors": requests_errors,
-                    "avg_ratio": avg_ratio,
-                    "avg_latency_ms": avg_latency,
+                    "avg_ratio": ratio_m.to_json(),
+                    "avg_latency_ms": latency_m.to_json(),
                     "uptime": uptime_str,
                 },
                 indent=2,
@@ -1767,8 +1919,14 @@ def cmd_stats(args: CommandArgs) -> None:
     print("TokenPak Compression Stats (last 100 requests)")
     print(SEP)
     print(f"{'Requests:':<17}{requests_total} total, {requests_errors} errors")
-    print(f"{'Avg ratio:':<17}{avg_ratio} ({pct_reduction}% token reduction)")
-    print(f"{'Avg latency:':<17}{avg_latency}ms")
+    if ratio_m.is_measured:
+        print(f"{'Avg savings:':<17}{pct_m.render(fmt='pct')} of input tokens avoided")
+    else:
+        print(f"{'Avg savings:':<17}{ratio_m.render()}")
+    print(
+        f"{'Avg latency:':<17}"
+        f"{latency_m.render(fmt='ms') if latency_m.is_measured else latency_m.render()}"
+    )
     print(f"{'Uptime:':<17}{uptime_str}")
 
 
@@ -2227,52 +2385,50 @@ def cmd_preview(args: CommandArgs) -> None:
         # Read from stdin
         text = sys.stdin.read()
 
-    if not text.strip():
-        print("Error: No input provided.")
-        print("Usage: tokenpak preview <text> [--file FILE] [--json|--raw|--verbose]")
+    # Measured, not simulated. Every number below comes from running the real
+    # compression pipeline and is contract-checked before display; see
+    # tokenpak/services/preview.py for the invariants.
+    from tokenpak.services.preview import PreviewState, run_preview
+
+    input_source = args.file if args.file else ("argv" if args.input else "stdin")
+    result = run_preview(text, input_source=input_source)
+
+    # --json is a machine-readable contract: it emits JSON on every path,
+    # including failures. A caller parsing stdout must never hit prose.
+    if args.json:
+        print(json.dumps(result.to_json(), indent=2))
+        if result.state is not PreviewState.MEASURED:
+            sys.exit(1)
+        return
+
+    if result.state is not PreviewState.MEASURED:
+        # No fabricated fallback: say what happened and exit non-zero.
+        label = {
+            PreviewState.NO_DATA: "Nothing to preview",
+            PreviewState.UNAVAILABLE: "Preview unavailable",
+            PreviewState.ERROR: "Preview failed",
+        }[result.state]
+        print(f"{label}: {result.reason}")
+        if result.state is PreviewState.NO_DATA:
+            print("Usage: tokenpak preview <text> [--file FILE] [--json|--raw|--verbose]")
         sys.exit(1)
 
-    # Simulate compression dry-run
-    # In the real implementation, this would call the compressor pipeline
-    input_tokens = len(text.split())  # Rough estimate
-    output_tokens = max(int(input_tokens * 0.65), 10)  # Approx 35% reduction
-    saved_tokens = input_tokens - output_tokens
+    inp = result.input_tokens or 0
+    out = result.output_tokens or 0
+    saved = result.saved_tokens or 0
+    ratio = result.compression_ratio or 0.0
+    prov = result.provenance
 
-    result: PreviewResult = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "saved_tokens": saved_tokens,
-        "compression_ratio": 1.0 - (output_tokens / max(input_tokens, 1)),
-        "retained_blocks": [
-            {"type": "system_prompt", "tokens": int(output_tokens * 0.3)},
-            {"type": "user_context", "tokens": int(output_tokens * 0.4)},
-        ],
-        "removed_blocks": [
-            {"type": "debug_logs", "tokens": int(saved_tokens * 0.5)},
-            {"type": "duplicate_text", "tokens": int(saved_tokens * 0.5)},
-        ],
-        "flags": ["skeleton_enabled", "cache_ready"],
-        "mode": "hybrid",
-        "duration_ms": 2.3,
-    }
-
-    # Output
-    if args.json:
-        print(json.dumps(result, indent=2))
-    elif args.raw:
-        print(f"Input:     {result['input_tokens']:,} tokens")
-        print(f"Output:    {result['output_tokens']:,} tokens")
-        print(
-            f"Saved:     {result['saved_tokens']:,} tokens ({result['compression_ratio'] * 100:.1f}%)"
-        )
+    if args.raw:
+        print(f"Input:     {inp:,} tokens")
+        print(f"Output:    {out:,} tokens")
+        print(f"Saved:     {saved:,} tokens ({ratio * 100:.1f}%)")
+        print(f"Applied:   {'yes' if result.applied else 'no (compression would expand input)'}")
         print()
-        print("Retained blocks:")
-        for block in result["retained_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
-        print()
-        print("Removed blocks:")
-        for block in result["removed_blocks"]:
-            print(f"  - {block['type']}: {block['tokens']} tokens")
+        print("Blocks:")
+        for block in result.blocks:
+            state = "retained" if block.retained else "removed"
+            print(f"  - {block.block_id} [{block.segment_type}]: {block.raw_chars} chars ({state})")
     else:
         # Pretty format (default)
         mode = resolve_mode(args)
@@ -2280,28 +2436,49 @@ def cmd_preview(args: CommandArgs) -> None:
         print(fmt.header())
         print()
 
-        print(f"  Input:          {result['input_tokens']:,} tokens")
-        print(f"  → Compressed:   {result['output_tokens']:,} tokens")
-        print(
-            f"  Savings:        {result['saved_tokens']:,} tokens ({result['compression_ratio'] * 100:.1f}% reduction)"
-        )
+        print(f"  Input:          {inp:,} tokens")
+        print(f"  → Compressed:   {out:,} tokens")
+        print(f"  Savings:        {saved:,} tokens ({ratio * 100:.1f}% reduction)")
+        if not result.applied:
+            print("  Applied:        no — the original is retained unchanged.")
+            if prov and prov.input_kind == "single_turn":
+                # Do not let a 0% single-turn preview read as "TokenPak does
+                # not work". State honestly where the savings actually come from.
+                print()
+                print("  This input is a single turn. TokenPak's savings come from")
+                print("  redundancy repeated across conversation turns, so there is")
+                print("  little for it to remove here. To measure your own savings,")
+                print("  preview a conversation export (a JSON array of messages,")
+                print("  a provider request body, or JSONL — one message per line),")
+                print("  or run `tokenpak serve` and measure live traffic.")
         print()
 
-        print(f"  Retained blocks ({len(result['retained_blocks'])}):")
-        for block in result["retained_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Removed blocks ({len(result['removed_blocks'])}):")
-        for block in result["removed_blocks"]:
-            print(f"    • {block['type']:<20} {block['tokens']:>6,} tokens")
-        print()
-
-        print(f"  Mode: {result['mode']} | Duration: {result['duration_ms']:.1f}ms")
-
-        if args.verbose:
+        retained = [b for b in result.blocks if b.retained]
+        removed = [b for b in result.blocks if not b.retained]
+        if retained:
+            print(f"  Retained blocks ({len(retained)}):")
+            for block in retained:
+                print(f"    • {block.segment_type:<20} {block.raw_chars:>6,} chars")
             print()
-            print(f"  Flags: {', '.join(result['flags'])}")
+        if removed:
+            print(f"  Removed blocks ({len(removed)}):")
+            for block in removed:
+                print(f"    • {block.segment_type:<20} {block.raw_chars:>6,} chars")
+            print()
+        if not result.blocks:
+            print("  Blocks:         pipeline identified no separable segments")
+            print()
+
+        print(f"  Mode: {prov.mode if prov else 'unknown'} | Duration: {result.duration_ms:.1f}ms")
+
+        if args.verbose and prov:
+            print()
+            print("  Measurement provenance:")
+            print(f"    Input          {prov.input_source} ({prov.input_bytes:,} bytes)")
+            print(f"    Input SHA-256  {prov.input_sha256}")
+            print(f"    Tokenizer      {prov.tokenizer}")
+            print(f"    Stages run     {', '.join(prov.stages_run) or '(none)'}")
+            print(f"    TokenPak       v{prov.tokenpak_version}")
 
 
 def cmd_dashboard(args: CommandArgs) -> int | None:
@@ -3366,7 +3543,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = sub.add_parser("init", help="Guided first-run setup (API key, port, vault path)")
     p_init.set_defaults(func=cmd_init)
 
-    p_setup = sub.add_parser("setup", help="Interactive first-time configuration wizard")
+    p_setup = sub.add_parser(
+        "setup",
+        help="Interactive first-time configuration wizard",
+        description=(
+            "Guided first-run configuration. Prompts interactively when stdin is a "
+            "terminal. For CI, containers, or any scripted run, state the choices "
+            "explicitly: `tokenpak setup --profile balanced --yes`. Setup will not "
+            "assume an answer from a closed stdin."
+        ),
+    )
+    p_setup.add_argument(
+        "--profile",
+        choices=["minimal", "balanced", "aggressive"],
+        default=None,
+        help="Compression profile to use, instead of prompting",
+    )
+    p_setup.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Proxy port to configure (default 8766)",
+    )
+    p_setup.add_argument(
+        "--yes",
+        action="store_true",
+        help="Overwrite an existing config without confirming",
+    )
     p_setup.set_defaults(func=cmd_setup)
 
     p_start = sub.add_parser(
@@ -8495,11 +8698,13 @@ def cmd_run_cancel(args: CommandArgs) -> None:
 # ── diff: Context diff visualization ─────────────────────────────────────────
 
 
-def cmd_diff(args: CommandArgs) -> None:
+def cmd_diff(args: CommandArgs) -> int:
     """Show context diff: removed, compressed, retained blocks."""
     from tokenpak.cli.commands.diff import run_diff_cmd
 
-    run_diff_cmd(args)
+    # Propagate the exit code: "unavailable" must not exit 0, or scripts read
+    # the absence of a diff as a successful empty diff.
+    return run_diff_cmd(args)
 
 
 def _build_diff_parser(sub: Subparsers) -> None:

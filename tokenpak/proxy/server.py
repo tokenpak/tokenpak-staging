@@ -3965,6 +3965,11 @@ class ProxyServer:
             else ("degraded" if is_degraded else "ok"),
             "uptime_seconds": uptime,
             "version": _tokenpak_version,
+            # OS pid of the serving process. Lets the CLI verify that a healthy
+            # endpoint is the proxy *it* started, rather than inferring
+            # ownership from "something answered on the port" — the inference
+            # that let `tokenpak setup` report success for a stranger's proxy.
+            "pid": os.getpid(),
             "requests_total": requests_total,
             "requests_errors": requests_errors,
             "compression_ratio_avg": compression_ratio_avg,

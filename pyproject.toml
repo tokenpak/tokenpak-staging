@@ -66,6 +66,11 @@ dependencies = [
     "watchdog>=3.0.0",
     "cryptography>=41.0.0",
     "urllib3>=2.0.0",
+    # Version comparison for `tokenpak update` and doctor's update check. Was
+    # imported unguarded at two callsites while undeclared, which crashed
+    # `tokenpak update` with a bare ModuleNotFoundError traceback and silently
+    # degraded the doctor check to a green "Unknown".
+    "packaging>=23.0",
     # Native Codex sends Responses API request bodies with Content-Encoding:
     # zstd. TokenPak decodes them before inspection/optimization and forwards
     # a standards-compliant uncompressed JSON entity upstream.

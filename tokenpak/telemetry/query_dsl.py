@@ -204,12 +204,16 @@ def get_savings_report(db_path: str | Path | None = None, days: int = 30) -> Sav
         try:
             # Exclude client-managed routes from savings attribution.
             # COALESCE(e.route, '') handles rows written before the route column existed.
+            # COUNT(*) rides along so callers can distinguish "no rows" from
+            # "rows that sum to zero". The COALESCE(...,0) aggregates below
+            # cannot express that difference on their own.
             cur.execute(
-                "SELECT COALESCE(SUM(c.actual_cost),0) as tc, COALESCE(SUM(c.baseline_cost),0) as bc, COALESCE(SUM(CASE WHEN COALESCE(e.route,'') != 'claude-code' THEN c.savings_total ELSE 0 END),0) as sv FROM tp_costs c JOIN tp_events e ON c.trace_id=e.trace_id WHERE e.ts>=? AND e.ts<=? AND e.event_type='request_end'",
+                "SELECT COALESCE(SUM(c.actual_cost),0) as tc, COALESCE(SUM(c.baseline_cost),0) as bc, COALESCE(SUM(CASE WHEN COALESCE(e.route,'') != 'claude-code' THEN c.savings_total ELSE 0 END),0) as sv, COUNT(*) as n FROM tp_costs c JOIN tp_events e ON c.trace_id=e.trace_id WHERE e.ts>=? AND e.ts<=? AND e.event_type='request_end'",
                 (s, e),
             )
             r = cur.fetchone()
             tc, bc, sv = r["tc"] or 0, r["bc"] or 0, r["sv"] or 0
+            observations = int(r["n"] or 0)
             # Cache hit rate is still reported for observability (all routes)
             cur.execute(
                 "SELECT COALESCE(SUM(u.cache_read),0) as cr, COALESCE(SUM(u.input_billed+u.cache_read),0) as ti FROM tp_usage u JOIN tp_events e ON u.trace_id=e.trace_id WHERE e.ts>=? AND e.ts<=? AND e.event_type='request_end'",
@@ -223,17 +227,23 @@ def get_savings_report(db_path: str | Path | None = None, days: int = 30) -> Sav
                 savings_amount=sv,
                 savings_pct=(sv / bc * 100 if bc else 0),
                 cache_hit_rate=(cache_read / total_in if total_in else 0),
+                observations=observations,
+                available=True,
             )
         except sqlite3.OperationalError as e:
             if "no such table" in str(e) or "no such column" in str(e):
-                # Legacy DB schema — missing tp_events/tp_costs tables or route column.
-                # Return zeroed report rather than crashing.
+                # Legacy DB schema — missing tp_events/tp_costs tables or route
+                # column. Do not crash, but do not claim a measurement either:
+                # available=False marks these floats as meaningless so callers
+                # render "unavailable" instead of "$0.00 (0.0%)".
                 return SavingsReport(
                     total_cost=0.0,
                     estimated_without_compression=0.0,
                     savings_amount=0.0,
                     savings_pct=0.0,
                     cache_hit_rate=0.0,
+                    observations=0,
+                    available=False,
                 )
             raise  # re-raise unexpected SQLite errors
     finally:
