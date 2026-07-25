@@ -473,7 +473,7 @@ def _consult_daemon_for_tier(lic: "License") -> tuple[str, str]:
         return ("unverified", str(payload.get("degraded_reason", "not_valid")))
 
     daemon_tier = str(payload.get("tier", TIER_FREE)).lower()
-    if daemon_tier in (TIER_PRO, TIER_PRO, TIER_PRO):
+    if daemon_tier == TIER_PRO:
         lic.tier = daemon_tier
         lic.status = "active"
         try:
@@ -548,7 +548,7 @@ def discover_plans() -> list[dict[str, Any]]:
 
     pricing = _load_pricing_manifest()
     blurbs = _default_blurbs()
-    order = (TIER_FREE, TIER_PRO, TIER_PRO, TIER_PRO)
+    order = (TIER_FREE, TIER_PRO)
 
     catalog: list[dict[str, Any]] = []
     for tier in order:
@@ -598,15 +598,11 @@ def _default_blurbs() -> dict[str, str]:
         ),
         TIER_PRO: (
             "Adds advanced compression, smart routing, session "
-            "telemetry, trace + replay, CSV/JSON export."
-        ),
-        TIER_PRO: (
-            "Adds budget enforcement, OAuth, real-time stats API, "
-            "shared vault, handoff system, workflow budgets."
-        ),
-        TIER_PRO: (
-            "Adds A/B testing, shadow mode, regression detection, "
-            "FinOps + audit pages, DLP/PII scanning, connection pooling."
+            "telemetry, trace + replay, CSV/JSON export, budget "
+            "enforcement, OAuth, real-time stats API, shared vault, "
+            "handoff system, workflow budgets, A/B testing, shadow "
+            "mode, regression detection, FinOps + audit pages, "
+            "DLP/PII scanning, connection pooling."
         ),
     }
 

@@ -423,7 +423,7 @@ class TestCostAnalyzeEndpoint:
         resp = client.post("/v1/cost/analyze", json=self._payload())
         assert resp.status_code == 401
 
-    def test_pro_key_succeeds(self):
+    def test_pro_key_succeeds_over_longer_window(self):
         client, key = _make_client(LicenseTier.PRO)
         resp = client.post(
             "/v1/cost/analyze",
