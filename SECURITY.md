@@ -47,38 +47,6 @@ We welcome good-faith security research and will not pursue legal action against
 - do not access, modify, or exfiltrate data that isn't theirs;
 - report promptly through the channels above and allow reasonable remediation time before public disclosure.
 
-## Known Advisories in Optional Extras
-
-TokenPak's core install carries none of the packages below. They arrive only if you opt into an
-extra, and we disclose them rather than leave you to discover them.
-
-### `tokenpak[crewai]` — chromadb
-
-Installing this extra pulls `crewai`, which requires `chromadb~=1.1.0`. All published chromadb 1.x
-releases are covered by CVE-2026-45829 (pre-authentication code injection), and **no fixed version
-exists upstream** as of this writing — the advisory's range covers every release up to and including
-the latest.
-
-What this does and does not mean:
-
-- **The published `tokenpak` package never imports or runs chromadb.** No shipped module reaches
-  it, and the crewai integration is a set of context and handoff wrappers with no vector-store code
-  path. For completeness: this repository also contains an unpublished, unshipped Chroma adapter
-  under `packages/tokenpak-vectordb/`, which is not part of any release and not installed by any
-  extra. We mention it so that a reader who greps the repository is not left thinking this
-  disclosure is inaccurate.
-- The exposure is inherent to running chromadb yourself, typically as a server. If your crewai
-  configuration does not run one, the advisory has no attack surface in your deployment.
-- We cannot pin around it: the constraint is crewai's, not ours.
-
-If you need this extra and the advisory matters to your threat model, evaluate chromadb's exposure
-in your own deployment, or run crewai without the vector-store features it enables.
-
-**Review condition.** This note is revisited when a fixed chromadb is published *and* crewai's
-constraint permits it. Note the advisory range is bounded at `<= 1.5.9`, so a future 1.6.0 would fall
-outside the stated range without necessarily being patched — a version outside the range is not by
-itself evidence of a fix.
-
 ## Best Practices
 
 ### For Users

@@ -6,6 +6,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- **The `crewai` optional extra.** `pip install tokenpak[crewai]` no longer resolves.
+
+  It was the only path by which `chromadb` entered the dependency graph, and every published
+  chromadb 1.x is covered by CVE-2026-45829 with no fixed release available — crewai pins
+  `chromadb~=1.1.0`, so there was no version to move to and the constraint was not ours to relax.
+  Carrying an unfixable critical advisory for an integration that is not a focus was the wrong
+  trade, so the extra is gone rather than documented around.
+
+  **No capability is lost.** The CrewAI adapter under `tokenpak/sdk/crewai/` never imported crewai —
+  it is a set of context and handoff wrappers — and it continues to work unchanged. If you use it,
+  install crewai yourself alongside TokenPak:
+
+  ```
+  pip install tokenpak crewai
+  ```
+
+  This also removes the `json-repair` advisory (GHSA-xf7x-x43h-rpqh), which reached the project only
+  through the same path, and drops 60 packages from the resolved dependency set.
+
 ## [1.15.0] — 2026-07-24
 
 > Minor release: a canonical, importable map from paid features to the license
