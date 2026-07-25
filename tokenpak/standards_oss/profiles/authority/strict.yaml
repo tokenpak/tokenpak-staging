@@ -8,7 +8,7 @@
 # you may not loosen a protected field at all (GOVERNANCE.md R22).
 
 schema: baseline-standards/authority-profile/1.0
-standards_version: 1.1.0
+standards_version: 1.2.0
 id: strict
 anchor: independent-verification-for-consequential-decisions
 

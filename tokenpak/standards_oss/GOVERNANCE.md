@@ -1,6 +1,6 @@
 ---
 id: BS-GOVERNANCE
-standards_version: 1.1.0
+standards_version: 1.2.0
 risk_class: critical
 default_coverage_profiles: [starter, delegated-work, product-delivery, multi-agent]
 ---
@@ -73,7 +73,10 @@ work around.
 an expiry. A grant without an expiry is a defect. An asynchronous approval MUST NOT become
 open-ended standing authority.
 
-**R8.** The escalation target MUST NOT be the default blocker. Every escalation path MUST define, in
+**R8.** The escalation target MUST NOT be the default blocker. Routine review and routine
+uncertainty are resolved by an available reviewer, automated if that is what is available; the
+accountable human is engaged only at a hard stop as defined in
+`delegation/independent-review-and-acceptance.md` R28. Every escalation path MUST define, in
 advance, what happens when the target does not respond within its stated window: proceed within a
 named envelope, or stop cleanly. "Wait indefinitely" and "assume approval" are both defects.
 

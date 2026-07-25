@@ -14,7 +14,7 @@
 #     ceiling.
 
 schema: baseline-standards/authority-profile/1.0
-standards_version: 1.1.0
+standards_version: 1.2.0
 id: bounded-autonomous
 anchor: evidence-with-notification
 

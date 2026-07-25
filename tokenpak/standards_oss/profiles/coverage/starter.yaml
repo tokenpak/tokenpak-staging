@@ -7,7 +7,7 @@
 # universal invariants remain loaded regardless of this profile.
 
 schema: baseline-standards/coverage-profile/1.0
-standards_version: 1.1.0
+standards_version: 1.2.0
 id: starter
 extends: null
 
