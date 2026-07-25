@@ -128,13 +128,18 @@ routes that are not eligible for compression savings.
 
 ## Works with
 
+**First-class integrations** — Codex (`tokenpak codex`) · Claude Code (`tokenpak integrate claude-code`)
+
+Both ship a dedicated launcher, credential reuse, a doctor command, and a proxy path built for
+that client specifically.
+
 **Tested SDK adapters** — OpenAI SDK · Anthropic SDK · LiteLLM
 
-**First-class integration** — Claude Code (`tokenpak integrate claude-code`)
+**Compatibility targets, not yet verified** — Cursor · Cline · Continue · Aider
 
-**Compatibility targets, not yet verified** — Cursor · Cline · Continue · Aider · Codex
+These work by pointing the client's base URL at the proxy, but are not covered by tests.
 
-Run `tokenpak integrate` for setup guides. Current status is tracked in
+Run `tokenpak integrate` for setup guides. Per-client status and coverage are tracked in
 [docs/adapter-compatibility-matrix.md](docs/adapter-compatibility-matrix.md) — that file is the
 ground truth, not this list.
 

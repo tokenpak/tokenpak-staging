@@ -143,6 +143,26 @@ TokenPak includes proxy-mode support for Google Vertex AI via the generative AI 
 
 ---
 
+## Client Integrations
+
+Clients are distinct from SDK adapters: they are agent shells and editors that route through
+TokenPak, rather than libraries that call it. Status here reflects shipped integration surface
+and test coverage in this repository.
+
+| Client | Status | Integration surface | Coverage |
+|--------|--------|--------------------|----------|
+| **Codex** | ✅ First-class | `tokenpak codex` launcher, MCP config, hooks, AGENTS.md, skills installer, doctor, uninstall, session/state locking, accounting, OAuth credential reuse, dedicated `/codex/responses` proxy adapter | 264 companion tests passing; 2 provider-router tests for the OAuth responses path. See Known Issues for the outstanding routing-suite gap |
+| **Claude Code** | ✅ First-class | `tokenpak integrate claude-code`, byte-preserved request path, gateway/launcher, plugin scripts | Covered by proxy byte-preservation and integration suites |
+| **Cursor** | 🔲 Compatibility target | Base-URL configuration; no dedicated integration surface | Not verified |
+| **Cline** | 🔲 Compatibility target | Base-URL configuration; no dedicated integration surface | Not verified |
+| **Continue** | 🔲 Compatibility target | Base-URL configuration; no dedicated integration surface | Not verified |
+| **Aider** | 🔲 Compatibility target | Base-URL configuration; no dedicated integration surface | Not verified |
+
+Public copy must use these three tiers verbatim and must not describe a compatibility target as
+tested or first-class.
+
+---
+
 ## Framework Adapters Status
 
 ### AutoGen (Microsoft)
@@ -217,6 +237,14 @@ The TokenPak proxy (`tokenpak.proxy.py`) supports routing to these providers:
 
 ## Known Issues & Workarounds
 
+### Codex `/v1/responses` OAuth routing suite is not in this tree
+
+The `OpenAICodexResponsesAdapter` ships and is registered in the adapter registry, and the
+OAuth responses path is exercised by two provider-router tests. Its dedicated 12-case routing
+suite (`tests/test_codex_responses_routing.py`) was authored on a branch that never merged;
+stale bytecode for it may appear under `tests/__pycache__/`. Treat the path as shipped with
+partial coverage until that suite lands.
+
 ### Issue: Old OpenAI SDK + Streaming
 If using OpenAI SDK < 1.0 with streaming, token counts may be delayed or incomplete.
 **Workaround:** Upgrade to OpenAI SDK 1.x or 2.x.
@@ -248,8 +276,11 @@ Include:
 
 ## Last Updated
 
-- **Date:** 2026-03-11
-- **TokenPak Version:** 1.0+
+- **Date:** 2026-07-24
+- **TokenPak Version:** 1.15.0
+
+Prior revision covered SDK and framework adapters only and carried no client-integration
+section; the client tiers above were added 2026-07-24 after a coverage audit.
 
 For current adapter status, check:
 - `tokenpak/adapters/` directory
