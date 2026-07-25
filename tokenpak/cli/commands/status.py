@@ -586,6 +586,23 @@ def _empty_tip_attribution(reason: str, db_path: Optional[str] = None) -> Dict[s
     }
 
 
+def _unavailable_line() -> Dict[str, Any]:
+    """A line for which no measurement exists.
+
+    Values are ``None``, never ``0`` — a plane we could not read must not be
+    indistinguishable from a plane that saved nothing.
+    """
+    return {"tokens": None, "usd": None, "status": "unavailable"}
+
+
+def _companion_line(days: int = 0, hours: int = 0) -> Dict[str, Any]:
+    """Companion enrichment line, unavailable when no journal exists."""
+    observed = _query_companion_enrichment(days=days, hours=hours)
+    if observed is None:
+        return _unavailable_line()
+    return _line(*observed)
+
+
 def _line(tokens: int, usd: float) -> Dict[str, Any]:
     """Build a display line with honest observed/not-observed state."""
     tokens_i = max(0, int(tokens or 0))
@@ -680,11 +697,21 @@ def _query_rollup_daily_tip_attribution(
     }
 
 
-def _query_companion_enrichment(days: int = 0, hours: int = 0) -> tuple[int, float]:
-    """Aggregate companion-side prompt savings from the local journal."""
-    journal_path = Path(os.path.expanduser("~/.tokenpak/companion/journal.db"))
-    if not journal_path.exists():
-        return 0, 0.0
+def _query_companion_enrichment(days: int = 0, hours: int = 0) -> Optional[tuple[int, float]]:
+    """Aggregate companion-side prompt savings from the local journal.
+
+    Returns ``None`` when no journal exists in any home — that is *no data*,
+    not a measured zero, and the caller must render it as unavailable rather
+    than as "$0.00 saved". The path is resolved rather than hardcoded: this
+    read was pinned to ``~/.tokenpak/companion/journal.db``, so an install
+    using ``TOKENPAK_HOME`` or the canonical home reported zero prompt-side
+    savings no matter how much the companion had actually saved.
+    """
+    from tokenpak.companion.config import resolve_journal_file
+
+    journal_path = resolve_journal_file("journal.db")
+    if journal_path is None:
+        return None
 
     seconds = _window_seconds(days, hours)
     where = "WHERE entry_type = 'companion_savings'"
@@ -708,7 +735,8 @@ def _query_companion_enrichment(days: int = 0, hours: int = 0) -> tuple[int, flo
             except Exception:
                 continue
     except sqlite3.Error:
-        return 0, 0.0
+        # The journal exists but could not be read — unreadable is not zero.
+        return None
     finally:
         conn.close()
     return tokens, usd
@@ -731,9 +759,9 @@ def _query_tip_cache_attribution(
     if conn is None:
         result = _empty_tip_attribution("monitor_db_not_found", db_path)
         result["window"] = _tip_window_label(days, hours)
-        comp_tokens, comp_usd = _query_companion_enrichment(days=days, hours=hours)
-        result["lines"]["companion_enrichment"] = _line(comp_tokens, comp_usd)
-        if comp_tokens or comp_usd:
+        comp_line = _companion_line(days=days, hours=hours)
+        result["lines"]["companion_enrichment"] = comp_line
+        if comp_line["tokens"] or comp_line["usd"]:
             result["available"] = True
             result["source"] = "companion_journal"
         return result
@@ -741,11 +769,11 @@ def _query_tip_cache_attribution(
     try:
         rollup = _query_rollup_daily_tip_attribution(conn, days=days, hours=hours)
         if rollup is not None:
-            comp_tokens, comp_usd = _query_companion_enrichment(days=days, hours=hours)
+            comp_line = _companion_line(days=days, hours=hours)
             # The companion journal is local-entrypoint state; prefer explicit
             # journal rows when present so rollup gaps don't hide prompt-side value.
-            if comp_tokens or comp_usd:
-                rollup["lines"]["companion_enrichment"] = _line(comp_tokens, comp_usd)
+            if comp_line["tokens"] or comp_line["usd"]:
+                rollup["lines"]["companion_enrichment"] = comp_line
             conn.close()
             return rollup
 
@@ -826,7 +854,7 @@ def _query_tip_cache_attribution(
         managed_cache_usd += _cache_savings_usd(model, proxy_tokens)
         compression_usd += _compression_savings_usd(model, comp_tokens)
 
-    companion_tokens, companion_usd = _query_companion_enrichment(days=days, hours=hours)
+    companion_line = _companion_line(days=days, hours=hours)
 
     return {
         "available": True,
@@ -838,7 +866,7 @@ def _query_tip_cache_attribution(
             "platform_cache": _line(platform_tokens, platform_usd),
             "tokenpak_compression": _line(compression_tokens, compression_usd),
             "tokenpak_managed_cache": _line(managed_cache_tokens, managed_cache_usd),
-            "companion_enrichment": _line(companion_tokens, companion_usd),
+            "companion_enrichment": companion_line,
         },
     }
 
@@ -1078,10 +1106,10 @@ def run(
     companion_tokens_avoided = 0
     companion_usd = 0.0
     try:
-        from pathlib import Path as _P
+        from tokenpak.companion.config import resolve_journal_file
 
-        _companion_db = _P(os.path.expanduser("~/.tokenpak/companion/journal.db"))
-        if _companion_db.exists() and session.get("start_time"):
+        _companion_db = resolve_journal_file("journal.db")
+        if _companion_db is not None and session.get("start_time"):
             _since = float(session["start_time"])
             _c = sqlite3.connect(str(_companion_db))
             try:

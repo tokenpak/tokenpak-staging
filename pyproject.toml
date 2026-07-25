@@ -33,7 +33,11 @@ keywords = [
     "routing",
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    # Alpha until a candidate build passes the beta gates end-to-end in
+    # isolated environments. It claimed Production/Stable while `preview`
+    # printed simulated numbers and `setup` reported success for a proxy
+    # that had not started. Moves to "4 - Beta" when that candidate passes.
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",

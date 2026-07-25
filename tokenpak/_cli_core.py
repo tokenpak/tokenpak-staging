@@ -717,7 +717,12 @@ def _mark_intro_seen() -> None:
         from tokenpak import _paths
 
         _paths.ensure_home()
-        (_paths.write_home() / _FIRST_RUN_FLAG_NAME).touch()
+        marker = _paths.write_home() / _FIRST_RUN_FLAG_NAME
+        marker.touch()
+        # The directory is 0700, but the marker inherits the process umask —
+        # every file TokenPak creates gets an explicit mode so the guarantee
+        # does not depend on how the user's umask happens to be set.
+        _paths.secure_file(marker)
     except Exception:
         pass
 
@@ -964,14 +969,12 @@ def cmd_setup(args: CommandArgs) -> int:
     """
     import os
     import subprocess
-    import time
-    from pathlib import Path
 
     import yaml
 
-    from .core.profiles import get_profile
-
     from tokenpak import _paths as _tp_paths
+
+    from .core.profiles import get_profile
 
     cli_profile = getattr(args, "profile", None)
     cli_port = getattr(args, "port", None)
@@ -2630,10 +2633,90 @@ def cmd_diagnose(args: CommandArgs) -> None:
     _run_diagnose(args)
 
 
+#: What each companion wrapper launches, and the binary it needs on PATH.
+_COMPANION_CLIENTS = {
+    "claude": ("Claude Code", "claude"),
+    "codex": ("Codex", "codex"),
+}
+
+#: TokenPak-owned flags per wrapper. Everything else is passed through
+#: verbatim to the client, which is why `--help` had to be intercepted.
+_COMPANION_WRAPPER_FLAGS = {
+    "claude": [("--budget USD", "Daily companion spend ceiling")],
+    "codex": [
+        ("--budget USD", "Daily companion spend ceiling"),
+        ("--install-only", "Provision companion state and exit without launching"),
+        ("--receipt-out PATH", "Write an accounting receipt to PATH"),
+        ("--run-id ID", "Correlation id recorded on the receipt"),
+        ("--receipt-only", "Emit the receipt without launching"),
+    ],
+}
+
+
+def _wants_wrapper_help(tail: list[str]) -> bool:
+    """Whether *tail* is asking for the wrapper's own help.
+
+    Only when help is the first token: `tokenpak codex --help` is a question
+    about TokenPak, while `tokenpak codex exec foo --help` is a question the
+    client should answer. Anything after `--` is the client's business.
+    """
+    return bool(tail) and tail[0] in ("-h", "--help")
+
+
+def _print_companion_wrapper_help(name: str) -> None:
+    """Print TokenPak's own help for a companion wrapper. Creates nothing."""
+    label, binary = _COMPANION_CLIENTS[name]
+    print(f"tokenpak {name} — launch {label} with the TokenPak companion active")
+    print()
+    print(f"Usage: tokenpak {name} [tokenpak flags] [{binary} arguments ...]")
+    print()
+    print(f"Arguments TokenPak does not recognise are passed to `{binary}` verbatim.")
+    print()
+    print("TokenPak flags:")
+    for flag, desc in _COMPANION_WRAPPER_FLAGS[name]:
+        print(f"  {flag:<22} {desc}")
+    print(f"  -h, --help             Show this message ({binary}'s own help: `{binary} --help`)")
+    if name == "codex":
+        print()
+        print("Subcommands:")
+        print("  doctor                 Diagnose the Codex companion installation")
+        print("  uninstall              Remove companion state Codex provisioning created")
+    print()
+    if _which(binary) is None:
+        print(f"Note: `{binary}` was not found on PATH — install {label} before launching.")
+
+
+def _which(binary: str) -> Optional[str]:
+    import shutil
+
+    return shutil.which(binary)
+
+
+def _require_companion_client(name: str) -> None:
+    """Exit with a documented code if the client binary is absent.
+
+    Runs *before* provisioning.
+
+    Provisioning ran first and reported success for a client that was never
+    installed, leaving config, hooks and skill files behind for a binary the
+    user does not have.
+    """
+    from tokenpak.cli.exit_codes import EXIT_MISSING_PREREQUISITE
+
+    label, binary = _COMPANION_CLIENTS[name]
+    if _which(binary) is None:
+        print(
+            f"tokenpak {name}: `{binary}` is not on PATH — install {label} first.",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_MISSING_PREREQUISITE)
+
+
 def cmd_claude(args: CommandArgs) -> None:
     """Launch Claude Code with tokenpak companion active."""
     import os
 
+    _require_companion_client("claude")
     if getattr(args, "budget", None) is not None:
         os.environ["TOKENPAK_COMPANION_BUDGET"] = str(args.budget)
     from .companion import launch
@@ -2691,6 +2774,11 @@ def cmd_codex(args: CommandArgs) -> None:
         from .companion.codex.uninstall import main as uninstall_main
 
         sys.exit(uninstall_main(forwarded[1:]))
+    # Preflight *after* doctor/uninstall — diagnosing or removing state for an
+    # absent client is legitimate — but before any provisioning. Launching
+    # used to provision 21 files and then fail with an opaque 120 for a binary
+    # the user does not have installed.
+    _require_companion_client("codex")
     if getattr(args, "install_only", False):
         forwarded = ["--install-only", *forwarded]
     if receipt_only:
@@ -3184,7 +3272,7 @@ def _build_stub_parsers(sub: Subparsers) -> None:
     # ── License commands (Free OSS tier, Pro-ready surface) ──────────────────
     p_license = sub.add_parser(
         "license",
-        help="Show license and tier info (Free, Pro, Team, Enterprise)",
+        help="Show license and edition info",
     )
     p_license.add_argument(
         "--json", dest="as_json", action="store_true", help="Machine-readable JSON output"
@@ -3210,7 +3298,7 @@ def _build_stub_parsers(sub: Subparsers) -> None:
 
     p_activate = sub.add_parser(
         "activate",
-        help="Store a Pro/Team/Enterprise license key",
+        help="Store a license key you were issued",
     )
     p_activate.add_argument("key", nargs="?", default="", help="Your license key")
     p_activate.add_argument("--email", default="", help="Optional email for the license")
@@ -6063,6 +6151,14 @@ def main() -> None:
     if raw_cmd == "claude":
         claude_idx = sys.argv.index("claude")
         claude_tail = sys.argv[claude_idx + 1 :]
+        # `tokenpak claude --help` asks about *this* wrapper. Verbatim
+        # passthrough sent it to the client instead, so the user got the
+        # client's help — or, when the client was absent, provisioning ran
+        # for a binary that is not installed. Answer it here, before any
+        # launch path can touch the filesystem.
+        if _wants_wrapper_help(claude_tail):
+            _print_companion_wrapper_help("claude")
+            sys.exit(0)
         # Extract --budget (the only tokenpak-owned flag) if present
         budget = None
         passthrough = []
@@ -6083,7 +6179,11 @@ def main() -> None:
         )
     elif raw_cmd == "codex":
         codex_idx = sys.argv.index("codex")
-        args = _codex_namespace_from_tail(sys.argv[codex_idx + 1 :])
+        codex_tail = sys.argv[codex_idx + 1 :]
+        if _wants_wrapper_help(codex_tail):
+            _print_companion_wrapper_help("codex")
+            sys.exit(0)
+        args = _codex_namespace_from_tail(codex_tail)
     else:
         args = parser.parse_args()
 

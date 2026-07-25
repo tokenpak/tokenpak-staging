@@ -439,11 +439,14 @@ def _handle_vault_block(handler: Any, block_id: str) -> None:
 
 
 def _companion_dir() -> Path:
-    root = os.environ.get(
-        "TOKENPAK_COMPANION_JOURNAL_DIR",
-        str(Path.home() / ".tokenpak" / "companion"),
-    )
-    return Path(root)
+    """Where this process writes companion state.
+
+    Delegates so the proxy, the hooks and the MCP server cannot disagree
+    about which database they are talking to.
+    """
+    from tokenpak.companion.config import journal_write_dir
+
+    return journal_write_dir()
 
 
 def _get_budget_tracker() -> Any:
@@ -921,11 +924,11 @@ def _handle_models_list(handler: Any, qs: dict[str, list[str]]) -> None:
         try:
             import sqlite3 as _sq
 
-            db_path = os.environ.get(
-                "TOKENPAK_DB",
-                os.path.expanduser("~/.tokenpak/monitor.db"),
-            )
-            if os.path.exists(db_path):
+            from tokenpak import _paths
+
+            resolved_db = _paths.monitor_db(mode="read")
+            db_path = str(resolved_db) if resolved_db else ""
+            if db_path and os.path.exists(db_path):
                 c = _sq.connect(db_path)
                 rows = c.execute(
                     "SELECT DISTINCT model FROM requests "
@@ -1629,12 +1632,14 @@ def _vault_block_count() -> int:
 def _promotion_candidate_count() -> int:
     """Count of journal entries marked as Pak promotion candidates.
 
-    Reads from the canonical companion journal DB at
-    ``~/.tokenpak/companion/journal.db``. Returns 0 when the DB is
-    absent or unreadable. Never raises.
+    Resolves the companion journal across homes. Returns 0 when the DB is
+    absent or unreadable — this is a count of rows, so an absent database
+    genuinely means zero candidates, not an unmeasured value. Never raises.
     """
-    db_path = Path.home() / ".tokenpak" / "companion" / "journal.db"
-    if not db_path.exists():
+    from tokenpak.companion.config import resolve_journal_file
+
+    db_path = resolve_journal_file("journal.db")
+    if db_path is None:
         return 0
     try:
         from tokenpak.companion.journal.pak_aware import count_promotion_candidates

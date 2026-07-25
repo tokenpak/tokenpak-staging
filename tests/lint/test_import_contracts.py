@@ -138,8 +138,7 @@ def test_unlisted_entrypoint_bypass_turns_gate_red(tmp_path):
     candidates = [
         line.strip()
         for line in original.splitlines()
-        if line.strip().startswith("tokenpak.cli.commands.")
-        and " -> tokenpak.compression" in line
+        if line.strip().startswith("tokenpak.cli.commands.") and " -> tokenpak.compression" in line
     ]
     if not candidates:
         pytest.skip("no entrypoint→compression bypass edges remain to sample")

@@ -192,8 +192,7 @@ class PreviewResult:
         for b in self.blocks:
             if b.raw_chars < 0 or b.final_chars < 0:
                 raise PreviewInvariantError(
-                    f"negative block size on {b.block_id}: "
-                    f"raw={b.raw_chars} final={b.final_chars}"
+                    f"negative block size on {b.block_id}: raw={b.raw_chars} final={b.final_chars}"
                 )
             if not b.block_id or not b.segment_type:
                 raise PreviewInvariantError("block identity must come from the pipeline")

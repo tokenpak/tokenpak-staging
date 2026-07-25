@@ -572,8 +572,13 @@ def _load_tokenpak_upstream_overrides() -> Dict[str, str]:
     the loaded config.yaml (post-migration).
     Supports current shape at `models.providers` and legacy root `providers`.
     """
-    cfg_path = Path.home() / ".tokenpak" / "config.json"
-    if cfg_path.exists():
+    # Compatibility read: config.json is a read-only legacy format and may
+    # live in either home. Resolved rather than hardcoded so a TOKENPAK_HOME
+    # install is not silently read from ~/.tokenpak.
+    from tokenpak import _paths
+
+    cfg_path = _paths.resolve_existing("config.json")
+    if cfg_path is not None:
         try:
             cfg = json.loads(cfg_path.read_text())
         except Exception:

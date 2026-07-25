@@ -110,7 +110,6 @@ class TestIntermediateHelp:
             )
 
         # Check for key intermediate commands
-        assert "watch" in text, "watch command not in --more output"
         assert "logs" in text, "logs command not in --more output"
         assert "config" in text, "config command not in --more output"
 
@@ -119,15 +118,25 @@ class TestIntermediateHelp:
         assert "Configuration:" in text
         assert "Content:" in text
 
-    def test_intermediate_commands_count(self):
-        """Intermediate commands list should have the correct count."""
-        # Should include watch, logs, stats, config, integrate, index, search, demo, restart, version
-        assert len(_INTERMEDIATE_COMMANDS) >= 10, "Expected at least 10 intermediate commands"
+    def test_intermediate_commands_are_supported(self):
+        """Intermediate help may only advertise allowlisted commands.
+
+        Replaces a minimum-count assertion. A count cannot tell ten working
+        commands apart from ten names, and it actively resists removing a verb
+        that turns out not to work — which is how `watch`, whose own help says
+        it is not implemented, stayed advertised here.
+        """
+        from tokenpak.core.registry import beta_surface
+
+        assert _INTERMEDIATE_COMMANDS, "intermediate help must list something"
+        for name in _INTERMEDIATE_COMMANDS:
+            assert beta_surface.is_supported(name), (
+                f"{name!r} is advertised in --more but is not on the beta allowlist"
+            )
 
     def test_intermediate_has_expected_commands(self):
         """Verify expected intermediate commands are defined."""
         expected = {
-            "watch",
             "logs",
             "stats",
             "config",
@@ -337,7 +346,7 @@ class TestAcceptanceCriteria:
 
         # Check key commands are present
         assert "setup" in text  # essential
-        assert "watch" in text  # intermediate
+        assert "logs" in text  # intermediate
 
     def test_criterion_3_all_shows_all_commands(self):
         """✅ tokenpak help --all shows all 93 commands."""

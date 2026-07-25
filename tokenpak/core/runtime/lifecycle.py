@@ -200,9 +200,7 @@ def snapshot(port: Optional[int] = None, *, probe: bool = True) -> LifecycleSnap
     snap.routed = _client_routed(port)
 
     if snap.foreign_listener:
-        snap.reasons.append(
-            f"port {port} has a listener that is not a TokenPak proxy we started"
-        )
+        snap.reasons.append(f"port {port} has a listener that is not a TokenPak proxy we started")
     if pid is not None and not snap.pid_alive:
         snap.reasons.append(f"recorded PID {pid} is not running (stale {PID_FILENAME})")
     if not snap.configured:

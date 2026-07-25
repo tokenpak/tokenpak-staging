@@ -301,13 +301,20 @@ def test_main_proxy_detection_exception_path(tmp_path):
 
     import httpx as _httpx
 
-    with patch.dict(
-        os.environ,
-        {
-            "TOKENPAK_COMPANION_JOURNAL_DIR": str(journal_dir),
-            "TOKENPAK_COMPANION_PROXY_URL": "",  # no explicit proxy
-        },
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "TOKENPAK_COMPANION_JOURNAL_DIR": str(journal_dir),
+                "TOKENPAK_COMPANION_PROXY_URL": "",  # no explicit proxy
+            },
+        ),
+        patch.dict(os.environ, {}, clear=False),
     ):
+        # A developer machine that routes through TokenPak already exports
+        # ANTHROPIC_BASE_URL; inheriting it made this assertion pass or fail
+        # depending on whose shell ran the suite.
+        os.environ.pop("ANTHROPIC_BASE_URL", None)
         with patch.object(
             CompanionConfig, "run_dir", new_callable=lambda: property(lambda self: run_dir)
         ):
