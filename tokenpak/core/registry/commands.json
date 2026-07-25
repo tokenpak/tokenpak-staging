@@ -495,10 +495,10 @@
       "command": "tip",
       "tier": "oss",
       "category": "Configuration",
-      "description": "TokenPak Integration Protocol — validate, inspect, conformance",
+      "description": "TokenPak Integrity Protocol — validate, inspect, conformance",
       "aliases": [],
       "usage": "/tokenpak tip [validate|inspect|conformance|doctor|observe|sources|scaffold-adapter]",
-      "detail": "Work with the TokenPak Integration Protocol (TIP): validate and inspect adapters, run conformance checks, and scaffold new integrations.",
+      "detail": "Work with the TokenPak Integrity Protocol (TIP): validate and inspect adapters, run conformance checks, and scaffold new integrations.",
       "related": ["config", "doctor"]
     },
     {
