@@ -67,7 +67,7 @@
     "last": "Non-functional: a redirect stub with no implementation behind it. Excluded until it returns real data.",
     "leaderboard": "Fleet-comparison surface; meaningless for a single install.",
     "learn": "Learning pipeline is unverified and writes state no other verb reads yet.",
-    "lock": "Coordination primitive for concurrent workers.",
+    "lock": "Coordination primitive for concurrent multi-host runs. Out of beta scope.",
     "macro": "Automation surface not exercised end-to-end.",
     "monitor": "Overlaps 'status' without adding a separately verified view of the same data.",
     "openclaw": "Adapter-specific integration outside the beta client set.",
