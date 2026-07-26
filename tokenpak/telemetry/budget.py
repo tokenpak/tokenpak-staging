@@ -511,4 +511,12 @@ def get_budget_tracker() -> BudgetTracker:
         _paths.ensure_home()
         db.parent.mkdir(parents=True, exist_ok=True)
         _tracker = BudgetTracker(config=cfg, db_path=str(db))
+        # Spend history is the user's own. The enclosing home is 0700, so this
+        # is defence in depth rather than an exposure, but a database of what
+        # someone spent should not be created at the ambient umask.
+        try:
+            if db.exists():
+                _paths.secure_file(db)
+        except Exception:
+            pass
     return _tracker

@@ -187,12 +187,38 @@ def load_license() -> License:
 
 
 def save_license(lic: License) -> None:
-    """Persist license to disk (atomic write)."""
+    """Persist license to disk (atomic write, owner-only).
+
+    This wrote the license at the process umask — 0664 on a default Linux
+    setup — into a home created by a bare ``mkdir``, so activating on a fresh
+    install produced a world-readable ``license.json`` inside a 0775
+    directory. The license carries the entitlement grant and its signature;
+    it belongs to the user who activated it and nobody else.
+
+    The temp file is secured *before* the rename, so there is no window in
+    which the contents exist on disk readable by others.
+    """
+    from tokenpak import _paths
+
     p = _license_path()
+    try:
+        _paths.ensure_home()
+    except Exception:
+        # Never let hardening prevent persistence; the file mode below is
+        # applied regardless of whether the home could be re-secured.
+        pass
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(lic.to_dict(), indent=2), encoding="utf-8")
+    try:
+        _paths.secure_file(tmp)
+    except Exception:
+        pass
     os.replace(tmp, p)
+    try:
+        _paths.secure_file(p)
+    except Exception:
+        pass
 
 
 def delete_license() -> bool:
