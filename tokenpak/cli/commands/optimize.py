@@ -50,6 +50,7 @@ def _monitor_db() -> str:
     """
     return _default_monitor_db()
 
+
 SEP = "────────────────────────────────────────"
 
 from tokenpak.models import get_cheaper_alternative as _get_cheaper_alternative

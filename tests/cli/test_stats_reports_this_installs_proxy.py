@@ -125,6 +125,4 @@ def test_proxy_url_still_wins_over_port(clean_home, decoy_proxy) -> None:
         TOKENPAK_PROXY_URL=f"http://127.0.0.1:{decoy_proxy}",
     )
 
-    assert "999,111" in out or "999111" in out, (
-        f"explicit TOKENPAK_PROXY_URL was ignored:\n{out}"
-    )
+    assert "999,111" in out or "999111" in out, f"explicit TOKENPAK_PROXY_URL was ignored:\n{out}"

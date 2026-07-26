@@ -25,6 +25,7 @@ def _monitor_db() -> str:
     """
     return str(_get_db_path("monitor.db"))
 
+
 SEP = "────────────────────────────────────────"
 
 

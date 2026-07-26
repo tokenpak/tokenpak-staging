@@ -96,9 +96,7 @@ def test_readers_degrade_instead_of_raising(home: Path) -> None:
     assert out["savings_observations"] == 0
 
 
-def test_a_database_in_the_source_tree_does_not_shadow_the_home(
-    home: Path, tmp_path: Path
-) -> None:
+def test_a_database_in_the_source_tree_does_not_shadow_the_home(home: Path, tmp_path: Path) -> None:
     """Resolution must answer to HOME, not to whatever is next to the code."""
     fake_repo = tmp_path / "checkout"
     fake_repo.mkdir()

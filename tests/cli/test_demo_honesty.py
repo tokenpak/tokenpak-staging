@@ -41,7 +41,7 @@ def test_compression_demo_labels_fixture_output(monkeypatch, capsys):
     # `tokenpak serve … (zero-config)`, which contradicted setup and doctor.
     assert "tokenpak setup" in out, "next-steps must start at setup"
     assert "zero-config" not in out, "there is no zero-config path; setup is required"
-    assert any(
-        verb in out for verb in ("tokenpak savings", "tokenpak cost")
-    ), "next-steps must route to a measured-savings command"
+    assert any(verb in out for verb in ("tokenpak savings", "tokenpak cost")), (
+        "next-steps must route to a measured-savings command"
+    )
     assert "measured" in out, "next-steps must distinguish the measured path from this fixture"

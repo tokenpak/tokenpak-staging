@@ -140,9 +140,7 @@ except ImportError:
     )
 
 
-def _coerce(
-    value: str, converter: Optional[Callable[[str], _ConfigValue]]
-) -> _ConfigValue:
+def _coerce(value: str, converter: Optional[Callable[[str], _ConfigValue]]) -> _ConfigValue:
     """Convert a raw string setting to its declared type."""
     if converter is bool:
         return cast(_ConfigValue, value.lower() in ("1", "true", "yes", "on"))
@@ -319,6 +317,7 @@ def setting_origin(env_var: str) -> str:
     if env_var in _PROFILE_PRESETS.get(ACTIVE_PROFILE, {}):
         return "profile"
     return "default"
+
 
 PROXY_PORT = _cfg("port", 8766, "TOKENPAK_PORT", int)
 LISTEN_ADDRESS = _cfg("listen_address", "127.0.0.1", "TOKENPAK_BIND_ADDRESS", str)

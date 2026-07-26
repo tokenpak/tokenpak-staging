@@ -116,9 +116,7 @@ def cmd_features_list(args: Any) -> int:
     print(f"{'feature':<32} {'requires':<14} {'state':<10}")
     print(f"{'─' * 32} {'─' * 14} {'─' * 10}")
     for r in rows:
-        print(
-            f"{r['feature']:<32} {_lic.public_edition(r['required_tier']):<14} {r['state']:<10}"
-        )
+        print(f"{r['feature']:<32} {_lic.public_edition(r['required_tier']):<14} {r['state']:<10}")
     print()
     print("Use `tokenpak features explain <feature>` for the per-feature reasoning.")
     return 0

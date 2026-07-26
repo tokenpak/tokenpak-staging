@@ -4802,13 +4802,17 @@ def cmd_compare(args: CommandArgs) -> None:
             continue
 
         baseline = calculate_request_cost_baseline(model, input_tokens, output_tokens)
-        print(f"  List-price basis  ${baseline:.4f}  (computed from billed tokens × published rates)")
+        print(
+            f"  List-price basis  ${baseline:.4f}  (computed from billed tokens × published rates)"
+        )
 
         if isinstance(actual_cost, (int, float)) and actual_cost >= 0:
             print(f"  Charged           ${float(actual_cost):.4f}  (measured)")
             delta = baseline - float(actual_cost)
             if delta > 0 and baseline > 0:
-                print(f"  Difference        ${delta:.4f}  ({delta / baseline * 100:.1f}% below basis)")
+                print(
+                    f"  Difference        ${delta:.4f}  ({delta / baseline * 100:.1f}% below basis)"
+                )
             elif delta < 0:
                 # Never render a negative saving as a saving.
                 print(f"  Difference        ${abs(delta):.4f} above basis")
@@ -4857,9 +4861,7 @@ def cmd_leaderboard(args: CommandArgs) -> None:
     model_stats: list[dict[str, object]] = []
     for u in usage:
         model = u.model or "unknown"
-        cost = calculate_request_cost_baseline(
-            model, u.total_input_tokens, u.total_output_tokens
-        )
+        cost = calculate_request_cost_baseline(model, u.total_input_tokens, u.total_output_tokens)
         obs = measured.get(model)
         model_stats.append(
             {

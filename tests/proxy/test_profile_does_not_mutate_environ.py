@@ -150,6 +150,4 @@ def test_doctor_does_not_claim_the_user_enabled_trace(home: Path, tmp_path: Path
     assert "TOKENPAK_TRACE=1" not in line, (
         f"doctor still claims the user set TOKENPAK_TRACE: {line!r}"
     )
-    assert "profile default" in line, (
-        f"doctor should attribute trace to the profile, got: {line!r}"
-    )
+    assert "profile default" in line, f"doctor should attribute trace to the profile, got: {line!r}"

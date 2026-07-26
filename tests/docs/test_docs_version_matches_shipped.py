@@ -42,9 +42,7 @@ def _is_historical(path: Path) -> bool:
 
 def _doc_files() -> list[Path]:
     patterns = ("*.md", "*.yaml", "*.yml")
-    return sorted(
-        p for pattern in patterns for p in DOCS.rglob(pattern) if not _is_historical(p)
-    )
+    return sorted(p for pattern in patterns for p in DOCS.rglob(pattern) if not _is_historical(p))
 
 
 def _versions_in_markdown(text: str) -> Iterator[str]:
