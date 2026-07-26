@@ -14,10 +14,33 @@ _Nothing yet._
 > two top rungs — alongside a large pass over what the CLI reports. Surfaces that printed
 > constructed numbers now print a measurement or say none was taken.
 >
-> **On the version number.** Six public symbols are removed, which by strict SemVer calls for a
+> **On the version number.** Eleven public symbols are removed, which by strict SemVer calls for a
 > major. This is shipped as a minor on an explicit project ruling, and is recorded here rather
 > than left for you to discover: if you depend on `tokenpak` with `>=1.15,<2.0` or without a pin,
 > read the upgrade notes before taking this one.
+>
+> Measured against 1.15.0 as published, by the project's own snapshot gate
+> (`scripts/release_gate/api_snapshot_diff.py`), the removals are:
+>
+> ```
+> tokenpak.licensing.TIER_TEAM
+> tokenpak.licensing.TIER_ENTERPRISE
+> tokenpak.cli.commands.license_cmd.DEFAULT_UPGRADE_URL
+> tokenpak.cli.commands.status.DEFAULT_UPGRADE_URL
+> tokenpak.cli.commands.preview.cmd_preview          # module removed
+> tokenpak.cli.commands.preview.register_preview     # module removed
+> tokenpak.companion.codex.launcher.FallbackDecision
+> tokenpak.companion.codex.launcher.PreflightEvaluation
+> tokenpak.companion.codex.launcher.PreflightEvidence
+> tokenpak.companion.codex.launcher.PreflightStatus
+> tokenpak.companion.codex.launcher.TemporarySessionChoice
+> ```
+>
+> Only the first two are discussed below as breaking; the rest are internal
+> surfaces the snapshot gate counts as public, and they are listed so the number
+> can be checked rather than taken on trust. `tokenpak preview` itself is
+> unaffected — the command works and is on the supported surface; what moved is
+> the module that registered it.
 
 ### Changed
 
