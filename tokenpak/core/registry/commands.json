@@ -60,10 +60,11 @@
       "command": "upgrade",
       "tier": "oss",
       "category": "Control",
-      "description": "Open the TokenPak Pro upgrade page",
+      "hidden": true,
+      "description": "Report that public TokenPak Pro enrollment is unavailable",
       "aliases": [],
       "usage": "/tokenpak upgrade [--print-url]",
-      "detail": "Opens the public Pro upgrade page in your default browser. Use --print-url for non-interactive scripts.",
+      "detail": "Compatibility shim. Public TokenPak Pro enrollment is not available, so this opens nothing and reports that state. --print-url prints TOKENPAK_UPGRADE_URL if an operator has set it, and exits non-zero when they have not.",
       "related": [
         "license",
         "plan",
@@ -442,6 +443,84 @@
       ]
     },
     {
+      "command": "replay",
+      "tier": "oss",
+      "category": "Visibility",
+      "description": "Inspect and re-run captured sessions",
+      "aliases": [],
+      "usage": "/tokenpak replay [list|show|run] <session_id>",
+      "detail": "Browse saved request/response pairs and replay them for testing or debugging.",
+      "related": [
+        "diff",
+        "debug"
+      ]
+    },
+    {
+      "command": "fingerprint",
+      "tier": "pro",
+      "category": "Optimization",
+      "description": "Fingerprint sync and cache management",
+      "aliases": [],
+      "usage": "/tokenpak fingerprint [sync|clear|status]",
+      "detail": "Manages content fingerprints used for deduplication and cache invalidation.",
+      "related": [
+        "index",
+        "compression"
+      ]
+    },
+    {
+      "command": "last",
+      "tier": "pro",
+      "category": "Visibility",
+      "description": "Show the last request summary",
+      "aliases": [],
+      "usage": "/tokenpak last",
+      "detail": "Quick summary of the most recent proxied request: model, tokens, cost, latency.",
+      "related": [
+        "replay",
+        "metrics"
+      ]
+    },
+    {
+      "command": "serve",
+      "tier": "oss",
+      "category": "Infrastructure",
+      "description": "Start proxy/telemetry server (low-level)",
+      "aliases": [],
+      "usage": "/tokenpak serve [--port PORT] [--telemetry] [--ingest]",
+      "detail": "Low-level server startup. Used for multi-node deployments, telemetry ingestion, and custom port bindings.",
+      "related": [
+        "start",
+        "workflow"
+      ]
+    },
+    {
+      "command": "agent",
+      "tier": "team",
+      "category": "Infrastructure",
+      "description": "Agent coordination (locks, registry)",
+      "aliases": [],
+      "usage": "/tokenpak agent [status|list|register|deregister]",
+      "detail": "Manages agent registrations in a shared proxy cluster. Enables multi-agent load balancing.",
+      "related": [
+        "lock",
+        "serve",
+        "workflow"
+      ]
+    },
+    {
+      "command": "lock",
+      "tier": "team",
+      "category": "Infrastructure",
+      "description": "File lock management",
+      "aliases": [],
+      "usage": "/tokenpak lock [list|release|status]",
+      "detail": "Manages distributed file locks for concurrent agent access control.",
+      "related": [
+        "agent"
+      ]
+    },
+    {
       "command": "run",
       "tier": "team",
       "category": "Automation",
@@ -511,197 +590,43 @@
     {
       "command": "models",
       "tier": "pro",
-      "category": "Automation",
-      "description": "Manage event triggers",
+      "category": "Visibility",
+      "description": "Show model usage and token stats from the monitor DB",
       "aliases": [],
-      "usage": "/tokenpak trigger [list|add|remove|fire] <name>",
-      "detail": "Define conditional triggers that fire macros or routes based on request patterns.",
+      "usage": "/tokenpak models [MODEL] [--raw]",
+      "detail": "Per-model breakdown of request count, token usage, cache hit rate, compression savings, cost, and average latency. Optionally filter by model name (partial match).",
       "related": [
-        "macro",
-        "workflow"
+        "cost",
+        "savings",
+        "metrics"
       ]
     },
     {
-      "command": "creds",
-      "tier": "oss",
-      "category": "Configuration",
-      "description": "Discover credentials across platforms and run diagnostics",
-      "aliases": [],
-      "usage": "/tokenpak creds",
-      "detail": "Discover API credentials across installed tools and platforms, and diagnose credential issues.",
-      "related": [
-        "config",
-        "doctor",
-        "setup"
-      ]
-    },
-    {
-      "command": "home",
-      "tier": "oss",
-      "category": "Configuration",
-      "description": "Manage tokenpak's on-disk configuration",
-      "aliases": [],
-      "usage": "/tokenpak home {path,init,validate,explain,migrate}",
-      "detail": "Inspect and manage TokenPak's on-disk home. `migrate` performs a non-destructive copy from a legacy home.",
-      "related": []
-    },
-    {
-      "command": "init",
-      "tier": "oss",
-      "category": "Configuration",
-      "description": "Guided first-run setup (API key, port, vault path)",
-      "aliases": [],
-      "usage": "/tokenpak init",
-      "detail": "Guided first-run setup that configures your API key, proxy port, and vault path.",
-      "related": [
-        "setup",
-        "config"
-      ]
-    },
-    {
-      "command": "integrate",
-      "tier": "oss",
-      "category": "Configuration",
-      "description": "Show setup instructions for LLM clients (Claude Code, Cursor, Cline, Continue, Aider, SDKs)",
-      "aliases": [],
-      "usage": "/tokenpak integrate [client]",
-      "detail": "Client-specific routing instructions for Claude Code, Cursor, Cline, Continue, Aider and the SDKs.",
-      "related": []
-    },
-    {
-      "command": "setup",
-      "tier": "oss",
-      "category": "Configuration",
-      "description": "Interactive first-time configuration wizard",
-      "aliases": [],
-      "usage": "/tokenpak setup",
-      "detail": "Interactive wizard for first-time configuration of TokenPak.",
-      "related": [
-        "init",
-        "config"
-      ]
-    },
-    {
-      "command": "tip",
-      "tier": "oss",
-      "category": "Configuration",
-      "description": "TokenPak Integration Protocol — validate, inspect, conformance",
-      "aliases": [],
-      "usage": "/tokenpak tip [validate|inspect|conformance|doctor|observe|sources|scaffold-adapter]",
-      "detail": "Work with the TokenPak Integration Protocol (TIP): validate and inspect adapters, run conformance checks, and scaffold new integrations.",
-      "related": [
-        "config",
-        "doctor"
-      ]
-    },
-    {
-      "command": "claude",
-      "tier": "oss",
-      "category": "Control",
-      "description": "Launch Claude Code with the companion active",
-      "aliases": [],
-      "usage": "/tokenpak claude",
-      "detail": "Launch Claude Code with the TokenPak companion active so requests route through the proxy.",
-      "related": [
-        "codex",
-        "start",
-        "status"
-      ]
-    },
-    {
-      "command": "codex",
-      "tier": "oss",
-      "category": "Control",
-      "description": "Launch Codex with the companion active",
-      "aliases": [],
-      "usage": "/tokenpak codex",
-      "detail": "Launch Codex with the TokenPak companion active so requests route through the proxy.",
-      "related": [
-        "claude",
-        "start",
-        "status"
-      ]
-    },
-    {
-      "command": "features",
-      "tier": "oss",
-      "category": "Control",
-      "description": "List entitlement state for every gated feature",
-      "aliases": [],
-      "usage": "/tokenpak features [--tier TIER]",
-      "detail": "Lists every gated feature and whether this install's entitlement enables it.",
-      "related": []
-    },
-    {
-      "command": "uninstall",
-      "tier": "oss",
-      "category": "Control",
-      "description": "Un-route (--soft) or purge state + remove package (--hard)",
-      "aliases": [],
-      "usage": "/tokenpak uninstall [--soft|--hard]",
-      "detail": "Un-route clients (--soft) or purge state and remove the package (--hard).",
-      "related": []
-    },
-    {
-      "command": "agent",
-      "tier": "team",
-      "category": "Infrastructure",
-      "description": "Agent coordination (locks, registry)",
-      "aliases": [],
-      "usage": "/tokenpak agent [status|list|register|deregister]",
-      "detail": "Manages agent registrations in a shared proxy cluster. Enables multi-agent load balancing.",
-      "related": [
-        "lock",
-        "serve",
-        "workflow"
-      ]
-    },
-    {
-      "command": "lock",
-      "tier": "team",
-      "category": "Infrastructure",
-      "description": "File lock management",
-      "aliases": [],
-      "usage": "/tokenpak lock [list|release|status]",
-      "detail": "Manages distributed file locks for concurrent agent access control.",
-      "related": [
-        "agent"
-      ]
-    },
-    {
-      "command": "serve",
-      "tier": "oss",
-      "category": "Infrastructure",
-      "description": "Start proxy/telemetry server (low-level)",
-      "aliases": [],
-      "usage": "/tokenpak serve [--port PORT] [--telemetry] [--ingest]",
-      "detail": "Low-level server startup. Used for multi-node deployments, telemetry ingestion, and custom port bindings.",
-      "related": [
-        "start",
-        "workflow"
-      ]
-    },
-    {
-      "command": "compress",
-      "tier": "oss",
-      "category": "Optimization",
-      "description": "Compress text/JSON/code content",
-      "aliases": [],
-      "usage": "/tokenpak compress [--file PATH]",
-      "detail": "Compress text, JSON or code content and report the measured result.",
-      "related": []
-    },
-    {
-      "command": "fingerprint",
+      "command": "report",
       "tier": "pro",
-      "category": "Optimization",
-      "description": "Fingerprint sync and cache management",
+      "category": "Visibility",
+      "description": "Generate and display daily savings report",
       "aliases": [],
-      "usage": "/tokenpak fingerprint [sync|clear|status]",
-      "detail": "Manages content fingerprints used for deduplication and cache invalidation.",
+      "usage": "/tokenpak report [--markdown] [--json]",
+      "detail": "Generates a daily savings summary showing token reductions, cost saved, and model efficiency. Output as terminal (default), markdown, or JSON.",
       "related": [
-        "index",
-        "compression"
+        "savings",
+        "cost",
+        "metrics"
+      ]
+    },
+    {
+      "command": "goals",
+      "tier": "pro",
+      "category": "Visibility",
+      "description": "Manage savings goals and track progress",
+      "aliases": [],
+      "usage": "/tokenpak goals [list|add|edit|delete|detail|export]",
+      "detail": "Define token or cost savings targets and monitor progress with pace tracking (ahead/on-track/behind). Supports goal history and comparison.",
+      "related": [
+        "savings",
+        "budget",
+        "report"
       ]
     },
     {
@@ -733,18 +658,118 @@
       ]
     },
     {
-      "command": "goals",
-      "tier": "pro",
-      "category": "Visibility",
-      "description": "Manage savings goals and track progress",
+      "command": "tip",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "TokenPak Integration Protocol — validate, inspect, conformance",
       "aliases": [],
-      "usage": "/tokenpak goals [list|add|edit|delete|detail|export]",
-      "detail": "Define token or cost savings targets and monitor progress with pace tracking (ahead/on-track/behind). Supports goal history and comparison.",
+      "usage": "/tokenpak tip [validate|inspect|conformance|doctor|observe|sources|scaffold-adapter]",
+      "detail": "Work with the TokenPak Integration Protocol (TIP): validate and inspect adapters, run conformance checks, and scaffold new integrations.",
+      "related": [
+        "config",
+        "doctor"
+      ]
+    },
+    {
+      "command": "creds",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Discover credentials across platforms and run diagnostics",
+      "aliases": [],
+      "usage": "/tokenpak creds",
+      "detail": "Discover API credentials across installed tools and platforms, and diagnose credential issues.",
+      "related": [
+        "config",
+        "doctor",
+        "setup"
+      ]
+    },
+    {
+      "command": "claude",
+      "tier": "oss",
+      "category": "Control",
+      "description": "Launch Claude Code with the companion active",
+      "aliases": [],
+      "usage": "/tokenpak claude",
+      "detail": "Launch Claude Code with the TokenPak companion active so requests route through the proxy.",
+      "related": [
+        "codex",
+        "start",
+        "status"
+      ]
+    },
+    {
+      "command": "codex",
+      "tier": "oss",
+      "category": "Control",
+      "description": "Launch Codex with the companion active",
+      "aliases": [],
+      "usage": "/tokenpak codex",
+      "detail": "Launch Codex with the TokenPak companion active so requests route through the proxy.",
+      "related": [
+        "claude",
+        "start",
+        "status"
+      ]
+    },
+    {
+      "command": "prove",
+      "tier": "oss",
+      "category": "Visibility",
+      "description": "A/B value proof: direct API vs TokenPak",
+      "aliases": [],
+      "usage": "/tokenpak prove [create|run|show|list|providers]",
+      "detail": "Run A/B value proofs comparing direct API calls against TokenPak to quantify savings.",
       "related": [
         "savings",
-        "budget",
-        "report"
+        "cost"
       ]
+    },
+    {
+      "command": "init",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Guided first-run setup (API key, port, vault path)",
+      "aliases": [],
+      "usage": "/tokenpak init",
+      "detail": "Guided first-run setup that configures your API key, proxy port, and vault path.",
+      "related": [
+        "setup",
+        "config"
+      ]
+    },
+    {
+      "command": "setup",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Interactive first-time configuration wizard",
+      "aliases": [],
+      "usage": "/tokenpak setup",
+      "detail": "Interactive wizard for first-time configuration of TokenPak.",
+      "related": [
+        "init",
+        "config"
+      ]
+    },
+    {
+      "command": "compress",
+      "tier": "oss",
+      "category": "Optimization",
+      "description": "Compress text/JSON/code content",
+      "aliases": [],
+      "usage": "/tokenpak compress [--file PATH]",
+      "detail": "Compress text, JSON or code content and report the measured result.",
+      "related": []
+    },
+    {
+      "command": "features",
+      "tier": "oss",
+      "category": "Control",
+      "description": "List entitlement state for every gated feature",
+      "aliases": [],
+      "usage": "/tokenpak features [--tier TIER]",
+      "detail": "Lists every gated feature and whether this install's entitlement enables it.",
+      "related": []
     },
     {
       "command": "help",
@@ -757,17 +782,24 @@
       "related": []
     },
     {
-      "command": "last",
-      "tier": "pro",
-      "category": "Visibility",
-      "description": "Show the last request summary",
+      "command": "home",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Manage tokenpak's on-disk configuration",
       "aliases": [],
-      "usage": "/tokenpak last",
-      "detail": "Quick summary of the most recent proxied request: model, tokens, cost, latency.",
-      "related": [
-        "replay",
-        "metrics"
-      ]
+      "usage": "/tokenpak home {path,init,validate,explain,migrate}",
+      "detail": "Inspect and manage TokenPak's on-disk home. `migrate` performs a non-destructive copy from a legacy home.",
+      "related": []
+    },
+    {
+      "command": "integrate",
+      "tier": "oss",
+      "category": "Configuration",
+      "description": "Show setup instructions for LLM clients (Claude Code, Cursor, Cline, Continue, Aider, SDKs)",
+      "aliases": [],
+      "usage": "/tokenpak integrate [client]",
+      "detail": "Client-specific routing instructions for Claude Code, Cursor, Cline, Continue, Aider and the SDKs.",
+      "related": []
     },
     {
       "command": "menu",
@@ -790,44 +822,14 @@
       "related": []
     },
     {
-      "command": "prove",
+      "command": "uninstall",
       "tier": "oss",
-      "category": "Visibility",
-      "description": "A/B value proof: direct API vs TokenPak",
+      "category": "Control",
+      "description": "Un-route (--soft) or purge state + remove package (--hard)",
       "aliases": [],
-      "usage": "/tokenpak prove [create|run|show|list|providers]",
-      "detail": "Run A/B value proofs comparing direct API calls against TokenPak to quantify savings.",
-      "related": [
-        "savings",
-        "cost"
-      ]
-    },
-    {
-      "command": "replay",
-      "tier": "oss",
-      "category": "Visibility",
-      "description": "Inspect and re-run captured sessions",
-      "aliases": [],
-      "usage": "/tokenpak replay [list|show|run] <session_id>",
-      "detail": "Browse saved request/response pairs and replay them for testing or debugging.",
-      "related": [
-        "diff",
-        "debug"
-      ]
-    },
-    {
-      "command": "report",
-      "tier": "pro",
-      "category": "Visibility",
-      "description": "Generate and display daily savings report",
-      "aliases": [],
-      "usage": "/tokenpak report [--markdown] [--json]",
-      "detail": "Generates a daily savings summary showing token reductions, cost saved, and model efficiency. Output as terminal (default), markdown, or JSON.",
-      "related": [
-        "savings",
-        "cost",
-        "metrics"
-      ]
+      "usage": "/tokenpak uninstall [--soft|--hard]",
+      "detail": "Un-route clients (--soft) or purge state and remove the package (--hard).",
+      "related": []
     }
   ]
 }

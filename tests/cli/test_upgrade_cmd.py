@@ -186,27 +186,58 @@ def test_status_unreachable_path_prints_no_cta(monkeypatch, capsys):
 # --------------------------------------------------------------------------
 
 
+#: Tiers retired as products. They are no longer module constants — the names
+#: are gone from the product and survive only as values that may arrive from
+#: outside, in a license issued before the retirement.
+RETIRED_TIERS = ("team", "enterprise")
+
+
 def test_public_edition_collapses_internal_tiers():
     assert _lic.public_edition(_lic.TIER_FREE) == _lic.EDITION_BASE
-    for tier in (_lic.TIER_PRO, _lic.TIER_TEAM, _lic.TIER_ENTERPRISE):
+    for tier in (_lic.TIER_PRO, *RETIRED_TIERS):
         assert _lic.public_edition(tier) == _lic.EDITION_PRO
 
 
 def test_team_and_enterprise_are_not_offerings():
     assert _lic.is_public_plan(_lic.TIER_FREE) is True
     assert _lic.is_public_plan(_lic.TIER_PRO) is True
-    assert _lic.is_public_plan(_lic.TIER_TEAM) is False
-    assert _lic.is_public_plan(_lic.TIER_ENTERPRISE) is False
+    for tier in RETIRED_TIERS:
+        assert _lic.is_public_plan(tier) is False
 
     tiers = {plan["tier"] for plan in _lic.discover_plans()}
-    assert _lic.TIER_TEAM not in tiers
-    assert _lic.TIER_ENTERPRISE not in tiers
+    for tier in RETIRED_TIERS:
+        assert tier not in tiers
+    # Nor may they be offered as choices anywhere derived from the tier list.
+    assert not set(RETIRED_TIERS) & set(_lic.known_tiers())
+
+
+def test_a_retired_tier_still_unlocks_what_it_was_sold_as():
+    """Retired as a product, honoured as an entitlement.
+
+    Collapsing the taxonomy dropped these tiers from the gate as well as from
+    the catalogue, so a license carrying one loaded, reported its tier, and
+    unlocked nothing — a silent downgrade to Free on a paid credential. The
+    issuing service still accepts tier over oss/pro/team/enterprise, so the
+    client has to honour what the issuer can produce.
+    """
+    gated = next(f for f, t in _lic._GATES.items() if t == _lic.TIER_PRO)
+    for tier in RETIRED_TIERS:
+        lic = _lic.License(tier=tier, status="active", key="TEST")
+        assert _lic.is_feature_enabled(gated, lic=lic) is True, (
+            f"a {tier} license must still unlock {gated}"
+        )
+        assert _lic.effective_tier(tier) == _lic.TIER_PRO
+
+    free_lic = _lic.License(tier=_lic.TIER_FREE, status="active", key="TEST")
+    assert _lic.is_feature_enabled(gated, lic=free_lic) is False, (
+        "guard the guard: the gate must still deny Free"
+    )
 
 
 def test_internal_tier_label_still_available_for_diagnostics():
-    """The taxonomy is preserved — it is just not the public vocabulary."""
-    assert _lic.internal_tier_label(_lic.TIER_TEAM) == "team"
-    assert _lic.internal_tier_label(_lic.TIER_ENTERPRISE) == "enterprise"
+    """A retired tier reports its own name, not a guess at what it maps to."""
+    for tier in RETIRED_TIERS:
+        assert _lic.internal_tier_label(tier).lower() == tier
 
 
 def test_plan_output_names_no_purchasable_tier(capsys):
