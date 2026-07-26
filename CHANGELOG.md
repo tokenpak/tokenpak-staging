@@ -55,6 +55,14 @@ _Nothing yet._
   `watch`, listed as a "live terminal savings dashboard" while its own help says
   it is not implemented, and `last`, a stub — and both now say so.
 
+  `tokenpak --help` is default discovery too, and it was a separate
+  hand-maintained list that no test paired against the allowlist. It went on
+  advertising five excluded verbs, `last` among them, described as "Show details
+  of last compressed request" while the command printed a first-run welcome
+  banner. It now lists only supported commands, and a test holds it there.
+  `fingerprint`, `optimize`, `prune` and `template` work and are still reachable;
+  they lost the listing, not the implementation.
+
 - **`tokenpak status` leads with runtime, routing, and context operation; savings
   follow.** Before "how much did this save me" comes "is it running, is my client
   actually routed through it, and is it operating on my context". The routing line
