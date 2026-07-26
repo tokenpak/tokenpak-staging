@@ -301,12 +301,15 @@ def test_main_proxy_detection_exception_path(tmp_path):
 
     import httpx as _httpx
 
-    with patch.dict(
-        os.environ,
-        {
-            "TOKENPAK_COMPANION_JOURNAL_DIR": str(journal_dir),
-            "TOKENPAK_COMPANION_PROXY_URL": "",  # no explicit proxy
-        },
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "TOKENPAK_COMPANION_JOURNAL_DIR": str(journal_dir),
+                "TOKENPAK_COMPANION_PROXY_URL": "",  # no explicit proxy
+            },
+        ),
+        patch.dict(os.environ, {}, clear=False),
     ):
         # The launcher passes a copy of the ambient environment to the child, so
         # an inherited ANTHROPIC_BASE_URL would satisfy the assertion below
