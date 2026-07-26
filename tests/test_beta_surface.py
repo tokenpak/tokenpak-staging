@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -153,6 +154,23 @@ def test_default_help_advertises_only_supported_commands():
     advertised = {c["command"] for c in help_cmd.discoverable_commands()}
     off_list = advertised - beta_surface.supported_commands()
     assert not off_list, f"default discovery advertises unsupported commands: {sorted(off_list)}"
+
+
+def test_argparse_help_advertises_only_supported_commands(capsys):
+    """`tokenpak --help` is default discovery too.
+
+    The tiered `help` command derives its listing from the registry; this one
+    is a hand-maintained string, which is the drift the allowlist exists to
+    catch. It advertised `last` — a stub — as "Show details of last compressed
+    request" for a full release after the classification said otherwise.
+    """
+    from tokenpak._cli_core import _print_quick_help
+
+    _print_quick_help()
+    advertised = set(re.findall(r"^ {2}([a-z][a-z-]+) {2,}\S", capsys.readouterr().out, re.M))
+    assert advertised, "parsed no commands out of the --help output; the format changed"
+    off_list = advertised - beta_surface.supported_commands()
+    assert not off_list, f"`tokenpak --help` advertises unsupported commands: {sorted(off_list)}"
 
 
 def test_essential_and_intermediate_help_are_subsets_of_the_allowlist():

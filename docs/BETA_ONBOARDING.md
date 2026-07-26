@@ -146,7 +146,7 @@ tokenpak tip conformance
 
 ## 5. TIP capability inspection
 
-TokenPak Integration Protocol (TIP) is the open contract layer that
+TokenPak Integrity Protocol (TIP) is the open contract layer that
 adapter providers and platform integrations declare against. List
 every capability label this install knows about:
 
