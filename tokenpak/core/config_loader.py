@@ -175,13 +175,34 @@ def _bool_env(val: str) -> bool:
     return val.lower() in ("1", "true", "yes", "on")
 
 
+#: Why the last load produced an empty config, when the reason was not
+#: "there is no config". ``None`` means the last load was clean.
+_load_error: tuple[Path, str] | None = None
+
+
+def config_load_error() -> tuple[Path, str] | None:
+    """The unreadable config path and parse error, or ``None``.
+
+    ``load_config`` returns ``{}`` for both "no config exists" and "the config
+    exists but could not be parsed", and callers could not tell them apart. So
+    ``tokenpak start`` on a config with a YAML syntax error ran validation
+    against an empty dict and told the user their **API key** was missing —
+    a confidently wrong diagnosis pointing at the wrong file — then exited 3
+    ("not configured") for a config that very much existed.
+    """
+    return _load_error
+
+
 def load_config(path: str | None = None) -> ConfigDict:
     """Load config from YAML file. Returns empty dict if file missing.
 
     On first call (no custom *path*), runs automatic JSON-to-YAML migration
     so users never need to run ``tokenpak config migrate`` manually.
+
+    An empty return is ambiguous by design (callers rely on it); consult
+    ``config_load_error()`` to distinguish absent from unreadable.
     """
-    global _config
+    global _config, _load_error
     if _config is not None and path is None:
         return _config
 
@@ -190,10 +211,12 @@ def load_config(path: str | None = None) -> ConfigDict:
         _maybe_migrate_json_to_yaml()
 
     config_path = Path(path) if path else config_read_path()
+    _load_error = None
     if config_path.exists():
         try:
             _config = _load_yaml(str(config_path))
-        except Exception:
+        except Exception as exc:
+            _load_error = (config_path, str(exc))
             _config = {}
     else:
         _config = {}

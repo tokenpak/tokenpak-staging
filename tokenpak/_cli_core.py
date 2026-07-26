@@ -1303,6 +1303,7 @@ def cmd_start(args: CommandArgs) -> int:
     import subprocess
 
     from tokenpak.cli.exit_codes import (
+        EXIT_CORRUPT_STATE,
         EXIT_NOT_CONFIGURED,
         EXIT_OK,
         EXIT_RUNTIME_UNAVAILABLE,
@@ -1312,10 +1313,28 @@ def cmd_start(args: CommandArgs) -> int:
     port = int(os.environ.get("TOKENPAK_PORT", "8766"))
 
     # Validate config on boot (P1-T5)
-    from tokenpak.core.config_loader import load_config
+    from tokenpak.core.config_loader import config_load_error, load_config
+
+    _config = load_config()
+
+    # A config that exists but cannot be parsed is not a missing config.
+    # Validating the empty dict the loader falls back to produced a confident
+    # and wrong diagnosis — "Required field 'api_keys' is missing" — for a
+    # file whose real problem was a YAML syntax error on line 2.
+    _bad = config_load_error()
+    if _bad is not None:
+        _path, _why = _bad
+        import sys as _sys
+
+        print(f"\n✗ Config file could not be parsed: {_path}", file=_sys.stderr)
+        for _line in str(_why).splitlines():
+            print(f"    {_line}", file=_sys.stderr)
+        print("\nThe file exists but is not valid YAML. Nothing was started.", file=_sys.stderr)
+        print("  • Fix the syntax above, or", file=_sys.stderr)
+        print("  • Move it aside and run 'tokenpak setup' to write a fresh one", file=_sys.stderr)
+        return EXIT_CORRUPT_STATE
 
     try:
-        _config = load_config()
         from tokenpak.core.config_validator import ConfigValidator
 
         validator_factory = cast(Callable[[], ConfigValidator], ConfigValidator)
@@ -2510,10 +2529,26 @@ def cmd_preview(args: CommandArgs) -> None:
 
     # --json is a machine-readable contract: it emits JSON on every path,
     # including failures. A caller parsing stdout must never hit prose.
+    # One code per state, from the documented table. These all exited 1, so a
+    # caller could not tell "you gave me nothing to measure" from "the
+    # compressor failed" — and the --json body already said `no_data` while
+    # the exit code said generic-failure.
+    from tokenpak.cli.exit_codes import (
+        EXIT_FAILURE,
+        EXIT_NO_DATA,
+        EXIT_RUNTIME_UNAVAILABLE,
+    )
+
+    _state_exit = {
+        PreviewState.NO_DATA: EXIT_NO_DATA,
+        PreviewState.UNAVAILABLE: EXIT_RUNTIME_UNAVAILABLE,
+        PreviewState.ERROR: EXIT_FAILURE,
+    }
+
     if args.json:
         print(json.dumps(result.to_json(), indent=2))
         if result.state is not PreviewState.MEASURED:
-            sys.exit(1)
+            sys.exit(_state_exit[result.state])
         return
 
     if result.state is not PreviewState.MEASURED:
@@ -2526,7 +2561,7 @@ def cmd_preview(args: CommandArgs) -> None:
         print(f"{label}: {result.reason}")
         if result.state is PreviewState.NO_DATA:
             print("Usage: tokenpak preview <text> [--file FILE] [--json|--raw|--verbose]")
-        sys.exit(1)
+        sys.exit(_state_exit[result.state])
 
     inp = result.input_tokens or 0
     out = result.output_tokens or 0

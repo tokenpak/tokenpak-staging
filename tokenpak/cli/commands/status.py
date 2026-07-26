@@ -998,11 +998,26 @@ def _print_runtime_and_routing(
         row("Proxy", "unresponsive", f"PID {snap.pid} is alive but not answering")
     else:
         row("Proxy", "not running", f"nothing listening on {port}")
-    row(
-        "Config",
-        "found" if snap.configured else "not found",
-        snap.config_path or "run `tokenpak setup`",
-    )
+    # "found" meant "a file is at that path", which reported a config with a
+    # YAML syntax error as healthy — the one state where the user most needs
+    # to be told something is wrong.
+    _cfg_error = None
+    try:
+        from tokenpak.core.config_loader import config_load_error, load_config
+
+        load_config()
+        _cfg_error = config_load_error()
+    except Exception:
+        _cfg_error = None
+
+    if _cfg_error is not None:
+        row("Config", "unreadable", f"{_cfg_error[0]} — not valid YAML")
+    else:
+        row(
+            "Config",
+            "found" if snap.configured else "not found",
+            snap.config_path or "run `tokenpak setup`",
+        )
     if uptime_s > 0:
         row("Uptime", _fmt_uptime(uptime_s))
     if errors > 0:
