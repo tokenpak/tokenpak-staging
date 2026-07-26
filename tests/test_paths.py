@@ -318,3 +318,18 @@ def test_migration_advisory_silent_on_a_canonical_install(fake_home):
 
     assert _paths.is_legacy_active() is False
     assert _paths.needs_migration() is False
+
+
+def test_empty_legacy_that_reads_resolve_to_is_still_worth_migrating(fake_home):
+    """The one shape where reads and writes disagree — say so.
+
+    A leftover empty ``~/.tokenpak`` is where reads land (presence order) while
+    writes correctly start canonical. Nothing is lost, but the two resolvers
+    disagree until it is moved or removed, so the advisory fires.
+    """
+    (fake_home / _paths.LEGACY_DIRNAME).mkdir()
+
+    assert _paths.home() == fake_home / _paths.LEGACY_DIRNAME
+    assert _paths.write_home() == fake_home / _paths.CANONICAL_DIRNAME
+    assert _paths.needs_migration() is True
+    assert _paths.is_legacy_active() is True

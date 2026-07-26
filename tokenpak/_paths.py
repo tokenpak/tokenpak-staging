@@ -350,13 +350,18 @@ def needs_migration() -> bool:
     leaves the legacy tree in place (rename-after-soak, not delete) so
     no user state is destroyed.
 
-    Keyed on where the state *is*, not on which directories exist. Asking
-    "does ``~/.tpk`` exist" answered no for the population that most needs
-    telling — an install whose state is in the legacy home beside an empty
-    canonical directory, which is precisely the shape the resolver now
+    Keyed on where reads actually resolve, not on which directories exist.
+    Asking "does ``~/.tpk`` exist" answered no for the population that most
+    needs telling — an install whose state is in the legacy home beside an
+    empty canonical directory, which is precisely the shape the resolver now
     rescues. It would have been rescued and never told.
+
+    This is deliberately the same question as :func:`is_legacy_active`. An
+    empty legacy directory that reads still resolve to is worth migrating
+    too: it is the one shape where reads and writes disagree, and moving or
+    removing it is what settles them.
     """
-    return _active_home() == legacy_home()
+    return is_legacy_active()
 
 
 def ensure_home(*, mode: int = 0o700) -> Path:
