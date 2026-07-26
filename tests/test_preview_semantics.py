@@ -94,7 +94,11 @@ def test_duration_is_measured_not_hardcoded():
         run_preview(_high_entropy(20), input_source="t").duration_ms,
     ]
     assert all(d is not None and d > 0 for d in durations)
-    assert 2.3 not in durations
+    # A real measurement may legitimately land on 2.3ms once — small input, fast
+    # runner — and it did, on one Python version and not the others. What the
+    # simulation did was land there *every* time, which is what this asserts.
+    # The ratio check above is already guarded this way; durations were not.
+    assert durations.count(2.3) < len(durations), f"duration looks hardcoded: {durations}"
     assert len(set(durations)) > 1, f"durations look hardcoded: {durations}"
 
 
