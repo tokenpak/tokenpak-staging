@@ -7,9 +7,16 @@ this module rather than building ``Path.home() / ".tokenpak"`` ad hoc.
 
 Resolution order:
     1. ``TOKENPAK_HOME`` env var (operator override, e.g. for sandboxes)
-    2. ``~/.tpk/`` (canonical default — Glossary 08 §TPK)
-    3. ``~/.tokenpak/`` (legacy fallback, only when ``~/.tpk/`` is absent
-       AND the legacy directory exists — preserves zero-touch upgrade)
+    2. whichever home already **holds state**, canonical preferred — so an
+       existing install is never moved out from under its own readers by a
+       directory that happened to get created
+    3. ``~/.tpk/`` if it exists (canonical default)
+    4. ``~/.tokenpak/`` if it exists (legacy fallback — zero-touch upgrade)
+    5. ``~/.tpk/``
+
+A *new* install always starts canonical: :func:`write_home` will not begin one
+in the legacy directory. An *existing* legacy install keeps reading and writing
+where it already lives until ``tokenpak config migrate`` moves it explicitly.
 
 Layout:
     <home>/
@@ -116,7 +123,7 @@ def _active_home() -> Optional[Path]:
     """The home this installation's state actually lives in, or ``None``.
 
     ``None`` means neither location holds anything — there is no install to
-    preserve, so the caller is free to apply the Std 33 §2 presence order.
+    preserve, so the caller is free to apply the documented presence order.
     """
     canonical = Path.home() / CANONICAL_DIRNAME
     if _holds_state(canonical):
@@ -132,7 +139,7 @@ def home() -> Path:
 
     Read resolution is compatibility-first so existing installs keep working:
     ``TOKENPAK_HOME`` → whichever home *holds state*, canonical preferred →
-    then the Std 33 §2 presence order, ``~/.tpk`` if present → ``~/.tokenpak``
+    then the documented presence order, ``~/.tpk`` if present → ``~/.tokenpak``
     if present → ``~/.tpk``.
 
     The content check is the layer above the presence order, and it is there

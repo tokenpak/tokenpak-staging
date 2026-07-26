@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for tokenpak._paths — Std 33 §2 resolution + §5 under() contract.
+"""Tests for tokenpak._paths — home resolution and the under() contract.
 
 Covers P-PATHS-01a (resolver + fail-loud subdir enum) and P-PATHS-01b
 (``dispatch`` subdir extension).
@@ -24,7 +24,7 @@ def fake_home(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Std 33 §2 resolution order
+# Home resolution order
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def test_ensure_home_idempotent(fake_home):
 
 
 # ---------------------------------------------------------------------------
-# Std 33 §5 under() — allowed subdirs
+# under() — allowed subdirs
 # ---------------------------------------------------------------------------
 
 
@@ -89,7 +89,7 @@ def test_under_allows_std33_subdirs(fake_home, subdir):
 
 
 def test_under_allows_adopted_subdir_paks(fake_home):
-    # paks/ is in active use (pak.py) though not yet in Std 33 §3 text.
+    # paks/ is in active use (pak.py) though not yet in the canonical layout.
     assert _paths.under("paks") == _paths.resolved_home() / "paks"
 
 
@@ -107,12 +107,12 @@ def test_under_allows_multi_segment_under_subdir(fake_home):
     ["config.json", "config.yaml", "license.json", "pricing.json", "alert_state.json"],
 )
 def test_under_allows_top_level_files(fake_home, fname):
-    # Std 33 §5 sanctions under("file") for top-level files.
+    # The resolver contract sanctions under("file") for top-level files.
     assert _paths.under(fname) == _paths.resolved_home() / fname
 
 
 # ---------------------------------------------------------------------------
-# Std 33 §5 under() — fail-loud on unknown subdirs
+# under() — fail-loud on unknown subdirs
 # ---------------------------------------------------------------------------
 
 
@@ -137,7 +137,7 @@ def test_under_does_not_create_directory(fake_home):
 
 
 # ---------------------------------------------------------------------------
-# dispatch/ subdir (Std 33 §3 amendment, approved 2026-05-20)
+# dispatch/ subdir (canonical layout amendment, approved 2026-05-20)
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +217,7 @@ def test_fresh_install_still_starts_canonical(fake_home):
 
 
 def test_empty_legacy_only_still_follows_presence_order(fake_home):
-    """Std 33 §2 is unchanged where neither home holds state."""
+    """The presence order is unchanged where neither home holds state."""
     (fake_home / _paths.LEGACY_DIRNAME).mkdir()
     assert _paths.home() == fake_home / _paths.LEGACY_DIRNAME
     # ...but nothing new is started there.
