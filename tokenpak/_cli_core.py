@@ -410,6 +410,23 @@ def _monitor_db_models(days: int = 30) -> list[MonitorModelRow]:
 # ── Live Proxy Access ─────────────────────────────────────────────────────────
 
 
+def _proxy_base_url() -> str:
+    """Base URL of this install's proxy.
+
+    Honours TOKENPAK_PROXY_URL, then TOKENPAK_PORT, then the default port.
+    Two callers hardcoded ``http://127.0.0.1:8766`` and consulted only
+    TOKENPAK_PROXY_URL, so on a host running a proxy on the default port,
+    `tokenpak stats` under TOKENPAK_PORT=<other> reported *that* proxy's
+    request count and uptime as the user's own — measured numbers, from
+    somebody else's traffic.
+    """
+    explicit = os.environ.get("TOKENPAK_PROXY_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    port = os.environ.get("TOKENPAK_PORT", "8766").strip() or "8766"
+    return f"http://127.0.0.1:{port}"
+
+
 def _proxy_get(path: str, port: Optional[int] = None) -> JsonObject | None:
     """Fetch JSON from running proxy. Returns None if unreachable."""
     import urllib.request as _urlreq
@@ -793,7 +810,7 @@ def _fetch_proxy_uptime(timeout: float = 0.5) -> str:
     try:
         import urllib.request as _urlreq
 
-        proxy_base = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+        proxy_base = _proxy_base_url()
         with _urlreq.urlopen(f"{proxy_base}/health", timeout=timeout) as _r:
             _hdata = json.loads(_r.read())
         uptime_s = _hdata.get("uptime_seconds")
@@ -1979,7 +1996,7 @@ def cmd_stats(args: CommandArgs) -> None:
     try:
         import urllib.request as _urlreq
 
-        proxy_base = os.environ.get("TOKENPAK_PROXY_URL", "http://127.0.0.1:8766")
+        proxy_base = _proxy_base_url()
         with _urlreq.urlopen(f"{proxy_base}/health", timeout=3) as r:
             proxy_data = json.loads(r.read())
     except Exception:
