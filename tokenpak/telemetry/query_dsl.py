@@ -119,8 +119,30 @@ def _default_db_path() -> Path:
     return get_db_path("telemetry.db")
 
 
+class TelemetryUnavailable(Exception):
+    """The telemetry store cannot be read. Not an error about the data."""
+
+
 def _get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path or _default_db_path()))
+    """Open the telemetry store read-only. Never creates it.
+
+    ``sqlite3.connect`` creates the file when it is absent, so *reading*
+    telemetry on a fresh install materialised an empty ``telemetry.db`` — at
+    the ambient umask — and then every query raised
+    ``sqlite3.OperationalError: no such table: tp_events`` as a raw traceback.
+
+    Read paths must not create state, and "there is nothing recorded yet" is
+    a normal condition with a defined representation elsewhere in this module.
+    Callers translate ``TelemetryUnavailable`` into their own unavailable
+    value rather than propagating a stack trace to a user's terminal.
+    """
+    resolved = Path(db_path) if db_path else _default_db_path()
+    if not resolved.exists():
+        raise TelemetryUnavailable(f"no telemetry store at {resolved}")
+    try:
+        conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+    except sqlite3.Error as exc:  # unreadable, locked, not a database
+        raise TelemetryUnavailable(f"cannot read {resolved}: {exc}") from exc
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -132,7 +154,10 @@ def _ts_range(days: int) -> tuple[float, float]:
 
 def get_cost_summary(db_path: str | Path | None = None, days: int = 30) -> CostSummary:
     """Query aggregated cost summary from the telemetry DB."""
-    conn = _get_conn(db_path)
+    try:
+        conn = _get_conn(db_path)
+    except TelemetryUnavailable:
+        return CostSummary(period_days=days)
     try:
         s, e = _ts_range(days)
         cur = conn.cursor()
@@ -165,7 +190,10 @@ def get_cost_summary(db_path: str | Path | None = None, days: int = 30) -> CostS
 
 def get_model_usage(db_path: str | Path | None = None, days: int = 30) -> list[ModelUsage]:
     """Query per-model token usage from the telemetry DB."""
-    conn = _get_conn(db_path)
+    try:
+        conn = _get_conn(db_path)
+    except TelemetryUnavailable:
+        return []
     try:
         s, e = _ts_range(days)
         cur = conn.cursor()
@@ -197,7 +225,12 @@ def get_savings_report(db_path: str | Path | None = None, days: int = 30) -> Sav
     """
     import sqlite3
 
-    conn = _get_conn(db_path)
+    try:
+        conn = _get_conn(db_path)
+    except TelemetryUnavailable:
+        # available=False is the documented "could not read the store"
+        # state, distinct from a healthy store with zero observations.
+        return SavingsReport(available=False)
     try:
         s, e = _ts_range(days)
         cur = conn.cursor()
@@ -254,7 +287,10 @@ def get_recent_events(
     db_path: str | Path | None = None, limit: int = 50
 ) -> list[dict[str, object]]:
     """Fetch the most recent telemetry events up to limit."""
-    conn = _get_conn(db_path)
+    try:
+        conn = _get_conn(db_path)
+    except TelemetryUnavailable:
+        return []
     try:
         cur = conn.cursor()
         cur.execute(
@@ -298,7 +334,10 @@ def get_model_compression_breakdown(
         List of ModelCompressionBreakdown sorted by tokens_saved descending.
         Returns empty list if no data or DB is unavailable.
     """
-    conn = _get_conn(db_path)
+    try:
+        conn = _get_conn(db_path)
+    except TelemetryUnavailable:
+        return []
     try:
         s, e = _ts_range(days)
         cur = conn.cursor()
@@ -356,7 +395,10 @@ def get_model_compression_breakdown(
 
 def get_daily_trend(db_path: str | Path | None = None, days: int = 30) -> list[DailyTrend]:
     """Fetch daily aggregated usage for trend charts."""
-    conn = _get_conn(db_path)
+    try:
+        conn = _get_conn(db_path)
+    except TelemetryUnavailable:
+        return []
     try:
         s, e = _ts_range(days)
         cur = conn.cursor()
