@@ -598,11 +598,28 @@ _EXTRA_KNOWN_COMMANDS = {
 def _core_command_names() -> set[str]:
     """Return the authoritative set of all built-in CLI verb names.
 
-    This is the union of the grouped commands and the argparse/stub commands.
-    Plugin discovery excludes every name in this set so a plugin can never
-    shadow a built-in verb.
+    Derived from the **live parser**, unioned with the hand-maintained lists.
+
+    It used to be the hand-maintained lists alone, and `main()` uses this set
+    to decide whether a verb is real before argparse ever sees it. Two verbs
+    the parser accepts — ``upgrade`` and ``telemetry`` — were missing from
+    those lists, so typing them produced "❌ Unknown command: 'upgrade'  Did
+    you mean: tokenpak update?" while the command sat registered and
+    dispatchable a few frames away. For ``upgrade`` that silently voided the
+    compatibility shim it exists to provide, and misdirected the user to an
+    unrelated verb.
+
+    Plugin discovery also excludes every name in this set, so widening it to
+    the real parser strictly improves the guarantee that a plugin cannot
+    shadow a built-in.
     """
-    return set(_ALL_COMMANDS) | set(_EXTRA_KNOWN_COMMANDS)
+    names = set(_ALL_COMMANDS) | set(_EXTRA_KNOWN_COMMANDS)
+    try:
+        names |= registered_command_names()
+    except Exception:
+        # Never let verb dispatch depend on parser construction succeeding.
+        pass
+    return names
 
 
 def registered_command_names(
