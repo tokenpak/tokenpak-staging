@@ -110,7 +110,12 @@ class TestPreviewCommand:
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 1
+        # Each preview state maps to its own documented code, so a caller can
+        # tell "nothing to measure" from "the compressor failed". This asserted
+        # a bare 1, which was the code every non-measured state shared.
+        from tokenpak.cli.exit_codes import EXIT_NO_DATA
+
+        assert result.returncode == EXIT_NO_DATA
         combined = result.stdout + result.stderr
         assert "Nothing to preview" in combined
         assert "input was empty" in combined

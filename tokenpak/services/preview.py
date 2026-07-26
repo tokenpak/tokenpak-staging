@@ -196,6 +196,16 @@ class PreviewResult:
                 )
             if not b.block_id or not b.segment_type:
                 raise PreviewInvariantError("block identity must come from the pipeline")
+            # Invariant 7: the blocks and the totals must describe the same
+            # outcome. "We kept your input" alongside a block reporting that
+            # input reduced to nothing is not a rendering detail — it is two
+            # contradictory measurements in one payload.
+            if not self.applied and b.final_chars != b.raw_chars:
+                raise PreviewInvariantError(
+                    f"applied=False but block {b.block_id} reports "
+                    f"{b.raw_chars} -> {b.final_chars} chars; nothing was applied, "
+                    "so nothing was removed"
+                )
 
     # -- serialization ------------------------------------------------------
 
@@ -364,6 +374,14 @@ def run_preview(
             continue
         raw_len = max(0, int(getattr(seg, "raw_len", 0) or 0))
         final_len = max(0, int(getattr(seg, "final_len", 0) or 0))
+        if not applied:
+            # The totals already say the original was kept. The blocks were
+            # still describing the *attempted* compression, so a result could
+            # report applied=false with saved_tokens=0 while its blocks showed
+            # a 3,321-character segment reduced to 0 and retained=false. Both
+            # halves of one payload, disagreeing about whether the user's
+            # input survived. When nothing was applied, nothing was removed.
+            final_len = raw_len
         blocks.append(
             PreviewBlock(
                 block_id=seg_id,
