@@ -166,6 +166,23 @@ def _license_path() -> Path:
     return _paths.under("license.json")
 
 
+def _license_write_path() -> Path:
+    """Where a newly activated license is written.
+
+    Reads resolve compatibility-first and may name a directory this install
+    merely inherited; writes must not. Creating a license in a home the
+    install does not live in is how a leftover legacy directory captures a
+    canonical installation — the file itself becomes the evidence that
+    resolution then follows.
+    """
+    override = os.environ.get("TOKENPAK_LICENSE_FILE")
+    if override:
+        return Path(override)
+    from tokenpak import _paths
+
+    return _paths.write_under("license.json")
+
+
 @dataclass
 class License:
     """Current active license — Free by default, unless a key is stored."""
@@ -233,7 +250,7 @@ def save_license(lic: License) -> None:
     """
     from tokenpak import _paths
 
-    p = _license_path()
+    p = _license_write_path()
     try:
         _paths.ensure_home()
     except Exception:

@@ -365,7 +365,7 @@ def _check_permissions(verbose: bool) -> DiagResult:
     return DiagResult(
         "permissions",
         OK,
-        "Permissions: Read access OK to vault and ~/.tokenpak",
+        f"Permissions: Read access OK to vault and {_paths.home()}",
         data={"checks": checked},
     )
 

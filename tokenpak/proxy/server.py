@@ -4193,7 +4193,7 @@ def _write_proxy_pid_file() -> Path:
     server. Honors TOKENPAK_HOME (falls back to ~/.tokenpak when unset), so a
     scoped-home proxy writes its own pid instead of clobbering the default home.
     """
-    pid_path = _paths.under("proxy.pid")
+    pid_path = _paths.write_under("proxy.pid")
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(os.getpid()))
     return pid_path

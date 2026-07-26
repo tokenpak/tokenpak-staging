@@ -102,20 +102,57 @@ _MONITOR_DB_ENV_COMPAT = "TOKENPAK_MONITOR_DB"
 _MONITOR_TABLE = "requests"
 
 
-def _holds_state(path: Path) -> bool:
-    """True when *path* is a directory that actually contains something.
+#: Top-level files that only TokenPak writes. Presence of any one of them is
+#: what makes a directory *this install's* home rather than a directory that
+#: merely shares the name.
+_STATE_FILES: frozenset[str] = frozenset(
+    {
+        "config.json",
+        "config.yaml",
+        "license.json",
+        "index.json",
+        "fleet.yaml",
+        "pinned_blocks.json",
+        "requests.jsonl",
+        "telemetry.db",
+        "monitor.db",
+        "budget.db",
+        "debug.log",
+        "watchdog.log",
+        "proxy.pid",
+        "cooldowns.json",
+        "auth-profiles.json",
+        "alert_state.json",
+        ".seen_intro",
+    }
+)
 
-    Existence alone is not evidence that a home is the active one. Creating a
-    directory is a side effect of hardening it, of a ``mkdir(parents=True)``
-    two levels down, or of a tool that reserved the name — none of which mean
-    the install lives there. Emptiness is the distinction that matters, so it
-    is the one resolution is allowed to use.
+
+def _holds_state(path: Path) -> bool:
+    """True when *path* holds state this install wrote.
+
+    Deliberately an allowlist, and deliberately strict. "Contains anything at
+    all" is too weak a test: a Finder visit leaves ``.DS_Store``, an editor
+    leaves a lockfile, and either would be enough to hand a populated home to
+    an empty one. It is checked against the known layout instead.
+
+    Being wrong in the two directions is not symmetric, which is why this errs
+    strict. A false negative resolves to the canonical home and behaves like a
+    fresh install — recoverable, and the direction the product wants anyway. A
+    false positive captures an installation permanently. Unrecognised contents
+    therefore do not count.
     """
     try:
-        return path.is_dir() and any(path.iterdir())
+        if not path.is_dir():
+            return False
+        for entry in path.iterdir():
+            if entry.name in _STATE_FILES or entry.name in _known_subdirs():
+                return True
+        return False
     except OSError:
-        # Unreadable is not empty. Treat it as state so an unreadable home is
-        # never silently abandoned in favour of a fresh empty one.
+        # Unreadable is not empty. Treating it as state keeps a home whose
+        # permissions are broken from being silently abandoned in favour of a
+        # fresh one, which would look like total data loss to its owner.
         return path.exists()
 
 
@@ -306,14 +343,20 @@ def has_canonical() -> bool:
 
 
 def needs_migration() -> bool:
-    """True when the legacy directory exists and the canonical does not.
+    """True when this install is living in the legacy directory.
 
     This is the migration trigger condition. ``tokenpak config migrate``
     backs up the legacy tree, copies it to the canonical location, and
     leaves the legacy tree in place (rename-after-soak, not delete) so
     no user state is destroyed.
+
+    Keyed on where the state *is*, not on which directories exist. Asking
+    "does ``~/.tpk`` exist" answered no for the population that most needs
+    telling — an install whose state is in the legacy home beside an empty
+    canonical directory, which is precisely the shape the resolver now
+    rescues. It would have been rescued and never told.
     """
-    return has_legacy() and not has_canonical()
+    return _active_home() == legacy_home()
 
 
 def ensure_home(*, mode: int = 0o700) -> Path:
@@ -435,13 +478,49 @@ def under(*parts: str) -> Path:
     )
 
 
+def _validate_segments(parts: tuple[str, ...]) -> str:
+    """Shared fail-loud check for :func:`under` and :func:`write_under`."""
+    if not parts:
+        raise ValueError("path builders require at least one path segment")
+    first = parts[0]
+    if first in _known_subdirs() or _is_top_level_file(first):
+        return first
+    raise ValueError(
+        f"unknown TokenPak home subdir {first!r}: allowed subdirs are "
+        f"{sorted(_known_subdirs())}, or a top-level file (name with an "
+        f"extension, e.g. 'config.json'). Add new subdirs to "
+        f"_STD_33_SUBDIRS per a canonical layout amendment."
+    )
+
+
+def write_under(*parts: str) -> Path:
+    """Build a path under the **write** home: the destination for new state.
+
+    The write-side counterpart to :func:`under`. Use it wherever the next
+    statement creates something — a ``mkdir``, an open for write, a log
+    handler.
+
+    Using :func:`under` for that is what let a directory get created under the
+    *read* home: on a machine with an empty leftover legacy directory the read
+    resolver answers ``~/.tokenpak``, so writing through it put state in the
+    legacy home — and because resolution keys on state, that one write captured
+    the installation permanently. Reading decides where to look; it must not
+    decide where to write.
+    """
+    _validate_segments(parts)
+    return write_home().joinpath(*parts)
+
+
 def is_legacy_active() -> bool:
     """True when the *resolved* home is the legacy directory.
 
     Used by doctor/setup to surface a "you're on legacy paths — run
     ``tokenpak config migrate`` to move to ``~/.tpk/``" advisory.
+
+    An empty canonical directory does not make the advisory false; the
+    question is which home the install is actually using.
     """
-    return home() == legacy_home() and not has_canonical()
+    return home() == legacy_home()
 
 
 # Resolver-contract API names: ``resolved_home`` / ``is_legacy`` are the names

@@ -222,3 +222,99 @@ def test_empty_legacy_only_still_follows_presence_order(fake_home):
     assert _paths.home() == fake_home / _paths.LEGACY_DIRNAME
     # ...but nothing new is started there.
     assert _paths.write_home() == fake_home / _paths.CANONICAL_DIRNAME
+
+
+# ---------------------------------------------------------------------------
+# The read/write split must not let a leftover directory capture an install.
+#
+# Keying resolution on content fixed one bug and opened another: if *any* file
+# counts as state, then anything that writes into a stale ~/.tokenpak converts
+# a canonical install to a legacy one, permanently. These pin both halves —
+# what counts as state, and that writes never go through the read resolver.
+# ---------------------------------------------------------------------------
+
+
+def test_stray_file_does_not_make_a_home(fake_home):
+    """A Finder visit or an editor lockfile is not an installation."""
+    canonical = fake_home / _paths.CANONICAL_DIRNAME
+    canonical.mkdir()
+    (canonical / ".DS_Store").write_bytes(b"\x00")
+    legacy = fake_home / _paths.LEGACY_DIRNAME
+    legacy.mkdir()
+    (legacy / "license.json").write_text("{}")
+
+    assert _paths.home() == legacy
+    assert _paths.write_home() == legacy
+
+
+def test_stray_file_does_not_capture_a_canonical_install(fake_home):
+    """The same rule in the other direction — junk in legacy takes nothing."""
+    canonical = fake_home / _paths.CANONICAL_DIRNAME
+    canonical.mkdir()
+    (canonical / "config.yaml").write_text("mode: hybrid\n")
+    legacy = fake_home / _paths.LEGACY_DIRNAME
+    legacy.mkdir()
+    (legacy / "some-unrelated-file").write_text("x")
+
+    assert _paths.home() == canonical
+    assert _paths.write_home() == canonical
+
+
+def test_empty_legacy_never_captures_new_writes(fake_home):
+    """A leftover empty ~/.tokenpak must not decide where new state goes."""
+    (fake_home / _paths.LEGACY_DIRNAME).mkdir()
+
+    assert _paths.write_home() == fake_home / _paths.CANONICAL_DIRNAME
+    assert _paths.write_under("license.json") == (
+        fake_home / _paths.CANONICAL_DIRNAME / "license.json"
+    )
+
+
+def test_write_under_never_returns_legacy_for_a_new_install(fake_home):
+    (fake_home / _paths.LEGACY_DIRNAME).mkdir()
+    for name in ("license.json", "config.yaml", "proxy.pid"):
+        assert _paths.write_under(name).parent == fake_home / _paths.CANONICAL_DIRNAME
+
+
+def test_write_under_follows_an_existing_legacy_install(fake_home):
+    legacy = fake_home / _paths.LEGACY_DIRNAME
+    legacy.mkdir()
+    (legacy / "config.yaml").write_text("mode: hybrid\n")
+    assert _paths.write_under("license.json") == legacy / "license.json"
+
+
+def test_write_under_honours_the_override(fake_home, monkeypatch):
+    override = fake_home / "sandbox"
+    monkeypatch.setenv(_paths.ENV_VAR, str(override))
+    assert _paths.write_under("license.json") == override / "license.json"
+
+
+def test_write_under_is_fail_loud_like_under(fake_home):
+    with pytest.raises(ValueError):
+        _paths.write_under("compaion")
+
+
+# ---------------------------------------------------------------------------
+# The migration advisory has to agree with resolution, or the users this
+# rescues are never told they are on legacy paths.
+# ---------------------------------------------------------------------------
+
+
+def test_migration_advisory_fires_for_a_rescued_legacy_install(fake_home):
+    legacy = fake_home / _paths.LEGACY_DIRNAME
+    legacy.mkdir()
+    (legacy / "config.yaml").write_text("mode: hybrid\n")
+    (fake_home / _paths.CANONICAL_DIRNAME).mkdir()  # empty — the rescued shape
+
+    assert _paths.home() == legacy
+    assert _paths.is_legacy_active() is True
+    assert _paths.needs_migration() is True
+
+
+def test_migration_advisory_silent_on_a_canonical_install(fake_home):
+    canonical = fake_home / _paths.CANONICAL_DIRNAME
+    canonical.mkdir()
+    (canonical / "config.yaml").write_text("mode: hybrid\n")
+
+    assert _paths.is_legacy_active() is False
+    assert _paths.needs_migration() is False
