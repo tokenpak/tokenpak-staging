@@ -148,3 +148,77 @@ def test_under_allows_dispatch(fake_home):
 
 def test_under_allows_dispatch_multi_segment(fake_home):
     assert _paths.under("dispatch", "runs.db") == (_paths.resolved_home() / "dispatch" / "runs.db")
+
+
+# ---------------------------------------------------------------------------
+# Legacy-tree resolution stability.
+#
+# The suite previously exercised ensure_home() only against a clean install, so
+# nothing covered the case that matters most: a machine that already has state
+# in ~/.tokenpak. Creating the canonical directory there used to flip home()
+# onto an empty directory, and every read followed it — including the license,
+# which meant activating Pro on an upgraded install read back as Free.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def legacy_install(fake_home):
+    """A home that already holds state in the legacy location."""
+    legacy = fake_home / _paths.LEGACY_DIRNAME
+    legacy.mkdir()
+    (legacy / "config.yaml").write_text("mode: hybrid\n")
+    (legacy / "license.json").write_text("{}\n")
+    return legacy
+
+
+def test_ensure_home_does_not_move_a_legacy_install(legacy_install):
+    """ensure_home() must not relocate an install that already has state."""
+    before = _paths.home()
+    _paths.ensure_home()
+    assert _paths.home() == before == legacy_install
+
+
+def test_ensure_home_hardens_the_home_that_is_actually_used(legacy_install):
+    """The 0700 guarantee has to land on the directory holding the secrets."""
+    legacy_install.chmod(0o775)
+    _paths.ensure_home()
+    assert (legacy_install.stat().st_mode & 0o777) == 0o700
+
+
+def test_reads_and_writes_agree_on_a_legacy_install(legacy_install):
+    """A split resolver is what produced the proxy.pid and license defects."""
+    assert _paths.home() == _paths.write_home() == legacy_install
+    _paths.ensure_home()
+    assert _paths.home() == _paths.write_home() == legacy_install
+
+
+def test_empty_canonical_does_not_outrank_populated_legacy(legacy_install):
+    """Existence is not evidence: an empty ~/.tpk means nothing lives there."""
+    (legacy_install.parent / _paths.CANONICAL_DIRNAME).mkdir()
+    assert _paths.home() == legacy_install
+    assert _paths.under("license.json") == legacy_install / "license.json"
+
+
+def test_populated_canonical_wins_over_legacy(legacy_install):
+    """Once state exists canonically — after migration — canonical leads."""
+    canonical = legacy_install.parent / _paths.CANONICAL_DIRNAME
+    canonical.mkdir()
+    (canonical / "config.yaml").write_text("mode: hybrid\n")
+    assert _paths.home() == canonical
+    assert _paths.write_home() == canonical
+
+
+def test_fresh_install_still_starts_canonical(fake_home):
+    """The original defect: a first-run marker must not pin a new install."""
+    _paths.ensure_home()
+    (_paths.write_home() / ".seen_intro").write_text("x")
+    assert _paths.home() == fake_home / _paths.CANONICAL_DIRNAME
+    assert _paths.write_home() == fake_home / _paths.CANONICAL_DIRNAME
+
+
+def test_empty_legacy_only_still_follows_presence_order(fake_home):
+    """Std 33 §2 is unchanged where neither home holds state."""
+    (fake_home / _paths.LEGACY_DIRNAME).mkdir()
+    assert _paths.home() == fake_home / _paths.LEGACY_DIRNAME
+    # ...but nothing new is started there.
+    assert _paths.write_home() == fake_home / _paths.CANONICAL_DIRNAME

@@ -104,3 +104,67 @@ def test_budget_store_is_owner_only(tmp_path: Path) -> None:
         pytest.skip("budget store was not created by this path")
     mode = _mode(db)
     assert not mode & stat.S_IROTH, f"budget.db is world-readable ({oct(mode)})"
+
+
+# ---------------------------------------------------------------------------
+# Upgrading an existing install must not lose the entitlement.
+#
+# `save_license` resolves the destination before calling `ensure_home()`.
+# While `ensure_home()` created the canonical directory unconditionally, that
+# ordering wrote the license to the legacy home and then moved resolution to
+# the canonical one — so the very next read found nothing and a just-activated
+# Pro license reported Free. The mode-bit tests above all run against a clean
+# HOME, so none of them could see it.
+# ---------------------------------------------------------------------------
+
+_ROUNDTRIP = """
+from tokenpak import licensing as L
+L.save_license(L.License(tier=L.TIER_PRO, status="active", key="TESTKEY-0000"))
+got = L.load_license()
+print("%s|%s" % (getattr(got, "tier", None), getattr(got, "key", None)))
+"""
+
+
+def _legacy_install(tmp_path: Path) -> Path:
+    """A HOME whose state already lives in the pre-canonical directory."""
+    legacy = tmp_path / ".tokenpak"
+    legacy.mkdir(parents=True)
+    (legacy / "config.yaml").write_text("mode: hybrid\n")
+    return legacy
+
+
+def test_activation_survives_on_an_upgraded_install(tmp_path: Path) -> None:
+    """Activate on a legacy tree, then read it back in the same process."""
+    _legacy_install(tmp_path)
+
+    assert _run(tmp_path, _ROUNDTRIP) == "pro|TESTKEY-0000"
+
+
+def test_activation_survives_across_processes_on_an_upgraded_install(
+    tmp_path: Path,
+) -> None:
+    """The failure was cross-invocation: activate, exit, then read again."""
+    _legacy_install(tmp_path)
+    _run(tmp_path, _ROUNDTRIP)
+
+    read_back = _run(
+        tmp_path,
+        "from tokenpak import licensing as L\n"
+        "got = L.load_license()\n"
+        'print("%s|%s" % (getattr(got, "tier", None), getattr(got, "key", None)))\n',
+    )
+    assert read_back == "pro|TESTKEY-0000"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_the_home_that_holds_the_license_is_hardened_on_an_upgraded_install(
+    tmp_path: Path,
+) -> None:
+    """Hardening the canonical home is no use when the license is elsewhere."""
+    legacy = _legacy_install(tmp_path)
+    legacy.chmod(0o775)
+
+    _run(tmp_path, _WRITE_LICENSE)
+
+    assert (legacy / "license.json").exists(), "license did not land in the active home"
+    assert _mode(legacy) == 0o700, f"{legacy} is {oct(_mode(legacy))}, expected 0o700"

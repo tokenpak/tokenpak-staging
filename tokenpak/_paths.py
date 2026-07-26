@@ -95,22 +95,65 @@ _MONITOR_DB_ENV_COMPAT = "TOKENPAK_MONITOR_DB"
 _MONITOR_TABLE = "requests"
 
 
+def _holds_state(path: Path) -> bool:
+    """True when *path* is a directory that actually contains something.
+
+    Existence alone is not evidence that a home is the active one. Creating a
+    directory is a side effect of hardening it, of a ``mkdir(parents=True)``
+    two levels down, or of a tool that reserved the name — none of which mean
+    the install lives there. Emptiness is the distinction that matters, so it
+    is the one resolution is allowed to use.
+    """
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        # Unreadable is not empty. Treat it as state so an unreadable home is
+        # never silently abandoned in favour of a fresh empty one.
+        return path.exists()
+
+
+def _active_home() -> Optional[Path]:
+    """The home this installation's state actually lives in, or ``None``.
+
+    ``None`` means neither location holds anything — there is no install to
+    preserve, so the caller is free to apply the Std 33 §2 presence order.
+    """
+    canonical = Path.home() / CANONICAL_DIRNAME
+    if _holds_state(canonical):
+        return canonical
+    legacy = Path.home() / LEGACY_DIRNAME
+    if _holds_state(legacy):
+        return legacy
+    return None
+
+
 def home() -> Path:
     """Return the resolved TokenPak home directory for **reads**.
 
     Read resolution is compatibility-first so existing installs keep working:
-    ``TOKENPAK_HOME`` → ``~/.tpk`` if present → ``~/.tokenpak`` if present →
-    ``~/.tpk``.
+    ``TOKENPAK_HOME`` → whichever home *holds state*, canonical preferred →
+    then the Std 33 §2 presence order, ``~/.tpk`` if present → ``~/.tokenpak``
+    if present → ``~/.tpk``.
 
-    Do **not** use this to decide where to create new state. Writes go through
-    :func:`write_home`, which never selects the legacy directory. Mixing the
-    two is what produced the defect this split fixes: a first-run flag written
-    to ``~/.tokenpak`` made ``home()`` resolve to the legacy path for every
-    later call, so no new install ever used the canonical home.
+    The content check is the layer above the presence order, and it is there
+    because existence stopped being evidence. An empty ``~/.tpk`` must not
+    outrank a populated ``~/.tokenpak``: an empty ``~/.tpk`` is exactly what
+    ``ensure_home()`` leaves behind on a legacy install, and letting it win
+    moved every subsequent read to a directory holding nothing — which read
+    back as "no license", "no config", "no data" on an install that had all
+    three. Where neither home holds state there is nothing to get wrong, and
+    the documented presence order applies unchanged.
+
+    Reads and writes resolve to the same directory for every installation that
+    has one. :func:`write_home` differs only in refusing to *start* a new
+    install in the legacy location.
     """
     override = os.environ.get(ENV_VAR, "").strip()
     if override:
         return Path(override).expanduser()
+    active = _active_home()
+    if active is not None:
+        return active
     canonical = Path.home() / CANONICAL_DIRNAME
     if canonical.exists():
         return canonical
@@ -123,15 +166,24 @@ def home() -> Path:
 def write_home() -> Path:
     """Return the directory that new state MUST be written to.
 
-    Only ever ``TOKENPAK_HOME`` or ``~/.tpk`` — never the legacy
-    ``~/.tokenpak``. When a legacy tree exists it stays readable via
-    :func:`home` and is migrated explicitly by ``tokenpak config migrate``;
-    nothing writes to it implicitly.
+    ``TOKENPAK_HOME`` → the home that already holds state → ``~/.tpk``.
+
+    A *new* install never starts in the legacy directory; that is the defect
+    this split exists to fix, where a first-run flag written to ``~/.tokenpak``
+    pinned resolution to the legacy path so no fresh install ever used the
+    canonical home.
+
+    An *existing* legacy install keeps writing where it already lives. Writing
+    new state to ``~/.tpk`` while its config, license and telemetry sat in
+    ``~/.tokenpak`` did not migrate the install — it split it in half, and the
+    half each caller saw depended on which resolver it happened to use.
+    Consolidation is what ``tokenpak config migrate`` is for, and it stays
+    explicit.
     """
     override = os.environ.get(ENV_VAR, "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / CANONICAL_DIRNAME
+    return _active_home() or (Path.home() / CANONICAL_DIRNAME)
 
 
 def read_candidates() -> list[Path]:
