@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 from pathlib import Path
 from typing import Any, Optional
 
@@ -95,10 +96,17 @@ _MONITOR_TABLE = "requests"
 
 
 def home() -> Path:
-    """Return the resolved TokenPak home directory.
+    """Return the resolved TokenPak home directory for **reads**.
 
-    See module docstring for resolution order. Always returns a Path
-    object even when the directory does not exist.
+    Read resolution is compatibility-first so existing installs keep working:
+    ``TOKENPAK_HOME`` → ``~/.tpk`` if present → ``~/.tokenpak`` if present →
+    ``~/.tpk``.
+
+    Do **not** use this to decide where to create new state. Writes go through
+    :func:`write_home`, which never selects the legacy directory. Mixing the
+    two is what produced the defect this split fixes: a first-run flag written
+    to ``~/.tokenpak`` made ``home()`` resolve to the legacy path for every
+    later call, so no new install ever used the canonical home.
     """
     override = os.environ.get(ENV_VAR, "").strip()
     if override:
@@ -110,6 +118,112 @@ def home() -> Path:
     if legacy.exists():
         return legacy
     return canonical
+
+
+def write_home() -> Path:
+    """Return the directory that new state MUST be written to.
+
+    Only ever ``TOKENPAK_HOME`` or ``~/.tpk`` — never the legacy
+    ``~/.tokenpak``. When a legacy tree exists it stays readable via
+    :func:`home` and is migrated explicitly by ``tokenpak config migrate``;
+    nothing writes to it implicitly.
+    """
+    override = os.environ.get(ENV_VAR, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / CANONICAL_DIRNAME
+
+
+def read_candidates() -> list[Path]:
+    """Homes to search when reading existing state, most-preferred first.
+
+    Lets a caller find state written by an older version without ever
+    implying that the legacy location is a valid write target.
+    """
+    seen: list[Path] = []
+    override = os.environ.get(ENV_VAR, "").strip()
+    if override:
+        seen.append(Path(override).expanduser())
+    for candidate in (Path.home() / CANONICAL_DIRNAME, Path.home() / LEGACY_DIRNAME):
+        if candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+def resolve_existing(*parts: str) -> Optional[Path]:
+    """First existing path for *parts* across :func:`read_candidates`.
+
+    Returns ``None`` when the file exists in no home — the caller decides
+    whether that is ``no_data`` or ``unavailable``; this function does not
+    invent a default.
+    """
+    for base in read_candidates():
+        candidate = base.joinpath(*parts)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+#: Env override for companion state. Read here rather than in the companion
+#: package because the proxy and the CLI both need to resolve this path, and
+#: the architecture forbids either of them importing ``tokenpak.companion``.
+COMPANION_DIR_ENV = "TOKENPAK_COMPANION_JOURNAL_DIR"
+_COMPANION_SUBDIR = "companion"
+
+
+def companion_write_dir() -> Path:
+    """Directory new companion state is written to.
+
+    Canonical-only: the env override if set, else ``<write_home>/companion``.
+    Never the legacy tree — an install that predates the canonical home keeps
+    its journals readable (see :func:`companion_read_dirs`) without
+    accumulating new ones there.
+
+    Every companion process — hooks, MCP server, launcher, proxy endpoints —
+    must agree on this path or they silently write to different databases.
+    """
+    override = os.environ.get(COMPANION_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return write_home() / _COMPANION_SUBDIR
+
+
+def companion_read_dirs() -> list[Path]:
+    """Existing companion directories to read, most-preferred first.
+
+    Readers must search across homes: a user who installed before the
+    canonical home existed has real journal data in the legacy tree, and
+    reporting $0.00 because we only looked in the new location would be the
+    absent-rendered-as-zero defect in a different costume.
+    """
+    override = os.environ.get(COMPANION_DIR_ENV, "").strip()
+    if override:
+        path = Path(override).expanduser()
+        return [path] if path.exists() else []
+    dirs: list[Path] = []
+    for base in read_candidates():
+        candidate = base / _COMPANION_SUBDIR
+        if candidate.exists() and candidate not in dirs:
+            dirs.append(candidate)
+    return dirs
+
+
+def companion_file(name: str) -> Optional[Path]:
+    """First existing companion file called *name*, or ``None``.
+
+    ``None`` means "no data anywhere", which is a different answer from
+    "zero"; callers must not substitute one for the other.
+    """
+    for base in companion_read_dirs():
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def companion_run_dir() -> Path:
+    """Runtime coordination directory (session markers, generated config)."""
+    return companion_write_dir() / "run"
 
 
 def legacy_home() -> Path:
@@ -144,15 +258,95 @@ def needs_migration() -> bool:
 
 
 def ensure_home(*, mode: int = 0o700) -> Path:
-    """Create the resolved home directory if absent. Returns the path.
+    """Create the write home if absent, with secure permissions. Returns it.
 
-    Mode 0700 is enforced because the directory contains license keys
-    and Pro daemon coordination state. Existing directories are not
-    re-chmoded (operator may have intentional permissions).
+    Mode 0700 is enforced because the directory holds license keys, API
+    credentials and Pro daemon coordination state.
+
+    Two behaviours differ from the original implementation, both because the
+    original guarantee did not hold in practice:
+
+    * The target is :func:`write_home`, not :func:`home`. Otherwise the first
+      call on a machine with a legacy tree would keep provisioning the legacy
+      directory forever.
+    * A group/world-accessible mode **is** repaired. The previous version
+      documented "existing directories are not re-chmoded", which meant that
+      whichever code path created the directory first decided its permissions
+      — and the first-run flag created it at 0775 under the default umask, so
+      the 0700 guarantee was defeated on every fresh install. Bits *beyond*
+      the requested mode are cleared; nothing is loosened.
     """
-    h = home()
+    h = write_home()
     h.mkdir(mode=mode, parents=True, exist_ok=True)
+    _harden_dir(h, mode=mode)
     return h
+
+
+def _harden_dir(path: Path, *, mode: int = 0o700) -> None:
+    """Clear group/other bits on *path* when present. Never loosens."""
+    try:
+        current = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return
+    if current & 0o077:
+        try:
+            path.chmod(current & mode)
+        except OSError:
+            pass
+
+
+#: Canonical user-config filename. YAML is what ``tokenpak setup`` writes and
+#: what the proxy reads, so it is the format of record.
+CONFIG_CANONICAL = "config.yaml"
+
+#: Read-compatibility config filenames, in preference order after the
+#: canonical one. ``config.json`` is accepted for existing installs but is
+#: never written by new code.
+CONFIG_COMPAT = ("config.yml", "config.json")
+
+
+def config_write_path() -> Path:
+    """Where a new user config MUST be written: ``<write_home>/config.yaml``."""
+    return write_home() / CONFIG_CANONICAL
+
+
+def config_read_path() -> Optional[Path]:
+    """The user config in effect, or ``None`` if there is none.
+
+    Searches every read home for the canonical name first, then the
+    compatibility names. This is the single resolver for "is TokenPak
+    configured?" — ``doctor`` previously answered that question by looking for
+    ``config.json`` alone while ``setup`` wrote ``config.yaml``, so completing
+    setup left doctor reporting "no config → Run: tokenpak setup".
+    """
+    for name in (CONFIG_CANONICAL, *CONFIG_COMPAT):
+        found = resolve_existing(name)
+        if found is not None:
+            return found
+    return None
+
+
+def is_configured() -> bool:
+    """True when a user config exists in any supported location or format."""
+    return config_read_path() is not None
+
+
+def secure_file(path: Path, *, mode: int = 0o600) -> None:
+    """Restrict a state file to the owner. Best effort; never raises.
+
+    Applied to files that carry secrets or user configuration (``config.yaml``,
+    ``license.json``, credential stores). Windows ignores POSIX bits, so this
+    is a no-op there rather than an error.
+    """
+    try:
+        current = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return
+    if current & 0o077:
+        try:
+            path.chmod(current & mode)
+        except OSError:
+            pass
 
 
 def under(*parts: str) -> Path:
@@ -328,6 +522,10 @@ __all__ = [
     "has_legacy",
     "has_canonical",
     "needs_migration",
+    "companion_file",
+    "companion_read_dirs",
+    "companion_run_dir",
+    "companion_write_dir",
     "ensure_home",
     "under",
     "is_legacy_active",

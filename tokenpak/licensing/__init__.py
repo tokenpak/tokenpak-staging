@@ -99,6 +99,34 @@ _TIER_ORDER = {
     TIER_PRO: 1,
 }
 
+#: Tiers that were retired as products but may still appear in a license
+#: already issued, mapped to the entitlement they were sold as.
+#:
+#: Retiring Team and Enterprise as *products* is correct — nobody can buy
+#: them. Retiring them as *entitlements* was not intended and is not safe:
+#: a license carrying one still loads, still reports its tier, and was
+#: silently dropped to Free by ``_TIER_ORDER.get(tier, 0)``, so a paid
+#: credential unlocked nothing and said nothing about why. The issuing
+#: service still accepts ``tier`` over oss/pro/team/enterprise, so the
+#: client must honour what the issuer can produce.
+#:
+#: These are deliberately string literals rather than restored constants:
+#: the names are gone from the product, and only survive as data that may
+#: arrive from outside.
+_RETIRED_TIER_ENTITLEMENT = {
+    "team": TIER_PRO,
+    "enterprise": TIER_PRO,
+}
+
+
+def effective_tier(tier: str) -> str:
+    """The entitlement a tier grants, resolving retired names.
+
+    ``known_tiers()`` deliberately does not include the retired names, so
+    nothing renders them as choices.
+    """
+    return _RETIRED_TIER_ENTITLEMENT.get(tier, tier)
+
 
 def known_tiers() -> tuple[str, ...]:
     """Tier names in ascending capability order.
@@ -192,12 +220,38 @@ def load_license() -> License:
 
 
 def save_license(lic: License) -> None:
-    """Persist license to disk (atomic write)."""
+    """Persist license to disk (atomic write, owner-only).
+
+    This wrote the license at the process umask — 0664 on a default Linux
+    setup — into a home created by a bare ``mkdir``, so activating on a fresh
+    install produced a world-readable ``license.json`` inside a 0775
+    directory. The license carries the entitlement grant and its signature;
+    it belongs to the user who activated it and nobody else.
+
+    The temp file is secured *before* the rename, so there is no window in
+    which the contents exist on disk readable by others.
+    """
+    from tokenpak import _paths
+
     p = _license_path()
+    try:
+        _paths.ensure_home()
+    except Exception:
+        # Never let hardening prevent persistence; the file mode below is
+        # applied regardless of whether the home could be re-secured.
+        pass
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(lic.to_dict(), indent=2), encoding="utf-8")
+    try:
+        _paths.secure_file(tmp)
+    except Exception:
+        pass
     os.replace(tmp, p)
+    try:
+        _paths.secure_file(p)
+    except Exception:
+        pass
 
 
 def delete_license() -> bool:
@@ -522,11 +576,45 @@ def is_feature_enabled(feature: str, *, lic: Optional[License] = None) -> bool:
     if lic.status != "active":
         # pending_validation / expired / revoked → Free-only
         return required == TIER_FREE
-    return _TIER_ORDER.get(lic.tier, 0) >= _TIER_ORDER[required]
+    return _TIER_ORDER.get(effective_tier(lic.tier), 0) >= _TIER_ORDER[required]
+
+
+#: The two editions TokenPak presents publicly. ``free``/``pro``/``team``/
+#: ``enterprise`` remain the *internal* entitlement taxonomy — they decide what
+#: a license unlocks — but only these two names are shown to users. Advertising
+#: Team and Enterprise as purchasable plans described products nobody can buy.
+EDITION_BASE = "TokenPak"
+EDITION_PRO = "TokenPak Pro"
+
+#: Internal tiers that map onto the Pro edition publicly.
+_PRO_EDITION_TIERS = frozenset({TIER_PRO, *_RETIRED_TIER_ENTITLEMENT})
+
+
+def public_edition(tier: str) -> str:
+    """Map an internal entitlement tier onto a public edition name."""
+    return EDITION_PRO if tier in _PRO_EDITION_TIERS else EDITION_BASE
+
+
+def is_public_plan(tier: str) -> bool:
+    """Whether *tier* may be presented as a plan a user can obtain.
+
+    Team and Enterprise are entitlement metadata carried by a verified
+    license, not offerings — so they never appear in a plan catalog.
+    """
+    return tier in (TIER_FREE, TIER_PRO)
 
 
 def describe_tier(tier: str) -> str:
-    """Human-readable tier label."""
+    """Human-readable tier label, in public edition terms.
+
+    Use :func:`internal_tier_label` when the audience is a diagnostic surface
+    that genuinely needs the underlying tier name.
+    """
+    return public_edition(tier)
+
+
+def internal_tier_label(tier: str) -> str:
+    """Underlying entitlement tier name, for diagnostics and license metadata."""
     return {
         TIER_FREE: "Free",
         TIER_PRO: "Pro",
@@ -562,6 +650,10 @@ def discover_plans() -> list[dict[str, Any]]:
     catalog: list[dict[str, Any]] = []
     for tier in order:
         if tier != TIER_FREE and tier not in tier_features:
+            continue
+        # Team/Enterprise features still exist in the gate table and still
+        # unlock for a license that carries them; they are simply not offerings.
+        if not is_public_plan(tier):
             continue
         feats = sorted(tier_features.get(tier, []))
         catalog.append(
@@ -602,8 +694,7 @@ def _load_pricing_manifest() -> dict[str, str]:
 def _default_blurbs() -> dict[str, str]:
     return {
         TIER_FREE: (
-            "Full Free-tier feature set — proxy, vault, basic "
-            "compression, dashboard, savings tracking."
+            "Proxy, vault, compression, dashboard and savings tracking. Everything shipped today."
         ),
         TIER_PRO: (
             "Adds advanced compression, smart routing, session "
