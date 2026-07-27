@@ -39,7 +39,28 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import pytest  # noqa: E402
+
 from tokenpak.compression.pipeline import CompressionPipeline  # noqa: E402
+
+try:
+    import tiktoken  # noqa: F401
+
+    _HAS_TIKTOKEN = True
+except ImportError:
+    _HAS_TIKTOKEN = False
+
+# Per-test skip marker, not a module-level importorskip, so the rest of this
+# file still runs without the optional extra. The reason names the companion
+# test that covers the load-bearing fact unconditionally — a skip that hides a
+# claim is worse than no test, and CI installs `.[dev]`, which does not carry
+# tiktoken, so this witness skips there.
+_REQUIRES_TIKTOKEN = pytest.mark.skipif(
+    not _HAS_TIKTOKEN,
+    reason="tiktoken not installed (optional 'tokens' extra). The durable claim — "
+    "that these numbers are a character proxy and not model tokens — is asserted "
+    "unconditionally by test_pipeline_counts_characters_not_model_tokens.",
+)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "headline_corpus.txt"
 
@@ -111,6 +132,7 @@ def test_headline_claim(tmp_path: Path) -> None:
     )
 
 
+@_REQUIRES_TIKTOKEN
 def test_real_tokenizer_witness(tmp_path: Path) -> None:
     """Record real-BPE reduction beside the character proxy, in the same CI log.
 
@@ -122,11 +144,7 @@ def test_real_tokenizer_witness(tmp_path: Path) -> None:
     proxy has not inverted relative to real BPE, which would mean the
     estimator's character semantics changed without anyone noticing.
     """
-    import pytest
-
-    tiktoken = pytest.importorskip(
-        "tiktoken", reason="real-tokenizer witness needs the tiktoken extra"
-    )
+    import tiktoken
 
     messages = _load_messages()
     pipeline = CompressionPipeline(
@@ -171,4 +189,34 @@ def test_real_tokenizer_witness(tmp_path: Path) -> None:
         f"The character proxy ({proxy_pct:.2f}%) now reports LESS reduction than real "
         f"BPE ({bpe_pct:.2f}%). That inverts the known relationship and means the "
         f"estimator's character semantics changed. Investigate before trusting either."
+    )
+
+
+def test_pipeline_counts_characters_not_model_tokens() -> None:
+    """The unconditional companion to the tokenizer witness.
+
+    The witness above needs an optional extra and therefore skips in CI. The
+    fact it exists to defend must not skip with it: everything this benchmark
+    reports is a **character proxy**, and quoting it as a token-reduction
+    figure is the error the witness was written to prevent.
+
+    This asserts the premise directly, with no optional dependency, so the day
+    someone swaps in a real tokenizer the surrounding claims are forced to be
+    revisited rather than silently inheriting a new meaning.
+    """
+    from tokenpak.compression.pipeline import _estimate_tokens
+    from tokenpak.services.preview import TOKENIZER_ID
+
+    assert TOKENIZER_ID == "heuristic-chars-per-token-4", (
+        f"The estimator identity changed to {TOKENIZER_ID!r}. Every number this "
+        f"benchmark pins, and every doc citing them, assumes chars//4 — revisit "
+        f"those before changing this assertion."
+    )
+
+    # 400 characters of a single-token-per-4-chars shape → exactly 100 units.
+    probe = [{"role": "user", "content": "a" * 400}]
+    assert _estimate_tokens(probe) == 100, (
+        "The estimator no longer counts len(content)//4. The band in "
+        "test_headline_claim and the divergence figures recorded alongside it "
+        "are expressed in those units and must be re-derived."
     )
