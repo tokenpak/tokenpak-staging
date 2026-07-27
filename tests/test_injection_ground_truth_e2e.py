@@ -98,6 +98,22 @@ def upstream():
     server.shutdown()
 
 
+@pytest.fixture(autouse=True)
+def injection_switch_on(monkeypatch):
+    """Enable the vault-injection master switch for this suite.
+
+    PR647 adds `VAULT_INJECTION_ENABLED`, default OFF, guarding the top of
+    `stage_vault_injection`. Without this fixture, once that lands the stage
+    returns at the guard and the strict xfail below can NEVER xpass again —
+    silently reverting this suite to the exact defect it was written to fix.
+
+    `raising=False` so the suite works on trees where the flag does not exist yet.
+    """
+    from tokenpak.proxy import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "VAULT_INJECTION_ENABLED", True, raising=False)
+
+
 @pytest.fixture
 def vault_with_content(monkeypatch):
     """Stub retrieval only. Adapter + splice + server stay real."""
@@ -288,20 +304,21 @@ def test_the_request_actually_reaches_the_injection_stage(
 
 @pytest.mark.xfail(
     reason=(
-        "KNOWN P0: vault injection does not modify the request. THREE independent "
-        "blockers, all of which must be repaired — an earlier version of this reason "
-        "named only the first two, and a fix following it lands on the wrong code:\n"
-        "  1. adapter starvation — _detect_adapter is called with empty path/headers, "
-        "     so detection always falls through to PassthroughAdapter, whose "
-        "     inject_system_context returns the body unchanged;\n"
-        "  2. injection_text is always empty — inject_vault_context returns a 3-tuple "
-        "     while the pipeline only populates the text from a 4-tuple, so "
-        "     stage_byte_restore short-circuits;\n"
-        "  3. pipeline.py does getattr(vault_bridge, 'extract_query_signal'), but that "
-        "     name is a FUNCTION-LOCAL import inside vault_bridge — hasattr() is False. "
-        "     The AttributeError is swallowed by a catch-all, query_signal becomes '', "
-        "     and byte_restore bails to restored_original_short_query.\n"
-        "Repairing only (1) and (2) still yields XFAIL — verified experimentally."
+        "KNOWN P0: vault injection does not modify the request. On THIS route "
+        "(byte_splice) the minimal repair set is TWO defects, verified by running "
+        "every combination:\n"
+        "  (2) inject_vault_context returns a 3-tuple while the pipeline only "
+        "      populates injection_text from a 4-tuple, so byte-restore short-circuits;\n"
+        "  (3) pipeline.py does getattr(vault_bridge, 'extract_query_signal'), but "
+        "      that name is a FUNCTION-LOCAL import there, so hasattr is False; the "
+        "      AttributeError is swallowed by a catch-all and the query signal is ''.\n"
+        "Repairing {2,3} alone makes this XPASS.\n"
+        "\n"
+        "A THIRD defect is real but does NOT gate this route: adapter starvation "
+        "(_detect_adapter called with empty path/headers → PassthroughAdapter). On "
+        "byte_splice the adapter's mutated body is discarded (pipeline.py:134-139 "
+        "keeps only injection_text), so it gates json_inject, not this test. Earlier "
+        "versions of this reason claimed all three were required — they were wrong."
     ),
     strict=True,
 )
