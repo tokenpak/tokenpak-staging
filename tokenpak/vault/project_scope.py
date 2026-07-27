@@ -435,35 +435,34 @@ def spanned_projects(
 ) -> tuple[str, ...]:
     """Projects genuinely in contention across *source_paths*.
 
-    Contention is a **set-cover** question, not a distinct-values one: results
-    are unambiguous exactly when a single project id covers every result. That
-    matters for the two sharing constructs:
+    Only ``shared: true`` (the ``*`` sentinel) grants universal cover. Every
+    other project id a block carries counts as contention.
 
-    * a ``shared: true`` root carries ``*`` and is covered by any scope;
-    * a root declared ``projects: [a, b]`` is covered by *either* ``a`` or
-      ``b``, so a result set landing only on such blocks is NOT ambiguous —
-      returning them is correct under either scope.
+    An earlier version treated this as a set-cover question — unambiguous when
+    *some* id covered every result. That is wrong, and wrong in the unsafe
+    direction. Given natural declarations like::
 
-    Counting distinct ids instead would report ``(a, b)`` there and suppress a
-    perfectly answerable query.
+        acme: roots: [{path: .../acme, projects: [acme, monorepo]}]
+        beta: roots: [{path: .../beta, projects: [beta, monorepo]}]
+
+    every result is covered by ``monorepo``, so cover-based logic returns "not
+    ambiguous" and interleaves acme and beta content with an empty ``spanned``
+    — a blend with no signal attached, which is precisely what this module
+    exists to prevent. Co-membership in an umbrella id means "both of these
+    belong to it", not "these two are the same thing".
+
+    The cost of the strict rule is that a result set landing *only* on a root
+    declared ``projects: [a, b]`` is reported as contended and suppressed, even
+    though returning it would have been defensible under either scope. That
+    failure is closed — a refusal the caller can resolve by naming a project —
+    and a closed failure is the correct trade here.
     """
-    memberships: list[frozenset[str]] = []
+    seen: set[str] = set()
     for path in source_paths:
         ids = registry.resolve_path(path).project_ids
         if not ids or SHARED in ids:
             continue  # unclaimed or universally shared — never evidence of contention
-        memberships.append(frozenset(ids))
-
-    if not memberships:
-        return ()
-
-    covering = frozenset.intersection(*memberships)
-    if covering:
-        return ()  # one project explains every result — not ambiguous
-
-    seen: set[str] = set()
-    for group in memberships:
-        seen |= group
+        seen |= {pid for pid in ids if pid != SHARED}
     return tuple(sorted(seen))
 
 

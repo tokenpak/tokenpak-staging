@@ -244,8 +244,14 @@ def _return_released_memory_to_os() -> None:
         logger.debug("glibc malloc_trim unavailable after vault reload", exc_info=True)
 
 
-_PROJECT_REGISTRY: "ProjectRegistry | None" = None
-_PROJECT_REGISTRY_ERROR: str | None = None
+#: Registry and its load error held as ONE tuple in ONE global. Two separate
+#: globals could be observed half-written by a concurrent request: on the error
+#: path the registry is empty, so a reader that saw the new (empty) registry
+#: with the old (absent) error would take the "no registry declared" branch and
+#: return unscoped results — failing open on exactly the branch that exists to
+#: fail closed.
+_PROJECT_REGISTRY_STATE: "tuple[ProjectRegistry, str | None] | None" = None
+_PROJECT_REGISTRY_LOCK = threading.Lock()
 
 
 def _get_project_registry() -> "tuple[ProjectRegistry, str | None]":
@@ -255,12 +261,16 @@ def _get_project_registry() -> "tuple[ProjectRegistry, str | None]":
     timer; re-reading and re-parsing ``vault.yaml`` per call would show up as a
     memory ratchet across reloads.
     """
-    global _PROJECT_REGISTRY, _PROJECT_REGISTRY_ERROR
-    if _PROJECT_REGISTRY is None:
+    global _PROJECT_REGISTRY_STATE
+    state = _PROJECT_REGISTRY_STATE
+    if state is None:
         from tokenpak.vault.sqlite_backend import _load_registry
 
-        _PROJECT_REGISTRY, _PROJECT_REGISTRY_ERROR = _load_registry()
-    return _PROJECT_REGISTRY, _PROJECT_REGISTRY_ERROR
+        with _PROJECT_REGISTRY_LOCK:
+            if _PROJECT_REGISTRY_STATE is None:
+                _PROJECT_REGISTRY_STATE = _load_registry()
+            state = _PROJECT_REGISTRY_STATE
+    return state
 
 
 def _project_scope_filter(
@@ -1007,18 +1017,37 @@ class VaultIndex:
                 _selective.append((qt, term_freq))
         _selective.sort(key=lambda x: x[1])  # most selective first
 
+        # Scope is applied during expansion, not merely at ranking time. The
+        # cap below is a budget, and out-of-scope documents must not spend it:
+        # if another project dominates the most selective term's postings, the
+        # cap can be reached before a later term is expanded at all, and an
+        # in-scope block matching only that term would never be scored. The
+        # result is a scoped search with worse recall than the same query
+        # against a single-project vault — narrowing the answer while quietly
+        # degrading it.
+        _scope = _project_scope_filter(project, exclude_roles)
+
+        def _in_scope(doc_idx: int) -> bool:
+            if _scope is None:
+                return True
+            return _scope.allows(str(blocks[block_ids[doc_idx]].get("source_path", "")))
+
         candidates: set[int] = set()
         if _selective:
             for qt, _ in _selective:
                 posting = postings[qt]
-                candidates.update(packed >> 32 for packed in posting)
+                candidates.update(
+                    doc_idx for packed in posting if _in_scope(doc_idx := packed >> 32)
+                )
                 if len(candidates) >= _max_candidates:
                     break  # enough; less selective terms contribute diminishing returns
         if not candidates:
             # All terms are corpus-wide — fall back to common terms (fast path)
             for qt in _fallback:
                 posting = postings[qt]
-                candidates.update(packed >> 32 for packed in posting)
+                candidates.update(
+                    doc_idx for packed in posting if _in_scope(doc_idx := packed >> 32)
+                )
         if not candidates:
             return []
 
@@ -1059,12 +1088,12 @@ class VaultIndex:
 
         # Sort deterministically: score desc, then path asc, then block_id asc
         # This ensures byte-identical ordering for cache stability even on score ties
-        # Project scope is applied here, inside the candidate generator, so it
-        # runs before `[:top_k]`. Filtering afterwards would let out-of-scope
-        # blocks consume result slots and silently return fewer in-scope hits
-        # than were asked for. The sort key is untouched, so ordering within a
-        # scope is byte-identical to the unscoped ordering of the same blocks.
-        _scope = _project_scope_filter(project, exclude_roles)
+        # Second application, guarding the ranking itself. Candidate expansion
+        # above already excluded out-of-scope documents; this covers the
+        # fallback path and keeps the predicate adjacent to `[:top_k]`, so an
+        # out-of-scope block can never consume a result slot. The sort key is
+        # untouched, so ordering within a scope is byte-identical to the
+        # unscoped ordering of the same blocks.
         ranked = sorted(
             (
                 (doc_idx, score)

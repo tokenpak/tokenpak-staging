@@ -363,8 +363,7 @@ def test_default_json_blocks_backend_enforces_scope(vault, tmp_path, monkeypatch
     """
     import tokenpak.proxy.vault_bridge as vault_bridge
 
-    monkeypatch.setattr(vault_bridge, "_PROJECT_REGISTRY", None, raising=False)
-    monkeypatch.setattr(vault_bridge, "_PROJECT_REGISTRY_ERROR", None, raising=False)
+    monkeypatch.setattr(vault_bridge, "_PROJECT_REGISTRY_STATE", None, raising=False)
 
     # This backend drops query terms appearing in >40% of the corpus as
     # non-selective. A tiny fixture makes the colliding terms *look* common and
