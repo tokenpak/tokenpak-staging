@@ -31,17 +31,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
 from tokenpak.core.config_loader import get as _cfg
+from tokenpak.vault.project_scope import AmbiguityPolicy
 from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 
-# Scope types are imported lazily inside the functions that use them. This
-# module is on the proxy startup path and is re-imported cold by out-of-process
-# tests; pulling the scope/SQLite chain in at module level measurably slowed
-# cold import and tripped the reload-RSS harness's subprocess budget.
-
-#: Minimum candidate window used to decide whether projects are in contention.
-#: A caller asking for top_k=1 must not thereby make every result look
-#: unambiguous — contention is a property of the corpus, not of the page size.
-_AMBIGUITY_PROBE_K = 20
+# `project_scope` is pure-stdlib and cheap, so the policy constants come in at
+# module level — default arguments are evaluated at definition time and cannot
+# use a lazy import. `sqlite_backend` is the expensive half of the chain and
+# stays lazy: this module is on the proxy startup path and is re-imported cold
+# by out-of-process tests, where it tripped the reload-RSS subprocess budget.
 
 if TYPE_CHECKING:
     from tokenpak.companion.capsules.builder import CapsuleBuilder
@@ -297,6 +294,11 @@ class VaultIndex:
     product does not have.
     """
 
+    @property
+    def supports_project_scope(self) -> bool:
+        """This backend applies membership during candidate expansion."""
+        return True
+
     def search_scoped(
         self,
         query: str,
@@ -306,7 +308,7 @@ class VaultIndex:
         project: str | None = None,
         cwd: str | None = None,
         exclude_roles: "Sequence[str] | None" = None,
-        on_ambiguous: str = "suppress",
+        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
     ) -> "ScopedSearchResult":
         """Scope-resolving search — parity with the SQLite backend's contract."""
         from tokenpak.vault.project_scope import ScopeResolution
@@ -354,7 +356,7 @@ class VaultIndex:
         project: str | None = None,
         cwd: str | None = None,
         exclude_roles: "Sequence[str] | None" = None,
-        on_ambiguous: str = "suppress",
+        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
     ) -> "tuple[str | None, bool, tuple[str, ...]]":
         """Decide the scope for a query: ``(project_id, suppressed, spanned)``.
 
@@ -390,12 +392,14 @@ class VaultIndex:
         if scope.resolved:
             return scope.project_id, False, ()
 
-        # Unresolved: look at a wider window than the caller asked for before
-        # deciding whether projects are in contention. With top_k=1 a result set
-        # can never look ambiguous, which would let the single best block from
-        # an arbitrary project through unchallenged.
-        probe_k = max(top_k, _AMBIGUITY_PROBE_K)
-        probed = self.search(query, probe_k, min_score, exclude_roles=exclude_roles)
+        # Unresolved: contention is a property of the corpus, so it is measured
+        # over *every* block that clears `min_score`, not over a larger page. A
+        # bounded probe only shrinks the window in which a competing project can
+        # hide — with the top N held by one project, a rival at rank N+1 would
+        # still yield a confident single-project answer. `_search` already
+        # computes the full ranked set and discards the tail, so asking for it
+        # costs nothing beyond the discard.
+        probed = self.search(query, 0, min_score, exclude_roles=exclude_roles)
         spanned = spanned_projects(registry, [str(b.get("source_path", "")) for b, _ in probed])
 
         if len(spanned) <= 1 or on_ambiguous == AmbiguityPolicy.UNSCOPED:
@@ -405,9 +409,15 @@ class VaultIndex:
             mass: dict[str, float] = {}
             for block, score in probed:
                 ids = registry.resolve_path(str(block.get("source_path", ""))).project_ids
+                # Skip shared blocks *wholesale*, not merely their sentinel id.
+                # Crediting the library that owns a universally-visible block
+                # would let it win a vote it should not be standing in — the
+                # same rule `spanned_projects` applies, which this loop
+                # previously contradicted from forty lines away.
+                if SHARED in ids:
+                    continue
                 for pid in ids:
-                    if pid != SHARED:
-                        mass[pid] = mass.get(pid, 0.0) + score
+                    mass[pid] = mass.get(pid, 0.0) + score
             if mass:
                 winner = sorted(mass.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
                 return winner, False, spanned
@@ -1101,7 +1111,7 @@ class VaultIndex:
                 if score >= min_score
                 and (
                     _scope is None
-                    or _scope.allows(blocks[block_ids[doc_idx]].get("source_path", ""))
+                    or _scope.allows(str(blocks[block_ids[doc_idx]].get("source_path", "")))
                 )
             ),
             key=lambda x: (
@@ -1109,7 +1119,11 @@ class VaultIndex:
                 blocks[block_ids[x[0]]].get("source_path", ""),
                 block_ids[x[0]],
             ),
-        )[:top_k]
+        )
+        # top_k <= 0 means "every block clearing min_score" — used by contention
+        # detection, which must see the whole corpus rather than a page of it.
+        if top_k > 0:
+            ranked = ranked[:top_k]
 
         # Preserve the proxy VaultIndex API: search results include content.
         # Only top-k results are hydrated, and the retained bytes stay bounded.
@@ -1163,7 +1177,7 @@ class VaultIndex:
         *,
         project: str | None = None,
         cwd: str | None = None,
-        on_ambiguous: str = "suppress",
+        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
     ) -> tuple[str, int, list[str]]:
         """
         Search vault and compile injection text within budget.

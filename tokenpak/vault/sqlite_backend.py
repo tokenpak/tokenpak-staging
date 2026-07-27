@@ -178,6 +178,11 @@ class SQLiteRetrievalBackend:
     # ------------------------------------------------------------------
 
     @property
+    def supports_project_scope(self) -> bool:
+        """This backend applies membership inside the scoring SQL."""
+        return True
+
+    @property
     def registry(self) -> ProjectRegistry:
         return self._registry
 
@@ -443,8 +448,13 @@ class SQLiteRetrievalBackend:
                 scope=scope,
             )
 
-        results = self.search(query, top_k, min_score, exclude_roles=exclude_roles)
-        spanned = self._projects_spanned([b["block_id"] for b, _ in results])
+        # Contention is a property of the corpus, not of the requested page: a
+        # rival project sitting just past `top_k` would otherwise yield a
+        # confident single-project answer. Probe everything clearing min_score,
+        # then hand back only the page that was asked for.
+        probed = self.search(query, 0, min_score, exclude_roles=exclude_roles)
+        spanned = self._projects_spanned([b["block_id"] for b, _ in probed])
+        results = probed[:top_k] if top_k > 0 else probed
 
         if len(spanned) <= 1:
             return ScopedSearchResult(results=results, scope=scope, spanned=spanned)
@@ -976,7 +986,11 @@ class SQLiteRetrievalBackend:
                 block_source.get(x[0], ""),
                 x[0],
             ),
-        )[:top_k]
+        )
+        # top_k <= 0 means "every block clearing min_score" — used by contention
+        # detection, which must see the whole corpus rather than a page of it.
+        if top_k > 0:
+            ranked = ranked[:top_k]
 
         if not ranked:
             return []

@@ -323,25 +323,39 @@ class ProjectRegistry:
                 )
             return ScopeResolution(project_id=pinned, source="env")
 
+        named = self.projects_named_in(query) if query else ()
+        if len(named) > 1:
+            return ScopeResolution(project_id=None, source="query_ambiguous", candidates=named)
+
+        cwd_projects: tuple[str, ...] = ()
         if cwd is not None:
             membership = self.resolve_path(cwd)
             # A shared root says nothing about which project the caller means.
-            real = [p for p in membership.project_ids if p != SHARED]
-            if len(real) == 1:
-                return ScopeResolution(project_id=real[0], source="cwd")
-            if len(real) > 1:
+            cwd_projects = tuple(sorted(p for p in membership.project_ids if p != SHARED))
+            if len(cwd_projects) > 1:
                 return ScopeResolution(
-                    project_id=None, source="cwd_ambiguous", candidates=tuple(sorted(real))
+                    project_id=None, source="cwd_ambiguous", candidates=cwd_projects
                 )
 
-        if query:
-            named = self.projects_named_in(query)
-            if len(named) == 1:
-                return ScopeResolution(project_id=named[0], source="query")
-            if len(named) > 1:
-                return ScopeResolution(
-                    project_id=None, source="query_ambiguous", candidates=named
-                )
+        # Where the working directory and the query name *different* projects,
+        # the working directory does not win. Letting it win produces the worst
+        # available outcome: a coherent, confident, single-project answer about
+        # the project the caller did not ask for — no blend to notice, no
+        # candidates reported, nothing to signal the substitution. Someone
+        # sitting in one checkout while asking about another is stating an
+        # intent that contradicts their location, and that conflict is exactly
+        # the condition this resolver must refuse rather than break.
+        if cwd_projects and named and cwd_projects[0] != named[0]:
+            return ScopeResolution(
+                project_id=None,
+                source="cwd_query_conflict",
+                candidates=tuple(sorted({cwd_projects[0], named[0]})),
+            )
+
+        if cwd_projects:
+            return ScopeResolution(project_id=cwd_projects[0], source="cwd")
+        if named:
+            return ScopeResolution(project_id=named[0], source="query")
 
         return ScopeResolution(project_id=None, source="unresolved")
 

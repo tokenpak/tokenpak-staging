@@ -349,14 +349,16 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
         _send_error(handler, 503, "vault_unavailable", "no index.json found")
         return
 
-    # Project scope. ``search_scoped`` exists only on the SQLite backend; the
-    # json_blocks backend has no membership table, so fall back to the unscoped
-    # call rather than failing the request.
+    # Project scope. Both shipped backends enforce it; a third-party backend
+    # may not. Ask the backend whether it does rather than probing for a method
+    # name — a capability probe that falls through to the unguarded path would
+    # answer a scoped request with unscoped results, which is undetectable
+    # downstream.
     project = (qs.get("project", [""])[0] or "").strip() or None
     cwd = (qs.get("cwd", [""])[0] or "").strip() or None
     scope_meta: dict[str, object] = {}
     try:
-        if hasattr(vi, "search_scoped"):
+        if getattr(vi, "supports_project_scope", False):
             scoped = vi.search_scoped(query, top_k=limit, project=project, cwd=cwd)
             results = scoped.results
             scope_meta = {
@@ -391,8 +393,9 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
                 handler,
                 501,
                 "scoping_unsupported",
-                f"retrieval backend {type(vi).__name__} cannot honor a project "
-                "scope; set vault.retrieval_backend=sqlite to enable scoping",
+                f"retrieval backend {type(vi).__name__} does not implement "
+                "project scoping; results would span projects, so the scoped "
+                "request is refused rather than answered unscoped",
             )
             return
         else:

@@ -198,6 +198,46 @@ def test_two_projects_named_in_query_is_not_a_guess(vault):
     assert scoped.scope is not None and scoped.scope.source == "query_ambiguous"
 
 
+def test_cwd_and_query_naming_different_projects_is_a_conflict(vault, tmp_path):
+    """Working directory must not silently override a project named in the query.
+
+    Letting cwd win yields the worst outcome available: a coherent, confident
+    answer about the project the caller did not ask for, with no blend to
+    notice and no candidates reported.
+    """
+    backend, _ = vault
+    scoped = backend.search_scoped(
+        "audit PR 100 for bluefin",
+        top_k=5,
+        min_score=0.0,
+        cwd=f"{tmp_path}/workspace/acme-storefront",
+    )
+    assert scoped.project_id is None
+    assert scoped.scope is not None and scoped.scope.source == "cwd_query_conflict"
+    assert set(scoped.scope.candidates) == {"acme-storefront", "bluefin-portal"}
+
+    # Agreement between the two signals is still a clean resolution.
+    agreeing = backend.search_scoped(
+        "audit PR 100 for bluefin",
+        top_k=5,
+        min_score=0.0,
+        cwd=f"{tmp_path}/workspace/bluefin-portal",
+    )
+    assert agreeing.project_id == "bluefin-portal"
+
+
+def test_contention_is_measured_over_the_corpus_not_the_page(vault):
+    """A competing project below the caller's page must still be detected.
+
+    Bounding the probe to a fixed window only shrinks the range in which a
+    rival project can hide; it never closes it.
+    """
+    backend, _ = vault
+    for page in (1, 2, 3, 5, 10):
+        scoped = backend.search_scoped(COLLIDING_QUERY, top_k=page, min_score=0.0)
+        assert scoped.suppressed, f"contention missed at top_k={page}"
+
+
 def test_env_pin_resolves_scope(vault, monkeypatch):
     backend, tmp_path = vault
     monkeypatch.setenv("TOKENPAK_PROJECT", "echo-cart")
