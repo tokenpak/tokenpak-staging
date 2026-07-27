@@ -349,26 +349,63 @@ def test_async_backpressure_middleware_installed_in_app():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="Async backend (server_async.py) exists but integration into ProxyServer.start() not yet implemented. Sync backend (BaseHTTPRequestHandler) is working correctly."
-)
-def test_start_proxy_uses_async_backend():
-    """start_proxy() must be usable and return a ProxyServer with async backend."""
+def test_async_backend_is_quarantined_not_production():
+    """`start_proxy()` must NOT select the async backend.
+
+    Replaces a skipped test that asserted the opposite — that `start_proxy()`
+    exposes `_async_thread`. That test encoded an aspiration, was skipped, and so
+    pinned nothing for months while the module continued to present as
+    production-available.
+
+    The async server does not carry the sync path's governance gates: no
+    spend-guard evaluation, no DLP outbound scan, and a narrower `INTERCEPT_HOSTS`
+    set that would leave some provider traffic ungoverned. Wiring it into
+    production would silently bypass cost control and secret scanning.
+
+    This test is the enforcement of that quarantine. It fails the moment the
+    async backend is wired in — which is correct: reviving it is a governance
+    decision with a written contract (see the module docstring), not a code
+    change that should pass CI silently.
+    """
+    from tokenpak.proxy import server_async
     from tokenpak.proxy.server import start_proxy
+
+    assert server_async.EXPERIMENTAL_NOT_PRODUCTION is True, (
+        "server_async is quarantined; flipping EXPERIMENTAL_NOT_PRODUCTION is a "
+        "governance change requiring the revival contract in its module docstring"
+    )
 
     TEMP_PORT = 19867
     ps = start_proxy(host="127.0.0.1", port=TEMP_PORT, blocking=False)
     try:
         _wait_for_port(TEMP_PORT, timeout=8)
-        # Verify it bound successfully by hitting /health on the temp port
         req = urllib.request.Request(f"http://127.0.0.1:{TEMP_PORT}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
-            assert resp.status == 200
-        assert ps is not None
-        # Async backend should be running (async thread set)
-        assert hasattr(ps, "_async_thread"), "ProxyServer should have _async_thread attribute"
+            assert resp.status == 200, "the sync proxy must still serve /health"
+
+        assert not hasattr(ps, "_async_thread"), (
+            "ProxyServer exposes _async_thread — the async backend appears wired "
+            "into production selection, which the quarantine forbids until the "
+            "revival contract is satisfied"
+        )
     finally:
         ps.stop()
+
+
+def test_async_module_documents_why_it_is_quarantined():
+    """The quarantine must be discoverable from the module, not only from a ruling.
+
+    A decision recorded only in governance is invisible to someone reading the
+    code. This pins the reasoning in place so the next reader learns *why*
+    before deciding to wire it up.
+    """
+    from tokenpak.proxy import server_async
+
+    doc = server_async.__doc__ or ""
+    assert "EXPERIMENTAL, NOT PRODUCTION" in doc
+    assert "Revival contract" in doc
+    for gate in ("spend-guard", "DLP"):
+        assert gate in doc, f"the docstring must state that {gate} is absent on this path"
 
 
 # ---------------------------------------------------------------------------
