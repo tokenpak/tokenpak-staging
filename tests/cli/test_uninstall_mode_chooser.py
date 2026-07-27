@@ -79,4 +79,23 @@ def test_non_interactive_error_does_not_repeat_the_untruth(monkeypatch, capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "purge everything" not in err
-    assert "journal" in err and "capsules" in err
+    assert "journal" in err and "budget" in err and "capsules" in err
+
+
+@pytest.mark.parametrize("destroyed", ["Paks", "templates", "cards", "license"])
+def test_both_surfaces_name_the_user_content_hard_destroys(destroyed, monkeypatch, capsys):
+    """`--hard` deletes saved Paks, templates, cards and the license.
+
+    Describing that as "configuration, caches and databases" is wrong in the
+    dangerous direction: a user who trusts it keeps their Paks in their head as
+    surviving, and they do not. Both the prompt and the scripted error must say
+    so, or the command tells two stories again.
+    """
+    monkeypatch.setattr("builtins.input", lambda *_a: "")
+    U._choose_mode()
+    assert destroyed.lower() in capsys.readouterr().out.lower()
+
+    monkeypatch.setattr(U.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(U.sys.stdout, "isatty", lambda: False, raising=False)
+    U.run_uninstall()
+    assert destroyed.lower() in capsys.readouterr().err.lower()

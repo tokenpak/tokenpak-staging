@@ -527,8 +527,9 @@ def _choose_mode() -> "Optional[str]":
     print("      tokenpak. Configuration, history and saved data are all kept.")
     print("      Reversible at any time with `tokenpak setup`.")
     print()
-    print(f"  {_c('[2] Remove stored state', _YELLOW)} — un-route, then delete configuration,")
-    print("      caches and the local databases, and offer to remove the package.")
+    print(f"  {_c('[2] Remove stored state', _YELLOW)} — un-route, then delete your")
+    print("      configuration, caches, local databases, saved Paks, templates,")
+    print("      cards and license, and offer to remove the package.")
     print("      Your session journal, budget history and capsules are KEPT.")
     print()
     print("  [q] Cancel")
@@ -572,9 +573,10 @@ def run_uninstall(
         interactive = sys.stdin.isatty() and sys.stdout.isatty() and not output_json
         if not interactive:
             _emit_error(
-                "specify --soft (un-route; keeps everything) or --hard "
-                "(also delete config, caches and local databases; keeps the "
-                "session journal, budget history and capsules)",
+                "specify --soft (un-route; keeps everything) or --hard (also "
+                "delete config, caches, databases, saved Paks, templates, cards "
+                "and license; keeps the session journal, budget history and "
+                "capsules)",
                 output_json,
             )
             return 2
