@@ -20,6 +20,20 @@ Schema v1 (``~/.tokenpak/vault.yaml``)::
         last_index_status: "ok"            # optional; ok | failed | running
         last_index_duration_ms: 1234       # optional; updated by reindex flags
         last_index_files: 42               # optional; updated by reindex flags
+    projects:                              # optional; project scope registry
+      - id: acme-storefront
+        aliases: [acme, storefront]
+        roots:
+          - path: /abs/path/workbench
+            role: workbench
+          - path: /abs/path/staging
+            role: staging
+
+``paths:`` says *what to index*; ``projects:`` says *what belongs to whom* so
+retrieval can scope results to one project instead of blending several. The two
+are independent — a path may be indexed without being claimed by any project,
+and a project root need not be separately registered under ``paths:``. See
+:mod:`tokenpak.vault.project_scope` for the resolution rules.
 
 Env overrides:
 
@@ -38,7 +52,10 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, cast
+from typing import TYPE_CHECKING, Iterable, Optional, cast
+
+if TYPE_CHECKING:
+    from tokenpak.vault.project_scope import ProjectRegistry
 
 SCHEMA_VERSION = 1
 
@@ -101,12 +118,36 @@ class VaultConfig:
 
     version: int = SCHEMA_VERSION
     paths: list[VaultPathEntry] = field(default_factory=list)
+    projects: list[dict[str, object]] = field(default_factory=list)
+    """Optional project registry (see :mod:`tokenpak.vault.project_scope`).
+
+    Held as raw mappings so this module stays a pure config reader: validation,
+    conflict detection and prefix resolution belong to the scope resolver, which
+    raises on a malformed declaration rather than silently degrading.
+
+    Additive within schema v1 — a config without ``projects:`` loads and behaves
+    exactly as before, and an older build ignores the key rather than failing.
+    """
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        d: dict[str, object] = {
             "version": self.version,
             "paths": [p.to_dict() for p in self.paths],
         }
+        # Omit when empty so untouched configs round-trip byte-identical.
+        if self.projects:
+            d["projects"] = self.projects
+        return d
+
+    def registry(self) -> "ProjectRegistry":
+        """Build the project registry declared by this config.
+
+        Raises:
+            ScopeConflictError: if the declaration is malformed or ambiguous.
+        """
+        from tokenpak.vault.project_scope import ProjectRegistry
+
+        return ProjectRegistry.from_config(self.projects)
 
     def find(self, path: str) -> Optional[VaultPathEntry]:
         """Return the registered entry for ``path`` (normalized), or None."""
@@ -195,7 +236,17 @@ def load(path: Optional[Path] = None) -> VaultConfig:
             )
         )
 
-    return VaultConfig(version=version, paths=entries)
+    raw_projects = raw.get("projects", [])
+    if raw_projects is None:
+        raw_projects = []
+    if not isinstance(raw_projects, list):
+        raise ValueError("vault.yaml: projects must be a list")
+
+    return VaultConfig(
+        version=version,
+        paths=entries,
+        projects=cast(list[dict[str, object]], raw_projects),
+    )
 
 
 def save(cfg: VaultConfig, path: Optional[Path] = None) -> Path:

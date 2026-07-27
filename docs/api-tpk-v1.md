@@ -44,16 +44,47 @@ Returns proxy version + uptime + vault status.
 
 BM25 search over the indexed vault. `limit` defaults to 5, capped at 20.
 
+Optional scope parameters:
+
+| Param | Purpose |
+|---|---|
+| `project` | Restrict results to a declared project id. Blocks outside it are never scored. |
+| `cwd` | Absolute directory used to infer the project when `project` is absent. |
+
 ```json
 {
  "query": "credential refresh",
  "count": 2,
+ "scope": { "project": "acme-storefront", "resolved_by": "explicit" },
  "results": [
  { "block_id": "...", "path": "...", "score": 14.437,
  "tokens": 312, "preview": "..." }
  ]
 }
 ```
+
+`resolved_by` reports which signal determined the scope: `explicit`, `env`,
+`cwd`, `query`, `no_registry`, or `unresolved`.
+
+**`409 ambiguous_project_scope`** — no scope could be resolved and the results
+span more than one project. The query is under-specified rather than failed, so
+the candidates come back for the caller to choose from:
+
+```json
+{
+ "error": "ambiguous_project_scope",
+ "detail": "query matched multiple projects and no scope was resolved; retry with project=<id>",
+ "candidates": ["acme-storefront", "bluefin-portal"],
+ "results": []
+}
+```
+
+Returning nothing here is deliberate: a blend of two projects reads exactly like
+a single coherent answer, and nothing downstream can tell the difference. See
+[project scoping](configuration/project-scoping.md).
+
+**`400 invalid_project_scope`** — `project` (or `$TOKENPAK_PROJECT`) names a
+project that is not declared.
 
 ### `GET /tpk/v1/vault/block/{block_id}`
 

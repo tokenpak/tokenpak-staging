@@ -349,8 +349,58 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
         _send_error(handler, 503, "vault_unavailable", "no index.json found")
         return
 
+    # Project scope. ``search_scoped`` exists only on the SQLite backend; the
+    # json_blocks backend has no membership table, so fall back to the unscoped
+    # call rather than failing the request.
+    project = (qs.get("project", [""])[0] or "").strip() or None
+    cwd = (qs.get("cwd", [""])[0] or "").strip() or None
+    scope_meta: dict[str, object] = {}
     try:
-        results = vi.search(query, top_k=limit)
+        if hasattr(vi, "search_scoped"):
+            scoped = vi.search_scoped(query, top_k=limit, project=project, cwd=cwd)
+            results = scoped.results
+            scope_meta = {
+                "project": scoped.project_id,
+                "resolved_by": scoped.scope.source if scoped.scope else "unknown",
+            }
+            if scoped.suppressed:
+                # Not an error: the query is under-specified, and the caller
+                # needs the candidate list to ask a better one.
+                _send_json(
+                    handler,
+                    409,
+                    {
+                        "error": "ambiguous_project_scope",
+                        "detail": (
+                            "query matched multiple projects and no scope was "
+                            "resolved; retry with project=<id>"
+                        ),
+                        "candidates": list(scoped.spanned),
+                        "results": [],
+                    },
+                )
+                return
+            if scoped.spanned:
+                scope_meta["spanned"] = list(scoped.spanned)
+        elif project or cwd:
+            # The active backend cannot scope. Answering an explicitly scoped
+            # request with unscoped results would be a silent downgrade of a
+            # safety property — the caller would have no way to know the scope
+            # was dropped. Refuse instead.
+            _send_error(
+                handler,
+                501,
+                "scoping_unsupported",
+                f"retrieval backend {type(vi).__name__} cannot honor a project "
+                "scope; set vault.retrieval_backend=sqlite to enable scoping",
+            )
+            return
+        else:
+            results = vi.search(query, top_k=limit)
+    except ValueError as exc:
+        # Unknown project id / bad TOKENPAK_PROJECT pin.
+        _send_error(handler, 400, "invalid_project_scope", str(exc))
+        return
     except Exception as exc:
         _send_error(handler, 500, "search_failed", str(exc))
         return
@@ -384,7 +434,10 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
                     "last_timestamp": ct.get("last_timestamp"),
                 }
         out.append(row)
-    _send_json(handler, 200, {"query": query, "count": len(out), "results": out})
+    payload: dict[str, object] = {"query": query, "count": len(out), "results": out}
+    if scope_meta:
+        payload["scope"] = scope_meta
+    _send_json(handler, 200, payload)
 
 
 def _handle_vault_block(handler: Any, block_id: str) -> None:

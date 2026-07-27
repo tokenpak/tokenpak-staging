@@ -410,7 +410,25 @@ def _handle_vault_search(state: CompanionState, args: dict[str, Any]) -> str:
         limit = 5
     limit = max(1, min(20, limit))
 
-    status, body = _proxy_get("/tpk/v1/vault/search", {"q": query, "limit": limit})
+    params: dict[str, Any] = {"q": query, "limit": limit}
+    # Scope the search to one project. Without it a vault holding several
+    # projects can return a blend that reads as a single coherent answer.
+    project = str(args.get("project", "")).strip()
+    if project:
+        params["project"] = project
+    # Forwarded only when the caller supplies it. The companion process's own
+    # cwd is not a trustworthy stand-in — the MCP server may be launched from
+    # anywhere, and inferring scope from the wrong directory would produce a
+    # confidently mis-scoped answer, which is the failure mode being fixed.
+    cwd = str(args.get("cwd", "")).strip()
+    if cwd:
+        params["cwd"] = cwd
+
+    status, body = _proxy_get("/tpk/v1/vault/search", params)
+    if status == 409:
+        # Under-specified rather than failed — surface the candidates so the
+        # model can ask which project instead of guessing.
+        return json.dumps(body, indent=2)
     if status == 0:
         return json.dumps(
             {
@@ -554,7 +572,15 @@ TOOLS: list[ToolDef] = [
             "with relevance scores. Use when the user references project docs, "
             "code, or knowledge stored in the local vault. The proxy also "
             "auto-injects vault context, but this tool lets you query "
-            "explicitly (e.g. narrowing to a specific concept)."
+            "explicitly (e.g. narrowing to a specific concept). "
+            "If the vault holds several projects, pass `project` to scope the "
+            "search. Project scoping requires a configured project registry and "
+            "a backend that supports it: when supported, an under-specified "
+            "query returns `ambiguous_project_scope` with the candidates instead "
+            "of blending projects, and an unsupported `project` request returns "
+            "`scoping_unsupported` rather than silently ignoring the scope. "
+            "Where scoping is unavailable, results may span projects — check the "
+            "`scope` field before treating results as belonging to one project."
         ),
         input_schema={
             "type": "object",
@@ -564,6 +590,22 @@ TOOLS: list[ToolDef] = [
                     "type": "integer",
                     "description": "Max results (default 5, max 20)",
                     "default": 5,
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Restrict results to this declared project id. Blocks "
+                        "outside it are never scored. Omit to resolve scope "
+                        "from the working directory or the query text."
+                    ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": (
+                        "Absolute working directory of the task, used to infer "
+                        "the project when `project` is absent. Pass it only if "
+                        "it really is the directory the work concerns."
+                    ),
                 },
             },
             "required": ["query"],

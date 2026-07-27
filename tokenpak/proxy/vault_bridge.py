@@ -1312,10 +1312,28 @@ def inject_vault_context(
     # Augment mode: if a semantic scorer is configured, fuse BM25 + semantic scores
     if semantic_scorer is not None:
         try:
-            bm25_results = vault_idx.search(
-                query, top_k=INJECT_TOP_K * 2, min_score=INJECT_MIN_SCORE
-            )
-            if bm25_results:
+            # Scope the candidate fetch. Calling the unscoped ``search`` here
+            # injected a cross-project blend on every request that had a semantic
+            # scorer configured — and because the fallback below *is* scoped,
+            # protection engaged only when the scorer happened to throw. A
+            # guarantee contingent on an unrelated component failing is not a
+            # guarantee. Worse, role exclusion applied on this path while project
+            # membership did not, so it read as working while half-applied.
+            suppressed_by_scope = False
+            if hasattr(vault_idx, "search_scoped"):
+                _scoped = vault_idx.search_scoped(
+                    query, top_k=INJECT_TOP_K * 2, min_score=INJECT_MIN_SCORE
+                )
+                suppressed_by_scope = _scoped.suppressed
+                bm25_results = _scoped.results
+            else:
+                bm25_results = vault_idx.search(
+                    query, top_k=INJECT_TOP_K * 2, min_score=INJECT_MIN_SCORE
+                )
+            if suppressed_by_scope:
+                # Ambiguous scope: contribute nothing rather than a blend.
+                injection_text, tokens_used, source_refs = "", 0, []
+            elif bm25_results:
                 block_ids = [
                     block_id
                     for block, _ in bm25_results
