@@ -343,6 +343,60 @@ the `.jsonl` transcript without an LLM call — deterministic and free.
 
 ---
 
+## Disk footprint and retention
+
+Everything the companion writes outside its package directory lives under the
+journal directory (`~/.tokenpak/companion/` by default, overridable with
+`TOKENPAK_COMPANION_JOURNAL_DIR`).
+
+| Path | Holds | Growth | Auto-pruned |
+|---|---|---|---|
+| `codex/sessions/<id>/` | Per-session Codex home — the isolation boundary for `tokenpak codex` | Tens of MB per session | **Yes** — see caps below |
+| `codex/workspaces/` | Per-workspace Codex state | Moderate | Yes, with its session |
+| `journal.db` | Session and entry history | A few MB | **No** — see below |
+| `recall.db` | Recall index | Small | No |
+| `budget.db` | Spend and budget history | Small | No |
+| `capsules/` | Session capsules (Markdown) | ~2–10 KB each | No |
+| `run/` | Generated launch config — MCP, settings, prompt fragment | Fixed, rewritten each launch | Overwritten |
+
+### Codex session-home retention
+
+Session homes are the largest consumer, so they are the only tree with an
+automatic sweep. Three caps apply, and homes are evicted when **any** is
+exceeded:
+
+| Cap | Value |
+|---|---|
+| Maximum homes retained | 5 |
+| Maximum age | 7 days |
+| Maximum total size | 500 MB |
+
+`tokenpak doctor` reports current usage against all three. The sweep is
+conservative by design: it takes a lock, quarantines before deleting, and
+writes a receipt, so an interrupted sweep never half-deletes a home.
+
+### What is deliberately not auto-pruned
+
+`journal.db` and `capsules/` are the substrate for `journal_read`,
+`load_capsule`, and cross-session recall — they are memory, not cache. Deleting
+them reclaims very little space and permanently removes the history those
+features read. They are left under your control rather than swept.
+
+### Reclaiming space manually
+
+```bash
+tokenpak doctor                      # current usage against every cap
+du -sh ~/.tokenpak/companion/*       # what is actually large
+
+rm -rf ~/.tokenpak/companion/codex/sessions/<id>    # one session home
+rm ~/.tokenpak/companion/budget.db                  # resets spend history
+```
+
+Removing a session home only costs the ability to resume that Codex session.
+Removing `journal.db` or `capsules/` costs recall of past sessions.
+
+---
+
 ## Troubleshooting
 
 ### MCP tools not available in Claude Code
