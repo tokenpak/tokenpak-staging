@@ -101,9 +101,29 @@ def test_nothing_is_reported_when_disabled(fake_retrieval):
     assert stage.tokens_delta == 0
 
 
-def test_body_is_untouched_when_disabled(fake_retrieval):
-    out, _stage = stage_vault_injection(_req(), {"vault_injection": "json_inject"})
-    assert out.body == BODY
+def test_body_is_untouched_when_disabled(monkeypatch):
+    """The stub must MUTATE, or this test proves nothing.
+
+    An earlier version used a stub that returned the body unchanged — so
+    `out.body == BODY` held whether or not the guard existed, and would hold even
+    with injection fully working. Review confirmed it passed with the guard
+    deleted. A test that cannot fail is not coverage.
+    """
+    import tokenpak.proxy.vault_bridge as vb
+
+    mutated = b'{"model":"x","messages":[{"role":"user","content":"MUTATED"}]}'
+    monkeypatch.setattr(
+        vb,
+        "inject_vault_context",
+        lambda body, adapter=None, request=None: (mutated, 412, ["decisions/auth.md"]),
+        raising=False,
+    )
+
+    out, stage = stage_vault_injection(_req(), {"vault_injection": "json_inject"})
+
+    assert stage.skip_reason == "disabled_by_config"
+    assert out.body == BODY, "the guard did not prevent a mutating injector from running"
+    assert out.body != mutated
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +141,6 @@ def test_enabling_the_switch_lets_the_stage_run(injection_enabled, fake_retrieva
     _out, stage = stage_vault_injection(_req(), {"vault_injection": "json_inject"})
 
     assert stage.skip_reason != "disabled_by_config"
-    assert not stage.skipped or stage.skip_reason != "disabled_by_config"
 
 
 def test_switch_is_read_at_call_time_not_import_time(fake_retrieval, monkeypatch):
