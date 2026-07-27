@@ -533,7 +533,10 @@ def _build_plan(
                 ops.append(
                     Op(
                         describe=f"Keep {kept} (no archive was written — your way back)",
-                        run=lambda: (_OUTCOME_SKIP, "retained: last route back to pre-install config"),
+                        run=lambda: (
+                            _OUTCOME_SKIP,
+                            "retained: last route back to pre-install config",
+                        ),
                         phase="purge",
                     )
                 )
