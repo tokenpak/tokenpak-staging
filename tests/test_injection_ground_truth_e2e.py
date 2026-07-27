@@ -117,6 +117,30 @@ def vault_with_content(monkeypatch):
     return _Idx
 
 
+@pytest.fixture
+def injection_stage_spy(monkeypatch):
+    """Record whether the vault stage actually executed.
+
+    The instrument's first version asserted only that the upstream received a
+    request. That is necessary and NOT sufficient: a request can arrive having
+    skipped the pipeline entirely, in which case "the marker is absent" says
+    nothing about injection.
+
+    An instrument must prove the code under test ran.
+    """
+    import tokenpak.proxy.pipeline as pl
+
+    calls: list[bool] = []
+    real = pl.stage_vault_injection
+
+    def _spy(request, policy, **kw):
+        calls.append(True)
+        return real(request, policy, **kw)
+
+    monkeypatch.setattr(pl, "stage_vault_injection", _spy, raising=True)
+    return calls
+
+
 PROXY_PORT = 18873
 
 
@@ -132,9 +156,17 @@ def intercepted_localhost(monkeypatch):
     Custom providers already extend this set at runtime (``config.py``), so this
     is the supported seam rather than a test-only hack.
     """
-    from tokenpak.proxy import router
+    from tokenpak.proxy import router, server
 
     patched = set(router.INTERCEPT_HOSTS) | {"127.0.0.1"}
+
+    # `server.py` does `from .router import INTERCEPT_HOSTS` — it binds the set
+    # BY VALUE at import time. Patching only `router.INTERCEPT_HOSTS` rebinds a
+    # name `server` never reads, so `should_log` at server.py stays False, the
+    # pipeline never runs, and this suite would report "no injection" for a
+    # request that was never even eligible. Patch the binding that is actually
+    # read.
+    monkeypatch.setattr(server, "INTERCEPT_HOSTS", patched, raising=False)
     monkeypatch.setattr(router, "INTERCEPT_HOSTS", patched, raising=False)
     try:
         from tokenpak.proxy import fallback
@@ -170,6 +202,13 @@ def _send(body: dict, upstream_url: str) -> None:
             "Content-Type": "application/json",
             "x-api-key": "test-key",
             "anthropic-version": "2023-06-01",
+            # Classifies the request onto the claude-code route, which is the
+            # only route whose policy is byte-preserved — and the byte-preserved
+            # branch is the ONLY place the request pipeline is invoked. Without
+            # this header the request takes the full_pipeline branch, which never
+            # calls the pipeline at all, and the suite would report "no injection"
+            # for a request that never reached the injector.
+            "X-Claude-Code-Session-Id": "ground-truth-e2e",
         },
         method="POST",
     )
@@ -208,6 +247,26 @@ def test_the_harness_records_what_upstream_receives(proxy, upstream):
     )
 
 
+def test_the_request_actually_reaches_the_injection_stage(
+    proxy, upstream, vault_with_content, injection_stage_spy
+):
+    """The stage under test must RUN, or this suite proves nothing.
+
+    Without this, a closed eligibility gate produces exactly the same observable
+    result as a broken injector: no marker upstream. The first version of this
+    suite had that flaw — it patched a rebound copy of INTERCEPT_HOSTS, so
+    `should_log` stayed False and the pipeline never ran.
+    """
+    _, upstream_url = proxy
+
+    _send(_eligible_request(), upstream_url)
+
+    assert injection_stage_spy, (
+        "stage_vault_injection was never invoked — the request did not reach the "
+        "pipeline, so any conclusion about injection from this suite is invalid"
+    )
+
+
 @pytest.mark.xfail(
     reason=(
         "KNOWN P0: vault injection does not modify the request. The adapter resolves "
@@ -217,7 +276,9 @@ def test_the_harness_records_what_upstream_receives(proxy, upstream):
     ),
     strict=True,
 )
-def test_vault_content_reaches_the_provider(proxy, upstream, vault_with_content):
+def test_vault_content_reaches_the_provider(
+    proxy, upstream, vault_with_content, injection_stage_spy
+):
     """The claim, asserted where it is either true or false.
 
     Marked xfail(strict) deliberately: it documents the defect as executable
@@ -230,6 +291,7 @@ def test_vault_content_reaches_the_provider(proxy, upstream, vault_with_content)
     _send(_eligible_request(), upstream_url)
 
     assert recorder.received_bodies, "nothing reached the upstream"
+    assert injection_stage_spy, "the injection stage never ran — result would be meaningless"
     sent = b"".join(recorder.received_bodies).decode("utf-8", "replace")
 
     assert VAULT_MARKER in sent, (
