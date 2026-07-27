@@ -1,7 +1,14 @@
 """
 tests/benchmarks/test_headline_claim.py — Headline token-reduction benchmark.
 
-Pins the 30-50% compression claim from README line 1 and line 70.
+Regression guard on the compression pipeline: the fixture below must keep
+reducing within a fixed band.
+
+This pins *pipeline behavior against a deterministic corpus*, not a public
+claim. The README makes no percentage promise, and the messaging standard
+prohibits savings claims outright — so a red result here means the pipeline or
+the fixture moved, never that public copy needs a number restored.
+
 Standard 21 §9.8 — process-enforced blocking job.
 Do NOT merge a PR to main if this test is red.
 
@@ -26,7 +33,8 @@ from tokenpak.compression.pipeline import CompressionPipeline  # noqa: E402
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "headline_corpus.txt"
 
-# Inclusive band matching the README claim; standard 07 carries the ±2pp tolerance.
+# Inclusive band for the fixture below — a measured property of this corpus, not
+# a published figure. Move it only alongside a re-measured fixture.
 REDUCTION_MIN = 30.0
 REDUCTION_MAX = 50.0
 
@@ -85,8 +93,9 @@ def test_headline_claim(tmp_path: Path) -> None:
     )
 
     assert REDUCTION_MIN <= reduction_pct <= REDUCTION_MAX, (
-        f"Headline claim failure: {reduction_pct:.1f}% not in "
-        f"[{REDUCTION_MIN}, {REDUCTION_MAX}]. "
-        f"README promises 30–50%. "
-        f"If the pipeline changed, update the fixture or escalate to revise the claim."
+        f"Compression regression: {reduction_pct:.1f}% not in "
+        f"[{REDUCTION_MIN}, {REDUCTION_MAX}] on the deterministic fixture. "
+        f"This band is a measured property of that corpus, not a published "
+        f"figure — do not 'fix' it by changing public copy. Investigate the "
+        f"pipeline change, or re-measure and move the fixture and band together."
     )
