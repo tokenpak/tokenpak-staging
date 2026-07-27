@@ -94,16 +94,18 @@ def reset_registry_cache() -> None:
 
 
 def _infer_project(source_path: str) -> Optional[str]:
-    """Best-effort project scope inference from a source path.
+    """Best-effort project scope for an emitted Pak, resolved from a source path.
 
-    Returns the first path segment past the user's home directory — for
-    paths under ``/home/<user>/`` or ``/Users/<user>/`` this is the project
-    name; for other paths the first content-bearing segment.
+    Resolution order: the declared project registry first; the legacy path-shape
+    derivation only when no registry is declared, so installs that never declared
+    one keep their previous behaviour. Returns None when a registry is declared
+    but does not claim this path, or claims it for more than one project.
 
-    Returns None when no segment qualifies — recall scoring treats None as
-    "unscoped" rather than over-claiming a project. This is conservative
-    by design: false positives in project_scope hard-filter on the recall
-    ranking model.
+    The result is *descriptive* — it populates ``PakScope.project`` on the emitted
+    Pak. Nothing in the tree filters on it: the ``project=`` filter used by Pak
+    listing reads the ``paks.project`` column, which is written through a separate
+    path. So a None here narrows nothing and widens nothing; it only declines to
+    assert a project the registry did not.
     """
     if not source_path:
         return None

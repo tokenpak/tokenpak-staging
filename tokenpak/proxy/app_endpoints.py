@@ -478,7 +478,8 @@ def _handle_vault_block(
     # tell which project it received. It is *enforced* only against an explicit
     # request: the caller named this block, so refusing an unscoped fetch would
     # break existing callers without preventing a blend — one named block is not
-    # a blend. That is the §4A.5 trade, taken deliberately.
+    # a blend. Refusing a closed failure in favour of an open one is the trade
+    # this deliberately does not make; here neither direction leaks.
     requested_project = (qs.get("project", [""])[0] or "").strip() if qs else ""
     block_projects: list[str] = []
     try:

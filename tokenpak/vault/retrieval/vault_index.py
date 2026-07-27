@@ -82,16 +82,25 @@ def _project_scope_filter(
 ):
     """Build a membership predicate, or None when nothing would be filtered.
 
-    Registry state is cached per process: this index is constructed per MCP
+    A *successful* load is cached per process: this index is constructed per MCP
     request, so re-reading vault.yaml on every construction would put a config
     parse on the request path.
+
+    A *failed* load is deliberately not cached. The MCP server is long-lived, so
+    pinning a failure would keep a vault.yaml the user has since corrected broken
+    for the rest of the session — the retry costs one parse on a path that is
+    already refusing. Note the remaining limit: a config edited from one valid
+    state to another is not picked up until the process restarts.
     """
     global _PROJECT_REGISTRY_STATE
-    if _PROJECT_REGISTRY_STATE is None:
+    state = _PROJECT_REGISTRY_STATE
+    if state is None:
         from tokenpak.vault.sqlite_backend import _load_registry
 
-        _PROJECT_REGISTRY_STATE = _load_registry()
-    registry, error = _PROJECT_REGISTRY_STATE
+        state = _load_registry()
+        if state[1] is None:
+            _PROJECT_REGISTRY_STATE = state
+    registry, error = state
     if error is not None:
         # A declaration that exists but cannot be read must not degrade to
         # "no scoping" — that is the fail-open this whole feature exists to
@@ -110,17 +119,6 @@ def _project_scope_filter(
 
     scope_filter = ScopeFilter(registry, project, exclude_roles)
     return scope_filter if scope_filter.active else None
-
-
-def reset_project_registry_cache() -> None:
-    """Drop the cached registry so the next query re-reads ``vault.yaml``.
-
-    The MCP server is a long-lived process, so without this a transient load
-    failure — or a vault.yaml the user has since corrected — stays pinned for
-    the life of the session.
-    """
-    global _PROJECT_REGISTRY_STATE
-    _PROJECT_REGISTRY_STATE = None
 
 
 class VaultIndex:
