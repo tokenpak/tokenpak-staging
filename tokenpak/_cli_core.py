@@ -883,6 +883,46 @@ def cmd_help(args: CommandArgs) -> None:
         _print_full_help()
 
 
+# ── TOKENPAK_HOME sandbox guard ───────────────────────────────────────────────
+#
+# TOKENPAK_HOME exists to sandbox writes (CI, multi-tenant hosts). A symlink
+# planted inside the override that points at the live config defeats a purely
+# textual check, because open(path, "w") follows links.
+#
+# This started as a closure inside cmd_setup guarding one path. Review found the
+# same write reachable through two other unguarded targets and a second command,
+# so it is module-level: a guard that protects one of a command's write targets
+# protects nothing.
+
+
+def _home_override_escape(*candidates: Path) -> Optional[str]:
+    """Return a refusal message if any candidate resolves outside TOKENPAK_HOME.
+
+    ``None`` when the override is unset, or when every candidate stays inside it.
+    Every path a command may WRITE must be passed — including directories, whose
+    creation and logs land outside the sandbox just as a config file would.
+    """
+    raw = os.environ.get("TOKENPAK_HOME", "").strip()
+    if not raw:
+        return None
+    root = Path(raw).expanduser().resolve()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            # resolve() follows symlinks, which is the point.
+            candidate.resolve().relative_to(root)
+        except (ValueError, OSError, RuntimeError):
+            # RuntimeError: Path.resolve() raises it on a symlink loop. Omitting
+            # it turned a refusal into an uncaught traceback.
+            return (
+                f"✗ Refusing to write outside TOKENPAK_HOME: {candidate}\n"
+                f"  resolves outside {root}.\n"
+                "  TOKENPAK_HOME exists to sandbox; a symlinked target defeats that."
+            )
+    return None
+
+
 # ── Alias commands ────────────────────────────────────────────────────────────
 
 
@@ -904,6 +944,17 @@ def cmd_init(args: CommandArgs) -> int:
     config_file = _p.config_write_path()
     existing_config = _p.config_read_path()
     env_file = config_dir / ".env"
+
+    # `init` had no sandbox guard at all — a second writer of config_write_path()
+    # plus .env. Driven through a pty it overwrote the real config while printing
+    # a success banner naming the sandbox, so the false claim rode on top of the
+    # data loss. Guarded before any prompt, so the refusal costs no keystrokes.
+    _escape = _home_override_escape(config_dir, config_file, env_file)
+    if _escape:
+        from tokenpak.cli.exit_codes import EXIT_FAILURE as _EXIT_FAILURE
+
+        print(_escape)
+        return _EXIT_FAILURE
 
     # `init` is interactive by nature. Every prompt below aborts on a closed
     # stdin, and click raises Abort — which surfaced as a raw traceback and a
@@ -1060,31 +1111,19 @@ def cmd_setup(args: CommandArgs) -> int:
     # run into a write against the operator's live config: `TOKENPAK_HOME=/tmp/x
     # tokenpak setup --yes` wrote nothing to /tmp/x and overwrote the real
     # ~/.tokenpak/config.yaml, with no backup.
-    _home_override = os.environ.get("TOKENPAK_HOME", "").strip()
-    if _home_override:
-        _override_root = Path(_home_override).expanduser().resolve()
-
-        def _inside_override(candidate: Path) -> bool:
-            # resolve() follows symlinks, which is the point: a symlink placed
-            # inside the override that points at the live config would otherwise
-            # pass a purely textual check and then be written through, because
-            # open(path, "w") follows links.
-            try:
-                candidate.resolve().relative_to(_override_root)
-                return True
-            except (ValueError, OSError):
-                return False
-
-        if existing_config is not None and not _inside_override(existing_config):
+    if os.environ.get("TOKENPAK_HOME", "").strip():
+        if existing_config is not None and _home_override_escape(existing_config):
             existing_config = None
-        # The write target itself must also resolve inside the override. Detecting
-        # the escape on the *read* candidate while writing through an unresolved
-        # target left the hole open.
-        if not _inside_override(config_file):
-            print(f"✗ Refusing to write outside TOKENPAK_HOME: {config_file}")
-            print(f"  resolves to {config_file.resolve()}, outside {_override_root}")
-            print("  TOKENPAK_HOME exists to sandbox; a symlinked target defeats that.")
-            return EXIT_FAILURE
+    # EVERY write target must resolve inside the override, not just the config
+    # file. Guarding config_file alone still destroyed the real config through
+    # config_dir: `startup_log = config_dir / "proxy-startup.log"` is opened "w",
+    # so a planted symlink took the startup banner straight into the live config
+    # (51 → 1041 bytes, no backup). A guard that covers one of a command's write
+    # targets protects nothing.
+    _escape = _home_override_escape(config_dir, config_file)
+    if _escape:
+        print(_escape)
+        return EXIT_FAILURE
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
@@ -6360,10 +6399,28 @@ def cmd_config_validate(args: CommandArgs):
         except Exception:
             _modern = None
         if _modern is not None and _modern != _TOKENPAK_CFG:
-            print("✓ No legacy meta config to validate.")
-            print(f"  This install is configured at {_modern}.")
-            print("  To validate a proxy config file: tokenpak config validate --config <file>")
-            return EXIT_OK
+            # config_read_path() is an EXISTENCE probe. Claiming "✓ configured
+            # at <file>" on the strength of it made `config validate` exit 0 on a
+            # config that `start` (8) and `status` both refuse to parse — a
+            # fail-open regression against merge-base, on the file every modern
+            # install has. Validate means read it.
+            try:
+                import yaml as _v_yaml
+
+                with open(_modern, encoding="utf-8") as _vf:
+                    _v_yaml.safe_load(_vf)
+            except FileNotFoundError:
+                pass  # vanished between probe and read; fall through to the
+                # not-configured path below rather than claim either way.
+            except Exception as _v_exc:
+                print(f"✗ The config at {_modern} could not be parsed: {_v_exc}")
+                print("  This is a corrupt config, not a missing one — repair or remove the file.")
+                return EXIT_CORRUPT_STATE
+            else:
+                print("✓ No legacy meta config to validate.")
+                print(f"  This install is configured at {_modern}.")
+                print("  To validate a proxy config file: tokenpak config validate --config <file>")
+                return EXIT_OK
         print(f"✗ Could not read the TokenPak meta config at {_TOKENPAK_CFG}: {exc}")
         print("  This install has no configuration at all — run `tokenpak setup`.")
         print("  To validate a proxy config file instead: --config <file>")
