@@ -6155,6 +6155,7 @@ def cmd_uninstall(args: CommandArgs) -> int:
         purge=getattr(args, "purge", False),
         backup=getattr(args, "backup", None),
         no_backup=getattr(args, "no_backup", False),
+        confirm=getattr(args, "confirm", None),
     )
 
 
@@ -6511,6 +6512,15 @@ def _build_uninstall_parser(sub: Subparsers) -> None:
         action="store_true",
         dest="no_backup",
         help="With --purge: skip the backup archive",
+    )
+    p.add_argument(
+        "--confirm",
+        metavar="<word>",
+        default=None,
+        help=(
+            "With --purge and no terminal: pass DELETE to authorise irreversible "
+            "removal. --yes alone is not sufficient"
+        ),
     )
     p.add_argument(
         "--dry-run",

@@ -60,7 +60,9 @@ def test_backup_contains_protected_data_and_skips_sockets(home, tmp_path):
     assert any(n.endswith("companion/budget.db") for n in names)
     assert any(n.endswith("capsules/c1.json") for n in names)
     assert any("permissions.toml" in n for n in names)
-    # Live sockets are not restorable and must not be archived.
+    # Live sockets are not restorable and must not be archived. The socket used
+    # here sits in a genuine runtime dir; the prefix-scoped rule is covered
+    # directly in test_uninstall_purge_safety.py.
     assert not any(n.endswith(".sock") for n in names)
 
 
@@ -107,8 +109,10 @@ def test_confirmations_fail_safe_on_eof(monkeypatch):
         raise EOFError
 
     monkeypatch.setattr("builtins.input", _eof)
-    # A non-answer must keep data: back up yes, delete no, choose nothing.
-    assert U._confirm_backup() is True
+    # A non-answer aborts. `_confirm_backup` returning True here previously let
+    # Ctrl-C at the only prompt complete the uninstall — see
+    # test_uninstall_purge_safety.py for the regression tests.
+    assert U._confirm_backup() is None
     assert U._confirm_purge([], Path("/nonexistent"), "") is False
     assert U._choose_mode() is None
 

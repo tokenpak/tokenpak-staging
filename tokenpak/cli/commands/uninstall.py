@@ -365,6 +365,92 @@ def _purge_data_inventory(home: Path) -> "list[str]":
     return found
 
 
+#: Runtime directories excluded from the archive, matched as a path PREFIX
+#: relative to the home root — never as a bare component anywhere in the tree.
+#: Matching any component deleted real user data: a capsule stored under
+#: ``capsules/run/`` was skipped by the archive and removed by the purge.
+_BACKUP_SKIP_PREFIXES = (("companion", "run"), ("tunnels",))
+
+
+def _is_within(child: Path, parent: Path) -> bool:
+    """True when *child* is *parent* or lies underneath it, symlinks resolved."""
+    try:
+        c = child.resolve()
+        p = parent.resolve()
+    except (OSError, RuntimeError):  # pragma: no cover - defensive
+        return False
+    return c == p or p in c.parents
+
+
+def validate_purge_home(home: Path) -> Optional[str]:
+    """Return a refusal reason, or None when *home* is safe to remove wholesale.
+
+    ``--hard`` deleted only an allowlist of names, so a mis-set ``TOKENPAK_HOME``
+    was survivable. ``--purge`` removes the whole tree, so the bound has to come
+    from somewhere: refuse anything that is not recognisably a TokenPak home.
+    """
+    try:
+        resolved = home.resolve()
+    except (OSError, RuntimeError):
+        return f"{home} cannot be resolved"
+
+    if home.is_symlink():
+        return (
+            f"{home} is a symlink to {resolved}. Refusing: removing the link "
+            "would report success while leaving the data, and archiving it "
+            "would capture only the link."
+        )
+    if not resolved.exists():
+        return None  # nothing to delete; the plan will be a no-op
+    if resolved == Path(resolved.anchor) or len(resolved.parts) <= 2:
+        return f"{resolved} is a filesystem root or near-root"
+    for forbidden, label in (
+        (Path.home(), "your home directory"),
+        (Path.cwd(), "the current working directory"),
+        (Path("/tmp"), "/tmp"),
+    ):
+        try:
+            if resolved == forbidden.resolve():
+                return f"{resolved} is {label}, not a TokenPak home"
+        except (OSError, RuntimeError):  # pragma: no cover - defensive
+            continue
+    # Positive identification: it must look like something TokenPak wrote.
+    markers = (
+        "config.yaml",
+        "config.json",
+        "companion",
+        "monitor.db",
+        "telemetry.db",
+        "license.json",
+        ".seen_intro",
+        "templates",
+        "paks",
+        "index.json",
+    )
+    if not any((resolved / m).exists() for m in markers):
+        return (
+            f"{resolved} does not look like a TokenPak home (no recognised "
+            "state found). Refusing to delete a directory this command cannot "
+            "identify."
+        )
+    return None
+
+
+def validate_backup_dest(dest: Path, targets: "list[Path]") -> Optional[str]:
+    """Return a refusal reason when the archive would land inside a delete target.
+
+    Writing the archive into the tree being removed destroys it along with the
+    data it was taken to protect, while the receipt still reports success.
+    """
+    for t in targets:
+        if _is_within(dest, t):
+            return (
+                f"backup destination {dest} is inside {t}, which this run "
+                "deletes — the archive would be destroyed with it"
+            )
+    return None
+
+
 def _default_backup_path(now: Optional[Any] = None) -> Path:
     """Backup destination — deliberately outside every delete target."""
     import datetime as _dt
@@ -382,11 +468,24 @@ def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool,
     """
     import tarfile
 
-    def _filter(ti: "tarfile.TarInfo") -> "Optional[tarfile.TarInfo]":
-        if Path(ti.name).name.endswith(_BACKUP_SKIP_SUFFIXES):
+    skipped: list[str] = []
+
+    def _excluded(rel: "tuple[str, ...]") -> bool:
+        """Exclusion decided on the path RELATIVE to the tree root."""
+        if rel and rel[-1].endswith(_BACKUP_SKIP_SUFFIXES):
+            return True
+        return any(rel[: len(pre)] == pre for pre in _BACKUP_SKIP_PREFIXES)
+
+    def _filter_home(ti: "tarfile.TarInfo") -> "Optional[tarfile.TarInfo]":
+        rel = Path(ti.name).parts[1:]  # strip the arcname root
+        if _excluded(rel):
+            skipped.append(ti.name)
             return None
-        parts = Path(ti.name).parts
-        if "run" in parts or "tunnels" in parts:
+        return ti
+
+    def _filter_extra(ti: "tarfile.TarInfo") -> "Optional[tarfile.TarInfo]":
+        if Path(ti.name).name.endswith(_BACKUP_SKIP_SUFFIXES):
+            skipped.append(ti.name)
             return None
         return ti
 
@@ -396,13 +495,23 @@ def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool,
         except ValueError:
             return f"external/{p.name}"
 
+    # Files the archive must be able to restore. Anything deletable and not
+    # deliberately excluded has to appear, or the "verified backup" is a
+    # promise the archive cannot keep.
+    expected: set[str] = set()
+    if home.exists():
+        for f in home.rglob("*"):
+            if f.is_file() and not _excluded(f.relative_to(home).parts):
+                expected.add(f"{home.name}/{f.relative_to(home)}")
+
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(dest, "w:gz") as tar:
             if home.exists():
-                tar.add(home, arcname=home.name, filter=_filter)
+                # dereference: a symlinked home must archive the DATA, not the link.
+                tar.add(home, arcname=home.name, filter=_filter_home)
             for p in extras:
-                tar.add(p, arcname=_arcname(p), filter=_filter)
+                tar.add(p, arcname=_arcname(p), filter=_filter_extra)
     except Exception as exc:
         try:
             dest.unlink(missing_ok=True)
@@ -414,12 +523,25 @@ def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool,
         if not dest.exists() or dest.stat().st_size == 0:
             return False, "backup archive is missing or empty"
         with tarfile.open(dest, "r:gz") as tar:
-            if not tar.getnames():
-                return False, "backup archive contains no entries"
+            names = set(tar.getnames())
+        if not names:
+            return False, "backup archive contains no entries"
+        # The check that matters: does the archive actually hold what we delete?
+        missing = sorted(expected - names)
+        if missing:
+            preview = ", ".join(missing[:3])
+            more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+            return False, (
+                f"backup archive is missing {len(missing)} file(s) that this "
+                f"run would delete: {preview}{more}"
+            )
     except Exception as exc:
         return False, f"backup verification failed: {exc}"
 
-    return True, str(dest)
+    detail = str(dest)
+    if skipped:
+        detail += f"  (excluded {len(skipped)} socket/pid/lock/runtime entries)"
+    return True, detail
 
 
 def _enumerate_hard_targets(home: Path, keep_data: bool) -> "tuple[list[Path], list[Path]]":
@@ -605,17 +727,22 @@ def _confirm_hard(ops: list[Op], retained: list[Path], run_pip: bool) -> bool:
 _PURGE_CONFIRM_WORD = "DELETE"
 
 
-def _confirm_backup() -> bool:
-    """Ask whether to write a backup first. Defaults to yes.
+def _confirm_backup() -> "Optional[bool]":
+    """Ask whether to write a backup first. Enter accepts the default (yes).
 
-    Both EOF and Ctrl-C answer *yes*: every non-answer here has to fail
-    toward keeping the user's data, never toward destroying it.
+    Returns True (back up), False (skip), or **None meaning ABORT**.
+
+    A non-answer used to return True. That reads as "fail toward keeping the
+    data" and is wrong here: this is one question inside a destructive flow, and
+    answering it "yes" lets the flow continue to the deletion. An interrupt is
+    not an instruction to proceed more carefully — it is an instruction to
+    stop. Callers MUST treat None as "cancel the whole operation".
     """
     try:
         answer = input("\nGenerate a backup archive first? [Y/n] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        return True
+        return None
     return answer not in ("n", "no")
 
 
@@ -789,6 +916,7 @@ def run_uninstall(
     purge: bool = False,
     backup: "Optional[str]" = None,
     no_backup: bool = False,
+    confirm: "Optional[str]" = None,
 ) -> int:
     """Run the uninstall flow. Returns a process exit code.
 
@@ -849,13 +977,22 @@ def run_uninstall(
     want_backup = False
     backup_dest: Optional[Path] = None
     if purge and not dry_run:
+        # Refuse to remove a tree we cannot positively identify as ours.
+        refusal = validate_purge_home(home)
+        if refusal:
+            _emit_error(f"{refusal}. Nothing was changed.", output_json)
+            return 2
         if no_backup:
             want_backup = False
         elif backup is not None:
             want_backup = True
             backup_dest = Path(backup).expanduser() if backup else _default_backup_path()
         elif tty and not output_json:
-            want_backup = _confirm_backup()
+            answer = _confirm_backup()
+            if answer is None:  # EOF / Ctrl-C is a stop, never an assent
+                _emit_error("aborted — nothing was changed", output_json)
+                return 2
+            want_backup = answer
             backup_dest = _default_backup_path() if want_backup else None
         else:
             _emit_error(
@@ -864,6 +1001,12 @@ def run_uninstall(
                 output_json,
             )
             return 2
+
+        if backup_dest is not None:
+            bad = validate_backup_dest(backup_dest, [home, *_external_state_paths()])
+            if bad:
+                _emit_error(f"{bad}. Nothing was changed.", output_json)
+                return 2
 
     # ── Build the single ordered plan (drives dry-run AND real run) ─────────
     # In a dry run no backup is taken, so model the intent the flags express:
@@ -905,14 +1048,26 @@ def run_uninstall(
         return _finish(receipt, output_json, dry=True)
 
     # ── Confirmation for destructive modes ──────────────────────────────────
-    if purge and not yes:
+    # --yes does NOT stand in for the purge confirmation. It is an assent to
+    # run non-interactively; it is not the user reading the loss inventory. On
+    # a terminal the word is always typed. Scripts opt in with --confirm DELETE,
+    # which is explicit about what it authorises in a way --yes never was.
+    if purge:
         note = (
             f"A backup will be written to {backup_dest} first."
             if want_backup
             else _c("No backup will be taken.", _RED)
         )
-        if not _confirm_purge(ops, home, note):
-            _emit_error("aborted — nothing was changed", output_json)
+        if tty and not output_json:
+            if not _confirm_purge(ops, home, note):
+                _emit_error("aborted — nothing was changed", output_json)
+                return 2
+        elif (confirm or "") != _PURGE_CONFIRM_WORD:
+            _emit_error(
+                f"--purge without a terminal requires --confirm {_PURGE_CONFIRM_WORD} "
+                "(--yes alone does not authorise irreversible removal)",
+                output_json,
+            )
             return 2
     elif hard and not yes:
         # Interactive (already verified TTY above).

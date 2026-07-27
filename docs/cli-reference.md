@@ -286,6 +286,7 @@ Un-route (--soft) or purge state + remove package (--hard)
 - `--purge` — Complete removal: state, journal/budget/capsules, integrations left outside the config directory, and the package. Cannot be undone
 - `--backup` — With --purge: write a restore archive first (default: ~/tokenpak-backup-<time>.tar.gz)
 - `--no-backup` — With --purge: skip the backup archive
+- `--confirm` — With --purge and no terminal: pass DELETE to authorise irreversible removal. --yes alone is not sufficient
 - `--dry-run` — Show the exact operations that would run, change nothing
 - `--yes` — Skip confirmation (required for --hard in non-interactive use)
 - `--keep-data` — Under --hard, also retain all ~/.tpk user data (config + dbs)
