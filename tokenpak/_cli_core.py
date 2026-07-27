@@ -5856,13 +5856,9 @@ def _update_nudge_allowed(command: str, machine_output: bool = False) -> bool:
 def _prompt_for_update_check_consent() -> bool:
     """Request and persist first-run consent before any automatic PyPI check."""
     print("\nTokenPak can check PyPI once per day for new releases.")
-    print(
-        "    The check sends no TokenPak project, prompt, completion, usage, credential,"
-    )
+    print("    The check sends no TokenPak project, prompt, completion, usage, credential,")
     print("    file, tool-inventory, vault, or proxy-log data.")
-    print(
-        "    PyPI still sees ordinary HTTPS/TLS transport metadata such as your IP,"
-    )
+    print("    PyPI still sees ordinary HTTPS/TLS transport metadata such as your IP,")
     print("    TLS handshake metadata, and HTTP headers.")
     try:
         choice = input("    Enable daily update checks? [y/N]: ").strip().lower()
@@ -6019,9 +6015,9 @@ def cmd_update(args: CommandArgs) -> None:
         if checked_at > 0:
             import datetime as _dt
 
-            checked = _dt.datetime.fromtimestamp(
-                checked_at, tz=_dt.timezone.utc
-            ).isoformat(timespec="seconds")
+            checked = _dt.datetime.fromtimestamp(checked_at, tz=_dt.timezone.utc).isoformat(
+                timespec="seconds"
+            )
             print(f"Last automatic attempt: {checked}")
         if latest:
             print(f"Latest cached version: {latest}")
