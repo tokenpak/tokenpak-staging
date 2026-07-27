@@ -38,6 +38,16 @@ def injection_enabled(monkeypatch):
     monkeypatch.setattr(cfg_mod, "VAULT_INJECTION_ENABLED", True, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def switch_off(monkeypatch):
+    """Behaviour tests set the switch explicitly; they must not inherit host state.
+
+    Otherwise a developer or CI runner with the flag legitimately enabled sees
+    this file fail for a reason that has nothing to do with the code.
+    """
+    monkeypatch.setattr(cfg_mod, "VAULT_INJECTION_ENABLED", False, raising=False)
+
+
 @pytest.fixture
 def fake_retrieval(monkeypatch):
     """Stub retrieval so the stage would do something if it were allowed to."""
@@ -56,13 +66,26 @@ def fake_retrieval(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_default_is_off():
-    """Shipped default must be OFF.
+def test_shipped_default_is_off():
+    """The SHIPPED default must be OFF.
 
-    If this test fails, someone changed the default. That is a governance
-    decision — the DLP and spend-guard ordering must be fixed first.
+    Asserts the *declared* default, not the resolved runtime value. An earlier
+    version asserted `cfg_mod.VAULT_INJECTION_ENABLED is False`, which fails on
+    any host that has legitimately enabled the flag — `TOKENPAK_VAULT_INJECTION=1`
+    made 5 of 7 tests in this file fail, with diagnostics telling the operator
+    "someone changed the default. That is a governance decision" when they had
+    merely used the flag for its stated purpose.
+
+    A test must not accuse a correct operator of a governance violation.
     """
-    assert cfg_mod.VAULT_INJECTION_ENABLED is False
+    import inspect
+
+    src = inspect.getsource(cfg_mod)
+    assert 'features.vault_injection", False' in src, (
+        "the shipped default for features.vault_injection is no longer False — "
+        "that is a governance decision requiring the DLP and spend-guard ordering "
+        "to land first"
+    )
 
 
 def test_disabled_by_default_skips_with_a_distinct_reason(fake_retrieval):
