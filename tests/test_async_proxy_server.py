@@ -387,6 +387,21 @@ def test_async_backend_is_quarantined_not_production(monkeypatch):
     # green check is affirmatively misleading — worse than the skipped test it
     # replaced, because a skipped test is visibly inert while a passing one reads
     # as coverage.
+    # Capture ownership BEFORE start_proxy and assert the DELTA, not the absolute
+    # value. `_proxy_server_ref` is a module global that `create_async_app()` sets
+    # and nothing ever clears, and `tests/test_proxy_server_async.py` assigns it at
+    # seven sites with save/restore at only one. Asserting `is None` therefore
+    # fires this suite's highest-severity message — "every request bypasses the
+    # spend guard and the DLP outbound scan" — because an unrelated unit test left
+    # a MagicMock behind.
+    #
+    # Reproduced: running that file first makes the absolute-value form FAIL while
+    # the baseline passes. Latent under CI's alphabetical collection, live under
+    # --lf, --ff, explicit ordering, or any future parallel/random plugin.
+    #
+    # The question is "did start_proxy take ownership", which is a delta.
+    _ownership_before = getattr(server_async, "_proxy_server_ref", None)
+
     _async_entries_called: list[str] = []
 
     def _sentinel(name):
@@ -422,9 +437,9 @@ def test_async_backend_is_quarantined_not_production(monkeypatch):
         # not be the thing answering requests. `_proxy_server_ref` is set by the
         # async app when it takes ownership, and uvicorn identifies itself in the
         # Server header. Neither can be avoided by a reviver who actually succeeds.
-        assert getattr(server_async, "_proxy_server_ref", None) is None, (
-            "server_async._proxy_server_ref is set — the async stack has taken "
-            "ownership of the ProxyServer, which the quarantine forbids"
+        assert server_async._proxy_server_ref is _ownership_before, (
+            "start_proxy() changed server_async._proxy_server_ref — the async stack "
+            "took ownership of the ProxyServer, which the quarantine forbids"
         )
 
         server_hdr = (resp.headers.get("Server") or "").lower()
