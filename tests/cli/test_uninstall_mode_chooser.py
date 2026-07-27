@@ -64,3 +64,19 @@ def test_chooser_offers_a_cancel_path(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda *_a: "")
     U._choose_mode()
     assert "[q] Cancel" in capsys.readouterr().out
+
+
+def test_non_interactive_error_does_not_repeat_the_untruth(monkeypatch, capsys):
+    """The same claim lived in the piped/scripted path, not just the prompt.
+
+    Fixing it in the interactive chooser and leaving it verbatim one function
+    over would make the command tell two different stories about the same flag,
+    and the scripted message is the one every CI log carries.
+    """
+    monkeypatch.setattr(U.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(U.sys.stdout, "isatty", lambda: False, raising=False)
+    rc = U.run_uninstall()
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "purge everything" not in err
+    assert "journal" in err and "capsules" in err

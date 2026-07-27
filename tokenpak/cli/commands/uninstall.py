@@ -572,7 +572,9 @@ def run_uninstall(
         interactive = sys.stdin.isatty() and sys.stdout.isatty() and not output_json
         if not interactive:
             _emit_error(
-                "specify --soft (un-route, reversible) or --hard (purge everything)",
+                "specify --soft (un-route; keeps everything) or --hard "
+                "(also delete config, caches and local databases; keeps the "
+                "session journal, budget history and capsules)",
                 output_json,
             )
             return 2
