@@ -22,7 +22,11 @@ import pytest
 
 from tokenpak._cli_core import _home_override_escape
 
-EXIT_CORRUPT_STATE = 3
+# Import the real constant — an earlier revision hand-copied it as 3, which is
+# EXIT_NOT_CONFIGURED. The test then failed CI against a CORRECT implementation
+# (exit 8) while its message blamed the code. A hand-written copy of a constant
+# is a fixture, and a test against a hand-written fixture verifies the fixture.
+from tokenpak.cli.exit_codes import EXIT_CORRUPT_STATE
 
 
 class TestHomeOverrideGuard:
