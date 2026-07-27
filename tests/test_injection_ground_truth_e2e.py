@@ -224,9 +224,28 @@ def _send(body: dict, upstream_url: str) -> None:
 
 
 def _eligible_request() -> dict:
+    """A request the byte-splice route can actually act on.
+
+    The `system` array is REQUIRED, not decoration. `_byte_inject_system_block`
+    (`proxy/request.py:153-155`) locates the closing bracket of the system array
+    and **fail-opens if there is none**:
+
+        close_pos = _find_system_array_close(body)
+        if close_pos < 0:
+            return body  # fail-open: no system array found
+
+    Without it the splice target does not exist, so the body comes back unchanged
+    however correct injection becomes — and the xfail below could never xpass.
+    A permanently-red xfail masking a *working* feature is the exact outcome
+    `strict=True` was chosen to prevent.
+
+    Real Claude Code requests always carry a system array, so this is also the
+    representative payload for the route the session header forces.
+    """
     return {
         "model": "claude-sonnet-4-6",
         "max_tokens": 64,
+        "system": [{"type": "text", "text": "You are a helpful assistant."}],
         "messages": [{"role": "user", "content": _FILLER + " what did we decide about auth?"}],
     }
 
@@ -269,10 +288,20 @@ def test_the_request_actually_reaches_the_injection_stage(
 
 @pytest.mark.xfail(
     reason=(
-        "KNOWN P0: vault injection does not modify the request. The adapter resolves "
-        "to PassthroughAdapter (inject_system_context returns the body unchanged) and "
-        "injection_text is always empty, so byte-restore short-circuits. This test is "
-        "the acceptance gate for the fix — when it passes, injection demonstrably works."
+        "KNOWN P0: vault injection does not modify the request. THREE independent "
+        "blockers, all of which must be repaired — an earlier version of this reason "
+        "named only the first two, and a fix following it lands on the wrong code:\n"
+        "  1. adapter starvation — _detect_adapter is called with empty path/headers, "
+        "     so detection always falls through to PassthroughAdapter, whose "
+        "     inject_system_context returns the body unchanged;\n"
+        "  2. injection_text is always empty — inject_vault_context returns a 3-tuple "
+        "     while the pipeline only populates the text from a 4-tuple, so "
+        "     stage_byte_restore short-circuits;\n"
+        "  3. pipeline.py does getattr(vault_bridge, 'extract_query_signal'), but that "
+        "     name is a FUNCTION-LOCAL import inside vault_bridge — hasattr() is False. "
+        "     The AttributeError is swallowed by a catch-all, query_signal becomes '', "
+        "     and byte_restore bails to restored_original_short_query.\n"
+        "Repairing only (1) and (2) still yields XFAIL — verified experimentally."
     ),
     strict=True,
 )
