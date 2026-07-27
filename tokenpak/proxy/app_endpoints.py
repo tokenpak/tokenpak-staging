@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import os
 import time
 from collections.abc import Mapping
@@ -188,7 +189,7 @@ def try_handle_get(handler: Any) -> bool:
     # ── /tpk/v1/vault/block/{block_id} ───────────────────────────────────
     if path.startswith("/tpk/v1/vault/block/"):
         block_id = path[len("/tpk/v1/vault/block/") :]
-        _handle_vault_block(handler, block_id)
+        _handle_vault_block(handler, block_id, qs)
         return True
 
     # ── /tpk/v1/budget ────────────────────────────────────────────────────
@@ -443,7 +444,9 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
     _send_json(handler, 200, payload)
 
 
-def _handle_vault_block(handler: Any, block_id: str) -> None:
+def _handle_vault_block(
+    handler: Any, block_id: str, qs: Optional[dict[str, list[str]]] = None
+) -> None:
     if not block_id:
         _send_error(handler, 400, "missing_block_id")
         return
@@ -465,6 +468,54 @@ def _handle_vault_block(handler: Any, block_id: str) -> None:
         return
 
     meta = blocks[block_id]
+
+    # By-id fetch reads the block map directly, bypassing every scoped search
+    # path — `supports_project_scope` describes the search API, not this object.
+    # A caller that names a scope must have it honored here too, or the scoped
+    # search above can be trivially stepped around by asking for the id.
+    #
+    # Membership is *reported* unconditionally so an unscoped caller can still
+    # tell which project it received. It is *enforced* only against an explicit
+    # request: the caller named this block, so refusing an unscoped fetch would
+    # break existing callers without preventing a blend — one named block is not
+    # a blend. That is the §4A.5 trade, taken deliberately.
+    requested_project = (qs.get("project", [""])[0] or "").strip() if qs else ""
+    block_projects: list[str] = []
+    try:
+        from tokenpak.vault.project_scope import SHARED
+        from tokenpak.vault.sqlite_backend import _load_registry
+
+        registry, registry_error = _load_registry()
+        if registry_error is not None and requested_project:
+            _send_error(
+                handler,
+                503,
+                "project_registry_unavailable",
+                f"cannot honor project={requested_project!r}: {registry_error}",
+            )
+            return
+        if registry.active:
+            source_path = str(meta.get("source_path", "") or "")
+            block_projects = list(registry.resolve_path(source_path).project_ids)
+            if requested_project:
+                if not registry.known(requested_project):
+                    _send_error(
+                        handler, 400, "invalid_project_scope", f"unknown project {requested_project!r}"
+                    )
+                    return
+                allowed = requested_project in block_projects or SHARED in block_projects
+                if not allowed:
+                    _send_error(
+                        handler,
+                        404,
+                        "block_not_in_project",
+                        f"block {block_id} is not in project {requested_project!r}",
+                    )
+                    return
+    except Exception as exc:  # noqa: BLE001 — scope is advisory on this path
+        logging.getLogger(__name__).warning(
+            "vault block scope check unavailable for %s: %s", block_id, exc
+        )
     tokenpak_dir = getattr(vi, "tokenpak_dir", None)
     content = ""
     if tokenpak_dir:
@@ -483,6 +534,9 @@ def _handle_vault_block(handler: Any, block_id: str) -> None:
             "path": meta.get("path", ""),
             "tokens": int(meta.get("tokens", 0) or 0),
             "content": content,
+            # Always reported, so a caller that did not request a scope can
+            # still tell which project this block came from.
+            "projects": block_projects,
         },
     )
 

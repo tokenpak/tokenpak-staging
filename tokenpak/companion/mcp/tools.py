@@ -450,8 +450,26 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
         return json.dumps({"error": "provide block_id or path"})
 
     # If only a path hint is given, resolve via search first to get an exact id.
+    # The scope MUST ride along: an unscoped resolve picks an arbitrary
+    # project's file whenever several projects hold the same relative path
+    # (`notes/pr-100.md` in five repos), and then fetches it by id — a
+    # cross-project answer produced by a lookup that looked exact. It fails
+    # closed today only by accident, because a 409 body carries an empty
+    # `results` list that falls through to `block_not_found`.
+    project = str(args.get("project", "")).strip()
+    cwd = str(args.get("cwd", "")).strip()
     if not block_id and path_hint:
-        status, body = _proxy_get("/tpk/v1/vault/search", {"q": path_hint, "limit": 1})
+        resolve_params: dict[str, Any] = {"q": path_hint, "limit": 1}
+        if project:
+            resolve_params["project"] = project
+        if cwd:
+            resolve_params["cwd"] = cwd
+        status, body = _proxy_get("/tpk/v1/vault/search", resolve_params)
+        if status == 409:
+            # Ambiguous scope on the resolve leg — report it as such rather
+            # than as a missing block, which would send the caller looking for
+            # the wrong problem.
+            return json.dumps(body, indent=2)
         if status == 0:
             return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
         results = body.get("results") or []
@@ -459,7 +477,12 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
             return json.dumps({"error": "block_not_found", "path": path_hint})
         block_id = results[0].get("block_id") or ""
 
-    status, body = _proxy_get(f"/tpk/v1/vault/block/{_url_parse.quote(block_id, safe='')}")
+    fetch_params: dict[str, Any] = {}
+    if project:
+        fetch_params["project"] = project
+    status, body = _proxy_get(
+        f"/tpk/v1/vault/block/{_url_parse.quote(block_id, safe='')}", fetch_params or None
+    )
     if status == 0:
         return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
     if status >= 400:
@@ -623,6 +646,22 @@ TOOLS: list[ToolDef] = [
             "type": "object",
             "properties": {
                 "block_id": {"type": "string", "description": "Exact block_id from vault_search"},
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Restrict to this declared project. Required to make a "
+                        "`path` lookup unambiguous when several projects hold "
+                        "the same relative path; also verified on a block_id "
+                        "fetch, which otherwise bypasses scoping entirely."
+                    ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": (
+                        "Absolute working directory used to infer the project "
+                        "when `project` is absent."
+                    ),
+                },
                 "path": {
                     "type": "string",
                     "description": "Path substring to match (alternative to block_id)",

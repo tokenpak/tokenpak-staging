@@ -1601,7 +1601,7 @@ def inject_vault_context(
             # guarantee. Worse, role exclusion applied on this path while project
             # membership did not, so it read as working while half-applied.
             suppressed_by_scope = False
-            if hasattr(vault_idx, "search_scoped"):
+            if getattr(vault_idx, "supports_project_scope", False):
                 _scoped = vault_idx.search_scoped(
                     query, top_k=INJECT_TOP_K * 2, min_score=INJECT_MIN_SCORE
                 )
