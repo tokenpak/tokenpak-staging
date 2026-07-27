@@ -2534,16 +2534,61 @@ def cmd_explain(args: CommandArgs) -> None:
         print("\nTip: Set with TOKENPAK_PROFILE=<name> or use `tokenpak explain --profile <name>`")
 
 
-def cmd_preview(args: CommandArgs) -> None:
+def cmd_preview(args: CommandArgs):
     """Preview compression result for input text (dry-run)."""
     import sys
     from pathlib import Path
 
+    from tokenpak.cli.exit_codes import EXIT_FAILURE
+
     # Get input text
     if args.file:
-        text = Path(args.file).read_text()
+        src = Path(args.file)
+        if not src.is_file():
+            print(f"✗ No such file: {args.file}")
+            print('  Check the path, or pass text directly: tokenpak preview "<text>"')
+            return EXIT_FAILURE
+        try:
+            text = src.read_text()
+        except OSError as exc:
+            print(f"✗ Could not read {args.file}: {exc}")
+            return EXIT_FAILURE
+        # A .json/.jsonl file that does not parse would otherwise be compressed
+        # as raw prose and reported as a confident, meaningless number. Refuse
+        # instead: a silent wrong answer is worse than an error.
+        suffix = src.suffix.lower()
+        if suffix in (".json", ".jsonl"):
+            import json as _json
+
+            try:
+                if suffix == ".json":
+                    _json.loads(text)
+                else:
+                    for lineno, line in enumerate(text.splitlines(), 1):
+                        if line.strip():
+                            _json.loads(line)
+            except ValueError as exc:
+                print(f"✗ {args.file} is not valid {suffix.lstrip('.').upper()}: {exc}")
+                print(
+                    f"  Fix the file, or pipe it as plain text: cat {args.file} | tokenpak preview"
+                )
+                return EXIT_FAILURE
     elif args.input:
         text = args.input
+        # The positional argument is literal TEXT. Passing a filename — the most
+        # natural first move, since the menu advertises a dry-run preview —
+        # would otherwise compress the *path string* and report ~0% savings with
+        # no hint anything was wrong. Catch that specific mistake.
+        stripped = text.strip()
+        if len(stripped) < 4096 and "\n" not in stripped:
+            try:
+                looks_like_file = Path(stripped).is_file()
+            except OSError:
+                looks_like_file = False
+            if looks_like_file:
+                print("✗ That is a file path, but this argument takes literal text.")
+                print(f"  Did you mean:  tokenpak preview --file {stripped}")
+                return EXIT_FAILURE
     else:
         # Read from stdin
         text = sys.stdin.read()
@@ -2563,7 +2608,6 @@ def cmd_preview(args: CommandArgs) -> None:
     # compressor failed" — and the --json body already said `no_data` while
     # the exit code said generic-failure.
     from tokenpak.cli.exit_codes import (
-        EXIT_FAILURE,
         EXIT_NO_DATA,
         EXIT_RUNTIME_UNAVAILABLE,
     )
@@ -5793,12 +5837,14 @@ def cmd_config_sync(args: CommandArgs) -> None:
         print(f"  ✗ Unknown source: {source}. Use --source=git or --source=url")
 
 
-def cmd_config_validate(args: CommandArgs) -> None:
+def cmd_config_validate(args: CommandArgs):
     """Validate config against schema.
 
     With --config FILE: validates a proxy config file (JSON/YAML) against JSON Schema.
     Without --config: validates the TokenPak meta config (config.json).
     """
+    from tokenpak.cli.exit_codes import EXIT_FAILURE, EXIT_NOT_CONFIGURED
+
     # Route to JSON schema validator when --config is provided
     config_file = getattr(args, "config_file", None)
     if config_file:
@@ -5815,8 +5861,12 @@ def cmd_config_validate(args: CommandArgs) -> None:
     try:
         cfg = _json_object(json.loads(_TOKENPAK_CFG.read_text()))
     except Exception as exc:
-        print(f"✗ Could not read config: {exc}")
-        return
+        # A validator that cannot read its target has not validated anything.
+        # Returning 0 here reported success to `set -e` scripts and CI.
+        print(f"✗ Could not read the TokenPak meta config at {_TOKENPAK_CFG}: {exc}")
+        print("  Run `tokenpak setup` to create one, or pass --config <file> to")
+        print("  validate a proxy config instead.")
+        return EXIT_NOT_CONFIGURED
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -5854,6 +5904,10 @@ def cmd_config_validate(args: CommandArgs) -> None:
             print(f"   {w}")
     if not errors and not warnings:
         print("✓ Config valid — all checks passed")
+
+    # Errors are failures and must be visible to callers. Warnings are not.
+    if errors:
+        return EXIT_FAILURE
 
 
 def cmd_config_pull(args: CommandArgs) -> None:
