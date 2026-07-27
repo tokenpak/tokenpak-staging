@@ -299,14 +299,65 @@ class VaultIndex:
         on_ambiguous: str = "suppress",
     ) -> "ScopedSearchResult":
         """Scope-resolving search — parity with the SQLite backend's contract."""
+        from tokenpak.vault.project_scope import ScopeResolution
+        from tokenpak.vault.sqlite_backend import ScopedSearchResult
+
+        resolved, suppressed, spanned = self._resolve_injection_scope(
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            project=project,
+            cwd=cwd,
+            exclude_roles=exclude_roles,
+            on_ambiguous=on_ambiguous,
+        )
+        if suppressed:
+            return ScopedSearchResult(
+                results=[],
+                scope=ScopeResolution(project_id=None, source="unresolved"),
+                spanned=spanned,
+                suppressed=True,
+            )
+        return ScopedSearchResult(
+            results=list(
+                self.search(
+                    query,
+                    top_k,
+                    min_score,
+                    project=resolved,
+                    exclude_roles=exclude_roles,
+                )
+            ),
+            scope=ScopeResolution(
+                project_id=resolved,
+                source=("explicit" if project else ("resolved" if resolved else "unresolved")),
+            ),
+            spanned=spanned,
+        )
+
+    def _resolve_injection_scope(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        min_score: float,
+        project: str | None = None,
+        cwd: str | None = None,
+        exclude_roles: "Sequence[str] | None" = None,
+        on_ambiguous: str = "suppress",
+    ) -> "tuple[str | None, bool, tuple[str, ...]]":
+        """Decide the scope for a query: ``(project_id, suppressed, spanned)``.
+
+        Shared by ``search_scoped`` and ``compile_injection`` so the two cannot
+        drift — the injection path is the one users cannot inspect, and it is
+        where a divergence would do the most damage.
+        """
         from tokenpak.vault.project_scope import (
             SHARED,
             AmbiguityPolicy,
             ScopeConflictError,
-            ScopeResolution,
             spanned_projects,
         )
-        from tokenpak.vault.sqlite_backend import ScopedSearchResult
 
         registry, registry_error = _get_project_registry()
 
@@ -323,58 +374,35 @@ class VaultIndex:
                     "declared; refusing to return unscoped results for an "
                     "explicitly scoped query"
                 )
-            return ScopedSearchResult(
-                results=list(self.search(query, top_k, min_score)),
-                scope=ScopeResolution(project_id=None, source="no_registry"),
-            )
+            return None, False, ()
 
         scope = registry.resolve_scope(explicit=project, cwd=cwd, query=query)
         if scope.resolved:
-            return ScopedSearchResult(
-                results=list(
-                    self.search(
-                        query,
-                        top_k,
-                        min_score,
-                        project=scope.project_id,
-                        exclude_roles=exclude_roles,
-                    )
-                ),
-                scope=scope,
-            )
+            return scope.project_id, False, ()
 
         # Unresolved: look at a wider window than the caller asked for before
         # deciding whether projects are in contention. With top_k=1 a result set
         # can never look ambiguous, which would let the single best block from
         # an arbitrary project through unchallenged.
         probe_k = max(top_k, _AMBIGUITY_PROBE_K)
-        probed = list(self.search(query, probe_k, min_score, exclude_roles=exclude_roles))
-        spanned = spanned_projects(registry, [b.get("source_path", "") for b, _ in probed])
-        results = probed[:top_k]
+        probed = self.search(query, probe_k, min_score, exclude_roles=exclude_roles)
+        spanned = spanned_projects(registry, [str(b.get("source_path", "")) for b, _ in probed])
 
         if len(spanned) <= 1 or on_ambiguous == AmbiguityPolicy.UNSCOPED:
-            return ScopedSearchResult(results=results, scope=scope, spanned=spanned)
+            return None, False, spanned
 
         if on_ambiguous == AmbiguityPolicy.DOMINANT:
             mass: dict[str, float] = {}
             for block, score in probed:
-                ids = registry.resolve_path(block.get("source_path", "")).project_ids
+                ids = registry.resolve_path(str(block.get("source_path", ""))).project_ids
                 for pid in ids:
                     if pid != SHARED:
                         mass[pid] = mass.get(pid, 0.0) + score
             if mass:
                 winner = sorted(mass.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
-                return ScopedSearchResult(
-                    results=list(
-                        self.search(
-                            query, top_k, min_score, project=winner, exclude_roles=exclude_roles
-                        )
-                    ),
-                    scope=ScopeResolution(project_id=winner, source="dominant"),
-                    spanned=spanned,
-                )
+                return winner, False, spanned
 
-        return ScopedSearchResult(results=[], scope=scope, spanned=spanned, suppressed=True)
+        return None, True, spanned
 
     def __init__(self, tokenpak_dir: str) -> None:
         self.tokenpak_dir = Path(tokenpak_dir)
@@ -1098,17 +1126,58 @@ class VaultIndex:
         return results
 
     def compile_injection(
-        self, query: str, budget: int = 4000, top_k: int = 5, min_score: float = 2.0
+        self,
+        query: str,
+        budget: int = 4000,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: str | None = None,
+        cwd: str | None = None,
+        on_ambiguous: str = "suppress",
     ) -> tuple[str, int, list[str]]:
         """
         Search vault and compile injection text within budget.
         Returns (injection_text, tokens_used, source_refs).
+
+        This is the automatic path on a default install, so scope is resolved
+        here rather than only in ``search_scoped``. Resolution cannot simply
+        delegate to ``search_scoped`` because injection needs the internal
+        metadata that ``search`` omits — so the decision is shared and only the
+        candidate fetch differs.
         """
+        from tokenpak.vault.project_scope import ScopeConflictError
+
+        try:
+            decision = self._resolve_injection_scope(
+                query,
+                top_k=top_k,
+                min_score=min_score,
+                project=project,
+                cwd=cwd,
+                on_ambiguous=on_ambiguous,
+            )
+        except ScopeConflictError as exc:
+            # A bad scope declaration must cost the injection, not the request.
+            logger.warning("Vault injection skipped: unusable project scope (%s)", exc)
+            return "", 0, []
+
+        resolved_project, suppressed, spanned = decision
+        if suppressed:
+            logger.warning(
+                "Vault injection suppressed: query matched %d projects (%s) "
+                "and no scope was resolved",
+                len(spanned),
+                ", ".join(spanned),
+            )
+            return "", 0, []
+
         results = self._search(
             query,
             top_k=top_k,
             min_score=min_score,
             include_internal=True,
+            project=resolved_project,
         )
         if not results:
             return "", 0, []

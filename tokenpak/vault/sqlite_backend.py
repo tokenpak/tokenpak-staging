@@ -70,6 +70,7 @@ from tokenpak.vault.project_scope import (
     ProjectRegistry,
     ScopeConflictError,
     ScopeResolution,
+    spanned_projects,
 )
 
 
@@ -487,17 +488,20 @@ class SQLiteRetrievalBackend:
         try:
             placeholders = ",".join("?" * len(block_ids))
             rows = conn.execute(
-                f"SELECT DISTINCT project_id FROM block_projects "
-                f"WHERE block_id IN ({placeholders}) AND project_id != ? "
-                f"AND block_id NOT IN ("
-                f"    SELECT block_id FROM block_projects WHERE project_id = ?)",
-                [*block_ids, SHARED, SHARED],
+                f"SELECT source_path FROM blocks WHERE block_id IN ({placeholders})",
+                list(block_ids),
             ).fetchall()
-            return tuple(sorted(str(r[0]) for r in rows))
         except sqlite3.Error:
             return ()
         finally:
             conn.close()
+
+        # Delegate to the shared set-cover test rather than SELECT DISTINCT.
+        # Distinct-values would report a root declared ``projects: [a, b]`` as
+        # a two-project contention and suppress a query that is answerable
+        # under either scope — and would disagree with the in-memory backend
+        # given the same vault.yaml and the same query.
+        return spanned_projects(self._registry, [str(r[0]) for r in rows])
 
     def _dominant_project(
         self, results: Sequence[Tuple[VaultBlock, float]]

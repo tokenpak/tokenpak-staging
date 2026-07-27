@@ -406,6 +406,22 @@ def test_default_json_blocks_backend_enforces_scope(vault, tmp_path, monkeypatch
     # higher-scoring out-of-scope blocks.
     assert len(scoped.results) >= 2
 
+    # The automatic path is the one users cannot inspect, and on a default
+    # install it is what actually runs — testing `search_scoped` alone proves
+    # the primitive works, not that the guarantee holds.
+    assert index.compile_injection(COLLIDING_QUERY, min_score=0.0) == ("", 0, [])
+
+    injected, tokens, refs = index.compile_injection(
+        COLLIDING_QUERY, min_score=0.0, project="corvid-shop"
+    )
+    assert refs, "a resolved scope must still inject"
+    for ref in refs:
+        assert "corvid-shop" in ref or "/shared/" in ref
+
+    # A bad scope pin costs the injection, not the request.
+    monkeypatch.setenv("TOKENPAK_PROJECT", "typoed-project")
+    assert index.compile_injection(COLLIDING_QUERY, min_score=0.0) == ("", 0, [])
+
 
 def test_explicit_scope_on_inactive_registry_raises(tmp_path, monkeypatch):
     """An explicit scope must bind or fail — never silently return unscoped.
@@ -458,9 +474,20 @@ def test_broken_registry_fails_closed_and_keeps_last_good(vault, tmp_path, monke
     empty registry would delete the only correct membership data still held.
     """
     backend, _ = vault
-    before = backend._projects_spanned(
-        [b["block_id"] for b, _ in backend.search(COLLIDING_QUERY, top_k=10, min_score=0.0)]
-    )
+
+    def membership_rows() -> set[tuple[str, str]]:
+        conn = backend._connect()
+        try:
+            return {
+                (str(a), str(b))
+                for a, b in conn.execute(
+                    "SELECT block_id, project_id FROM block_projects"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+
+    before = membership_rows()
     assert before, "fixture should have membership recorded"
 
     # Corrupt the declaration and reload the registry the way production does.
@@ -484,12 +511,10 @@ def test_broken_registry_fails_closed_and_keeps_last_good(vault, tmp_path, monke
     # Auto-injection contributes nothing instead of blending.
     assert backend.compile_injection(COLLIDING_QUERY, min_score=0.0) == ("", 0, [])
 
-    # And the last-good membership survives the failed load.
+    # And the last-good membership rows survive the failed load — a reload must
+    # not re-resolve against the empty registry and delete them.
     backend.maybe_reload()
-    after = backend._projects_spanned(
-        [b["block_id"] for b, _ in backend.search(COLLIDING_QUERY, top_k=10, min_score=0.0)]
-    )
-    assert after == before
+    assert membership_rows() == before
 
 
 def test_no_registry_behaves_exactly_as_before(tmp_path, monkeypatch):
