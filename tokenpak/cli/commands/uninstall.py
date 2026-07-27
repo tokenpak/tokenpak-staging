@@ -31,7 +31,7 @@ import sys
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 # ANSI markers, gated on a TTY so piped/JSON output stays clean.
 _GREEN = "\033[92m"
@@ -509,6 +509,41 @@ def _print_receipt(receipt: Receipt) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _choose_mode() -> "Optional[str]":
+    """Interactive chooser for a bare ``tokenpak uninstall``.
+
+    Returns "soft", "hard", or None to cancel. EOF and Ctrl-C cancel: a
+    non-answer must never select the more destructive option.
+
+    The prompt this replaces read *"Hard (purge everything)"*, which is not
+    what ``--hard`` does — it deliberately keeps the session journal, the
+    budget history and the saved capsules. A destructive prompt that overstates
+    its own reach teaches the user to distrust the accurate ones, and a user
+    who believed it would think their history was already gone.
+    """
+    print("How much do you want to remove?")
+    print()
+    print(f"  {_c('[1] Un-route', _GREEN)} (recommended) — stop routing your clients through")
+    print("      tokenpak. Configuration, history and saved data are all kept.")
+    print("      Reversible at any time with `tokenpak setup`.")
+    print()
+    print(f"  {_c('[2] Remove stored state', _YELLOW)} — un-route, then delete configuration,")
+    print("      caches and the local databases, and offer to remove the package.")
+    print("      Your session journal, budget history and capsules are KEPT.")
+    print()
+    print("  [q] Cancel")
+    try:
+        choice = input("\nChoose [1/2/q] (default 1): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if choice in ("", "1", "s", "soft"):
+        return "soft"
+    if choice in ("2", "h", "hard"):
+        return "hard"
+    return None
+
+
 def run_uninstall(
     soft: bool = False,
     hard: bool = False,
@@ -542,19 +577,14 @@ def run_uninstall(
             )
             return 2
         # Interactive bare invocation: ask, default soft (reversible).
-        try:
-            choice = (
-                input("Soft (un-route, keep config) or Hard (purge everything)? [soft/hard] ")
-                .strip()
-                .lower()
-            )
-        except (EOFError, KeyboardInterrupt):
-            print()
+        chosen = _choose_mode()
+        if chosen is None:
+            _emit_error("aborted — nothing was changed", output_json)
             return 2
-        if choice in ("hard", "h"):
+        if chosen == "hard":
             hard = True
         else:
-            soft = True  # default + any "soft"/empty answer
+            soft = True
 
     # ── HARD safety gate (AC-S1) ────────────────────────────────────────────
     run_pip = hard  # offer/run package removal only under --hard
