@@ -6141,7 +6141,8 @@ def cmd_update(args: CommandArgs) -> None:
 
 
 def cmd_uninstall(args: CommandArgs) -> int:
-    """Un-route (``--soft``) or purge + offer package removal (``--hard``)."""
+    """Un-route (``--soft``), purge state (``--hard``), or remove everything
+    including user data and the package (``--purge``)."""
     from .cli.commands.uninstall import run_uninstall
 
     return run_uninstall(
@@ -6151,6 +6152,9 @@ def cmd_uninstall(args: CommandArgs) -> int:
         yes=getattr(args, "yes", False),
         keep_data=getattr(args, "keep_data", False),
         output_json=getattr(args, "json", False),
+        purge=getattr(args, "purge", False),
+        backup=getattr(args, "backup", None),
+        no_backup=getattr(args, "no_backup", False),
     )
 
 
@@ -6485,6 +6489,28 @@ def _build_uninstall_parser(sub: Subparsers) -> None:
         "--hard",
         action="store_true",
         help="Soft + purge state (keeps journal/budget/capsules) + offer package removal",
+    )
+    p.add_argument(
+        "--purge",
+        action="store_true",
+        help=(
+            "Complete removal: state, journal/budget/capsules, integrations left "
+            "outside the config directory, and the package. Cannot be undone"
+        ),
+    )
+    p.add_argument(
+        "--backup",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="<path>",
+        help="With --purge: write a restore archive first (default: ~/tokenpak-backup-<time>.tar.gz)",
+    )
+    p.add_argument(
+        "--no-backup",
+        action="store_true",
+        dest="no_backup",
+        help="With --purge: skip the backup archive",
     )
     p.add_argument(
         "--dry-run",

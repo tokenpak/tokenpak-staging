@@ -31,7 +31,7 @@ import sys
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 # ANSI markers, gated on a TTY so piped/JSON output stays clean.
 _GREEN = "\033[92m"
@@ -89,6 +89,14 @@ class Receipt:
     lines: list[dict[str, Any]] = field(default_factory=list)
     retained: list[str] = field(default_factory=list)
     errors: int = 0
+    purge: bool = False
+    backup_path: Optional[str] = None
+
+    @property
+    def mode(self) -> str:
+        if self.purge:
+            return "purge"
+        return "hard" if self.hard else "soft"
 
     def record(self, op: Op, outcome: str, detail: str) -> None:
         self.lines.append(
@@ -99,13 +107,14 @@ class Receipt:
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "mode": "hard" if self.hard else "soft",
+            "mode": self.mode,
             "dry_run": self.dry_run,
             "keep_data": self.keep_data,
             "home": self.home,
             "operations": self.lines,
             "retained": self.retained,
             "errors": self.errors,
+            "backup_path": self.backup_path,
         }
 
 
@@ -291,6 +300,114 @@ _HARD_PURGE_NAMES = (
 _COMPANION_PROTECTED = ("journal.db", "budget.db", "capsules")
 
 
+# ---------------------------------------------------------------------------
+# Complete removal (--purge)
+# ---------------------------------------------------------------------------
+#
+# --purge is deliberately a THIRD mode rather than a redefinition of --hard.
+# Someone with `tokenpak uninstall --hard --yes` in a script relies on their
+# journal and budget history surviving; changing that silently would destroy
+# data on upgrade. --soft and --hard keep their exact meanings.
+
+#: Data that survives --hard but is destroyed by --purge. Named in the warning
+#: so nobody loses any of it by surprise. (relative path, human description)
+_PURGE_NAMED_DATA: "tuple[tuple[str, str], ...]" = (
+    ("companion/journal.db", "session journal"),
+    ("companion/budget.db", "spend and budget history"),
+    ("companion/capsules", "saved memory capsules"),
+    ("monitor.db", "request ledger"),
+    ("telemetry.db", "telemetry store"),
+    ("license.json", "license store"),
+)
+
+#: Archive members that cannot be meaningfully restored — live sockets, pid
+#: files and lock files. Excluded so the backup stays portable.
+_BACKUP_SKIP_SUFFIXES = (".sock", ".pid", ".lock")
+
+
+def _external_state_paths() -> "list[Path]":
+    """TokenPak state written OUTSIDE the resolved home.
+
+    These survive --hard today, which is why an uninstalled machine still
+    carries a systemd unit and a permissions file. --purge removes them.
+    """
+    from . import install as _install
+
+    candidates = [
+        Path.home() / ".config" / "tokenpak",  # permissions.toml
+        Path.home() / ".config" / "tokenpak.env",  # env overrides
+        _install._systemd_unit_path(),  # user service unit
+        _install._settings_path().with_suffix(".json.bak"),  # our own backup
+    ]
+    return [p for p in candidates if p.exists() or p.is_symlink()]
+
+
+def _purge_data_inventory(home: Path) -> "list[str]":
+    """Human-readable list of the named user data --purge will destroy."""
+    found = []
+    for rel, label in _PURGE_NAMED_DATA:
+        if (home / rel).exists():
+            found.append(f"{home / rel}  ({label})")
+    return found
+
+
+def _default_backup_path(now: Optional[Any] = None) -> Path:
+    """Backup destination — deliberately outside every delete target."""
+    import datetime as _dt
+
+    stamp = (now or _dt.datetime.now()).strftime("%Y%m%d-%H%M%S")
+    return Path.home() / f"tokenpak-backup-{stamp}.tar.gz"
+
+
+def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool, str]":
+    """Write a gzipped tar of everything --purge is about to delete.
+
+    Verified before it is trusted: the archive must exist, be non-empty and
+    list at least one member. A failed or empty backup aborts the uninstall
+    rather than letting it proceed unprotected.
+    """
+    import tarfile
+
+    def _filter(ti: "tarfile.TarInfo") -> "Optional[tarfile.TarInfo]":
+        if Path(ti.name).name.endswith(_BACKUP_SKIP_SUFFIXES):
+            return None
+        parts = Path(ti.name).parts
+        if "run" in parts or "tunnels" in parts:
+            return None
+        return ti
+
+    def _arcname(p: Path) -> str:
+        try:
+            return f"external/{p.relative_to(Path.home())}"
+        except ValueError:
+            return f"external/{p.name}"
+
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(dest, "w:gz") as tar:
+            if home.exists():
+                tar.add(home, arcname=home.name, filter=_filter)
+            for p in extras:
+                tar.add(p, arcname=_arcname(p), filter=_filter)
+    except Exception as exc:
+        try:
+            dest.unlink(missing_ok=True)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return False, f"backup failed: {exc}"
+
+    try:
+        if not dest.exists() or dest.stat().st_size == 0:
+            return False, "backup archive is missing or empty"
+        with tarfile.open(dest, "r:gz") as tar:
+            if not tar.getnames():
+                return False, "backup archive contains no entries"
+    except Exception as exc:
+        return False, f"backup verification failed: {exc}"
+
+    return True, str(dest)
+
+
 def _enumerate_hard_targets(home: Path, keep_data: bool) -> "tuple[list[Path], list[Path]]":
     """Return (to_delete, retained) absolute paths under *home* for --hard.
 
@@ -336,7 +453,9 @@ def _enumerate_hard_targets(home: Path, keep_data: bool) -> "tuple[list[Path], l
 # ---------------------------------------------------------------------------
 
 
-def _build_plan(*, hard: bool, keep_data: bool, home: Path) -> "tuple[list[Op], list[Path]]":
+def _build_plan(
+    *, hard: bool, keep_data: bool, home: Path, purge: bool = False
+) -> "tuple[list[Op], list[Path]]":
     """Assemble the ordered operation plan and the retained-path list."""
     ops: list[Op] = []
 
@@ -350,7 +469,11 @@ def _build_plan(*, hard: bool, keep_data: bool, home: Path) -> "tuple[list[Op], 
     )
     ops.append(
         Op(
-            describe="Reverse Codex companion install (retains journal/budget/capsules)",
+            describe=(
+                "Reverse Codex companion install"
+                if purge  # the whole home goes next, so promising retention would lie
+                else "Reverse Codex companion install (retains journal/budget/capsules)"
+            ),
             run=_teardown_codex,
             phase="soft",
         )
@@ -358,6 +481,29 @@ def _build_plan(*, hard: bool, keep_data: bool, home: Path) -> "tuple[list[Op], 
     ops.append(Op(describe="Stop running proxy (if any)", run=_stop_proxy, phase="soft"))
 
     retained: list[Path] = []
+    if purge:
+        # Nothing is retained. Remove the home wholesale — that covers the
+        # protected companion data, the first-run sentinel, and anything a
+        # future release writes without updating the named purge list — then
+        # the state we scattered outside it.
+        if home.exists():
+            ops.append(
+                Op(
+                    describe=f"Delete {home} and everything in it",
+                    run=partial(_remove_path, home),
+                    phase="purge",
+                )
+            )
+        for target in _external_state_paths():
+            ops.append(
+                Op(
+                    describe=f"Delete {target}",
+                    run=partial(_remove_path, target),
+                    phase="purge",
+                )
+            )
+        return ops, retained
+
     if hard:
         to_delete, retained = _enumerate_hard_targets(home, keep_data)
         if keep_data:
@@ -414,6 +560,53 @@ def _confirm_hard(ops: list[Op], retained: list[Path], run_pip: bool) -> bool:
     except (EOFError, KeyboardInterrupt):
         return False
     return answer == "y"
+
+
+#: Complete removal is irreversible, so a bare "y" is too easy to hit by
+#: accident. The user types the word out.
+_PURGE_CONFIRM_WORD = "DELETE"
+
+
+def _confirm_backup() -> bool:
+    """Ask whether to write a backup first. Defaults to yes.
+
+    Both EOF and Ctrl-C answer *yes*: every non-answer here has to fail
+    toward keeping the user's data, never toward destroying it.
+    """
+    try:
+        answer = input("\nGenerate a backup archive first? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return True
+    return answer not in ("n", "no")
+
+
+def _confirm_purge(ops: "list[Op]", home: Path, backup_note: str) -> bool:
+    """Severe-tier confirmation: itemize the loss, then require the word."""
+    print(_c("⚠️  COMPLETE uninstall — this CANNOT be undone.", _RED))
+    print()
+    print(_c("  These are removed permanently:", _YELLOW))
+    for op in ops:
+        if op.phase == "purge":
+            print(f"    {op.describe}")
+
+    inventory = _purge_data_inventory(home)
+    if inventory:
+        print()
+        print(_c("  Including data that a --hard uninstall would have kept:", _YELLOW))
+        for line in inventory:
+            print(f"    {line}")
+
+    print()
+    print(_c("  The tokenpak package is removed as the final step.", _YELLOW))
+    print(f"  {backup_note}")
+    print()
+    try:
+        answer = input(f"Type {_PURGE_CONFIRM_WORD} to confirm, or anything else to cancel: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer.strip() == _PURGE_CONFIRM_WORD
 
 
 # ---------------------------------------------------------------------------
@@ -477,11 +670,16 @@ _GLYPH = {
 
 
 def _print_receipt(receipt: Receipt) -> None:
-    mode = "hard" if receipt.hard else "soft"
-    header = f"tokenpak uninstall --{mode}"
+    header = f"tokenpak uninstall --{receipt.mode}"
     if receipt.dry_run:
         header += "  (dry-run — nothing changed)"
-    print(_c(header, _YELLOW if receipt.hard else _GREEN))
+    if receipt.purge:
+        colour = _RED
+    elif receipt.hard:
+        colour = _YELLOW
+    else:
+        colour = _GREEN
+    print(_c(header, colour))
     print()
     for line in receipt.lines:
         glyph, code = _GLYPH.get(line["outcome"], ("?", _DIM))
@@ -495,7 +693,11 @@ def _print_receipt(receipt: Receipt) -> None:
         for r in receipt.retained:
             print(f"  • {r}")
         print()
-    if not receipt.hard:
+    if receipt.backup_path:
+        print(_c(f"Backup written: {receipt.backup_path}", _GREEN))
+        print(_c(f"  Restore with:  tar -xzf {receipt.backup_path} -C ~", _DIM))
+        print()
+    if not receipt.hard and not receipt.purge:
         print(_c("Re-route any time with: tokenpak setup", _GREEN))
     if receipt.errors:
         print(
@@ -509,6 +711,36 @@ def _print_receipt(receipt: Receipt) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _choose_mode() -> "Optional[str]":
+    """Interactive chooser for a bare ``tokenpak uninstall``.
+
+    Returns "soft", "purge", or None when the user cancels. EOF and Ctrl-C
+    cancel — a non-answer must never select a destructive option.
+    """
+    print("How much do you want to remove?")
+    print()
+    print(f"  {_c('[1] Soft', _GREEN)} (recommended) — stop routing your clients through tokenpak.")
+    print("      Your configuration, history and saved data are all kept.")
+    print("      Reversible at any time with `tokenpak setup`.")
+    print()
+    print(f"  {_c('[2] Complete', _RED)} — remove everything: configuration, history,")
+    print("      session journal, budget data, capsules, integrations, and the")
+    print(f"      package itself. {_c('This cannot be undone.', _RED)}")
+    print("      You will be offered a backup archive first.")
+    print()
+    print("  [q] Cancel")
+    try:
+        choice = input("\nChoose [1/2/q] (default 1): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if choice in ("", "1", "s", "soft"):
+        return "soft"
+    if choice in ("2", "c", "complete", "purge"):
+        return "purge"
+    return None
+
+
 def run_uninstall(
     soft: bool = False,
     hard: bool = False,
@@ -516,6 +748,9 @@ def run_uninstall(
     yes: bool = False,
     keep_data: bool = False,
     output_json: bool = False,
+    purge: bool = False,
+    backup: "Optional[str]" = None,
+    no_backup: bool = False,
 ) -> int:
     """Run the uninstall flow. Returns a process exit code.
 
@@ -523,51 +758,77 @@ def run_uninstall(
       0  success (incl. dry-run, incl. clean no-op)
       1  one or more operations failed
       2  ambiguous/unsafe invocation refused (no destructive default; non-TTY
-         --hard without --yes)
+         --hard/--purge without --yes; backup not resolved; backup failed)
     """
     from ... import _paths
 
     home = _paths.home()
 
     # ── Mode resolution (never guess a destructive default; AC-S1) ──────────
-    if hard and soft:
-        _emit_error("specify only one of --soft / --hard", output_json)
+    if sum((bool(soft), bool(hard), bool(purge))) > 1:
+        _emit_error("specify only one of --soft / --hard / --purge", output_json)
         return 2
-    if not soft and not hard:
+    if backup is not None and no_backup:
+        _emit_error("specify only one of --backup / --no-backup", output_json)
+        return 2
+    if (backup is not None or no_backup) and not purge:
+        _emit_error("--backup / --no-backup apply to --purge only", output_json)
+        return 2
+
+    if not soft and not hard and not purge:
         interactive = sys.stdin.isatty() and sys.stdout.isatty() and not output_json
         if not interactive:
             _emit_error(
-                "specify --soft (un-route, reversible) or --hard (purge everything)",
+                "specify --soft (un-route, reversible), --hard (purge state), "
+                "or --purge (complete, irreversible)",
                 output_json,
             )
             return 2
-        # Interactive bare invocation: ask, default soft (reversible).
-        try:
-            choice = (
-                input("Soft (un-route, keep config) or Hard (purge everything)? [soft/hard] ")
-                .strip()
-                .lower()
-            )
-        except (EOFError, KeyboardInterrupt):
-            print()
+        chosen = _choose_mode()
+        if chosen is None:
+            _emit_error("aborted — nothing was changed", output_json)
             return 2
-        if choice in ("hard", "h"):
-            hard = True
+        if chosen == "purge":
+            purge = True
         else:
-            soft = True  # default + any "soft"/empty answer
+            soft = True
 
-    # ── HARD safety gate (AC-S1) ────────────────────────────────────────────
-    run_pip = hard  # offer/run package removal only under --hard
-    if hard and not dry_run and not yes:
-        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+    # ── Destructive safety gate (AC-S1) ─────────────────────────────────────
+    # --purge always removes the package; --hard still asks separately.
+    run_pip = hard or purge
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    if (hard or purge) and not dry_run and not yes and not tty:
+        _emit_error(
+            f"--{'purge' if purge else 'hard'} requires --yes in non-interactive "
+            "use (refusing to delete)",
+            output_json,
+        )
+        return 2
+
+    # ── Resolve the backup decision BEFORE anything is deleted ──────────────
+    # Scripts must state their intent: inheriting a default here would let
+    # automation destroy user data silently.
+    want_backup = False
+    backup_dest: Optional[Path] = None
+    if purge and not dry_run:
+        if no_backup:
+            want_backup = False
+        elif backup is not None:
+            want_backup = True
+            backup_dest = Path(backup).expanduser() if backup else _default_backup_path()
+        elif tty and not output_json:
+            want_backup = _confirm_backup()
+            backup_dest = _default_backup_path() if want_backup else None
+        else:
             _emit_error(
-                "--hard requires --yes in non-interactive use (refusing to delete)",
+                "--purge in non-interactive use requires an explicit "
+                "--backup <path> or --no-backup",
                 output_json,
             )
             return 2
 
     # ── Build the single ordered plan (drives dry-run AND real run) ─────────
-    ops, retained_paths = _build_plan(hard=hard, keep_data=keep_data, home=home)
+    ops, retained_paths = _build_plan(hard=hard, keep_data=keep_data, home=home, purge=purge)
     retained = [str(p) for p in retained_paths]
 
     receipt = Receipt(
@@ -577,6 +838,7 @@ def run_uninstall(
         keep_data=keep_data,
         home=str(home),
         retained=retained,
+        purge=purge,
     )
 
     # ── Dry-run: describe the exact plan, touch nothing ─────────────────────
@@ -599,12 +861,43 @@ def run_uninstall(
             )
         return _finish(receipt, output_json, dry=True)
 
-    # ── Confirmation for destructive --hard ─────────────────────────────────
-    if hard and not yes:
+    # ── Confirmation for destructive modes ──────────────────────────────────
+    if purge and not yes:
+        note = (
+            f"A backup will be written to {backup_dest} first."
+            if want_backup
+            else _c("No backup will be taken.", _RED)
+        )
+        if not _confirm_purge(ops, home, note):
+            _emit_error("aborted — nothing was changed", output_json)
+            return 2
+    elif hard and not yes:
         # Interactive (already verified TTY above).
         if not _confirm_hard(ops, retained_paths, run_pip):
             _emit_error("aborted — nothing was changed", output_json)
             return 2
+
+    # ── Backup BEFORE the first deletion; a failure aborts the uninstall ────
+    if want_backup and backup_dest is not None:
+        print("Creating backup…")
+        ok, detail = _create_backup(home, backup_dest, _external_state_paths())
+        receipt.lines.append(
+            {
+                "phase": "backup",
+                "op": f"Write backup archive to {backup_dest}",
+                "outcome": _OUTCOME_DONE if ok else _OUTCOME_FAIL,
+                "detail": detail,
+            }
+        )
+        if not ok:
+            receipt.errors += 1
+            _emit_error(
+                f"{detail} — nothing was deleted. Re-run with --no-backup to "
+                "proceed anyway, or free up space and retry.",
+                output_json,
+            )
+            return 2
+        receipt.backup_path = detail
 
     # ── Execute the plan in order ───────────────────────────────────────────
     # Codex prints its own report; suppress noise under --json so output stays
@@ -618,7 +911,9 @@ def run_uninstall(
 
     # ── Package removal LAST (after all home purging) ───────────────────────
     if run_pip:
-        if yes:
+        # --purge means complete: the user already typed the confirmation word,
+        # so removal is not asked a second time.
+        if yes or purge:
             _run_pip_uninstall(receipt)
         else:
             # Interactive secondary confirm specifically for package removal.
