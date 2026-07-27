@@ -349,7 +349,7 @@ def test_async_backpressure_middleware_installed_in_app():
 # ---------------------------------------------------------------------------
 
 
-def test_async_backend_is_quarantined_not_production():
+def test_async_backend_is_quarantined_not_production(monkeypatch):
     """`start_proxy()` must NOT select the async backend.
 
     Replaces a skipped test that asserted the opposite — that `start_proxy()`
@@ -375,6 +375,24 @@ def test_async_backend_is_quarantined_not_production():
         "governance change requiring the revival contract in its module docstring"
     )
 
+    # Assert on the WIRING MECHANISM, not on an attribute name.
+    #
+    # A previous version asserted `not hasattr(ps, "_async_thread")`. That name
+    # appears in no product code — `start_async_proxy_in_thread()` RETURNS the
+    # thread and the caller names it. So a reviver binding it as `self._async_srv`
+    # would have passed that assertion green while every request bypassed the
+    # spend guard and DLP. The guard was theatre.
+    #
+    # Sentinel on the real entry point cannot be renamed around.
+    _async_started = False
+
+    def _fail_fast(*a, **kw):
+        nonlocal _async_started
+        _async_started = True
+        raise AssertionError("quarantined async backend was started")
+
+    monkeypatch.setattr(server_async, "start_async_proxy_in_thread", _fail_fast, raising=True)
+
     TEMP_PORT = 19867
     ps = start_proxy(host="127.0.0.1", port=TEMP_PORT, blocking=False)
     try:
@@ -383,10 +401,10 @@ def test_async_backend_is_quarantined_not_production():
         with urllib.request.urlopen(req, timeout=5) as resp:
             assert resp.status == 200, "the sync proxy must still serve /health"
 
-        assert not hasattr(ps, "_async_thread"), (
-            "ProxyServer exposes _async_thread — the async backend appears wired "
-            "into production selection, which the quarantine forbids until the "
-            "revival contract is satisfied"
+        assert not _async_started, (
+            "start_async_proxy_in_thread() was invoked during start_proxy() — the "
+            "async backend is wired into production selection, which the quarantine "
+            "forbids until the revival contract is satisfied"
         )
     finally:
         ps.stop()
