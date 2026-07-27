@@ -277,6 +277,7 @@ _HARD_PURGE_NAMES = (
     "requests.jsonl",
     "pinned_blocks.json",
     "update_check.json",
+    "update_check.lock",
     "fleet.yaml",
     "cache",
     "dispatch",

@@ -18,6 +18,7 @@ import sys
 import time
 from collections.abc import Sized
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import (
@@ -1339,7 +1340,14 @@ def cmd_start(args: CommandArgs) -> int:
     )
     from tokenpak.core.runtime import lifecycle as _lifecycle
 
-    port = int(os.environ.get("TOKENPAK_PORT", "8766"))
+    # --port is declared on this command and was being ignored: the port came
+    # from the environment only, so `tokenpak start --port 8799` ran its
+    # ownership preflight against 8766 and refused whenever anything else held
+    # the default port. Explicit flag wins, then TOKENPAK_PORT, then the default.
+    _flag_port = getattr(args, "port", None)
+    port = (
+        int(_flag_port) if _flag_port is not None else int(os.environ.get("TOKENPAK_PORT", "8766"))
+    )
 
     # Validate config on boot (P1-T5)
     from tokenpak.core.config_loader import config_load_error, load_config
@@ -1406,7 +1414,7 @@ def cmd_start(args: CommandArgs) -> int:
         print(f"A proxy is already answering on port {port}, but this install did not start it.")
         print("   TokenPak will not manage a process it does not own.")
         print("   Run `tokenpak status` to inspect it, or choose another port:")
-        print("     TOKENPAK_PORT=<port> tokenpak start")
+        print("     tokenpak start --port <port>")
         return EXIT_RUNTIME_UNAVAILABLE
 
     if snap.pid_alive and not snap.health_ok:
@@ -2534,16 +2542,61 @@ def cmd_explain(args: CommandArgs) -> None:
         print("\nTip: Set with TOKENPAK_PROFILE=<name> or use `tokenpak explain --profile <name>`")
 
 
-def cmd_preview(args: CommandArgs) -> None:
+def cmd_preview(args: CommandArgs):
     """Preview compression result for input text (dry-run)."""
     import sys
     from pathlib import Path
 
+    from tokenpak.cli.exit_codes import EXIT_FAILURE
+
     # Get input text
     if args.file:
-        text = Path(args.file).read_text()
+        src = Path(args.file)
+        if not src.is_file():
+            print(f"✗ No such file: {args.file}")
+            print('  Check the path, or pass text directly: tokenpak preview "<text>"')
+            return EXIT_FAILURE
+        try:
+            text = src.read_text()
+        except OSError as exc:
+            print(f"✗ Could not read {args.file}: {exc}")
+            return EXIT_FAILURE
+        # A .json/.jsonl file that does not parse would otherwise be compressed
+        # as raw prose and reported as a confident, meaningless number. Refuse
+        # instead: a silent wrong answer is worse than an error.
+        suffix = src.suffix.lower()
+        if suffix in (".json", ".jsonl"):
+            import json as _json
+
+            try:
+                if suffix == ".json":
+                    _json.loads(text)
+                else:
+                    for lineno, line in enumerate(text.splitlines(), 1):
+                        if line.strip():
+                            _json.loads(line)
+            except ValueError as exc:
+                print(f"✗ {args.file} is not valid {suffix.lstrip('.').upper()}: {exc}")
+                print(
+                    f"  Fix the file, or pipe it as plain text: cat {args.file} | tokenpak preview"
+                )
+                return EXIT_FAILURE
     elif args.input:
         text = args.input
+        # The positional argument is literal TEXT. Passing a filename — the most
+        # natural first move, since the menu advertises a dry-run preview —
+        # would otherwise compress the *path string* and report ~0% savings with
+        # no hint anything was wrong. Catch that specific mistake.
+        stripped = text.strip()
+        if len(stripped) < 4096 and "\n" not in stripped:
+            try:
+                looks_like_file = Path(stripped).is_file()
+            except OSError:
+                looks_like_file = False
+            if looks_like_file:
+                print("✗ That is a file path, but this argument takes literal text.")
+                print(f"  Did you mean:  tokenpak preview --file {stripped}")
+                return EXIT_FAILURE
     else:
         # Read from stdin
         text = sys.stdin.read()
@@ -2563,7 +2616,6 @@ def cmd_preview(args: CommandArgs) -> None:
     # compressor failed" — and the --json body already said `no_data` while
     # the exit code said generic-failure.
     from tokenpak.cli.exit_codes import (
-        EXIT_FAILURE,
         EXIT_NO_DATA,
         EXIT_RUNTIME_UNAVAILABLE,
     )
@@ -3852,7 +3904,15 @@ def build_parser() -> argparse.ArgumentParser:
             "The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml"
         ),
     )
-    p_start.add_argument("--port", type=int, default=8766, help="Port to listen on (default: 8766)")
+    # default=None, not 8766: cmd_start must be able to tell "user passed a
+    # port" from "user passed nothing". With a concrete default, honouring the
+    # flag would silently override TOKENPAK_PORT on every unflagged run.
+    p_start.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to listen on (default: 8766, or TOKENPAK_PORT)",
+    )
     p_start.add_argument(
         "--workers", type=int, default=2, help="Number of worker processes (default: 2)"
     )
@@ -5495,6 +5555,57 @@ def _tokenpak_is_user_install() -> bool:
 # ── Update check (cached PyPI version; consumed by `doctor` + update nudge) ────
 
 _UPDATE_NUDGE_OPTOUT_ENV = "TOKENPAK_NO_UPDATE_CHECK"
+_UPDATE_NUDGE_TTL_SECONDS = 24 * 60 * 60
+_UPDATE_NUDGE_TIMEOUT_SECONDS = 1.5
+_KEEP_SKIPPED_VERSION = object()
+_KEEP_AUTOMATIC_CHECKS = object()
+_UPDATE_NUDGE_EXCLUDED_COMMANDS = frozenset(
+    {
+        "update",
+        "upgrade",
+        "menu",
+        "requests",
+        "start",
+        "stop",
+        "restart",
+        "serve",
+        "monitor",
+        "dashboard",
+        "claude",
+        "codex",
+    }
+)
+_MACHINE_OUTPUT_ATTRS = (
+    "as_json",
+    "export_csv",
+    "json",
+    "json_export",
+    "json_out",
+    "json_output",
+    "output_json",
+    "markdown",
+    "minimal",
+    "print_url",
+    "quiet",
+    "raw",
+)
+_MACHINE_OUTPUT_FORMATS = frozenset({"csv", "json", "jsonl", "markdown", "raw"})
+
+
+def _machine_output_requested(args) -> bool:
+    """Recognize argparse destinations used for machine-readable output."""
+    if any(bool(getattr(args, attr, False)) for attr in _MACHINE_OUTPUT_ATTRS):
+        return True
+    return str(getattr(args, "format", "")).lower() in _MACHINE_OUTPUT_FORMATS
+
+
+def _update_nudge_suppressed(args) -> bool:
+    """Suppress automatic checks for machine, launcher, and long-running flows."""
+    if _machine_output_requested(args):
+        return True
+    if getattr(args, "watch", False):
+        return True
+    return getattr(args, "trigger_cmd", None) in {"watch", "daemon"}
 
 
 def _update_nudge_opted_out() -> bool:
@@ -5514,36 +5625,326 @@ def _update_cache_path() -> "Path":
     return _paths.home() / "update_check.json"
 
 
+def _ensure_update_cache_parent(path: Path) -> None:
+    """Create and harden the TokenPak home for private update-check state."""
+    parent = path.parent
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(parent, 0o700)
+    except OSError:
+        pass
+
+
+def _lock_update_cache_fd(fd: int, platform_name: Optional[str] = None) -> None:
+    """Acquire an exclusive one-byte lock on POSIX or Windows."""
+    platform_name = os.name if platform_name is None else platform_name
+    if platform_name == "nt":
+        import msvcrt
+
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"\0")
+            os.fsync(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_EX)
+
+
+def _unlock_update_cache_fd(fd: int, platform_name: Optional[str] = None) -> None:
+    """Release a lock acquired by :func:`_lock_update_cache_fd`."""
+    platform_name = os.name if platform_name is None else platform_name
+    if platform_name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _update_cache_lock():
+    """Serialize cache probes and read-modify-write updates across processes."""
+    path = _update_cache_path()
+    _ensure_update_cache_parent(path)
+    lock_path = path.with_suffix(".lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        _lock_update_cache_fd(fd)
+        locked = True
+        yield path
+    finally:
+        try:
+            if locked:
+                _unlock_update_cache_fd(fd)
+        finally:
+            os.close(fd)
+
+
+def _read_update_cache_state(path: Optional[Path] = None) -> dict:
+    """Return the complete update-check cache, or an empty mapping on failure."""
+    try:
+        cache_path = _update_cache_path() if path is None else path
+        data = json.loads(cache_path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _read_update_cache() -> Tuple[float, Optional[str]]:
     """Return ``(checked_at_epoch, cached_latest_version)``.
 
     Reads the cached result only — never issues a network probe. Returns
     ``(0.0, None)`` on any failure (no cache yet, unreadable, malformed).
     """
+    data = _read_update_cache_state()
     try:
-        data = _json_object(json.loads(_update_cache_path().read_text()))
-        latest = data.get("latest")
-        return _as_float(data.get("checked_at")), latest if isinstance(latest, str) else None
-    except Exception:
+        return float(data.get("checked_at", 0.0)), data.get("latest")
+    except (TypeError, ValueError):
         return 0.0, None
 
 
+def _write_update_cache_unlocked(
+    path: Path,
+    latest: Optional[str],
+    *,
+    checked_at: Optional[float] = None,
+    skipped_version=_KEEP_SKIPPED_VERSION,
+    skipped_at: Optional[float] = None,
+    automatic_checks=_KEEP_AUTOMATIC_CHECKS,
+) -> None:
+    """Persist cache state while the caller holds ``_update_cache_lock``."""
+    previous = _read_update_cache_state(path)
+    payload = {
+        "checked_at": float(time.time() if checked_at is None else checked_at),
+        "latest": latest,
+    }
+    if automatic_checks is _KEEP_AUTOMATIC_CHECKS:
+        automatic_checks = previous.get("automatic_checks")
+    if isinstance(automatic_checks, bool):
+        payload["automatic_checks"] = automatic_checks
+    if skipped_version is _KEEP_SKIPPED_VERSION:
+        skipped_version = previous.get("skipped_version")
+    if skipped_version:
+        payload["skipped_version"] = str(skipped_version)
+        payload["skipped_at"] = (
+            float(skipped_at)
+            if skipped_at is not None
+            else previous.get("skipped_at", payload["checked_at"])
+        )
+
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def _write_update_cache(
+    latest: Optional[str],
+    *,
+    checked_at: Optional[float] = None,
+    skipped_version=_KEEP_SKIPPED_VERSION,
+    skipped_at: Optional[float] = None,
+    automatic_checks=_KEEP_AUTOMATIC_CHECKS,
+) -> None:
+    """Atomically persist update state without breaking the invoking command."""
+    try:
+        with _update_cache_lock() as path:
+            _write_update_cache_unlocked(
+                path,
+                latest,
+                checked_at=checked_at,
+                skipped_version=skipped_version,
+                skipped_at=skipped_at,
+                automatic_checks=automatic_checks,
+            )
+    except Exception:
+        return
+
+
+def _automatic_update_checks_enabled() -> Optional[bool]:
+    """Return saved consent: ``True``/``False``, or ``None`` when undecided."""
+    value = _read_update_cache_state().get("automatic_checks")
+    return value if isinstance(value, bool) else None
+
+
+def _set_automatic_update_checks(enabled: bool) -> bool:
+    """Persist automatic-check consent without issuing or fabricating a check."""
+    try:
+        with _update_cache_lock() as path:
+            state = _read_update_cache_state(path)
+            _write_update_cache_unlocked(
+                path,
+                state.get("latest"),
+                checked_at=float(state.get("checked_at", 0.0) or 0.0),
+                automatic_checks=bool(enabled),
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _mark_update_skipped(latest: str) -> None:
+    """Suppress the nudge for exactly ``latest`` while allowing newer nudges."""
+    now = time.time()
+    _write_update_cache(
+        latest,
+        checked_at=now,
+        skipped_version=latest,
+        skipped_at=now,
+    )
+
+
 def _fetch_latest_pypi_version(timeout: float = 5.0) -> str:
-    """Return the latest ``tokenpak`` version from PyPI.
+    """Delegate to the privacy-bounded core PyPI metadata primitive."""
+    from tokenpak.core._update_check import fetch_latest_pypi_version
 
-    Raises on any network/parse error — callers decide how to handle failure.
-    Not used by ``doctor`` (which reads the cache only); kept so the launcher
-    update nudge and tests have a single canonical probe.
-    """
-    import urllib.request as _ur
+    return fetch_latest_pypi_version(timeout=timeout)
 
-    with _ur.urlopen("https://pypi.org/pypi/tokenpak/json", timeout=timeout) as resp:
-        data = _json_object(json.loads(resp.read()))
-        info = _json_object(data.get("info"))
-        latest = info.get("version")
-        if not isinstance(latest, str):
-            raise ValueError("PyPI response omitted a string info.version")
-        return latest
+
+def _latest_for_update_nudge(now: Optional[float] = None) -> Tuple[Optional[str], dict]:
+    """Return cached/fresh PyPI state with one automatic attempt per 24 hours."""
+    now = time.time() if now is None else now
+    try:
+        with _update_cache_lock() as path:
+            state = _read_update_cache_state(path)
+            # Revalidate durable consent while holding the same cross-process
+            # lock used by --disable-checks.  A caller that observed stale
+            # consent before acquiring this lock must not issue a request after
+            # another process has completed the disable operation.
+            if state.get("automatic_checks") is not True:
+                return None, state
+            try:
+                checked_at = float(state.get("checked_at", 0.0))
+            except (TypeError, ValueError):
+                checked_at = 0.0
+            latest = state.get("latest")
+            age = now - checked_at
+            if checked_at > 0 and 0 <= age < _UPDATE_NUDGE_TTL_SECONDS:
+                return latest, state
+
+            # Record before the request: failures and crashes are cached too.
+            _write_update_cache_unlocked(path, None, checked_at=now)
+            try:
+                latest = _fetch_latest_pypi_version(timeout=_UPDATE_NUDGE_TIMEOUT_SECONDS)
+            except Exception:
+                return None, _read_update_cache_state(path)
+
+            _write_update_cache_unlocked(path, latest, checked_at=now)
+            return latest, _read_update_cache_state(path)
+    except Exception:
+        return None, _read_update_cache_state()
+
+
+def _update_nudge_allowed(command: str, machine_output: bool = False) -> bool:
+    """Return whether this invocation may perform an interactive update prompt."""
+    if machine_output or command in _UPDATE_NUDGE_EXCLUDED_COMMANDS:
+        return False
+    if _update_nudge_opted_out() or _no_tui():
+        return False
+    if os.environ.get("TOKENPAK_NONINTERACTIVE") or os.environ.get("CI"):
+        return False
+    if os.environ.get("TERM", "") == "dumb":
+        return False
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _prompt_for_update_check_consent() -> bool:
+    """Request and persist first-run consent before any automatic PyPI check."""
+    print("\nTokenPak can check PyPI once per day for new releases.")
+    print("    The check sends no TokenPak project, prompt, completion, usage, credential,")
+    print("    file, tool-inventory, vault, or proxy-log data.")
+    print("    PyPI still sees ordinary HTTPS/TLS transport metadata such as your IP,")
+    print("    TLS handshake metadata, and HTTP headers.")
+    try:
+        choice = input("    Enable daily update checks? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+    enabled = choice in {"y", "yes"}
+    if not _set_automatic_update_checks(enabled):
+        print("    Could not save the update-check preference; no check was made.")
+        return False
+    if enabled:
+        print("    Update checks enabled. Disable anytime with `tokenpak update --disable-checks`.")
+        return True
+
+    print("    Update checks disabled. Enable anytime with `tokenpak update --enable-checks`.")
+    return False
+
+
+def _maybe_prompt_for_update(command: str, machine_output: bool = False) -> None:
+    """Offer consent and then Update/Skip after a successful interactive command."""
+    try:
+        if not _update_nudge_allowed(command, machine_output):
+            return
+        consent = _automatic_update_checks_enabled()
+        if consent is None:
+            if not _prompt_for_update_check_consent():
+                return
+        elif not consent:
+            return
+
+        latest, state = _latest_for_update_nudge()
+        if not latest:
+            return
+
+        from packaging.version import InvalidVersion, Version
+
+        from tokenpak import __version__ as current
+
+        try:
+            if Version(latest) <= Version(current):
+                return
+        except InvalidVersion:
+            return
+        if state.get("skipped_version") == latest:
+            return
+
+        print(f"\n⚠️  TokenPak {latest} is available (you have {current}).")
+        print("    Options: [U]pdate now  [S]kip this version")
+        try:
+            choice = input("    Choose [u/S]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if choice in {"u", "update", "y", "yes"}:
+            cmd_update(
+                argparse.Namespace(
+                    check=False,
+                    force=False,
+                    core_only=False,
+                    dry_run=False,
+                )
+            )
+        elif choice in {"", "s", "skip", "n", "no"}:
+            _mark_update_skipped(latest)
+            print(f"    Skipped {latest}; you'll be notified when a newer version is available.")
+        else:
+            print("    No update applied. Run `tokenpak update` whenever you're ready.")
+    except Exception:
+        return
 
 
 def _pip_upgrade_tokenpak(verbose: bool = True) -> Tuple[bool, str, str]:
@@ -5554,17 +5955,28 @@ def _pip_upgrade_tokenpak(verbose: bool = True) -> Tuple[bool, str, str]:
     plain ``pip install`` is refused; we retry into the per-user site with
     ``--break-system-packages``, which writes only to the user site (``~/.local``)
     and never touches system/distro-managed packages. pipx-managed installs are
-    detected and reported so the caller can advise ``pipx upgrade`` instead of
+    detected and upgraded through the external ``pipx`` executable instead of
     running pip inside the pipx venv.
 
     Returns ``(ok, method, detail)`` where ``method`` is ``pip`` / ``pip-bsp`` /
     ``pipx`` and ``detail`` carries trimmed stderr on failure.
     """
+    import shutil as _shutil
     import subprocess as _sp
 
     # pipx-managed: running pip inside the pipx venv is the wrong tool.
     if "/pipx/venvs/" in (sys.prefix or "").replace(os.sep, "/"):
-        return False, "pipx", ""
+        pipx = _shutil.which("pipx")
+        if not pipx:
+            return False, "pipx", "pipx executable not found on PATH"
+        result = _sp.run(
+            [pipx, "upgrade", "tokenpak"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True, "pipx", ""
+        return False, "pipx", (result.stderr or result.stdout or "")[:400]
 
     in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
     # Match where the package currently lives so we upgrade it in place.
@@ -5588,7 +6000,8 @@ def _pip_upgrade_tokenpak(verbose: bool = True) -> Tuple[bool, str, str]:
                 "  ⚠ Externally-managed environment (PEP 668); retrying into the "
                 "user site with --break-system-packages (writes only to ~/.local)…"
             )
-        result = _run(scope + ["--break-system-packages"])
+        retry_scope = scope if in_venv or "--user" in scope else ["--user"]
+        result = _run(retry_scope + ["--break-system-packages"])
         if result.returncode == 0:
             return True, "pip-bsp", ""
 
@@ -5600,9 +6013,42 @@ def cmd_update(args: CommandArgs) -> None:
     import subprocess as _sp
 
     check_only = getattr(args, "check", False)
+    enable_checks = getattr(args, "enable_checks", False)
+    disable_checks = getattr(args, "disable_checks", False)
+    check_status = getattr(args, "check_status", False)
     force = getattr(args, "force", False)
     core_only = getattr(args, "core_only", False)
     dry_run = getattr(args, "dry_run", False)
+
+    if check_status:
+        consent = _automatic_update_checks_enabled()
+        label = "enabled" if consent is True else "disabled"
+        if consent is None:
+            label += " (no consent decision saved)"
+        print(f"Automatic update checks: {label}")
+        checked_at, latest = _read_update_cache()
+        if checked_at > 0:
+            import datetime as _dt
+
+            checked = _dt.datetime.fromtimestamp(checked_at, tz=_dt.timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            print(f"Last automatic attempt: {checked}")
+        if latest:
+            print(f"Latest cached version: {latest}")
+        return 0
+
+    if enable_checks or disable_checks:
+        enabled = bool(enable_checks)
+        if not _set_automatic_update_checks(enabled):
+            print("✗ Could not save the update-check preference.", file=sys.stderr)
+            return 1
+        if enabled:
+            print("✓ Automatic update checks enabled (at most once every 24 hours).")
+            print("  The next eligible interactive command may check PyPI.")
+        else:
+            print("✓ Automatic update checks disabled. No automatic PyPI requests will be made.")
+        return 0
 
     if dry_run:
         print("🔍 Dry run — showing what would change (no changes applied)\n")
@@ -5610,11 +6056,7 @@ def cmd_update(args: CommandArgs) -> None:
     # Check latest version from PyPI
     print("Checking for updates...")
     try:
-        import urllib.request as _ur
-
-        with _ur.urlopen("https://pypi.org/pypi/tokenpak/json", timeout=5) as resp:
-            data = json.loads(resp.read())
-            latest = data["info"]["version"]
+        latest = _fetch_latest_pypi_version(timeout=5)
     except Exception as e:
         print(f"  ✗ Could not reach PyPI: {e}")
         latest = None
@@ -5658,11 +6100,14 @@ def cmd_update(args: CommandArgs) -> None:
     if ok:
         if method == "pip-bsp":
             print("  ✓ tokenpak updated (user site, --break-system-packages)")
+        elif method == "pipx":
+            print("  ✓ tokenpak updated with pipx")
         else:
             print("  ✓ tokenpak updated")
     elif method == "pipx":
-        print("  ✗ tokenpak is managed by pipx — upgrade with:\n      pipx upgrade tokenpak")
-        return
+        print(f"  ✗ pipx upgrade failed: {detail or 'unknown error'}")
+        print("    Retry with: pipx upgrade tokenpak")
+        return 1
     else:
         print(f"  ✗ pip install failed:\n{detail}")
         print(
@@ -5672,7 +6117,9 @@ def cmd_update(args: CommandArgs) -> None:
             "--user --upgrade --break-system-packages tokenpak\n"
             "    • pipx install:         pipx upgrade tokenpak"
         )
-        return
+        return 1
+
+    _write_update_cache(latest or current_ver, skipped_version=None)
 
     # Restart proxy if it was running
     if proxy_running and not core_only:
@@ -5793,12 +6240,14 @@ def cmd_config_sync(args: CommandArgs) -> None:
         print(f"  ✗ Unknown source: {source}. Use --source=git or --source=url")
 
 
-def cmd_config_validate(args: CommandArgs) -> None:
+def cmd_config_validate(args: CommandArgs):
     """Validate config against schema.
 
     With --config FILE: validates a proxy config file (JSON/YAML) against JSON Schema.
     Without --config: validates the TokenPak meta config (config.json).
     """
+    from tokenpak.cli.exit_codes import EXIT_FAILURE, EXIT_NOT_CONFIGURED
+
     # Route to JSON schema validator when --config is provided
     config_file = getattr(args, "config_file", None)
     if config_file:
@@ -5815,8 +6264,12 @@ def cmd_config_validate(args: CommandArgs) -> None:
     try:
         cfg = _json_object(json.loads(_TOKENPAK_CFG.read_text()))
     except Exception as exc:
-        print(f"✗ Could not read config: {exc}")
-        return
+        # A validator that cannot read its target has not validated anything.
+        # Returning 0 here reported success to `set -e` scripts and CI.
+        print(f"✗ Could not read the TokenPak meta config at {_TOKENPAK_CFG}: {exc}")
+        print("  Run `tokenpak setup` to create one, or pass --config <file> to")
+        print("  validate a proxy config instead.")
+        return EXIT_NOT_CONFIGURED
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -5854,6 +6307,10 @@ def cmd_config_validate(args: CommandArgs) -> None:
             print(f"   {w}")
     if not errors and not warnings:
         print("✓ Config valid — all checks passed")
+
+    # Errors are failures and must be visible to callers. Warnings are not.
+    if errors:
+        return EXIT_FAILURE
 
 
 def cmd_config_pull(args: CommandArgs) -> None:
@@ -5991,7 +6448,28 @@ def _build_version_parser(sub: Subparsers) -> None:
 
 def _build_update_parser(sub: Subparsers) -> None:
     p = sub.add_parser("update", help="Update TokenPak to latest from git/pypi")
-    p.add_argument("--check", action="store_true", help="Check for updates without installing")
+    check_group = p.add_mutually_exclusive_group()
+    check_group.add_argument(
+        "--check", action="store_true", help="Check for updates once without installing"
+    )
+    check_group.add_argument(
+        "--enable-checks",
+        action="store_true",
+        dest="enable_checks",
+        help="Enable automatic daily update checks (no request now)",
+    )
+    check_group.add_argument(
+        "--disable-checks",
+        action="store_true",
+        dest="disable_checks",
+        help="Disable automatic update checks (no request)",
+    )
+    check_group.add_argument(
+        "--check-status",
+        action="store_true",
+        dest="check_status",
+        help="Show saved automatic-check state without a request",
+    )
     p.add_argument("--force", action="store_true", help="Force update even if already up to date")
     p.add_argument(
         "--core-only",
@@ -6485,10 +6963,8 @@ def main() -> None:
             sys.exit(0)
 
     # ── First-run welcome ──────────────────────────────────────────────────────
-    machine_output = any(
-        bool(getattr(args, attr, False))
-        for attr in ("as_json", "json", "json_export", "json_output", "quiet", "raw")
-    )
+    machine_output = _machine_output_requested(args)
+    suppress_update_nudge = _update_nudge_suppressed(args)
     if _is_first_run() and args.command not in ("help",) and not machine_output:
         print(
             "👋 Welcome to TokenPak! It looks like this is your first time.\n"
@@ -6510,9 +6986,15 @@ def main() -> None:
     # 1 on error but the dispatcher dropped the value, so callers in
     # `set -e` scripts saw exit 0 even after a printed error. Handlers
     # that return None or 0 keep the prior fall-through behavior.
-    _rc = args.func(args)
+    try:
+        _rc = args.func(args)
+    except SystemExit as exc:
+        if exc.code is None or exc.code == 0:
+            _maybe_prompt_for_update(args.command, machine_output=suppress_update_nudge)
+        raise
     if isinstance(_rc, int) and _rc != 0:
         sys.exit(_rc)
+    _maybe_prompt_for_update(args.command, machine_output=suppress_update_nudge)
 
 
 # ── Route commands ────────────────────────────────────────────────────────────
@@ -7613,7 +8095,7 @@ def _build_goals_parser(sub: Subparsers) -> None:
     # Export
     p_export = gsub.add_parser("export", help="Export goals to JSON")
     p_export.add_argument("--output", "-o", help="Output file (default: stdout)")
-    p_export.set_defaults(func=cmd_goals_export)
+    p_export.set_defaults(func=cmd_goals_export, json_output=True)
 
     # History
     p_history = gsub.add_parser("history", help="Show milestone history")
