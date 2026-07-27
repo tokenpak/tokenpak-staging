@@ -91,13 +91,36 @@ def _project_scope_filter(
         from tokenpak.vault.sqlite_backend import _load_registry
 
         _PROJECT_REGISTRY_STATE = _load_registry()
-    registry, _error = _PROJECT_REGISTRY_STATE
+    registry, error = _PROJECT_REGISTRY_STATE
+    if error is not None:
+        # A declaration that exists but cannot be read must not degrade to
+        # "no scoping" — that is the fail-open this whole feature exists to
+        # prevent, and it fires exactly when someone is turning scoping on.
+        # Every other backend refuses here; this one used to discard the error,
+        # which also dropped archive-role exclusion and surfaced stale content.
+        from tokenpak.vault.project_scope import ScopeConflictError
+
+        raise ScopeConflictError(
+            f"project registry failed to load ({error}); refusing to answer "
+            "rather than returning unscoped results"
+        )
     if not getattr(registry, "active", False) and not project:
         return None
     from tokenpak.vault.project_scope import ScopeFilter
 
     scope_filter = ScopeFilter(registry, project, exclude_roles)
     return scope_filter if scope_filter.active else None
+
+
+def reset_project_registry_cache() -> None:
+    """Drop the cached registry so the next query re-reads ``vault.yaml``.
+
+    The MCP server is a long-lived process, so without this a transient load
+    failure — or a vault.yaml the user has since corrected — stays pinned for
+    the life of the session.
+    """
+    global _PROJECT_REGISTRY_STATE
+    _PROJECT_REGISTRY_STATE = None
 
 
 class VaultIndex:
@@ -546,7 +569,13 @@ class VaultIndex:
 
     @property
     def supports_project_scope(self) -> bool:
-        """This index applies membership during candidate expansion."""
+        """Covers ``search`` and ``compile_injection`` on this class.
+
+        Both accept ``project`` and apply membership during candidate expansion,
+        before truncation. This class has no ``search_scoped``; callers needing
+        ambiguity detection must use a backend that provides it rather than
+        inferring it from this flag.
+        """
         return True
 
     def search(
@@ -602,16 +631,27 @@ class VaultIndex:
                 _selective.append((qt, term_freq))
         _selective.sort(key=lambda x: x[1])  # most selective first
 
+        # Scope during expansion, not only at ranking. The cap below is a
+        # budget: if another project dominates the most selective term, it can
+        # be exhausted before a later term expands at all, and an in-scope block
+        # matching only that term is never scored — a scoped search returning
+        # less than the same query unscoped. This is the same defect that was
+        # fixed in the proxy index; it was reproduced here verbatim.
+        _scope = _project_scope_filter(project, exclude_roles)
+
+        def _in_scope(bid: str) -> bool:
+            return _scope is None or _scope.allows(str(blocks[bid].get("source_path", "")))
+
         candidates: set[str] = set()
         if _selective:
             for qt, _ in _selective:
-                candidates.update(inverted[qt])
+                candidates.update(b for b in inverted[qt] if _in_scope(b))
                 if len(candidates) >= _max_candidates:
                     break  # enough; less selective terms contribute diminishing returns
         if not candidates:
             # All terms are corpus-wide — fall back to common terms (fast path)
             for qt in _fallback:
-                candidates.update(inverted[qt])
+                candidates.update(b for b in inverted[qt] if _in_scope(b))
         if not candidates:
             return []
 
@@ -637,13 +677,11 @@ class VaultIndex:
         # Membership is applied before truncation so an out-of-scope block
         # cannot consume a result slot; the sort key is untouched, so ordering
         # within a scope matches the unscoped ordering of the same blocks.
-        _scope = _project_scope_filter(project, exclude_roles)
         ranked = sorted(
             (
                 (bid, score)
                 for bid, score in scores.items()
-                if _scope is None
-                or _scope.allows(str(blocks[bid].get("source_path", "")))
+                if _in_scope(bid)
             ),
             key=lambda x: (-x[1], blocks[x[0]].get("source_path", ""), x[0]),
         )
@@ -652,13 +690,30 @@ class VaultIndex:
         return [(blocks[bid], score) for bid, score in ranked]
 
     def compile_injection(
-        self, query: str, budget: int = 4000, top_k: int = 5, min_score: float = 2.0
+        self,
+        query: str,
+        budget: int = 4000,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: Optional[str] = None,
+        exclude_roles: Optional[Sequence[str]] = None,
     ) -> Tuple[str, int, List[str]]:
         """
         Search vault and compile injection text within budget.
         Returns (injection_text, tokens_used, source_refs).
+
+        Scope is honoured here as well as in ``search``: the capability this
+        class advertises covers both, and a compile path that quietly ignored
+        it would make that advertisement false.
         """
-        results = self.search(query, top_k=top_k, min_score=min_score)
+        results = self.search(
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            project=project,
+            exclude_roles=exclude_roles,
+        )
         if not results:
             return "", 0, []
 

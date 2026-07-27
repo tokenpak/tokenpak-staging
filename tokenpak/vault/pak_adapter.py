@@ -69,6 +69,30 @@ def _file_type_to_source_type(file_type: Optional[str]) -> PakSourceType:
     return _FILE_TYPE_TO_SOURCE_TYPE.get(file_type.lower(), PakSourceType.FILE)
 
 
+_REGISTRY_CACHE: "tuple[object, object] | None" = None
+
+
+def _cached_registry() -> "tuple[object, object]":
+    """Load the project registry once per process.
+
+    ``vault_block_to_pak`` runs per block, so an uncached load put a file read
+    and a YAML parse on every converted block — every other call site in the
+    tree caches this.
+    """
+    global _REGISTRY_CACHE
+    if _REGISTRY_CACHE is None:
+        from tokenpak.vault.sqlite_backend import _load_registry
+
+        _REGISTRY_CACHE = _load_registry()
+    return _REGISTRY_CACHE
+
+
+def reset_registry_cache() -> None:
+    """Drop the cached registry so the next call re-reads ``vault.yaml``."""
+    global _REGISTRY_CACHE
+    _REGISTRY_CACHE = None
+
+
 def _infer_project(source_path: str) -> Optional[str]:
     """Best-effort project scope inference from a source path.
 
@@ -99,9 +123,8 @@ def _infer_project(source_path: str) -> Optional[str]:
     # declared one on their previous behaviour.
     try:
         from tokenpak.vault.project_scope import SHARED
-        from tokenpak.vault.sqlite_backend import _load_registry
 
-        registry, registry_error = _load_registry()
+        registry, registry_error = _cached_registry()
         if registry_error is not None:
             return None
         if registry.active:

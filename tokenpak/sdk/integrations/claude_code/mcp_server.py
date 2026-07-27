@@ -146,6 +146,14 @@ TOOLS: List[Dict[str, Any]] = [
                     "description": "Max results to return (default 5)",
                     "default": 5,
                 },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Restrict results to this declared project. Without it, "
+                        "a vault holding several projects can return a blend of "
+                        "them. Falls back to $TOKENPAK_PROJECT."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -198,6 +206,14 @@ TOOLS: List[Dict[str, Any]] = [
                     "description": "Max results to return (default 5)",
                     "default": 5,
                 },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Restrict results to this declared project. Without it, "
+                        "a vault holding several projects can return a blend of "
+                        "them. Falls back to $TOKENPAK_PROJECT."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -221,6 +237,14 @@ TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Natural-language query or topic"},
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Restrict results to this declared project. Without it, "
+                        "a vault holding several projects can return a blend of "
+                        "them. Falls back to $TOKENPAK_PROJECT."
+                    ),
+                },
                 "top_k": {
                     "type": "integer",
                     "description": "Max results per sub-tool (default 5)",
@@ -254,6 +278,14 @@ TOOLS: List[Dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Restrict results to this declared project. Without it, "
+                        "a vault holding several projects can return a blend of "
+                        "them. Falls back to $TOKENPAK_PROJECT."
+                    ),
+                },
                 "branch": {
                     "type": "string",
                     "description": "Branch or git ref being reviewed (e.g. HEAD~1)",
@@ -509,7 +541,7 @@ def _handle_build_context_pack(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "error": "query is required and must be non-empty"}
 
     # 1. Search corpus
-    search_result = _handle_search_corpus({"query": query, "top_k": top_k})
+    search_result = _handle_search_corpus({"query": query, "top_k": top_k, "project": params.get("project")})
     if search_result.get("status") == "no-corpus":
         return search_result
     corpus_hits = search_result.get("results", [])
@@ -522,7 +554,7 @@ def _handle_build_context_pack(params: Dict[str, Any]) -> Dict[str, Any]:
     # 3. Summarize related issues (optional)
     related: List[Dict] = []
     if include_related:
-        related_result = _handle_summarize_related_issues({"query": query, "top_k": top_k})
+        related_result = _handle_summarize_related_issues({"query": query, "top_k": top_k, "project": params.get("project")})
         if related_result.get("status") == "ok":
             related = related_result.get("related", [])
 
@@ -566,7 +598,7 @@ def _handle_prepare_review_packet(params: Dict[str, Any]) -> Dict[str, Any]:
     top_k = 5
 
     # 1. search_corpus — primary retrieval (no redundant call; used once)
-    search_result = _handle_search_corpus({"query": query, "top_k": top_k})
+    search_result = _handle_search_corpus({"query": query, "top_k": top_k, "project": params.get("project")})
     if search_result.get("status") == "no-corpus":
         return search_result
     corpus_hits = search_result.get("results", [])
@@ -577,7 +609,7 @@ def _handle_prepare_review_packet(params: Dict[str, Any]) -> Dict[str, Any]:
     entities = extract_result.get("entities", {})
 
     # 3. summarize_related_issues — related context
-    related_result = _handle_summarize_related_issues({"query": query, "top_k": top_k})
+    related_result = _handle_summarize_related_issues({"query": query, "top_k": top_k, "project": params.get("project")})
     related = related_result.get("related", []) if related_result.get("status") == "ok" else []
 
     # 4. Compact the full context using tokenpak.compression.budgets.policy (lazy import)

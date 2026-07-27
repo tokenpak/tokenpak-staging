@@ -482,7 +482,7 @@ def _handle_vault_block(
     requested_project = (qs.get("project", [""])[0] or "").strip() if qs else ""
     block_projects: list[str] = []
     try:
-        from tokenpak.vault.project_scope import SHARED
+        from tokenpak.vault.project_scope import SHARED, ScopeConflictError
         from tokenpak.vault.sqlite_backend import _load_registry
 
         registry, registry_error = _load_registry()
@@ -512,9 +512,22 @@ def _handle_vault_block(
                         f"block {block_id} is not in project {requested_project!r}",
                     )
                     return
-    except Exception as exc:  # noqa: BLE001 — scope is advisory on this path
+    except ScopeConflictError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — inference is best-effort
+        # Deliberately narrow: an explicit project must never be served because
+        # the membership lookup happened to raise. Only the *reporting* half is
+        # best-effort, and only when no scope was requested.
+        if requested_project:
+            _send_error(
+                handler,
+                503,
+                "project_scope_unavailable",
+                f"cannot verify project={requested_project!r}: {exc}",
+            )
+            return
         logging.getLogger(__name__).warning(
-            "vault block scope check unavailable for %s: %s", block_id, exc
+            "vault block membership unavailable for %s: %s", block_id, exc
         )
     tokenpak_dir = getattr(vi, "tokenpak_dir", None)
     content = ""
@@ -531,8 +544,11 @@ def _handle_vault_block(
         200,
         {
             "block_id": block_id,
-            "path": meta.get("path", ""),
-            "tokens": int(meta.get("tokens", 0) or 0),
+            # Blocks carry `source_path`/`raw_tokens`; the older key names read
+            # empty on every response, which hid which file was returned —
+            # exactly the signal the membership report exists to give.
+            "path": meta.get("source_path", meta.get("path", "")),
+            "tokens": int(meta.get("raw_tokens", meta.get("tokens", 0)) or 0),
             "content": content,
             # Always reported, so a caller that did not request a scope can
             # still tell which project this block came from.
@@ -1225,7 +1241,7 @@ def _try_handle_pak_get(handler: Any, path: str, parsed: Any) -> bool:
         from urllib.parse import unquote
 
         pak_id = unquote(path[len("/pak/v1/inspect/") :])
-        _handle_pak_inspect(handler, pak_id)
+        _handle_pak_inspect(handler, pak_id, parse_qs(parsed.query or ''))
         return True
 
     _send_error(
@@ -1601,7 +1617,9 @@ def _handle_pak_status(handler: Any) -> None:
     )
 
 
-def _handle_pak_inspect(handler: Any, pak_id: str) -> None:
+def _handle_pak_inspect(
+    handler: Any, pak_id: str, qs: Optional[dict[str, list[str]]] = None
+) -> None:
     """GET /pak/v1/inspect/<pak-id> — return a Pak's serialized form.
 
     Resolution order:
@@ -1625,6 +1643,41 @@ def _handle_pak_inspect(handler: Any, pak_id: str) -> None:
         # the underlying block via the existing vault-bridge helper and
         # convert. Returns 404 when the block isn't indexed.
         block_id = pak_id[len("vault:") :]
+
+        # Same rule as the block endpoint: an explicit project must bind here
+        # too. This surface returns the source path, filename and token counts
+        # of any indexed block, so leaving it unscoped let a caller enumerate
+        # another project's files through a route the scoped ones close.
+        requested_project = (qs.get("project", [""])[0] or "").strip() if qs else ""
+        if requested_project:
+            try:
+                from tokenpak.vault.sqlite_backend import _load_registry
+
+                registry, registry_error = _load_registry()
+                if registry_error is not None:
+                    _send_error(
+                        handler,
+                        503,
+                        "project_registry_unavailable",
+                        f"cannot honor project={requested_project!r}: {registry_error}",
+                    )
+                    return
+                if registry.active and not registry.known(requested_project):
+                    _send_error(
+                        handler,
+                        400,
+                        "invalid_project_scope",
+                        f"unknown project {requested_project!r}",
+                    )
+                    return
+            except Exception as exc:  # noqa: BLE001
+                _send_error(
+                    handler,
+                    503,
+                    "project_scope_unavailable",
+                    f"cannot verify project={requested_project!r}: {exc}",
+                )
+                return
         try:
             from tokenpak.proxy.vault_bridge import get_vault_index
 
@@ -1650,6 +1703,16 @@ def _handle_pak_inspect(handler: Any, pak_id: str) -> None:
             from tokenpak.vault.pak_adapter import vault_block_to_pak
 
             pak = vault_block_to_pak(block_dict)
+            if requested_project:
+                scope_project = getattr(getattr(pak, "scope", None), "project", None)
+                if scope_project is not None and scope_project != requested_project:
+                    _send_error(
+                        handler,
+                        404,
+                        "block_not_in_project",
+                        f"block {block_id} is not in project {requested_project!r}",
+                    )
+                    return
             _send_json(handler, 200, pak.to_dict())
             return
         except Exception as exc:
