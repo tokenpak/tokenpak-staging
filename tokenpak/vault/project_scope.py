@@ -66,6 +66,8 @@ __all__ = [
     "ScopeResolution",
     "ScopeConflictError",
     "AmbiguityPolicy",
+    "ScopeFilter",
+    "spanned_projects",
     "normalize_path",
 ]
 
@@ -369,6 +371,100 @@ class ProjectRegistry:
 
     def known(self, project_id: str) -> bool:
         return project_id.strip().lower() in self.projects
+
+
+# ---------------------------------------------------------------------------
+# Backend-agnostic enforcement
+# ---------------------------------------------------------------------------
+#
+# There are three separate retrieval implementations in the tree (the proxy's
+# in-memory index, the SQLite backend, and the SDK's own index). A guarantee
+# re-implemented once per backend is a guarantee that holds in whichever ones
+# someone remembered. These two helpers are the shared enforcement primitives:
+# a membership predicate and an ambiguity test, both pure functions of the
+# registry and a source path.
+
+
+class ScopeFilter:
+    """Membership predicate over ``source_path``, for in-memory backends.
+
+    The SQLite backend pushes the equivalent test into SQL so it runs before
+    scoring; backends that rank in memory apply this while iterating candidates
+    — in both cases *before* top-k truncation, so an out-of-scope block can
+    never consume a result slot.
+
+    An inactive registry admits everything, which keeps unscoped installs on
+    exactly their previous behaviour.
+    """
+
+    __slots__ = ("_registry", "_project", "_excluded")
+
+    def __init__(
+        self,
+        registry: "ProjectRegistry",
+        project: Optional[str] = None,
+        exclude_roles: Optional[Iterable[str]] = None,
+    ) -> None:
+        self._registry = registry
+        self._project = project
+        self._excluded = (
+            frozenset(exclude_roles)
+            if exclude_roles is not None
+            else (DEFAULT_EXCLUDED_ROLES if registry.active else frozenset())
+        )
+
+    @property
+    def active(self) -> bool:
+        """True when this filter can reject anything."""
+        return bool(self._project) or bool(self._excluded)
+
+    def allows(self, source_path: str) -> bool:
+        if not self.active:
+            return True
+        membership = self._registry.resolve_path(source_path)
+        if self._excluded and membership.role in self._excluded:
+            return False
+        if not self._project:
+            return True
+        # SHARED is admitted under every scope by construction.
+        return self._project in membership.project_ids or SHARED in membership.project_ids
+
+
+def spanned_projects(
+    registry: "ProjectRegistry", source_paths: Iterable[str]
+) -> tuple[str, ...]:
+    """Projects genuinely in contention across *source_paths*.
+
+    Contention is a **set-cover** question, not a distinct-values one: results
+    are unambiguous exactly when a single project id covers every result. That
+    matters for the two sharing constructs:
+
+    * a ``shared: true`` root carries ``*`` and is covered by any scope;
+    * a root declared ``projects: [a, b]`` is covered by *either* ``a`` or
+      ``b``, so a result set landing only on such blocks is NOT ambiguous —
+      returning them is correct under either scope.
+
+    Counting distinct ids instead would report ``(a, b)`` there and suppress a
+    perfectly answerable query.
+    """
+    memberships: list[frozenset[str]] = []
+    for path in source_paths:
+        ids = registry.resolve_path(path).project_ids
+        if not ids or SHARED in ids:
+            continue  # unclaimed or universally shared — never evidence of contention
+        memberships.append(frozenset(ids))
+
+    if not memberships:
+        return ()
+
+    covering = frozenset.intersection(*memberships)
+    if covering:
+        return ()  # one project explains every result — not ambiguous
+
+    seen: set[str] = set()
+    for group in memberships:
+        seen |= group
+    return tuple(sorted(seen))
 
 
 # ---------------------------------------------------------------------------

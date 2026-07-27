@@ -33,10 +33,22 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 from tokenpak.core.config_loader import get as _cfg
 from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 
+# Scope types are imported lazily inside the functions that use them. This
+# module is on the proxy startup path and is re-imported cold by out-of-process
+# tests; pulling the scope/SQLite chain in at module level measurably slowed
+# cold import and tripped the reload-RSS harness's subprocess budget.
+
+#: Minimum candidate window used to decide whether projects are in contention.
+#: A caller asking for top_k=1 must not thereby make every result look
+#: unambiguous — contention is a property of the corpus, not of the page size.
+_AMBIGUITY_PROBE_K = 20
+
 if TYPE_CHECKING:
     from tokenpak.companion.capsules.builder import CapsuleBuilder
     from tokenpak.proxy.adapters.base import FormatAdapter
+    from tokenpak.vault.project_scope import ProjectRegistry, ScopeFilter
     from tokenpak.vault.semantic import TermResolver
+    from tokenpak.vault.sqlite_backend import ScopedSearchResult
 
     from .request import ProxyRequest
 
@@ -232,11 +244,137 @@ def _return_released_memory_to_os() -> None:
         logger.debug("glibc malloc_trim unavailable after vault reload", exc_info=True)
 
 
+_PROJECT_REGISTRY: "ProjectRegistry | None" = None
+_PROJECT_REGISTRY_ERROR: str | None = None
+
+
+def _get_project_registry() -> "tuple[ProjectRegistry, str | None]":
+    """Load the project registry once per process.
+
+    Cached because ``search`` runs on the request path and reload runs on a
+    timer; re-reading and re-parsing ``vault.yaml`` per call would show up as a
+    memory ratchet across reloads.
+    """
+    global _PROJECT_REGISTRY, _PROJECT_REGISTRY_ERROR
+    if _PROJECT_REGISTRY is None:
+        from tokenpak.vault.sqlite_backend import _load_registry
+
+        _PROJECT_REGISTRY, _PROJECT_REGISTRY_ERROR = _load_registry()
+    return _PROJECT_REGISTRY, _PROJECT_REGISTRY_ERROR
+
+
+def _project_scope_filter(
+    project: str | None, exclude_roles: "Sequence[str] | None"
+) -> "ScopeFilter | None":
+    """Build a membership predicate, or None when nothing would be filtered."""
+    registry, _ = _get_project_registry()
+    if not registry.active and not project:
+        return None
+    from tokenpak.vault.project_scope import ScopeFilter
+
+    scope_filter = ScopeFilter(registry, project, exclude_roles)
+    return scope_filter if scope_filter.active else None
+
+
 class VaultIndex:
     """
     Read-only BM25-searchable index loaded from .tokenpak/index.json + blocks/.
     Reloads periodically to pick up git-pulled changes.
+
+    Project scoping mirrors the SQLite backend: membership is applied while
+    candidates are still being collected, never after truncation. This backend
+    is the *default*, so a guarantee that skipped it would be a guarantee the
+    product does not have.
     """
+
+    def search_scoped(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: str | None = None,
+        cwd: str | None = None,
+        exclude_roles: "Sequence[str] | None" = None,
+        on_ambiguous: str = "suppress",
+    ) -> "ScopedSearchResult":
+        """Scope-resolving search — parity with the SQLite backend's contract."""
+        from tokenpak.vault.project_scope import (
+            SHARED,
+            AmbiguityPolicy,
+            ScopeConflictError,
+            ScopeResolution,
+            spanned_projects,
+        )
+        from tokenpak.vault.sqlite_backend import ScopedSearchResult
+
+        registry, registry_error = _get_project_registry()
+
+        if registry_error is not None:
+            raise ScopeConflictError(
+                f"project registry failed to load ({registry_error}); "
+                "refusing to answer rather than returning unscoped results"
+            )
+
+        if not registry.active:
+            if project:
+                raise ScopeConflictError(
+                    f"project {project!r} requested but no project registry is "
+                    "declared; refusing to return unscoped results for an "
+                    "explicitly scoped query"
+                )
+            return ScopedSearchResult(
+                results=list(self.search(query, top_k, min_score)),
+                scope=ScopeResolution(project_id=None, source="no_registry"),
+            )
+
+        scope = registry.resolve_scope(explicit=project, cwd=cwd, query=query)
+        if scope.resolved:
+            return ScopedSearchResult(
+                results=list(
+                    self.search(
+                        query,
+                        top_k,
+                        min_score,
+                        project=scope.project_id,
+                        exclude_roles=exclude_roles,
+                    )
+                ),
+                scope=scope,
+            )
+
+        # Unresolved: look at a wider window than the caller asked for before
+        # deciding whether projects are in contention. With top_k=1 a result set
+        # can never look ambiguous, which would let the single best block from
+        # an arbitrary project through unchallenged.
+        probe_k = max(top_k, _AMBIGUITY_PROBE_K)
+        probed = list(self.search(query, probe_k, min_score, exclude_roles=exclude_roles))
+        spanned = spanned_projects(registry, [b.get("source_path", "") for b, _ in probed])
+        results = probed[:top_k]
+
+        if len(spanned) <= 1 or on_ambiguous == AmbiguityPolicy.UNSCOPED:
+            return ScopedSearchResult(results=results, scope=scope, spanned=spanned)
+
+        if on_ambiguous == AmbiguityPolicy.DOMINANT:
+            mass: dict[str, float] = {}
+            for block, score in probed:
+                ids = registry.resolve_path(block.get("source_path", "")).project_ids
+                for pid in ids:
+                    if pid != SHARED:
+                        mass[pid] = mass.get(pid, 0.0) + score
+            if mass:
+                winner = sorted(mass.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                return ScopedSearchResult(
+                    results=list(
+                        self.search(
+                            query, top_k, min_score, project=winner, exclude_roles=exclude_roles
+                        )
+                    ),
+                    scope=ScopeResolution(project_id=winner, source="dominant"),
+                    spanned=spanned,
+                )
+
+        return ScopedSearchResult(results=[], scope=scope, spanned=spanned, suppressed=True)
 
     def __init__(self, tokenpak_dir: str) -> None:
         self.tokenpak_dir = Path(tokenpak_dir)
@@ -772,9 +910,24 @@ class VaultIndex:
                 "vault_index_oversized_blocks": generation.oversized_blocks,
             }
 
-    def search(self, query: str, top_k: int = 5, min_score: float = 2.0) -> list[SearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: str | None = None,
+        exclude_roles: "Sequence[str] | None" = None,
+    ) -> list[SearchResult]:
         """BM25 search across vault blocks. Returns [(block_dict, score), ...]."""
-        return self._search(query, top_k=top_k, min_score=min_score, include_internal=False)
+        return self._search(
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            include_internal=False,
+            project=project,
+            exclude_roles=exclude_roles,
+        )
 
     def _search(
         self,
@@ -783,6 +936,8 @@ class VaultIndex:
         min_score: float,
         *,
         include_internal: bool,
+        project: str | None = None,
+        exclude_roles: "Sequence[str] | None" = None,
     ) -> list[SearchResult]:
         """Search with optional private metadata for the injection compiler."""
         query_terms = _bm25_tokenize_query(query)
@@ -876,8 +1031,22 @@ class VaultIndex:
 
         # Sort deterministically: score desc, then path asc, then block_id asc
         # This ensures byte-identical ordering for cache stability even on score ties
+        # Project scope is applied here, inside the candidate generator, so it
+        # runs before `[:top_k]`. Filtering afterwards would let out-of-scope
+        # blocks consume result slots and silently return fewer in-scope hits
+        # than were asked for. The sort key is untouched, so ordering within a
+        # scope is byte-identical to the unscoped ordering of the same blocks.
+        _scope = _project_scope_filter(project, exclude_roles)
         ranked = sorted(
-            ((doc_idx, score) for doc_idx, score in scores.items() if score >= min_score),
+            (
+                (doc_idx, score)
+                for doc_idx, score in scores.items()
+                if score >= min_score
+                and (
+                    _scope is None
+                    or _scope.allows(blocks[block_ids[doc_idx]].get("source_path", ""))
+                )
+            ),
             key=lambda x: (
                 -x[1],
                 blocks[block_ids[x[0]]].get("source_path", ""),

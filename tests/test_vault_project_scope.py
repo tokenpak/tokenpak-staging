@@ -354,6 +354,59 @@ def test_registry_edit_re_resolves_without_index_change(vault):
         assert "workspace/acme-storefront" in path
 
 
+def test_default_json_blocks_backend_enforces_scope(vault, tmp_path, monkeypatch):
+    """The *default* retrieval backend must enforce the guarantee too.
+
+    `RETRIEVAL_BACKEND` defaults to `json_blocks`, so a guarantee implemented
+    only in the SQLite backend would be false on a default install — and
+    silently so. Covers the same contract against the in-memory index.
+    """
+    import tokenpak.proxy.vault_bridge as vault_bridge
+
+    monkeypatch.setattr(vault_bridge, "_PROJECT_REGISTRY", None, raising=False)
+    monkeypatch.setattr(vault_bridge, "_PROJECT_REGISTRY_ERROR", None, raising=False)
+
+    # This backend drops query terms appearing in >40% of the corpus as
+    # non-selective. A tiny fixture makes the colliding terms *look* common and
+    # gates them out entirely, which no real vault would do — pad the corpus so
+    # `pr`/`100` are as selective here as they are in a real index.
+    idx = tmp_path / "index"
+    existing = json.loads((idx / "index.json").read_text(encoding="utf-8"))["blocks"]
+    for n in range(60):
+        _write_block(
+            idx,
+            f"filler-{n}",
+            f"{tmp_path}/unclaimed/doc-{n}.md",
+            f"unrelated topic {n} " + " ".join(f"lorem{n}_{w}" for w in range(40)),
+            existing,
+        )
+    (idx / "index.json").write_text(json.dumps({"blocks": existing}), encoding="utf-8")
+
+    index = vault_bridge.VaultIndex(str(idx))
+    index.maybe_reload()
+
+    # Unresolved scope spanning several projects fails closed.
+    unresolved = index.search_scoped(COLLIDING_QUERY, top_k=5, min_score=0.0)
+    assert unresolved.suppressed and not unresolved.results
+    assert len(unresolved.spanned) > 1
+
+    # A small page must not make contention invisible (the probe window).
+    assert index.search_scoped(COLLIDING_QUERY, top_k=1, min_score=0.0).suppressed
+
+    # An explicit scope returns only that project (plus shared resources).
+    scoped = index.search_scoped(
+        COLLIDING_QUERY, top_k=10, min_score=0.0, project="corvid-shop"
+    )
+    assert scoped.results
+    for block, _ in scoped.results:
+        path = str(block.get("source_path", "")).replace(str(tmp_path), "")
+        assert "corvid-shop" in path or "/shared/" in path
+
+    # Filtering happens before truncation, so a scoped page is not starved by
+    # higher-scoring out-of-scope blocks.
+    assert len(scoped.results) >= 2
+
+
 def test_explicit_scope_on_inactive_registry_raises(tmp_path, monkeypatch):
     """An explicit scope must bind or fail — never silently return unscoped.
 
