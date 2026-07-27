@@ -1034,6 +1034,7 @@ def cmd_setup(args: CommandArgs) -> int:
     import yaml
 
     from tokenpak import _paths as _tp_paths
+    from tokenpak.cli.exit_codes import EXIT_FAILURE
 
     from .core.profiles import get_profile
 
@@ -1060,12 +1061,30 @@ def cmd_setup(args: CommandArgs) -> int:
     # tokenpak setup --yes` wrote nothing to /tmp/x and overwrote the real
     # ~/.tokenpak/config.yaml, with no backup.
     _home_override = os.environ.get("TOKENPAK_HOME", "").strip()
-    if _home_override and existing_config is not None:
+    if _home_override:
         _override_root = Path(_home_override).expanduser().resolve()
-        try:
-            existing_config.resolve().relative_to(_override_root)
-        except ValueError:
+
+        def _inside_override(candidate: Path) -> bool:
+            # resolve() follows symlinks, which is the point: a symlink placed
+            # inside the override that points at the live config would otherwise
+            # pass a purely textual check and then be written through, because
+            # open(path, "w") follows links.
+            try:
+                candidate.resolve().relative_to(_override_root)
+                return True
+            except (ValueError, OSError):
+                return False
+
+        if existing_config is not None and not _inside_override(existing_config):
             existing_config = None
+        # The write target itself must also resolve inside the override. Detecting
+        # the escape on the *read* candidate while writing through an unresolved
+        # target left the hole open.
+        if not _inside_override(config_file):
+            print(f"✗ Refusing to write outside TOKENPAK_HOME: {config_file}")
+            print(f"  resolves to {config_file.resolve()}, outside {_override_root}")
+            print("  TOKENPAK_HOME exists to sandbox; a symlinked target defeats that.")
+            return EXIT_FAILURE
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
@@ -2573,23 +2592,21 @@ def cmd_preview(args: CommandArgs):
         --json branch, which broke that for `preview --json <path>`.
         """
         if getattr(args, "json", False):
-            print(
-                json.dumps(
-                    {
-                        "state": "error",
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "saved_tokens": 0,
-                        "compression_ratio": 0.0,
-                        "duration_ms": 0.0,
-                        "applied": False,
-                        "blocks": [],
-                        "provenance": None,
-                        "reason": " ".join(line.strip() for line in lines),
-                    },
-                    indent=2,
-                )
+            # Build the contract object rather than hand-rolling a dict. The
+            # invariant is that a non-MEASURED state carries **null** numerics,
+            # never 0 — `PreviewResult.validate()` raises on zeros, and
+            # test_cli_preview_json_nulls_are_not_zeros asserts it. Hand-rolling
+            # produced a second, incompatible shape under the same
+            # `state: "error"` label, so a consumer branching on
+            # `saved_tokens is None` read a refusal as "measured, saved nothing".
+            from tokenpak.services.preview import PreviewResult, PreviewState
+
+            _err = PreviewResult(
+                state=PreviewState.ERROR,
+                reason=" ".join(line.strip() for line in lines),
             )
+            _err.validate()
+            print(json.dumps(_err.to_json(), indent=2))
         else:
             for line in lines:
                 print(line)
@@ -6292,7 +6309,12 @@ def cmd_config_validate(args: CommandArgs):
     With --config FILE: validates a proxy config file (JSON/YAML) against JSON Schema.
     Without --config: validates the TokenPak meta config (config.json).
     """
-    from tokenpak.cli.exit_codes import EXIT_FAILURE, EXIT_NOT_CONFIGURED, EXIT_OK
+    from tokenpak.cli.exit_codes import (
+        EXIT_CORRUPT_STATE,
+        EXIT_FAILURE,
+        EXIT_NOT_CONFIGURED,
+        EXIT_OK,
+    )
 
     # Route to JSON schema validator when --config is provided
     config_file = getattr(args, "config_file", None)
@@ -6318,6 +6340,18 @@ def cmd_config_validate(args: CommandArgs):
         # this still fails, forever. A correctly-configured install with no
         # legacy meta config has nothing to validate here and is not an error —
         # returning non-zero for it broke `config validate && …` wrappers.
+        # A file that exists but will not parse is its own state, distinct from
+        # one that is absent — the repo carries EXIT_CORRUPT_STATE and a test
+        # named test_corrupt_config_is_not_missing_config for exactly this.
+        # `config_read_path()` tests existence only, and its candidate list
+        # includes config.json, so probing with it would hand back the very file
+        # that just failed to parse and report success on it.
+        if _TOKENPAK_CFG.exists():
+            print(f"✗ The TokenPak meta config at {_TOKENPAK_CFG} exists but could not be read.")
+            print(f"  {exc}")
+            print("  This is a corrupt config, not a missing one — repair or remove the file.")
+            return EXIT_CORRUPT_STATE
+
         _modern = None
         try:
             from tokenpak import _paths as _vp_paths
@@ -6325,7 +6359,7 @@ def cmd_config_validate(args: CommandArgs):
             _modern = _vp_paths.config_read_path()
         except Exception:
             _modern = None
-        if _modern is not None:
+        if _modern is not None and _modern != _TOKENPAK_CFG:
             print("✓ No legacy meta config to validate.")
             print(f"  This install is configured at {_modern}.")
             print("  To validate a proxy config file: tokenpak config validate --config <file>")
