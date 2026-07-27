@@ -9,6 +9,16 @@ claim. The README makes no percentage promise, and the messaging standard
 prohibits savings claims outright — so a red result here means the pipeline or
 the fixture moved, never that public copy needs a number restored.
 
+The unit is also not a model token. The pipeline counts ``len(content) // 4``
+— a character proxy, named ``heuristic-chars-per-token-4`` in
+``services/preview.py``. On this very fixture the proxy reports ~38% while a
+real BPE tokenizer (``cl100k_base``) reports ~21%: a ~17 point divergence, and
+below the floor asserted here. The gap sits in the compressed output, not the
+input — alias substitution strips many characters but few BPE tokens, because
+BPE already encodes repeated CamelCase compactly, and this fixture is built to
+exercise exactly that stage. ``test_real_tokenizer_witness`` keeps both numbers
+in the same CI log so the proxy is never read alone.
+
 Standard 21 §9.8 — process-enforced blocking job.
 Do NOT merge a PR to main if this test is red.
 
@@ -89,7 +99,7 @@ def test_headline_claim(tmp_path: Path) -> None:
 
     print(
         f"\nheadline benchmark: {reduction_pct:.1f}% reduction "
-        f"({result.tokens_raw}→{result.tokens_after} tokens)"
+        f"({result.tokens_raw}→{result.tokens_after} chars//4 units, not model tokens)"
     )
 
     assert REDUCTION_MIN <= reduction_pct <= REDUCTION_MAX, (
@@ -98,4 +108,67 @@ def test_headline_claim(tmp_path: Path) -> None:
         f"This band is a measured property of that corpus, not a published "
         f"figure — do not 'fix' it by changing public copy. Investigate the "
         f"pipeline change, or re-measure and move the fixture and band together."
+    )
+
+
+def test_real_tokenizer_witness(tmp_path: Path) -> None:
+    """Record real-BPE reduction beside the character proxy, in the same CI log.
+
+    Asserts no savings figure — choosing one would itself be a claim, and
+    savings claims are prohibited. This exists so the proxy number above can
+    never be read, quoted, or promoted without the real number beside it.
+
+    The one hard assertion is the one that cannot become a claim: that the
+    proxy has not inverted relative to real BPE, which would mean the
+    estimator's character semantics changed without anyone noticing.
+    """
+    import pytest
+
+    tiktoken = pytest.importorskip(
+        "tiktoken", reason="real-tokenizer witness needs the tiktoken extra"
+    )
+
+    messages = _load_messages()
+    pipeline = CompressionPipeline(
+        instruction_table_path=str(tmp_path / "instruction_table.json"),
+    )
+    result = pipeline.run(messages)
+    compressed = getattr(result, "messages", None)
+    if compressed is None:  # pragma: no cover - pipeline shape guard
+        pytest.skip("pipeline result exposes no compressed messages")
+
+    enc = tiktoken.get_encoding("cl100k_base")
+
+    def _bpe(msgs: list[dict]) -> int:
+        total = 0
+        for m in msgs:
+            content = m.get("content")
+            if isinstance(content, str):
+                total += len(enc.encode(content))
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        total += len(enc.encode(part["text"]))
+        return total
+
+    raw_bpe, out_bpe = _bpe(messages), _bpe(compressed)
+    bpe_pct = (raw_bpe - out_bpe) / raw_bpe * 100 if raw_bpe else 0.0
+    proxy_pct = result.savings_pct
+
+    print(
+        f"\ntokenizer witness on the same fixture:"
+        f"\n  character proxy (chars//4)   {result.tokens_raw:>6} -> {result.tokens_after:<6}"
+        f" = {proxy_pct:.2f}%   <-- the band above pins THIS"
+        f"\n  real BPE (cl100k_base)       {raw_bpe:>6} -> {out_bpe:<6}"
+        f" = {bpe_pct:.2f}%"
+        f"\n  divergence                   {proxy_pct - bpe_pct:.2f} percentage points"
+        f"\n  note: cl100k_base is not Anthropic's tokenizer; a real-BPE reference"
+        f" point, not a per-provider figure."
+    )
+
+    assert raw_bpe > 0, "witness corpus tokenized to nothing — fixture or parser broke"
+    assert proxy_pct >= bpe_pct, (
+        f"The character proxy ({proxy_pct:.2f}%) now reports LESS reduction than real "
+        f"BPE ({bpe_pct:.2f}%). That inverts the known relationship and means the "
+        f"estimator's character semantics changed. Investigate before trusting either."
     )
