@@ -180,3 +180,64 @@ def test_archive_round_trips_to_the_documented_location(home, tmp_path):
     assert not (restore_root / "external").exists(), (
         "an 'external/' prefix makes the documented restore command wrong"
     )
+
+
+# Redesign: deletion is driven by an inventory of names, never by a directory sweep.
+def test_purge_leaves_unrecognised_files_and_says_so(home):
+    """A file this version does not know about must survive, and be reported."""
+    stray = home / "somebody-elses-notes.txt"
+    stray.write_text("not ours")
+    ops, _ = U._build_plan(hard=False, keep_data=False, home=home, purge=True, archived=True)
+    assert not any(str(stray) in op.describe for op in ops), "swept a file it does not own"
+    for op in ops:
+        if op.describe.startswith("Remove ") and str(home) in op.describe:
+            outcome, detail = op.run()
+            assert outcome == U._OUTCOME_SKIP
+            assert "unrecognised" in detail
+            break
+    else:  # pragma: no cover - the op must exist
+        pytest.fail("no remainder op in the plan")
+    assert stray.exists()
+
+
+def test_purge_inventory_covers_the_protected_user_data(home):
+    targets = {p.name for p in U._enumerate_purge_targets(home)}
+    assert {"journal.db", "capsules", "config.yaml"} <= targets
+
+
+# H3 root cause: a marker the same run can create authenticates nothing.
+def test_first_run_sentinel_is_not_a_home_marker(tmp_path, monkeypatch):
+    """`.seen_intro` is written by the first-run banner into TOKENPAK_HOME."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    victim = tmp_path / "Photos"
+    victim.mkdir()
+    (victim / "holiday.jpg").write_text("jpeg")
+    (victim / ".seen_intro").write_text("")  # what the banner leaves behind
+    assert U.validate_purge_home(victim) is not None
+
+
+@pytest.mark.parametrize("marker", ["templates", "paks", "companion", "config.json", "index.json"])
+def test_generic_names_do_not_identify_a_tokenpak_home(marker, tmp_path, monkeypatch):
+    """A web project with templates/ satisfied the original marker list."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    project = tmp_path / "site"
+    project.mkdir()
+    (project / marker).mkdir() if "." not in marker else (project / marker).write_text("{}")
+    assert U.validate_purge_home(project) is not None
+
+
+@pytest.mark.parametrize("marker", ["monitor.db", "license.json", "fleet.yaml"])
+def test_distinctive_markers_do_identify_a_home(marker, tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    h = tmp_path / ".tpk"
+    h.mkdir()
+    (h / marker).write_text("x")
+    assert U.validate_purge_home(h) is None
+
+
+# NEW-3/4: backup_path must be a path, not prose.
+def test_backup_detail_is_a_bare_path(home, tmp_path):
+    dest = tmp_path / "b.tar.gz"
+    ok, detail = U._create_backup(home, dest, [])
+    assert ok
+    assert detail == str(dest), "prose here corrupts backup_path and the restore command"

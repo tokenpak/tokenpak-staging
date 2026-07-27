@@ -366,46 +366,55 @@ def _external_state_paths(include_client_backup: bool = True) -> "list[Path]":
     return [p for p in candidates if p.exists() or p.is_symlink()]
 
 
-def _revert_client(key: str) -> "tuple[str, str]":
-    """Restore one client's config from the snapshot taken at integrate time."""
-    try:
-        from . import integrate as _integrate
+def _enumerate_purge_targets(home: Path) -> "list[Path]":
+    """Every path ``--purge`` removes under *home*, by name.
 
-        integration = _integrate._find(key)
-        if integration is None:
-            return _OUTCOME_NOOP, f"{key} is not a known integration"
-        result = _integrate._revert_integration(integration)
-    except Exception as exc:
-        return _OUTCOME_FAIL, f"{key} revert error: {exc}"
-    if getattr(result, "ok", False):
-        return _OUTCOME_DONE, getattr(result, "summary", f"{key} reverted")
-    return _OUTCOME_FAIL, getattr(result, "error", None) or f"{key} revert failed"
-
-
-def _revertable_client_integrations() -> "list[tuple[str, Path]]":
-    """Client configs TokenPak edited that still carry a recoverable snapshot.
-
-    Un-routing covered Claude Code only, so a purge left other clients pointing
-    at a proxy that no longer exists — a broken reference in a file TokenPak
-    does not own.
+    This is ``--hard``'s allowlist plus the user data ``--hard`` protects plus
+    the first-run sentinel — enumerated, never a directory sweep. Anything a
+    future release writes without being added here survives, which is the safe
+    direction to fail: an un-deleted file is a disclosed leftover, a
+    wrongly-deleted one is gone.
     """
-    out: "list[tuple[str, Path]]" = []
-    try:
-        from . import integrate as _integrate
-
-        for integration in _integrate.INTEGRATIONS:
-            locator = getattr(integration, "backup_locator", None)
-            if locator is None:
-                continue
-            try:
-                bak = locator()
-            except Exception:  # pragma: no cover - defensive
-                continue
-            if bak and Path(bak).exists():
-                out.append((integration.key, Path(bak)))
-    except Exception:  # pragma: no cover - registry shape is not load-bearing
+    if not home.exists():
         return []
-    return out
+    targets: list[Path] = []
+    for name in (*_HARD_PURGE_NAMES, ".seen_intro", "update_check.json"):
+        p = home / name
+        if (p.exists() or p.is_symlink()) and p not in targets:
+            targets.append(p)
+    for child in sorted(home.glob("*.db")):
+        if child not in targets:
+            targets.append(child)
+    companion = home / "companion"
+    if companion.exists():
+        for child in sorted(companion.iterdir()):
+            if child not in targets:
+                targets.append(child)
+        targets.append(companion)
+    return targets
+
+
+def _rmdir_if_empty(target: Path) -> "tuple[str, str]":
+    """Remove *target* only when the inventory left it empty.
+
+    A non-empty remainder is reported rather than swept: it is state this
+    version does not know about, and the user is told it is there.
+    """
+    try:
+        if not target.exists():
+            return _OUTCOME_NOOP, f"{target} already gone"
+        remaining = sorted(p.name for p in target.iterdir())
+        if remaining:
+            preview = ", ".join(remaining[:5])
+            more = f" (+{len(remaining) - 5} more)" if len(remaining) > 5 else ""
+            return _OUTCOME_SKIP, (
+                f"kept {target}: {len(remaining)} unrecognised item(s) remain "
+                f"[{preview}{more}] — remove by hand if you want them gone"
+            )
+        target.rmdir()
+    except Exception as exc:
+        return _OUTCOME_FAIL, f"could not remove {target}: {exc}"
+    return _OUTCOME_DONE, f"removed {target}"
 
 
 def _purge_data_inventory(home: Path) -> "list[str]":
@@ -432,6 +441,14 @@ def _is_within(child: Path, parent: Path) -> bool:
     except (OSError, RuntimeError):  # pragma: no cover - defensive
         return False
     return c == p or p in c.parents
+
+
+def _safe_same(a: Path, b: Path) -> bool:
+    """True when two paths resolve to the same location, errors treated as no."""
+    try:
+        return a.resolve() == b.resolve()
+    except (OSError, RuntimeError):  # pragma: no cover - defensive
+        return False
 
 
 def validate_purge_home(home: Path) -> Optional[str]:
@@ -466,19 +483,38 @@ def validate_purge_home(home: Path) -> Optional[str]:
                 return f"{resolved} is {label}, not a TokenPak home"
         except (OSError, RuntimeError):  # pragma: no cover - defensive
             continue
-    # Positive identification: it must look like something TokenPak wrote.
+    # Positive identification, using DISTINCTIVE names only. Two rules, both
+    # learned from a guard that failed:
+    #   - Never a name this process can create. `.seen_intro` is written by the
+    #     first-run banner into TOKENPAK_HOME *before* this check is reached, so
+    #     the guard authenticated the target with its own footprint and was
+    #     inert on exactly the first run it existed to stop.
+    #   - Never a name other software uses. `templates`, `paks`, `companion`,
+    #     `config.json` and `index.json` are ordinary; a web project with a
+    #     `templates/` directory satisfied the old list.
     markers = (
-        "config.yaml",
-        "config.json",
-        "companion",
         "monitor.db",
         "telemetry.db",
         "license.json",
-        ".seen_intro",
-        "templates",
-        "paks",
-        "index.json",
+        "routing_ledger.db",
+        "update_check.json",
+        "pinned_blocks.json",
+        "fleet.yaml",
+        "requests.jsonl",
     )
+    # The canonical locations are trusted by name: TokenPak chose them, nobody
+    # else writes there, and a freshly configured home holds only `config.yaml`
+    # — which is far too ordinary to accept at an operator-supplied path, but
+    # perfectly good evidence at `~/.tpk`. Anywhere else must show a
+    # distinctive artefact.
+    from ... import _paths
+
+    canonical = {
+        (Path.home() / _paths.CANONICAL_DIRNAME),
+        (Path.home() / _paths.LEGACY_DIRNAME),
+    }
+    if any(_safe_same(resolved, c) for c in canonical):
+        return None
     if not any((resolved / m).exists() for m in markers):
         return (
             f"{resolved} does not look like a TokenPak home (no recognised "
@@ -567,8 +603,10 @@ def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool,
         dest.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(dest, "w:gz") as tar:
             if home.exists():
-                # dereference: a symlinked home must archive the DATA, not the link.
-                tar.add(home, arcname=home.name, filter=_filter_home)
+                # Home-relative, exactly like the extras: `arcname=home.name`
+                # stored a bare basename, so a home outside ~ restored to the
+                # wrong directory under the documented `tar -C ~`.
+                tar.add(home, arcname=_arcname(home), filter=_filter_home)
             for p in extras:
                 tar.add(p, arcname=_arcname(p), filter=_filter_extra)
     except Exception as exc:
@@ -597,10 +635,10 @@ def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool,
     except Exception as exc:
         return False, f"backup verification failed: {exc}"
 
-    detail = str(dest)
-    if skipped:
-        detail += f"  (excluded {len(skipped)} socket/pid/lock/runtime entries)"
-    return True, detail
+    # The caller stores this verbatim as the machine-readable backup path and
+    # splices it into the printed restore command, so it must be the path and
+    # nothing else. Counts belong in their own receipt line.
+    return True, str(dest)
 
 
 def _enumerate_hard_targets(home: Path, keep_data: bool) -> "tuple[list[Path], list[Path]]":
@@ -685,32 +723,37 @@ def _build_plan(
     )
     ops.append(Op(describe="Stop running proxy (if any)", run=_stop_proxy, phase="soft"))
 
-    if purge:
-        # Un-routing above covers Claude Code only. Every other client we wrote
-        # into keeps pointing at a proxy that is about to stop existing, which
-        # is a broken reference left in a file TokenPak does not own.
-        for key, bak in _revertable_client_integrations():
-            if key == "claude-code":
-                continue  # already handled by _unroute_settings
-            ops.append(
-                Op(
-                    describe=f"Revert {key} integration (restore {bak.name})",
-                    run=partial(_revert_client, key),
-                    phase="soft",
-                )
-            )
+    # Reverting other clients was tried and withdrawn. It keyed off the mere
+    # existence of `<config>.bak`, which is not proof TokenPak wrote it: a
+    # user's own backup was restored over their live config, and edits made
+    # after integration were overwritten with no copy kept. Detecting "we did
+    # this" needs an ownership marker that does not exist yet. Until it does,
+    # a disclosed leftover beats a silent overwrite — `tokenpak integrate
+    # <client> --revert` remains available and is explicit about what it
+    # touches.
 
     retained: list[Path] = []
     if purge:
-        # Nothing is retained. Remove the home wholesale — that covers the
-        # protected companion data, the first-run sentinel, and anything a
-        # future release writes without updating the named purge list — then
-        # the state we scattered outside it.
+        # Deletion is driven by an INVENTORY of names TokenPak writes, never by
+        # "remove this directory". Removing a location cannot be made safe: the
+        # location is supplied by an environment variable, and every attempt to
+        # validate it was defeated — most sharply by a guard that accepted a
+        # marker the same run had just created. An inventory is bounded by
+        # construction, and a mis-set home can only ever cost files that carry
+        # TokenPak's own names.
+        for target in _enumerate_purge_targets(home):
+            ops.append(
+                Op(
+                    describe=f"Delete {target}",
+                    run=partial(_remove_path, target),
+                    phase="purge",
+                )
+            )
         if home.exists():
             ops.append(
                 Op(
-                    describe=f"Delete {home} and everything in it",
-                    run=partial(_remove_path, home),
+                    describe=f"Remove {home} if the inventory emptied it",
+                    run=partial(_rmdir_if_empty, home),
                     phase="purge",
                 )
             )
@@ -1092,7 +1135,7 @@ def run_uninstall(
             if backup
             else (_default_backup_path() if not no_backup else None)
         )
-        if planned_dest is not None:
+        if planned_dest is not None and not output_json:
             print(_c(f"  Backup would be written to: {planned_dest}", _DIM))
     ops, retained_paths = _build_plan(
         hard=hard, keep_data=keep_data, home=home, purge=purge, archived=archived
@@ -1157,9 +1200,24 @@ def run_uninstall(
             _emit_error("aborted — nothing was changed", output_json)
             return 2
 
+    # ── Soft phase first, so the proxy is stopped before we read its DBs ───
+    # Archiving a live SQLite file captures a torn snapshot, and any write
+    # between the archive and the removal is lost. Nothing in the soft phase
+    # deletes TokenPak state, so running it first costs nothing.
+    soft_ops = [op for op in ops if op.phase == "soft"]
+    rest_ops = [op for op in ops if op.phase != "soft"]
+    for op in soft_ops:
+        if output_json and op.run is _teardown_codex:
+            outcome, detail = _silenced(op.run)
+        else:
+            outcome, detail = op.run()
+        receipt.record(op, outcome, detail)
+    ops = rest_ops
+
     # ── Backup BEFORE the first deletion; a failure aborts the uninstall ────
     if want_backup and backup_dest is not None:
-        print("Creating backup…")
+        if not output_json:
+            print("Creating backup…")
         ok, detail = _create_backup(home, backup_dest, _external_state_paths())
         receipt.lines.append(
             {
