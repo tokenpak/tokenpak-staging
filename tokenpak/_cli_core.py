@@ -913,12 +913,27 @@ def _home_override_escape(*candidates: Path) -> Optional[str]:
             # resolve() follows symlinks, which is the point.
             candidate.resolve().relative_to(root)
         except (ValueError, OSError, RuntimeError):
-            # RuntimeError: Path.resolve() raises it on a symlink loop. Omitting
-            # it turned a refusal into an uncaught traceback.
+            # RuntimeError: Path.resolve() raises it on a symlink loop up to
+            # Python 3.12. Omitting it turned a refusal into an uncaught
+            # traceback.
             return (
                 f"✗ Refusing to write outside TOKENPAK_HOME: {candidate}\n"
                 f"  resolves outside {root}.\n"
                 "  TOKENPAK_HOME exists to sandbox; a symlinked target defeats that."
+            )
+        # Python 3.13 resolve() returns a symlink loop unresolved instead of
+        # raising, and the unresolved path sits inside root — so containment
+        # passes and the later write raises ELOOP uncaught. Probe the loop
+        # directly: stat() is version-independent (kernel ELOOP). A missing
+        # path is a legitimate not-yet-created write target.
+        try:
+            os.stat(candidate)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return (
+                f"✗ Refusing to write through an unresolvable symlink: {candidate}\n"
+                "  the target cannot be opened (symlink loop or unreadable link chain)."
             )
     return None
 
