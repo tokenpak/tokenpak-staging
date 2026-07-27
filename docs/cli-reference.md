@@ -32,7 +32,7 @@ The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml
 
 **Flags:**
 
-- `--port` — Port to listen on (default: 8766) (default: 8766)
+- `--port` — Port to listen on (default: 8766, or TOKENPAK_PORT)
 - `--workers` — Number of worker processes (default: 2) (default: 2)
 - `--log-level` — Logging level (default: info) (default: info) — choices: `debug`, `info`, `warning`, `error`
 
