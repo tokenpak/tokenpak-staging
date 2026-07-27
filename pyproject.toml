@@ -281,13 +281,10 @@ version = {attr = "tokenpak.__version__"}
 # In-package example trees are NOT omitted. Unlike the test trees they are not
 # excluded from the distribution, so they ship and are measured.
 omit = [
-    # mirrors "tokenpak.tests*"
-    "tokenpak/tests/*",
-    # mirrors "tokenpak.sdk.*.tests*"
-    "tokenpak/sdk/*/tests/*",
-    # mirrors "*.tests*" — any other nested in-package test tree
-    "tokenpak/*/tests/*",
-    "tokenpak/*/*/tests/*",
+    # One pattern covers all three exclude shapes. `**` is depth-unbounded, which
+    # is what setuptools' `*.tests*` means; an explicit per-depth list silently
+    # caps at whatever depth it was written for and misses trees added deeper.
+    "tokenpak/**/tests/*",
 ]
 
 [tool.pytest.ini_options]
