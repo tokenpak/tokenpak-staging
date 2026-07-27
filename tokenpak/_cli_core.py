@@ -1051,6 +1051,21 @@ def cmd_setup(args: CommandArgs) -> int:
     config_dir = _tp_paths.write_home()
     config_file = _tp_paths.config_write_path()
     existing_config = _tp_paths.config_read_path()
+    # ...but never outside an explicit TOKENPAK_HOME. That override exists to
+    # sandbox (the standard names CI and multi-tenant hosts), and
+    # `read_candidates()` deliberately also lists the real homes so a caller can
+    # *find* older state — its docstring is explicit that doing so never implies
+    # a valid write target. Honouring a config discovered there turns a sandboxed
+    # run into a write against the operator's live config: `TOKENPAK_HOME=/tmp/x
+    # tokenpak setup --yes` wrote nothing to /tmp/x and overwrote the real
+    # ~/.tokenpak/config.yaml, with no backup.
+    _home_override = os.environ.get("TOKENPAK_HOME", "").strip()
+    if _home_override and existing_config is not None:
+        _override_root = Path(_home_override).expanduser().resolve()
+        try:
+            existing_config.resolve().relative_to(_override_root)
+        except ValueError:
+            existing_config = None
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
@@ -2549,18 +2564,49 @@ def cmd_preview(args: CommandArgs):
 
     from tokenpak.cli.exit_codes import EXIT_FAILURE
 
+    def _bail(*lines: str) -> int:
+        """Refuse the input, honouring the --json contract.
+
+        --json is a machine-readable contract: it emits JSON on *every* path,
+        including failures, so a caller parsing stdout never hits prose. The
+        input guards below originally printed prose and returned before the
+        --json branch, which broke that for `preview --json <path>`.
+        """
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "state": "error",
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "saved_tokens": 0,
+                        "compression_ratio": 0.0,
+                        "duration_ms": 0.0,
+                        "applied": False,
+                        "blocks": [],
+                        "provenance": None,
+                        "reason": " ".join(line.strip() for line in lines),
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for line in lines:
+                print(line)
+        return EXIT_FAILURE
+
     # Get input text
     if args.file:
         src = Path(args.file)
         if not src.is_file():
-            print(f"✗ No such file: {args.file}")
-            print('  Check the path, or pass text directly: tokenpak preview "<text>"')
-            return EXIT_FAILURE
+            return _bail(
+                f"✗ No such file: {args.file}",
+                '  Check the path, or pass text directly: tokenpak preview "<text>"',
+            )
         try:
             text = src.read_text()
         except OSError as exc:
-            print(f"✗ Could not read {args.file}: {exc}")
-            return EXIT_FAILURE
+            return _bail(f"✗ Could not read {args.file}: {exc}")
         # A .json/.jsonl file that does not parse would otherwise be compressed
         # as raw prose and reported as a confident, meaningless number. Refuse
         # instead: a silent wrong answer is worse than an error.
@@ -2576,11 +2622,10 @@ def cmd_preview(args: CommandArgs):
                         if line.strip():
                             _json.loads(line)
             except ValueError as exc:
-                print(f"✗ {args.file} is not valid {suffix.lstrip('.').upper()}: {exc}")
-                print(
-                    f"  Fix the file, or pipe it as plain text: cat {args.file} | tokenpak preview"
+                return _bail(
+                    f"✗ {args.file} is not valid {suffix.lstrip('.').upper()}: {exc}",
+                    f"  Fix the file, or pipe it as plain text: cat {args.file} | tokenpak preview",
                 )
-                return EXIT_FAILURE
     elif args.input:
         text = args.input
         # The positional argument is literal TEXT. Passing a filename — the most
@@ -2594,9 +2639,10 @@ def cmd_preview(args: CommandArgs):
             except OSError:
                 looks_like_file = False
             if looks_like_file:
-                print("✗ That is a file path, but this argument takes literal text.")
-                print(f"  Did you mean:  tokenpak preview --file {stripped}")
-                return EXIT_FAILURE
+                return _bail(
+                    "✗ That is a file path, but this argument takes literal text.",
+                    f"  Did you mean:  tokenpak preview --file {stripped}",
+                )
     else:
         # Read from stdin
         text = sys.stdin.read()
@@ -6246,7 +6292,7 @@ def cmd_config_validate(args: CommandArgs):
     With --config FILE: validates a proxy config file (JSON/YAML) against JSON Schema.
     Without --config: validates the TokenPak meta config (config.json).
     """
-    from tokenpak.cli.exit_codes import EXIT_FAILURE, EXIT_NOT_CONFIGURED
+    from tokenpak.cli.exit_codes import EXIT_FAILURE, EXIT_NOT_CONFIGURED, EXIT_OK
 
     # Route to JSON schema validator when --config is provided
     config_file = getattr(args, "config_file", None)
@@ -6266,9 +6312,27 @@ def cmd_config_validate(args: CommandArgs):
     except Exception as exc:
         # A validator that cannot read its target has not validated anything.
         # Returning 0 here reported success to `set -e` scripts and CI.
+        # The legacy meta config (config.json) is a different artifact from the
+        # config `setup` writes (config.yaml), and nothing creates it on a modern
+        # install. Telling the user to run `setup` was a loop: setup succeeds,
+        # this still fails, forever. A correctly-configured install with no
+        # legacy meta config has nothing to validate here and is not an error —
+        # returning non-zero for it broke `config validate && …` wrappers.
+        _modern = None
+        try:
+            from tokenpak import _paths as _vp_paths
+
+            _modern = _vp_paths.config_read_path()
+        except Exception:
+            _modern = None
+        if _modern is not None:
+            print("✓ No legacy meta config to validate.")
+            print(f"  This install is configured at {_modern}.")
+            print("  To validate a proxy config file: tokenpak config validate --config <file>")
+            return EXIT_OK
         print(f"✗ Could not read the TokenPak meta config at {_TOKENPAK_CFG}: {exc}")
-        print("  Run `tokenpak setup` to create one, or pass --config <file> to")
-        print("  validate a proxy config instead.")
+        print("  This install has no configuration at all — run `tokenpak setup`.")
+        print("  To validate a proxy config file instead: --config <file>")
         return EXIT_NOT_CONFIGURED
 
     errors: list[str] = []
