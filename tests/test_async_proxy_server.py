@@ -406,11 +406,38 @@ def test_async_backend_is_quarantined_not_production(monkeypatch):
         req = urllib.request.Request(f"http://127.0.0.1:{TEMP_PORT}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             assert resp.status == 200, "the sync proxy must still serve /health"
+            resp_headers = dict(resp.headers)
+        resp = type("R", (), {"headers": resp_headers})()
 
+        # OUTCOME assertion — what is actually serving.
+        #
+        # Name sentinels alone cannot work here, and three attempts proved it.
+        # `server_async.__all__` exports ~30 public symbols; review demonstrated a
+        # revival built from `handle_v1_proxy` + `lifespan` + `_proxy_server_ref`
+        # that touched none of the sentinelled names and served real traffic
+        # through uvicorn while this test reported "1 passed". Enumerating names
+        # is whack-a-mole against a module designed to be composable.
+        #
+        # So assert the OUTCOME instead: whatever wired it, the async stack must
+        # not be the thing answering requests. `_proxy_server_ref` is set by the
+        # async app when it takes ownership, and uvicorn identifies itself in the
+        # Server header. Neither can be avoided by a reviver who actually succeeds.
+        assert getattr(server_async, "_proxy_server_ref", None) is None, (
+            "server_async._proxy_server_ref is set — the async stack has taken "
+            "ownership of the ProxyServer, which the quarantine forbids"
+        )
+
+        server_hdr = (resp.headers.get("Server") or "").lower()
+        assert "uvicorn" not in server_hdr, (
+            f"/health is being served by uvicorn (Server: {server_hdr!r}) — the "
+            "quarantined async stack is live and every request bypasses the spend "
+            "guard and the DLP outbound scan"
+        )
+
+        # Name sentinels retained as defence in depth: they give a precise
+        # diagnostic when the revival goes through a known entry point.
         assert not _async_entries_called, (
-            f"async entry point(s) {_async_entries_called} invoked during start_proxy() "
-            "— the async backend is wired into production selection, which the "
-            "quarantine forbids until the revival contract is satisfied"
+            f"async entry point(s) {_async_entries_called} invoked during start_proxy()"
         )
     finally:
         ps.stop()
