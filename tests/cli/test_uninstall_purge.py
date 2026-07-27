@@ -111,3 +111,41 @@ def test_confirmations_fail_safe_on_eof(monkeypatch):
     assert U._confirm_backup() is True
     assert U._confirm_purge([], Path("/nonexistent"), "") is False
     assert U._choose_mode() is None
+
+
+def test_no_backup_keeps_the_client_config_snapshot(home, tmp_path, monkeypatch):
+    """Without an archive, the user's route back to their own config must survive.
+
+    The removal contract keeps consciously-retained backups after a purge;
+    deleting this file with nothing else holding its contents would strand the
+    user on a config they never chose.
+    """
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    bak = claude / "settings.json.bak"
+    bak.write_text('{"env": {}}')
+
+    ops, retained = U._build_plan(
+        hard=False, keep_data=False, home=home, purge=True, archived=False
+    )
+    deleted = " ".join(op.describe for op in ops if op.describe.startswith("Delete"))
+    assert str(bak) not in deleted
+    assert bak in retained
+
+    # With an archive holding it, removing it leaves nothing stranded.
+    ops2, _ = U._build_plan(hard=False, keep_data=False, home=home, purge=True, archived=True)
+    assert str(bak) in " ".join(op.describe for op in ops2 if op.describe.startswith("Delete"))
+
+
+def test_archive_always_captures_the_client_config_snapshot(home, tmp_path):
+    """Archived regardless — 'not deleted' and 'not captured' are different."""
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json.bak").write_text('{"env": {}}')
+    dest = tmp_path / "b.tar.gz"
+    ok, _ = U._create_backup(home, dest, U._external_state_paths(include_client_backup=True))
+    assert ok
+    import tarfile
+
+    with tarfile.open(dest, "r:gz") as tar:
+        assert any(n.endswith("settings.json.bak") for n in tar.getnames())

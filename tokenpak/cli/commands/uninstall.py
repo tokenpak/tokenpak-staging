@@ -325,11 +325,24 @@ _PURGE_NAMED_DATA: "tuple[tuple[str, str], ...]" = (
 _BACKUP_SKIP_SUFFIXES = (".sock", ".pid", ".lock")
 
 
-def _external_state_paths() -> "list[Path]":
+def _client_config_backup() -> Path:
+    """The snapshot taken of the user's client config before we edited it."""
+    from . import install as _install
+
+    return _install._settings_path().with_suffix(".json.bak")
+
+
+def _external_state_paths(include_client_backup: bool = True) -> "list[Path]":
     """TokenPak state written OUTSIDE the resolved home.
 
     These survive --hard today, which is why an uninstalled machine still
     carries a systemd unit and a permissions file. --purge removes them.
+
+    ``include_client_backup`` covers the snapshot of the user's own client
+    config. It is always archived, but it may only be *deleted* when its
+    contents have been captured somewhere else: the removal contract keeps
+    consciously-retained backups after a purge, and it is the user's last way
+    back to their pre-install client settings.
     """
     from . import install as _install
 
@@ -337,8 +350,9 @@ def _external_state_paths() -> "list[Path]":
         Path.home() / ".config" / "tokenpak",  # permissions.toml
         Path.home() / ".config" / "tokenpak.env",  # env overrides
         _install._systemd_unit_path(),  # user service unit
-        _install._settings_path().with_suffix(".json.bak"),  # our own backup
     ]
+    if include_client_backup:
+        candidates.append(_client_config_backup())
     return [p for p in candidates if p.exists() or p.is_symlink()]
 
 
@@ -454,9 +468,19 @@ def _enumerate_hard_targets(home: Path, keep_data: bool) -> "tuple[list[Path], l
 
 
 def _build_plan(
-    *, hard: bool, keep_data: bool, home: Path, purge: bool = False
+    *,
+    hard: bool,
+    keep_data: bool,
+    home: Path,
+    purge: bool = False,
+    archived: bool = True,
 ) -> "tuple[list[Op], list[Path]]":
-    """Assemble the ordered operation plan and the retained-path list."""
+    """Assemble the ordered operation plan and the retained-path list.
+
+    ``archived`` says whether a verified backup archive was written. Without
+    one, the snapshot of the user's client config is kept rather than deleted
+    — it is their only way back to their pre-install settings.
+    """
     ops: list[Op] = []
 
     routed_note = "active → un-route" if _is_routed() else "not routed (idempotent)"
@@ -494,7 +518,7 @@ def _build_plan(
                     phase="purge",
                 )
             )
-        for target in _external_state_paths():
+        for target in _external_state_paths(include_client_backup=archived):
             ops.append(
                 Op(
                     describe=f"Delete {target}",
@@ -502,6 +526,17 @@ def _build_plan(
                     phase="purge",
                 )
             )
+        if not archived:
+            kept = _client_config_backup()
+            if kept.exists():
+                retained.append(kept)
+                ops.append(
+                    Op(
+                        describe=f"Keep {kept} (no archive was written — your way back)",
+                        run=lambda: (_OUTCOME_SKIP, "retained: last route back to pre-install config"),
+                        phase="purge",
+                    )
+                )
         return ops, retained
 
     if hard:
@@ -828,7 +863,12 @@ def run_uninstall(
             return 2
 
     # ── Build the single ordered plan (drives dry-run AND real run) ─────────
-    ops, retained_paths = _build_plan(hard=hard, keep_data=keep_data, home=home, purge=purge)
+    # In a dry run no backup is taken, so model the intent the flags express:
+    # the offered default is yes, and only --no-backup opts out.
+    archived = (not no_backup) if dry_run else want_backup
+    ops, retained_paths = _build_plan(
+        hard=hard, keep_data=keep_data, home=home, purge=purge, archived=archived
+    )
     retained = [str(p) for p in retained_paths]
 
     receipt = Receipt(
