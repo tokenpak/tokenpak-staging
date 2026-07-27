@@ -267,7 +267,10 @@ Update tokenpak
 
 **Flags:**
 
-- `--check` — Check for updates without installing
+- `--check` — Check for updates once without installing
+- `--enable-checks` — Enable automatic daily update checks (no request now)
+- `--disable-checks` — Disable automatic update checks (no request)
+- `--check-status` — Show saved automatic-check state without a request
 - `--force` — Force update even if already up to date
 - `--core-only` — Update core only, skip config merge
 - `--dry-run` — Show what would change without applying
