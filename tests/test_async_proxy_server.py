@@ -375,23 +375,29 @@ def test_async_backend_is_quarantined_not_production(monkeypatch):
         "governance change requiring the revival contract in its module docstring"
     )
 
-    # Assert on the WIRING MECHANISM, not on an attribute name.
+    # Sentinel EVERY entry point into the async stack, not one of them.
     #
-    # A previous version asserted `not hasattr(ps, "_async_thread")`. That name
-    # appears in no product code — `start_async_proxy_in_thread()` RETURNS the
-    # thread and the caller names it. So a reviver binding it as `self._async_srv`
-    # would have passed that assertion green while every request bypassed the
-    # spend guard and DLP. The guard was theatre.
+    # Two earlier versions of this guard were both bypassable. The first asserted
+    # `not hasattr(ps, "_async_thread")` — a name in no product code. The second
+    # sentinelled only `start_async_proxy_in_thread`, and review demonstrated a
+    # reviver wiring uvicorn over `create_async_app()` while the guard passed
+    # green and a real Starlette app was attached to the ProxyServer.
     #
-    # Sentinel on the real entry point cannot be renamed around.
-    _async_started = False
+    # A guard whose only deliverable is assurance must cover every path, or its
+    # green check is affirmatively misleading — worse than the skipped test it
+    # replaced, because a skipped test is visibly inert while a passing one reads
+    # as coverage.
+    _async_entries_called: list[str] = []
 
-    def _fail_fast(*a, **kw):
-        nonlocal _async_started
-        _async_started = True
-        raise AssertionError("quarantined async backend was started")
+    def _sentinel(name):
+        def _fail_fast(*a, **kw):
+            _async_entries_called.append(name)
+            raise AssertionError(f"quarantined async backend was started via {name}()")
 
-    monkeypatch.setattr(server_async, "start_async_proxy_in_thread", _fail_fast, raising=True)
+        return _fail_fast
+
+    for _entry in ("start_async_proxy_in_thread", "run_async_proxy", "create_async_app"):
+        monkeypatch.setattr(server_async, _entry, _sentinel(_entry), raising=True)
 
     TEMP_PORT = 19867
     ps = start_proxy(host="127.0.0.1", port=TEMP_PORT, blocking=False)
@@ -401,10 +407,10 @@ def test_async_backend_is_quarantined_not_production(monkeypatch):
         with urllib.request.urlopen(req, timeout=5) as resp:
             assert resp.status == 200, "the sync proxy must still serve /health"
 
-        assert not _async_started, (
-            "start_async_proxy_in_thread() was invoked during start_proxy() — the "
-            "async backend is wired into production selection, which the quarantine "
-            "forbids until the revival contract is satisfied"
+        assert not _async_entries_called, (
+            f"async entry point(s) {_async_entries_called} invoked during start_proxy() "
+            "— the async backend is wired into production selection, which the "
+            "quarantine forbids until the revival contract is satisfied"
         )
     finally:
         ps.stop()
