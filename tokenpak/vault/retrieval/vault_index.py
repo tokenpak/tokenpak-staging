@@ -30,10 +30,10 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Tuple, TypedDict, cast
+from typing import Dict, List, Optional, Tuple, TypedDict, cast
 
 from tokenpak.vault._atomic import _atomic_write
 
@@ -72,6 +72,32 @@ VAULT_CACHE_PRELOAD: int = int(os.environ.get("TOKENPAK_VAULT_CACHE_PRELOAD", 20
 @lru_cache(maxsize=512)
 def _bm25_tokenize(text: str) -> List[str]:
     return re.findall(r"[a-z0-9_]+", text.lower())
+
+
+_PROJECT_REGISTRY_STATE: "tuple[object, object] | None" = None
+
+
+def _project_scope_filter(
+    project: Optional[str], exclude_roles: Optional[Sequence[str]]
+):
+    """Build a membership predicate, or None when nothing would be filtered.
+
+    Registry state is cached per process: this index is constructed per MCP
+    request, so re-reading vault.yaml on every construction would put a config
+    parse on the request path.
+    """
+    global _PROJECT_REGISTRY_STATE
+    if _PROJECT_REGISTRY_STATE is None:
+        from tokenpak.vault.sqlite_backend import _load_registry
+
+        _PROJECT_REGISTRY_STATE = _load_registry()
+    registry, _error = _PROJECT_REGISTRY_STATE
+    if not getattr(registry, "active", False) and not project:
+        return None
+    from tokenpak.vault.project_scope import ScopeFilter
+
+    scope_filter = ScopeFilter(registry, project, exclude_roles)
+    return scope_filter if scope_filter.active else None
 
 
 class VaultIndex:
@@ -518,10 +544,27 @@ class VaultIndex:
                 ),
             }
 
+    @property
+    def supports_project_scope(self) -> bool:
+        """This index applies membership during candidate expansion."""
+        return True
+
     def search(
-        self, query: str, top_k: int = 5, min_score: float = 2.0
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: Optional[str] = None,
+        exclude_roles: Optional[Sequence[str]] = None,
     ) -> List[Tuple[VaultBlock, float]]:
-        """BM25 search across vault blocks. Returns [(block_dict, score), ...]."""
+        """BM25 search across vault blocks. Returns [(block_dict, score), ...].
+
+        This index backs the Claude Code MCP plugin, which reaches it directly
+        rather than through the proxy — so it enforces project scope itself. A
+        surface an agent touches without passing through the scoped endpoints
+        would otherwise be the easiest way to get a cross-project answer.
+        """
         query_terms = _bm25_tokenize(query)
         if not query_terms or not self.blocks:
             return []
@@ -591,10 +634,21 @@ class VaultIndex:
 
         # Sort deterministically: score desc, then path asc, then block_id asc
         # This ensures byte-identical ordering for cache stability even on score ties
+        # Membership is applied before truncation so an out-of-scope block
+        # cannot consume a result slot; the sort key is untouched, so ordering
+        # within a scope matches the unscoped ordering of the same blocks.
+        _scope = _project_scope_filter(project, exclude_roles)
         ranked = sorted(
-            scores.items(),
+            (
+                (bid, score)
+                for bid, score in scores.items()
+                if _scope is None
+                or _scope.allows(str(blocks[bid].get("source_path", "")))
+            ),
             key=lambda x: (-x[1], blocks[x[0]].get("source_path", ""), x[0]),
-        )[:top_k]
+        )
+        if top_k > 0:
+            ranked = ranked[:top_k]
         return [(blocks[bid], score) for bid, score in ranked]
 
     def compile_injection(

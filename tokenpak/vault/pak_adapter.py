@@ -83,6 +83,37 @@ def _infer_project(source_path: str) -> Optional[str]:
     """
     if not source_path:
         return None
+
+    # Prefer the declared project registry. Path-shape derivation is wrong for
+    # the case this scope exists to handle: every project under a common parent
+    # collapses to that parent (three sibling checkouts in ``~/workspace`` all
+    # infer ``workspace``, so a filter meant to block cross-project leakage
+    # merges them), while one project spread over workbench/staging/archive
+    # roots fragments into three different "projects". The declared registry
+    # gets both right because membership is stated rather than guessed.
+    #
+    # When a registry is declared but does not claim this path, return None —
+    # "no project" is a scope that over-matches nothing, whereas a guessed
+    # label silently merges unrelated work. Falling back to the legacy
+    # derivation only when no registry exists keeps installs that never
+    # declared one on their previous behaviour.
+    try:
+        from tokenpak.vault.project_scope import SHARED
+        from tokenpak.vault.sqlite_backend import _load_registry
+
+        registry, registry_error = _load_registry()
+        if registry_error is not None:
+            return None
+        if registry.active:
+            claimed = [
+                pid
+                for pid in registry.resolve_path(source_path).project_ids
+                if pid != SHARED
+            ]
+            return claimed[0] if len(claimed) == 1 else None
+    except Exception:  # noqa: BLE001 — inference is best-effort by contract
+        pass
+
     parts = [p for p in Path(source_path).parts if p and p not in ("/", "\\", ".")]
     # Detect ``home/<user>/`` or ``Users/<user>/`` prefix (Linux/macOS) and
     # skip both the home anchor and the username segment. Linux's ``/home``

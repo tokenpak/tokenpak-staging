@@ -277,6 +277,19 @@ TOOLS: List[Dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
+def _scope_project(params: dict) -> Optional[str]:
+    """Project scope for a vault query, from the caller or the environment.
+
+    Returns None when nothing declares a scope, which leaves behaviour
+    unchanged for single-project vaults.
+    """
+    explicit = str(params.get("project", "") or "").strip()
+    if explicit:
+        return explicit
+    pinned = os.environ.get("TOKENPAK_PROJECT", "").strip()
+    return pinned or None
+
+
 def _handle_search_corpus(params: Dict[str, Any]) -> Dict[str, Any]:
     """Handler for search_corpus. Lazy-imports VaultIndex."""
     vault_root = _resolve_vault_root()
@@ -306,7 +319,9 @@ def _handle_search_corpus(params: Dict[str, Any]) -> Dict[str, Any]:
                 "results": [],
             }
 
-        raw_results = index.search(query, top_k=top_k)
+        # Scope is honoured here too: this plugin reaches the index directly,
+        # bypassing the scoped proxy endpoints entirely.
+        raw_results = index.search(query, top_k=top_k, project=_scope_project(params))
         results = []
         for block, score in raw_results:
             content = index._get_content(block["block_id"])
@@ -395,7 +410,9 @@ def _handle_summarize_related_issues(params: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         must_hit_terms = extract_must_hit_terms(query)
-        raw_results = index.search(query, top_k=top_k)
+        # Scope is honoured here too: this plugin reaches the index directly,
+        # bypassing the scoped proxy endpoints entirely.
+        raw_results = index.search(query, top_k=top_k, project=_scope_project(params))
 
         related = []
         for block, score in raw_results:
