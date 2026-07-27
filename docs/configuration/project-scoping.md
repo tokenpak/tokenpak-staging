@@ -48,7 +48,7 @@ projects:
         role: staging
       - path: ~/archive/2025/acme-store-legacy
         role: archive
-      - path: ~/vault/01_PROJECTS/acme
+      - path: ~/project-notes/acme
         role: notes
 
   - id: bluefin-portal
@@ -86,7 +86,7 @@ Two rules keep overlapping declarations safe:
 
 **Longest prefix wins.** Roots are matched by path specificity, so a nested root
 resolves ahead of a broader one regardless of declaration order. Given roots
-`~/vault` (project `notes-archive`) and `~/vault/01_PROJECTS/acme` (project
+`~/project-notes` (project `notes-archive`) and `~/project-notes/acme` (project
 `acme-storefront`), a file under the latter resolves to `acme-storefront`.
 
 **Ambiguity is an error, not a tiebreak.** Declaring the same path under two

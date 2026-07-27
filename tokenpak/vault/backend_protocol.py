@@ -39,6 +39,8 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Dict, List, Protocol, Tuple, cast, runtime_checkable
 
+from tokenpak.vault.project_scope import ProjectScopeCapabilities
+
 logger = logging.getLogger("tokenpak.vault.backend_protocol")
 
 RetrievalRecord = Mapping[str, object]
@@ -171,7 +173,7 @@ class SemanticScorer(Protocol):
 # ---------------------------------------------------------------------------
 
 
-class RetrievalBackendBase:
+class RetrievalBackendBase(ProjectScopeCapabilities):
     """Base class providing default ``compile_injection()`` from ``search()``.
 
     Subclass this and implement ``search()``, ``available``, and ``maybe_reload()``.
@@ -210,23 +212,6 @@ class RetrievalBackendBase:
     def search(self, query: str, top_k: int = 5, min_score: float = 2.0) -> List[RetrievalResult]:
         raise NotImplementedError("Subclasses must implement 'search()'")
 
-    @property
-    def supports_project_scope(self) -> bool:
-        """Whether this backend enforces project scoping.
-
-        Defaults to ``False``: a backend that has not implemented scoping must
-        not be assumed to provide it. Callers that need the guarantee check this
-        and refuse rather than proceeding unscoped — answering a scoped request
-        with unscoped results is a silent contract break, which is worse than a
-        refusal because nothing downstream can detect it.
-
-        A backend returning ``True`` is asserting that ``search`` accepts a
-        ``project`` argument and applies membership *before* truncating to
-        ``top_k``, and that ``compile_injection`` resolves scope rather than
-        inheriting the unscoped default above.
-        """
-        return False
-
     def compile_injection(
         self, query: str, budget: int = 4000, top_k: int = 5, min_score: float = 2.0
     ) -> Tuple[str, int, List[str]]:
@@ -247,10 +232,10 @@ class RetrievalBackendBase:
         # to route through their own scope resolution; a third-party backend
         # that does not override it opts out of the guarantee.
         #
-        # `supports_project_scope` below is how a backend declares which side of
-        # that line it is on, so the gap is at least visible rather than
-        # assumed. See the architecture standard's section on safety properties
-        # across interchangeable backends.
+        # The canonical ProjectScopeCapabilities contract is how a backend
+        # declares which side of that line it is on, so the gap is visible
+        # rather than assumed. See the architecture standard's section on
+        # safety properties across interchangeable backends.
         results = self.search(query, top_k=top_k, min_score=min_score)
         if not results:
             return "", 0, []

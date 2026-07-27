@@ -92,6 +92,13 @@ Always works. Same JSON payload as `tokenpak pak status --json`.
 - Other subtypes → 501 `not_implemented` with `reason: "pro_daemon_required"`
 - Unknown vault block → 404 `pak_not_found`
 
+For a `vault:` ID, optional `?project=<declared-id>` requires the source block
+to belong to that project. An unknown project returns `400
+invalid_project_scope`, a block outside the project returns `404
+block_not_in_project`, and a requested scope without a usable registry returns
+`501 scoping_unavailable` or `503 project_registry_unavailable`. The endpoint
+does not fall back to path-shape inference for an explicit project request.
+
 ### `POST /pak/v1/recall`
 
 Always 501 in Phase 1 — recall ranking is Pro-only.

@@ -65,9 +65,12 @@ from typing import Dict, List, Optional, Sequence, Tuple, TypedDict, cast
 
 from tokenpak.vault.project_scope import (
     DEFAULT_EXCLUDED_ROLES,
+    PROJECT_FILTERING_CAPABILITY,
+    SCOPE_RESOLUTION_CAPABILITY,
     SHARED,
     AmbiguityPolicy,
     ProjectRegistry,
+    ProjectScopeCapabilities,
     ScopeConflictError,
     ScopeResolution,
     spanned_projects,
@@ -144,7 +147,7 @@ def _load_registry() -> Tuple[ProjectRegistry, Optional[str]]:
 # ---------------------------------------------------------------------------
 
 
-class SQLiteRetrievalBackend:
+class SQLiteRetrievalBackend(ProjectScopeCapabilities):
     """SQLite-backed BM25 retrieval for proxy vault injection.
 
     Implements the same public interface as ``VaultIndex``:
@@ -169,18 +172,20 @@ class SQLiteRetrievalBackend:
         self._initialized = False
         if registry is not None:
             self._registry, self._registry_error = registry, None
+            self._registry_managed = False
         else:
             self._registry, self._registry_error = _load_registry()
+            self._registry_managed = True
         self._synced_signature: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Project scope
     # ------------------------------------------------------------------
 
-    @property
-    def supports_project_scope(self) -> bool:
-        """This backend applies membership inside the scoring SQL."""
-        return True
+    project_scope_implementation_id = "sqlite"
+    project_scope_capabilities = frozenset(
+        {PROJECT_FILTERING_CAPABILITY, SCOPE_RESOLUTION_CAPABILITY}
+    )
 
     @property
     def registry(self) -> ProjectRegistry:
@@ -195,6 +200,7 @@ class SQLiteRetrievalBackend:
         """
         self._registry = registry
         self._registry_error = None
+        self._registry_managed = False
         self._synced_signature = None
         self._last_checked = 0.0
 
@@ -227,6 +233,18 @@ class SQLiteRetrievalBackend:
         if now - self._last_checked < self._check_interval:
             return
         self._last_checked = now
+
+        if self._registry_managed:
+            loaded_registry, registry_error = _load_registry()
+            if registry_error is not None:
+                # Keep last-good membership but refuse guarded operations until
+                # the declaration is readable again.
+                self._registry_error = registry_error
+            else:
+                if loaded_registry != self._registry:
+                    self._registry = loaded_registry
+                    self._synced_signature = None
+                self._registry_error = None
 
         index_path = self.tokenpak_dir / "index.json"
         if not index_path.exists():
@@ -493,16 +511,20 @@ class SQLiteRetrievalBackend:
             return ()
         try:
             conn = self._connect()
-        except sqlite3.Error:
-            return ()
+        except sqlite3.Error as exc:
+            raise ScopeConflictError(
+                f"cannot verify project contention: {exc}"
+            ) from exc
         try:
             placeholders = ",".join("?" * len(block_ids))
             rows = conn.execute(
                 f"SELECT source_path FROM blocks WHERE block_id IN ({placeholders})",
                 list(block_ids),
             ).fetchall()
-        except sqlite3.Error:
-            return ()
+        except sqlite3.Error as exc:
+            raise ScopeConflictError(
+                f"cannot verify project contention: {exc}"
+            ) from exc
         finally:
             conn.close()
 

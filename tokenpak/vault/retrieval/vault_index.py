@@ -24,6 +24,7 @@ __all__ = (
 
 
 import json
+import logging
 import math
 import os
 import re
@@ -36,6 +37,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, TypedDict, cast
 
 from tokenpak.vault._atomic import _atomic_write
+from tokenpak.vault.project_scope import (
+    PROJECT_FILTERING_CAPABILITY,
+    SCOPE_RESOLUTION_CAPABILITY,
+    AmbiguityPolicy,
+    ProjectScopeCapabilities,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _fallback_count_tokens(text: str) -> int:
@@ -75,6 +84,26 @@ def _bm25_tokenize(text: str) -> List[str]:
 
 
 _PROJECT_REGISTRY_STATE: "tuple[object, object] | None" = None
+_PROJECT_REGISTRY_LOCK = threading.Lock()
+
+
+def _get_project_registry(*, force_reload: bool = False):
+    """Return a reloadable registry while preserving the last good value."""
+    global _PROJECT_REGISTRY_STATE
+    state = _PROJECT_REGISTRY_STATE
+    if state is None or force_reload or state[1] is not None:
+        from tokenpak.vault.sqlite_backend import _load_registry
+
+        with _PROJECT_REGISTRY_LOCK:
+            current = _PROJECT_REGISTRY_STATE
+            if current is None or force_reload or current[1] is not None:
+                loaded_registry, error = _load_registry()
+                if error is not None and current is not None:
+                    loaded_registry = current[0]
+                _PROJECT_REGISTRY_STATE = (loaded_registry, error)
+            state = _PROJECT_REGISTRY_STATE
+    assert state is not None
+    return state
 
 
 def _project_scope_filter(
@@ -92,15 +121,7 @@ def _project_scope_filter(
     already refusing. Note the remaining limit: a config edited from one valid
     state to another is not picked up until the process restarts.
     """
-    global _PROJECT_REGISTRY_STATE
-    state = _PROJECT_REGISTRY_STATE
-    if state is None:
-        from tokenpak.vault.sqlite_backend import _load_registry
-
-        state = _load_registry()
-        if state[1] is None:
-            _PROJECT_REGISTRY_STATE = state
-    registry, error = state
+    registry, error = _get_project_registry()
     if error is not None:
         # A declaration that exists but cannot be read must not degrade to
         # "no scoping" — that is the fail-open this whole feature exists to
@@ -121,7 +142,7 @@ def _project_scope_filter(
     return scope_filter if scope_filter.active else None
 
 
-class VaultIndex:
+class VaultIndex(ProjectScopeCapabilities):
     """
     Read-only BM25-searchable index loaded from .tokenpak/index.json + blocks/.
     Reloads periodically to pick up git-pulled changes.
@@ -163,6 +184,10 @@ class VaultIndex:
         now = time.time()
         if now - self._last_loaded < VAULT_INDEX_RELOAD_INTERVAL:
             return
+
+        # The MCP process is long-lived. Refresh project membership on the
+        # existing reload timer even when index.json itself is unchanged.
+        _get_project_registry(force_reload=True)
 
         index_path = self.tokenpak_dir / "index.json"
         if not index_path.exists():
@@ -565,16 +590,10 @@ class VaultIndex:
                 ),
             }
 
-    @property
-    def supports_project_scope(self) -> bool:
-        """Covers ``search`` and ``compile_injection`` on this class.
-
-        Both accept ``project`` and apply membership during candidate expansion,
-        before truncation. This class has no ``search_scoped``; callers needing
-        ambiguity detection must use a backend that provides it rather than
-        inferring it from this flag.
-        """
-        return True
+    project_scope_implementation_id = "sdk_plugin"
+    project_scope_capabilities = frozenset(
+        {PROJECT_FILTERING_CAPABILITY, SCOPE_RESOLUTION_CAPABILITY}
+    )
 
     def search(
         self,
@@ -687,6 +706,93 @@ class VaultIndex:
             ranked = ranked[:top_k]
         return [(blocks[bid], score) for bid, score in ranked]
 
+    def search_scoped(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: Optional[str] = None,
+        cwd: Optional[str] = None,
+        exclude_roles: Optional[Sequence[str]] = None,
+        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
+    ):
+        """Resolve project scope and suppress unresolved multi-project results."""
+        from tokenpak.vault.project_scope import (
+            SHARED,
+            ScopeConflictError,
+            ScopeResolution,
+            spanned_projects,
+        )
+        from tokenpak.vault.sqlite_backend import ScopedSearchResult
+
+        registry, registry_error = _get_project_registry()
+        if registry_error is not None:
+            raise ScopeConflictError(
+                f"project registry failed to load ({registry_error}); refusing "
+                "to answer rather than returning unscoped results"
+            )
+
+        if not registry.active:
+            if project:
+                raise ScopeConflictError(
+                    f"project {project!r} requested but no project registry is "
+                    "declared; refusing to return unscoped results for an "
+                    "explicitly scoped query"
+                )
+            return ScopedSearchResult(
+                results=self.search(query, top_k, min_score, exclude_roles=exclude_roles),
+                scope=ScopeResolution(project_id=None, source="no_registry"),
+            )
+
+        scope = registry.resolve_scope(explicit=project, cwd=cwd, query=query)
+        if scope.resolved:
+            return ScopedSearchResult(
+                results=self.search(
+                    query,
+                    top_k,
+                    min_score,
+                    project=scope.project_id,
+                    exclude_roles=exclude_roles,
+                ),
+                scope=scope,
+            )
+
+        probed = self.search(query, 0, min_score, exclude_roles=exclude_roles)
+        spanned = spanned_projects(
+            registry, (str(block.get("source_path", "")) for block, _ in probed)
+        )
+        results = probed[:top_k] if top_k > 0 else probed
+
+        if len(spanned) <= 1 or on_ambiguous == AmbiguityPolicy.UNSCOPED:
+            return ScopedSearchResult(results=results, scope=scope, spanned=spanned)
+
+        if on_ambiguous == AmbiguityPolicy.DOMINANT:
+            mass: dict[str, float] = {}
+            for block, score in probed:
+                project_ids = registry.resolve_path(
+                    str(block.get("source_path", ""))
+                ).project_ids
+                if SHARED in project_ids:
+                    continue
+                for project_id in project_ids:
+                    mass[project_id] = mass.get(project_id, 0.0) + score
+            if mass:
+                winner = sorted(mass.items(), key=lambda item: (-item[1], item[0]))[0][0]
+                return ScopedSearchResult(
+                    results=self.search(
+                        query,
+                        top_k,
+                        min_score,
+                        project=winner,
+                        exclude_roles=exclude_roles,
+                    ),
+                    scope=ScopeResolution(project_id=winner, source="dominant"),
+                    spanned=spanned,
+                )
+
+        return ScopedSearchResult(results=[], scope=scope, spanned=spanned, suppressed=True)
+
     def compile_injection(
         self,
         query: str,
@@ -695,23 +801,42 @@ class VaultIndex:
         min_score: float = 2.0,
         *,
         project: Optional[str] = None,
+        cwd: Optional[str] = None,
         exclude_roles: Optional[Sequence[str]] = None,
+        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
     ) -> Tuple[str, int, List[str]]:
         """
         Search vault and compile injection text within budget.
         Returns (injection_text, tokens_used, source_refs).
 
-        Scope is honoured here as well as in ``search``: the capability this
-        class advertises covers both, and a compile path that quietly ignored
-        it would make that advertisement false.
+        Scope is resolved here as well as in ``search_scoped``. Automatic
+        injection is not inspectable by the caller, so an unresolved
+        multi-project match contributes nothing rather than a blend.
         """
-        results = self.search(
-            query,
-            top_k=top_k,
-            min_score=min_score,
-            project=project,
-            exclude_roles=exclude_roles,
-        )
+        from tokenpak.vault.project_scope import ScopeConflictError
+
+        try:
+            scoped = self.search_scoped(
+                query,
+                top_k=top_k,
+                min_score=min_score,
+                project=project,
+                cwd=cwd,
+                exclude_roles=exclude_roles,
+                on_ambiguous=on_ambiguous,
+            )
+        except ScopeConflictError as exc:
+            logger.warning("Vault injection skipped: unusable project scope (%s)", exc)
+            return "", 0, []
+        if scoped.suppressed:
+            logger.warning(
+                "Vault injection suppressed: query matched %d projects (%s) "
+                "and no scope was resolved",
+                len(scoped.spanned),
+                ", ".join(scoped.spanned),
+            )
+            return "", 0, []
+        results = scoped.results
         if not results:
             return "", 0, []
 

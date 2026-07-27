@@ -350,16 +350,15 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
         _send_error(handler, 503, "vault_unavailable", "no index.json found")
         return
 
-    # Project scope. Both shipped backends enforce it; a third-party backend
-    # may not. Ask the backend whether it does rather than probing for a method
-    # name — a capability probe that falls through to the unguarded path would
-    # answer a scoped request with unscoped results, which is undetectable
-    # downstream.
+    # Project scope. Ambiguity resolution is a separate capability from
+    # explicit project filtering: only the former guarantees search_scoped().
+    # Conflating the two makes a truthful filtering declaration look like proof
+    # of a method the public contract never required.
     project = (qs.get("project", [""])[0] or "").strip() or None
     cwd = (qs.get("cwd", [""])[0] or "").strip() or None
     scope_meta: dict[str, object] = {}
     try:
-        if getattr(vi, "supports_project_scope", False):
+        if getattr(vi, "supports_scope_resolution", False):
             scoped = vi.search_scoped(query, top_k=limit, project=project, cwd=cwd)
             results = scoped.results
             scope_meta = {
@@ -385,22 +384,62 @@ def _handle_vault_search(handler: Any, qs: dict[str, list[str]]) -> None:
                 return
             if scoped.spanned:
                 scope_meta["spanned"] = list(scoped.spanned)
-        elif project or cwd:
-            # The active backend cannot scope. Answering an explicitly scoped
-            # request with unscoped results would be a silent downgrade of a
-            # safety property — the caller would have no way to know the scope
-            # was dropped. Refuse instead.
-            _send_error(
-                handler,
-                501,
-                "scoping_unsupported",
-                f"retrieval backend {type(vi).__name__} does not implement "
-                "project scoping; results would span projects, so the scoped "
-                "request is refused rather than answered unscoped",
-            )
-            return
+        elif project and getattr(vi, "supports_project_scope", False) and not cwd:
+            from tokenpak.vault.sqlite_backend import _load_registry
+
+            registry, registry_error = _load_registry()
+            if registry_error is not None:
+                _send_error(handler, 503, "project_registry_unavailable", registry_error)
+                return
+            if not registry.active:
+                _send_error(
+                    handler,
+                    501,
+                    "scoping_unavailable",
+                    "project was requested but no project registry is declared",
+                )
+                return
+            if not registry.known(project):
+                _send_error(
+                    handler,
+                    400,
+                    "invalid_project_scope",
+                    f"unknown project {project!r}",
+                )
+                return
+            results = vi.search(query, top_k=limit, project=project)
+            scope_meta = {"project": project, "resolved_by": "explicit"}
         else:
-            results = vi.search(query, top_k=limit)
+            from tokenpak.vault.sqlite_backend import _load_registry
+
+            registry, registry_error = _load_registry()
+            if registry_error is not None:
+                _send_error(
+                    handler,
+                    503,
+                    "project_registry_unavailable",
+                    registry_error,
+                )
+                return
+            if not registry.active and not project and not cwd:
+                results = vi.search(query, top_k=limit)
+            else:
+                # An active registry means even an under-specified query needs
+                # ambiguity detection. A backend without that capability cannot
+                # safely decide that an unscoped answer is single-project.
+                reason = (
+                    "cannot resolve project scope for this request"
+                    if registry.active
+                    else "cannot honor the requested project scope"
+                )
+                _send_error(
+                    handler,
+                    501,
+                    "scoping_unsupported",
+                    f"retrieval backend {type(vi).__name__} {reason}; results "
+                    "would be unverified, so the request is refused",
+                )
+                return
     except ValueError as exc:
         # Unknown project id / bad TOKENPAK_PROJECT pin.
         _send_error(handler, 400, "invalid_project_scope", str(exc))
@@ -481,40 +520,60 @@ def _handle_vault_block(
     # a blend. Refusing a closed failure in favour of an open one is the trade
     # this deliberately does not make; here neither direction leaks.
     requested_project = (qs.get("project", [""])[0] or "").strip() if qs else ""
+    requested_cwd = (qs.get("cwd", [""])[0] or "").strip() if qs else ""
+    pinned_project = os.environ.get("TOKENPAK_PROJECT", "").strip()
     block_projects: list[str] = []
     try:
         from tokenpak.vault.project_scope import SHARED, ScopeConflictError
         from tokenpak.vault.sqlite_backend import _load_registry
 
         registry, registry_error = _load_registry()
-        if registry_error is not None and requested_project:
+        scope_requested = bool(requested_project or requested_cwd or pinned_project)
+        if registry_error is not None and scope_requested:
             _send_error(
                 handler,
                 503,
                 "project_registry_unavailable",
-                f"cannot honor project={requested_project!r}: {registry_error}",
+                f"cannot resolve requested project scope: {registry_error}",
+            )
+            return
+        if scope_requested and not registry.active:
+            _send_error(
+                handler,
+                501,
+                "scoping_unavailable",
+                "a project scope was requested but no project registry is declared",
             )
             return
         if registry.active:
             source_path = str(meta.get("source_path", "") or "")
             block_projects = list(registry.resolve_path(source_path).project_ids)
-            if requested_project:
-                if not registry.known(requested_project):
+            if scope_requested:
+                scope = registry.resolve_scope(
+                    explicit=requested_project or None,
+                    cwd=requested_cwd or None,
+                )
+                if not scope.resolved:
                     _send_error(
-                        handler, 400, "invalid_project_scope", f"unknown project {requested_project!r}"
+                        handler,
+                        400,
+                        "unresolved_project_scope",
+                        "the supplied project signals did not resolve to one declared project",
                     )
                     return
-                allowed = requested_project in block_projects or SHARED in block_projects
+                effective_project = scope.project_id or ""
+                allowed = effective_project in block_projects or SHARED in block_projects
                 if not allowed:
                     _send_error(
                         handler,
                         404,
                         "block_not_in_project",
-                        f"block {block_id} is not in project {requested_project!r}",
+                        f"block {block_id} is not in project {effective_project!r}",
                     )
                     return
-    except ScopeConflictError:
-        raise
+    except ScopeConflictError as exc:
+        _send_error(handler, 400, "invalid_project_scope", str(exc))
+        return
     except Exception as exc:  # noqa: BLE001 — inference is best-effort
         # Deliberately narrow: an explicit project must never be served because
         # the membership lookup happened to raise. Only the *reporting* half is
@@ -1663,7 +1722,15 @@ def _handle_pak_inspect(
                         f"cannot honor project={requested_project!r}: {registry_error}",
                     )
                     return
-                if registry.active and not registry.known(requested_project):
+                if not registry.active:
+                    _send_error(
+                        handler,
+                        501,
+                        "scoping_unavailable",
+                        "project was requested but no project registry is declared",
+                    )
+                    return
+                if not registry.known(requested_project):
                     _send_error(
                         handler,
                         400,
@@ -1706,7 +1773,7 @@ def _handle_pak_inspect(
             pak = vault_block_to_pak(block_dict)
             if requested_project:
                 scope_project = getattr(getattr(pak, "scope", None), "project", None)
-                if scope_project is not None and scope_project != requested_project:
+                if scope_project != requested_project:
                     _send_error(
                         handler,
                         404,

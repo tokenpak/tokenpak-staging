@@ -90,14 +90,29 @@ project that is not declared.
 
 Full content + metadata of a specific block.
 
+Optional query parameters:
+
+| Parameter | Meaning |
+|---|---|
+| `project` | Require the block to belong to this declared project. |
+| `cwd` | Resolve the project from this working directory when `project` is absent. |
+
 ```json
 {
  "block_id": "docs.guides.example.md",
  "path": "docs.guides.example.md",
  "tokens": 312,
- "content": "---\ntitle: ...\n..."
+ "content": "---\ntitle: ...\n...",
+ "projects": ["acme-storefront"]
 }
 ```
+
+The endpoint returns `400 invalid_project_scope` or
+`400 unresolved_project_scope` when the supplied signals cannot bind,
+`404 block_not_in_project` when the block is outside the resolved project,
+`501 scoping_unavailable` when a scope is requested without a declared
+registry, and `503 project_registry_unavailable` when membership cannot be
+verified. It never returns content after dropping a requested scope.
 
 ### `GET /tpk/v1/budget`
 

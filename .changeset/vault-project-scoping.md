@@ -44,6 +44,8 @@ scoping_unsupported` instead of silently returning unscoped results, and a
 project registry that is present but unreadable causes scoped queries to be
 refused while preserving the last known-good membership.
 
-Scoping currently requires the SQLite retrieval backend; the default
-`json_blocks` backend reports `scoping_unsupported` rather than silently
-ignoring a scope request.
+The default `json_blocks`, optional SQLite, and editor-plugin retrieval indexes
+all enforce the same filter and ambiguity contract. A discovery-driven
+conformance matrix runs the shared regressions against every shipping index and
+a minimal third-party implementation; an unverified backend is refused rather
+than silently serving an unscoped answer.

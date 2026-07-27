@@ -149,10 +149,13 @@ TOOLS: List[Dict[str, Any]] = [
                 "project": {
                     "type": "string",
                     "description": (
-                        "Restrict results to this declared project. Without it, "
-                        "a vault holding several projects can return a blend of "
-                        "them. Falls back to $TOKENPAK_PROJECT."
+                        "Restrict results to this declared project. Omit to resolve "
+                        "from $TOKENPAK_PROJECT, cwd, or a unique query mention."
                     ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory used to resolve project scope.",
                 },
             },
             "required": ["query"],
@@ -209,10 +212,13 @@ TOOLS: List[Dict[str, Any]] = [
                 "project": {
                     "type": "string",
                     "description": (
-                        "Restrict results to this declared project. Without it, "
-                        "a vault holding several projects can return a blend of "
-                        "them. Falls back to $TOKENPAK_PROJECT."
+                        "Restrict results to this declared project. Omit to resolve "
+                        "from $TOKENPAK_PROJECT, cwd, or a unique query mention."
                     ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory used to resolve project scope.",
                 },
             },
             "required": ["query"],
@@ -240,10 +246,13 @@ TOOLS: List[Dict[str, Any]] = [
                 "project": {
                     "type": "string",
                     "description": (
-                        "Restrict results to this declared project. Without it, "
-                        "a vault holding several projects can return a blend of "
-                        "them. Falls back to $TOKENPAK_PROJECT."
+                        "Restrict results to this declared project. Omit to resolve "
+                        "from $TOKENPAK_PROJECT, cwd, or a unique query mention."
                     ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory used to resolve project scope.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -281,10 +290,13 @@ TOOLS: List[Dict[str, Any]] = [
                 "project": {
                     "type": "string",
                     "description": (
-                        "Restrict results to this declared project. Without it, "
-                        "a vault holding several projects can return a blend of "
-                        "them. Falls back to $TOKENPAK_PROJECT."
+                        "Restrict results to this declared project. Omit to resolve "
+                        "from $TOKENPAK_PROJECT, cwd, or a unique query mention."
                     ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory used to resolve project scope.",
                 },
                 "branch": {
                     "type": "string",
@@ -310,16 +322,37 @@ TOOLS: List[Dict[str, Any]] = [
 
 
 def _scope_project(params: dict) -> Optional[str]:
-    """Project scope for a vault query, from the caller or the environment.
-
-    Returns None when nothing declares a scope, which leaves behaviour
-    unchanged for single-project vaults.
-    """
+    """Return only the caller's explicit project; the resolver handles env."""
     explicit = str(params.get("project", "") or "").strip()
-    if explicit:
-        return explicit
-    pinned = os.environ.get("TOKENPAK_PROJECT", "").strip()
-    return pinned or None
+    return explicit or None
+
+
+def _scoped_index_search(index, params: dict, query: str, top_k: int):
+    """Return ``(results, error_response)`` for an ambiguity-aware query."""
+    from tokenpak.vault.project_scope import ScopeConflictError
+
+    cwd = str(params.get("cwd", "") or "").strip() or None
+    try:
+        scoped = index.search_scoped(
+            query,
+            top_k=top_k,
+            project=_scope_project(params),
+            cwd=cwd,
+        )
+    except ScopeConflictError as exc:
+        return None, {
+            "status": "invalid-project-scope",
+            "error": str(exc),
+            "results": [],
+        }
+    if scoped.suppressed:
+        return None, {
+            "status": "ambiguous-project-scope",
+            "error": "query matched several projects; retry with project or cwd",
+            "candidates": list(scoped.spanned),
+            "results": [],
+        }
+    return scoped.results, None
 
 
 def _handle_search_corpus(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -351,9 +384,11 @@ def _handle_search_corpus(params: Dict[str, Any]) -> Dict[str, Any]:
                 "results": [],
             }
 
-        # Scope is honoured here too: this plugin reaches the index directly,
-        # bypassing the scoped proxy endpoints entirely.
-        raw_results = index.search(query, top_k=top_k, project=_scope_project(params))
+        raw_results, scope_error = _scoped_index_search(index, params, query, top_k)
+        if scope_error is not None:
+            scope_error.update({"query": query, "top_k": top_k})
+            return scope_error
+        assert raw_results is not None
         results = []
         for block, score in raw_results:
             content = index._get_content(block["block_id"])
@@ -442,9 +477,12 @@ def _handle_summarize_related_issues(params: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         must_hit_terms = extract_must_hit_terms(query)
-        # Scope is honoured here too: this plugin reaches the index directly,
-        # bypassing the scoped proxy endpoints entirely.
-        raw_results = index.search(query, top_k=top_k, project=_scope_project(params))
+        raw_results, scope_error = _scoped_index_search(index, params, query, top_k)
+        if scope_error is not None:
+            scope_error["query"] = query
+            scope_error["related"] = []
+            return scope_error
+        assert raw_results is not None
 
         related = []
         for block, score in raw_results:
@@ -541,8 +579,14 @@ def _handle_build_context_pack(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "error", "error": "query is required and must be non-empty"}
 
     # 1. Search corpus
-    search_result = _handle_search_corpus({"query": query, "top_k": top_k, "project": params.get("project")})
-    if search_result.get("status") == "no-corpus":
+    scope_args = {
+        "query": query,
+        "top_k": top_k,
+        "project": params.get("project"),
+        "cwd": params.get("cwd"),
+    }
+    search_result = _handle_search_corpus(scope_args)
+    if search_result.get("status") != "ok":
         return search_result
     corpus_hits = search_result.get("results", [])
 
@@ -554,7 +598,7 @@ def _handle_build_context_pack(params: Dict[str, Any]) -> Dict[str, Any]:
     # 3. Summarize related issues (optional)
     related: List[Dict] = []
     if include_related:
-        related_result = _handle_summarize_related_issues({"query": query, "top_k": top_k, "project": params.get("project")})
+        related_result = _handle_summarize_related_issues(scope_args)
         if related_result.get("status") == "ok":
             related = related_result.get("related", [])
 
@@ -598,8 +642,14 @@ def _handle_prepare_review_packet(params: Dict[str, Any]) -> Dict[str, Any]:
     top_k = 5
 
     # 1. search_corpus — primary retrieval (no redundant call; used once)
-    search_result = _handle_search_corpus({"query": query, "top_k": top_k, "project": params.get("project")})
-    if search_result.get("status") == "no-corpus":
+    scope_args = {
+        "query": query,
+        "top_k": top_k,
+        "project": params.get("project"),
+        "cwd": params.get("cwd"),
+    }
+    search_result = _handle_search_corpus(scope_args)
+    if search_result.get("status") != "ok":
         return search_result
     corpus_hits = search_result.get("results", [])
 
@@ -609,7 +659,7 @@ def _handle_prepare_review_packet(params: Dict[str, Any]) -> Dict[str, Any]:
     entities = extract_result.get("entities", {})
 
     # 3. summarize_related_issues — related context
-    related_result = _handle_summarize_related_issues({"query": query, "top_k": top_k, "project": params.get("project")})
+    related_result = _handle_summarize_related_issues(scope_args)
     related = related_result.get("related", []) if related_result.get("status") == "ok" else []
 
     # 4. Compact the full context using tokenpak.compression.budgets.policy (lazy import)

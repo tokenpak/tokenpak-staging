@@ -480,6 +480,8 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
     fetch_params: dict[str, Any] = {}
     if project:
         fetch_params["project"] = project
+    if cwd:
+        fetch_params["cwd"] = cwd
     status, body = _proxy_get(
         f"/tpk/v1/vault/block/{_url_parse.quote(block_id, safe='')}", fetch_params or None
     )

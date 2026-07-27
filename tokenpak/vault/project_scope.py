@@ -24,7 +24,7 @@ id, declared in ``vault.yaml``::
             role: staging
           - path: ~/archive/2025/acme-store-legacy
             role: archive
-          - path: ~/vault/01_PROJECTS/acme
+          - path: ~/project-notes/acme
             role: notes
       - id: shared-design-system
         roots:
@@ -35,8 +35,8 @@ id, declared in ``vault.yaml``::
 Two properties make this safe under overlap:
 
 * **Longest-prefix wins.** Roots are matched by path specificity, so a nested
-  root (``~/vault/01_PROJECTS/acme``) resolves ahead of a broader one
-  (``~/vault``) regardless of declaration order.
+  root (``~/project-notes/acme``) resolves ahead of a broader one
+  (``~/project-notes``) regardless of declaration order.
 * **Ambiguity is a load-time error, not a silent tiebreak.** Two roots that
   resolve the same path to different projects fail loudly at config load.
   Genuine multi-project resources are expressed *within one root* — either
@@ -51,11 +51,13 @@ autonomous promotion). Narrowing one store is not resolver-ranking.
 
 from __future__ import annotations
 
+import ast
+import importlib
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import ClassVar, Iterable, Mapping, Optional, Sequence
 
 __all__ = [
     "SHARED",
@@ -67,6 +69,11 @@ __all__ = [
     "ScopeConflictError",
     "AmbiguityPolicy",
     "ScopeFilter",
+    "ProjectScopeCapabilities",
+    "ProjectScopeImplementation",
+    "PROJECT_FILTERING_CAPABILITY",
+    "SCOPE_RESOLUTION_CAPABILITY",
+    "discover_project_scope_implementations",
     "spanned_projects",
     "normalize_path",
 ]
@@ -78,6 +85,117 @@ SHARED = "*"
 Stored as a real membership row so the query-time filter stays a single
 ``IN (?, '*')`` predicate rather than a special case in the SQL builder.
 """
+
+
+PROJECT_FILTERING_CAPABILITY = "project_filtering"
+"""Explicit project filtering in ``search`` and ``compile_injection``."""
+
+SCOPE_RESOLUTION_CAPABILITY = "scope_resolution"
+"""Ambiguity-aware ``search_scoped`` resolution and fail-closed suppression."""
+
+
+class ProjectScopeCapabilities:
+    """Canonical capability contract for project-scoped retrieval.
+
+    Implementations declare capabilities through ``project_scope_capabilities``;
+    they do not redefine the meaning of the public properties below.
+
+    ``supports_project_scope`` covers ``search(..., project=...)`` filtering
+    before ``top_k`` and ``compile_injection(..., project=...)`` with the same
+    membership rule. ``supports_scope_resolution`` additionally guarantees a
+    ``search_scoped(...)`` method that resolves explicit, environment, cwd and
+    query signals and suppresses unresolved multi-project matches.
+
+    Shipping implementations set ``project_scope_implementation_id``. The
+    conformance suite discovers those markers from package source, so adding a
+    sibling cannot silently escape the shared regression matrix.
+    """
+
+    project_scope_implementation_id: ClassVar[str | None] = None
+    project_scope_capabilities: ClassVar[frozenset[str]] = frozenset()
+
+    @property
+    def supports_project_scope(self) -> bool:
+        """Whether explicit project filtering is implemented end to end."""
+        return PROJECT_FILTERING_CAPABILITY in self.project_scope_capabilities
+
+    @property
+    def supports_scope_resolution(self) -> bool:
+        """Whether ambiguity-aware ``search_scoped`` is implemented."""
+        return SCOPE_RESOLUTION_CAPABILITY in self.project_scope_capabilities
+
+
+@dataclass(frozen=True)
+class ProjectScopeImplementation:
+    """A shipping implementation found by the canonical source marker."""
+
+    implementation_id: str
+    implementation_class: type[ProjectScopeCapabilities]
+
+
+def discover_project_scope_implementations() -> tuple[ProjectScopeImplementation, ...]:
+    """Discover every shipping project-scope implementation in ``tokenpak``.
+
+    Discovery reads class markers from Python source before importing only the
+    matching modules. This avoids a central supported-backend list (which would
+    drift) and avoids importing the entire package merely to enumerate three
+    retrieval implementations. Duplicate ids and malformed declarations fail
+    loudly because either would make the CI matrix incomplete or ambiguous.
+    """
+
+    package_root = Path(__file__).resolve().parents[1]
+    discovered: list[ProjectScopeImplementation] = []
+    seen_ids: set[str] = set()
+
+    for source_path in sorted(package_root.rglob("*.py")):
+        try:
+            tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        except (OSError, SyntaxError):
+            continue
+
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            implementation_id: str | None = None
+            for statement in node.body:
+                if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                    continue
+                targets = (
+                    statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                )
+                if not any(
+                    isinstance(target, ast.Name) and target.id == "project_scope_implementation_id"
+                    for target in targets
+                ):
+                    continue
+                value = statement.value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    implementation_id = value.value
+                break
+
+            if implementation_id is None:
+                continue
+            if implementation_id in seen_ids:
+                raise RuntimeError(
+                    f"duplicate project-scope implementation id: {implementation_id!r}"
+                )
+
+            relative = source_path.relative_to(package_root).with_suffix("")
+            module_name = "tokenpak." + ".".join(relative.parts)
+            module = importlib.import_module(module_name)
+            implementation_class = getattr(module, node.name)
+            if not isinstance(implementation_class, type) or not issubclass(
+                implementation_class, ProjectScopeCapabilities
+            ):
+                raise RuntimeError(
+                    f"{module_name}.{node.name} declares project-scope implementation "
+                    "identity without inheriting ProjectScopeCapabilities"
+                )
+            seen_ids.add(implementation_id)
+            discovered.append(ProjectScopeImplementation(implementation_id, implementation_class))
+
+    return tuple(sorted(discovered, key=lambda item: item.implementation_id))
+
 
 _VALID_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 

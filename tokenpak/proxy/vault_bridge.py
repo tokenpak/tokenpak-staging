@@ -31,7 +31,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
 from tokenpak.core.config_loader import get as _cfg
-from tokenpak.vault.project_scope import AmbiguityPolicy
+from tokenpak.vault.project_scope import (
+    PROJECT_FILTERING_CAPABILITY,
+    SCOPE_RESOLUTION_CAPABILITY,
+    AmbiguityPolicy,
+    ProjectScopeCapabilities,
+)
 from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 
 # `project_scope` is pure-stdlib and cheap, so the policy constants come in at
@@ -43,7 +48,7 @@ from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 if TYPE_CHECKING:
     from tokenpak.companion.capsules.builder import CapsuleBuilder
     from tokenpak.proxy.adapters.base import FormatAdapter
-    from tokenpak.vault.project_scope import ProjectRegistry, ScopeFilter
+    from tokenpak.vault.project_scope import ProjectRegistry, ScopeFilter, ScopeResolution
     from tokenpak.vault.semantic import TermResolver
     from tokenpak.vault.sqlite_backend import ScopedSearchResult
 
@@ -251,22 +256,30 @@ _PROJECT_REGISTRY_STATE: "tuple[ProjectRegistry, str | None] | None" = None
 _PROJECT_REGISTRY_LOCK = threading.Lock()
 
 
-def _get_project_registry() -> "tuple[ProjectRegistry, str | None]":
-    """Load the project registry once per process.
+def _get_project_registry(
+    *, force_reload: bool = False
+) -> "tuple[ProjectRegistry, str | None]":
+    """Load or refresh the project registry, preserving the last good value.
 
-    Cached because ``search`` runs on the request path and reload runs on a
-    timer; re-reading and re-parsing ``vault.yaml`` per call would show up as a
-    memory ratchet across reloads.
+    Searches read the cached value; the normal index reload timer calls this
+    with ``force_reload=True`` so a valid-to-valid ``vault.yaml`` edit takes
+    effect without a process restart. A broken edit retains the last good
+    registry but carries the error, which makes guarded operations fail closed.
     """
     global _PROJECT_REGISTRY_STATE
     state = _PROJECT_REGISTRY_STATE
-    if state is None:
+    if state is None or force_reload or state[1] is not None:
         from tokenpak.vault.sqlite_backend import _load_registry
 
         with _PROJECT_REGISTRY_LOCK:
-            if _PROJECT_REGISTRY_STATE is None:
-                _PROJECT_REGISTRY_STATE = _load_registry()
+            current = _PROJECT_REGISTRY_STATE
+            if current is None or force_reload or current[1] is not None:
+                loaded_registry, error = _load_registry()
+                if error is not None and current is not None:
+                    loaded_registry = current[0]
+                _PROJECT_REGISTRY_STATE = (loaded_registry, error)
             state = _PROJECT_REGISTRY_STATE
+    assert state is not None
     return state
 
 
@@ -283,7 +296,7 @@ def _project_scope_filter(
     return scope_filter if scope_filter.active else None
 
 
-class VaultIndex:
+class VaultIndex(ProjectScopeCapabilities):
     """
     Read-only BM25-searchable index loaded from .tokenpak/index.json + blocks/.
     Reloads periodically to pick up git-pulled changes.
@@ -294,10 +307,10 @@ class VaultIndex:
     product does not have.
     """
 
-    @property
-    def supports_project_scope(self) -> bool:
-        """This backend applies membership during candidate expansion."""
-        return True
+    project_scope_implementation_id = "json_blocks"
+    project_scope_capabilities = frozenset(
+        {PROJECT_FILTERING_CAPABILITY, SCOPE_RESOLUTION_CAPABILITY}
+    )
 
     def search_scoped(
         self,
@@ -311,10 +324,9 @@ class VaultIndex:
         on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
     ) -> "ScopedSearchResult":
         """Scope-resolving search — parity with the SQLite backend's contract."""
-        from tokenpak.vault.project_scope import ScopeResolution
         from tokenpak.vault.sqlite_backend import ScopedSearchResult
 
-        resolved, suppressed, spanned = self._resolve_injection_scope(
+        scope, suppressed, spanned = self._resolve_injection_scope(
             query,
             top_k=top_k,
             min_score=min_score,
@@ -326,7 +338,7 @@ class VaultIndex:
         if suppressed:
             return ScopedSearchResult(
                 results=[],
-                scope=ScopeResolution(project_id=None, source="unresolved"),
+                scope=scope,
                 spanned=spanned,
                 suppressed=True,
             )
@@ -336,14 +348,11 @@ class VaultIndex:
                     query,
                     top_k,
                     min_score,
-                    project=resolved,
+                    project=scope.project_id,
                     exclude_roles=exclude_roles,
                 )
             ),
-            scope=ScopeResolution(
-                project_id=resolved,
-                source=("explicit" if project else ("resolved" if resolved else "unresolved")),
-            ),
+            scope=scope,
             spanned=spanned,
         )
 
@@ -357,8 +366,8 @@ class VaultIndex:
         cwd: str | None = None,
         exclude_roles: "Sequence[str] | None" = None,
         on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
-    ) -> "tuple[str | None, bool, tuple[str, ...]]":
-        """Decide the scope for a query: ``(project_id, suppressed, spanned)``.
+    ) -> "tuple[ScopeResolution, bool, tuple[str, ...]]":
+        """Decide the scope for a query: ``(resolution, suppressed, spanned)``.
 
         Shared by ``search_scoped`` and ``compile_injection`` so the two cannot
         drift — the injection path is the one users cannot inspect, and it is
@@ -368,6 +377,7 @@ class VaultIndex:
             SHARED,
             AmbiguityPolicy,
             ScopeConflictError,
+            ScopeResolution,
             spanned_projects,
         )
 
@@ -386,11 +396,11 @@ class VaultIndex:
                     "declared; refusing to return unscoped results for an "
                     "explicitly scoped query"
                 )
-            return None, False, ()
+            return ScopeResolution(project_id=None, source="no_registry"), False, ()
 
         scope = registry.resolve_scope(explicit=project, cwd=cwd, query=query)
         if scope.resolved:
-            return scope.project_id, False, ()
+            return scope, False, ()
 
         # Unresolved: contention is a property of the corpus, so it is measured
         # over *every* block that clears `min_score`, not over a larger page. A
@@ -403,7 +413,7 @@ class VaultIndex:
         spanned = spanned_projects(registry, [str(b.get("source_path", "")) for b, _ in probed])
 
         if len(spanned) <= 1 or on_ambiguous == AmbiguityPolicy.UNSCOPED:
-            return None, False, spanned
+            return scope, False, spanned
 
         if on_ambiguous == AmbiguityPolicy.DOMINANT:
             mass: dict[str, float] = {}
@@ -420,9 +430,9 @@ class VaultIndex:
                     mass[pid] = mass.get(pid, 0.0) + score
             if mass:
                 winner = sorted(mass.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
-                return winner, False, spanned
+                return ScopeResolution(project_id=winner, source="dominant"), False, spanned
 
-        return None, True, spanned
+        return scope, True, spanned
 
     def __init__(self, tokenpak_dir: str) -> None:
         self.tokenpak_dir = Path(tokenpak_dir)
@@ -507,6 +517,10 @@ class VaultIndex:
         now = __import__("time").time()
         if now - self._last_loaded < VAULT_INDEX_RELOAD_INTERVAL:
             return
+
+        # Registry membership can change without index.json moving. Refresh it
+        # on the same bounded timer before the index-mtime fast path returns.
+        _get_project_registry(force_reload=True)
 
         index_path = self.tokenpak_dir / "index.json"
         if not index_path.exists():
@@ -1205,7 +1219,7 @@ class VaultIndex:
             logger.warning("Vault injection skipped: unusable project scope (%s)", exc)
             return "", 0, []
 
-        resolved_project, suppressed, spanned = decision
+        scope, suppressed, spanned = decision
         if suppressed:
             logger.warning(
                 "Vault injection suppressed: query matched %d projects (%s) "
@@ -1220,7 +1234,7 @@ class VaultIndex:
             top_k=top_k,
             min_score=min_score,
             include_internal=True,
-            project=resolved_project,
+            project=scope.project_id,
         )
         if not results:
             return "", 0, []
@@ -1601,7 +1615,7 @@ def inject_vault_context(
             # guarantee. Worse, role exclusion applied on this path while project
             # membership did not, so it read as working while half-applied.
             suppressed_by_scope = False
-            if getattr(vault_idx, "supports_project_scope", False):
+            if getattr(vault_idx, "supports_scope_resolution", False):
                 _scoped = vault_idx.search_scoped(
                     query, top_k=INJECT_TOP_K * 2, min_score=INJECT_MIN_SCORE
                 )
