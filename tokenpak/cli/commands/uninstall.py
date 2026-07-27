@@ -4,9 +4,11 @@
 Unifies the fragmented teardown primitives into one truthful,
 reversible-by-default command.
 
-  --soft  un-route only (reversible via ``tokenpak setup``): restores Claude
-          Code settings, tears down the Codex companion install, stops a
-          running proxy. Leaves config/state/dbs and the package intact.
+  --soft  un-route only: restores Claude Code settings, tears down the
+          Codex companion install, stops a running proxy. Leaves
+          config/state/dbs and the package intact. Reversible — ``tokenpak
+          setup`` re-routes Claude Code; ``tokenpak codex --install-only``
+          restores the Codex companion.
   --hard  soft + purge the resolved TokenPak home (EXCEPT user data:
           companion/journal.db, companion/budget.db, companion/capsules/) +
           offer ``pip uninstall tokenpak`` as the final step.
@@ -496,7 +498,8 @@ def _print_receipt(receipt: Receipt) -> None:
             print(f"  • {r}")
         print()
     if not receipt.hard:
-        print(_c("Re-route any time with: tokenpak setup", _GREEN))
+        print(_c("Re-route Claude Code any time with: tokenpak setup", _GREEN))
+        print(_c("Re-route Codex any time with: tokenpak codex --install-only", _GREEN))
     if receipt.errors:
         print(
             _c(f"{receipt.errors} operation(s) failed — see ❌ lines above.", _RED),
@@ -525,7 +528,8 @@ def _choose_mode() -> "Optional[str]":
     print()
     print(f"  {_c('[1] Un-route', _GREEN)} (recommended) — stop routing your clients through")
     print("      tokenpak. Configuration, history and saved data are all kept.")
-    print("      Reversible at any time with `tokenpak setup`.")
+    print("      Reversible: `tokenpak setup` re-routes Claude Code; Codex")
+    print("      users re-run `tokenpak codex --install-only`.")
     print()
     print(f"  {_c('[2] Remove stored state', _YELLOW)} — un-route, then delete")
     print("      stored state including your configuration, caches, local")

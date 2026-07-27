@@ -145,3 +145,62 @@ def test_user_facing_purge_entries_are_named_or_hedged(monkeypatch, capsys):
 
     # Everything else is covered by the hedge rather than enumerated.
     assert "including" in text
+
+
+# ---------------------------------------------------------------------------
+# The chosen mode must DRIVE the executed plan (mutation gate).
+#
+# The chooser unit tests above pin _choose_mode()'s string mapping, but
+# nothing below them pinned that the string reaches _build_plan. Inverting
+# the chosen == "hard" branch in run_uninstall left every test in this file
+# green while "[1] Un-route (recommended)" performed the hard purge
+# (independent acceptance finding, staging PR #651, 2026-07-27). These two
+# tests fail on that mutation: they run the real interactive path end to end
+# and assert the hard= flag the plan was actually built with.
+# ---------------------------------------------------------------------------
+
+
+def _run_interactive(monkeypatch, answer):
+    """Drive run_uninstall through the real chooser; capture _build_plan args."""
+    seen = {}
+
+    def _capture_plan(*, hard, keep_data, home):
+        seen["hard"] = hard
+        return [], []
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_a: answer)
+    monkeypatch.setattr(U, "_build_plan", _capture_plan)
+    rc = U.run_uninstall(dry_run=True)
+    return rc, seen
+
+
+def test_choosing_unroute_builds_a_soft_plan(monkeypatch, capsys):
+    rc, seen = _run_interactive(monkeypatch, "1")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert seen["hard"] is False
+    assert "--soft" in out and "--hard" not in out
+
+
+def test_choosing_remove_state_builds_a_hard_plan(monkeypatch, capsys):
+    rc, seen = _run_interactive(monkeypatch, "2")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert seen["hard"] is True
+    assert "--hard" in out
+
+
+def test_reversibility_claim_names_the_codex_restore_path(monkeypatch, capsys):
+    """Soft mode tears down the Codex companion, and `tokenpak setup` does not
+    restore it. Any reversibility claim in the chooser must therefore name the
+    Codex restore path too, or it is false for Codex users (independent
+    acceptance finding, staging PR #651)."""
+    monkeypatch.setattr("builtins.input", lambda *_a: "")
+    U._choose_mode()
+    text = capsys.readouterr().out.lower()
+    if "reversible" in text:
+        assert "codex --install-only" in text, (
+            "chooser claims reversibility without naming the Codex restore path"
+        )
