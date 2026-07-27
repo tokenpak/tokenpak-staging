@@ -1340,7 +1340,14 @@ def cmd_start(args: CommandArgs) -> int:
     )
     from tokenpak.core.runtime import lifecycle as _lifecycle
 
-    port = int(os.environ.get("TOKENPAK_PORT", "8766"))
+    # --port is declared on this command and was being ignored: the port came
+    # from the environment only, so `tokenpak start --port 8799` ran its
+    # ownership preflight against 8766 and refused whenever anything else held
+    # the default port. Explicit flag wins, then TOKENPAK_PORT, then the default.
+    _flag_port = getattr(args, "port", None)
+    port = (
+        int(_flag_port) if _flag_port is not None else int(os.environ.get("TOKENPAK_PORT", "8766"))
+    )
 
     # Validate config on boot (P1-T5)
     from tokenpak.core.config_loader import config_load_error, load_config
@@ -1407,7 +1414,7 @@ def cmd_start(args: CommandArgs) -> int:
         print(f"A proxy is already answering on port {port}, but this install did not start it.")
         print("   TokenPak will not manage a process it does not own.")
         print("   Run `tokenpak status` to inspect it, or choose another port:")
-        print("     TOKENPAK_PORT=<port> tokenpak start")
+        print("     tokenpak start --port <port>")
         return EXIT_RUNTIME_UNAVAILABLE
 
     if snap.pid_alive and not snap.health_ok:
@@ -3897,7 +3904,15 @@ def build_parser() -> argparse.ArgumentParser:
             "The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml"
         ),
     )
-    p_start.add_argument("--port", type=int, default=8766, help="Port to listen on (default: 8766)")
+    # default=None, not 8766: cmd_start must be able to tell "user passed a
+    # port" from "user passed nothing". With a concrete default, honouring the
+    # flag would silently override TOKENPAK_PORT on every unflagged run.
+    p_start.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to listen on (default: 8766, or TOKENPAK_PORT)",
+    )
     p_start.add_argument(
         "--workers", type=int, default=2, help="Number of worker processes (default: 2)"
     )
