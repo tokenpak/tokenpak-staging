@@ -133,3 +133,50 @@ def test_verification_rejects_an_archive_missing_deletable_files(home, tmp_path,
     ok, detail = U._create_backup(home, tmp_path / "b.tar.gz", [])
     assert ok is False
     assert "missing" in detail
+
+
+# M1 — a split install leaves a second home; purging one left the other whole.
+def test_legacy_home_is_included_when_distinct(home, tmp_path, monkeypatch):
+    legacy = tmp_path / ".tokenpak"
+    (legacy / "companion").mkdir(parents=True)
+    (legacy / "config.json").write_text("{}")
+    (legacy / "companion" / "journal.db").write_text("legacy journal")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    paths = U._external_state_paths()
+    assert legacy in paths, "the legacy home survived a complete uninstall"
+
+
+def test_legacy_home_not_double_listed_when_it_is_the_resolved_home(tmp_path, monkeypatch):
+    legacy = tmp_path / ".tokenpak"
+    (legacy).mkdir()
+    (legacy / "config.json").write_text("{}")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(U, "_external_state_paths", U._external_state_paths)
+    from tokenpak import _paths
+
+    monkeypatch.setattr(_paths, "home", lambda: legacy)
+    assert legacy not in U._external_state_paths()
+
+
+# M3 — the printed restore command must actually restore.
+def test_archive_round_trips_to_the_documented_location(home, tmp_path):
+    """`tar -xzf <archive> -C ~` must land every member back where it came from."""
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json.bak").write_text('{"env": {"SENTINEL": "x"}}')
+    dest = tmp_path / "b.tar.gz"
+
+    ok, _ = U._create_backup(home, dest, U._external_state_paths())
+    assert ok
+
+    restore_root = tmp_path / "restored"
+    restore_root.mkdir()
+    with tarfile.open(dest, "r:gz") as tar:
+        tar.extractall(restore_root, filter="data")
+
+    # Exactly the layout `-C ~` produces: no synthetic prefix directory.
+    assert (restore_root / ".tpk" / "config.yaml").read_text() == "profile: balanced"
+    assert (restore_root / ".claude" / "settings.json.bak").exists()
+    assert not (restore_root / "external").exists(), (
+        "an 'external/' prefix makes the documented restore command wrong"
+    )

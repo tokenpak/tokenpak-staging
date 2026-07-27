@@ -344,6 +344,7 @@ def _external_state_paths(include_client_backup: bool = True) -> "list[Path]":
     consciously-retained backups after a purge, and it is the user's last way
     back to their pre-install client settings.
     """
+    from ... import _paths
     from . import install as _install
 
     candidates = [
@@ -351,9 +352,60 @@ def _external_state_paths(include_client_backup: bool = True) -> "list[Path]":
         Path.home() / ".config" / "tokenpak.env",  # env overrides
         _install._systemd_unit_path(),  # user service unit
     ]
+    # A split install leaves a second home behind. The resolver picks ONE, so
+    # purging only that one left the other fully intact and unarchived — config,
+    # license and the companion databases included.
+    legacy = Path.home() / _paths.LEGACY_DIRNAME
+    try:
+        if legacy.exists() and legacy.resolve() != _paths.home().resolve():
+            candidates.append(legacy)
+    except (OSError, RuntimeError):  # pragma: no cover - defensive
+        pass
     if include_client_backup:
         candidates.append(_client_config_backup())
     return [p for p in candidates if p.exists() or p.is_symlink()]
+
+
+def _revert_client(key: str) -> "tuple[str, str]":
+    """Restore one client's config from the snapshot taken at integrate time."""
+    try:
+        from . import integrate as _integrate
+
+        integration = _integrate._find(key)
+        if integration is None:
+            return _OUTCOME_NOOP, f"{key} is not a known integration"
+        result = _integrate._revert_integration(integration)
+    except Exception as exc:
+        return _OUTCOME_FAIL, f"{key} revert error: {exc}"
+    if getattr(result, "ok", False):
+        return _OUTCOME_DONE, getattr(result, "summary", f"{key} reverted")
+    return _OUTCOME_FAIL, getattr(result, "error", None) or f"{key} revert failed"
+
+
+def _revertable_client_integrations() -> "list[tuple[str, Path]]":
+    """Client configs TokenPak edited that still carry a recoverable snapshot.
+
+    Un-routing covered Claude Code only, so a purge left other clients pointing
+    at a proxy that no longer exists — a broken reference in a file TokenPak
+    does not own.
+    """
+    out: "list[tuple[str, Path]]" = []
+    try:
+        from . import integrate as _integrate
+
+        for integration in _integrate.INTEGRATIONS:
+            locator = getattr(integration, "backup_locator", None)
+            if locator is None:
+                continue
+            try:
+                bak = locator()
+            except Exception:  # pragma: no cover - defensive
+                continue
+            if bak and Path(bak).exists():
+                out.append((integration.key, Path(bak)))
+    except Exception:  # pragma: no cover - registry shape is not load-bearing
+        return []
+    return out
 
 
 def _purge_data_inventory(home: Path) -> "list[str]":
@@ -490,10 +542,17 @@ def _create_backup(home: Path, dest: Path, extras: "list[Path]") -> "tuple[bool,
         return ti
 
     def _arcname(p: Path) -> str:
+        """Archive paths RELATIVE TO THE USER'S HOME.
+
+        An ``external/`` prefix made the printed restore command wrong: it put
+        the client-config snapshot at ``~/external/.claude/...`` instead of
+        ``~/.claude/...``. Storing the real relative path means the documented
+        ``tar -xzf <archive> -C ~`` restores every member where it belongs.
+        """
         try:
-            return f"external/{p.relative_to(Path.home())}"
+            return str(p.relative_to(Path.home()))
         except ValueError:
-            return f"external/{p.name}"
+            return f"outside-home/{p.name}"
 
     # Files the archive must be able to restore. Anything deletable and not
     # deliberately excluded has to appear, or the "verified backup" is a
@@ -625,6 +684,21 @@ def _build_plan(
         )
     )
     ops.append(Op(describe="Stop running proxy (if any)", run=_stop_proxy, phase="soft"))
+
+    if purge:
+        # Un-routing above covers Claude Code only. Every other client we wrote
+        # into keeps pointing at a proxy that is about to stop existing, which
+        # is a broken reference left in a file TokenPak does not own.
+        for key, bak in _revertable_client_integrations():
+            if key == "claude-code":
+                continue  # already handled by _unroute_settings
+            ops.append(
+                Op(
+                    describe=f"Revert {key} integration (restore {bak.name})",
+                    run=partial(_revert_client, key),
+                    phase="soft",
+                )
+            )
 
     retained: list[Path] = []
     if purge:
@@ -1012,6 +1086,14 @@ def run_uninstall(
     # In a dry run no backup is taken, so model the intent the flags express:
     # the offered default is yes, and only --no-backup opts out.
     archived = (not no_backup) if dry_run else want_backup
+    if purge and dry_run:
+        planned_dest = (
+            Path(backup).expanduser()
+            if backup
+            else (_default_backup_path() if not no_backup else None)
+        )
+        if planned_dest is not None:
+            print(_c(f"  Backup would be written to: {planned_dest}", _DIM))
     ops, retained_paths = _build_plan(
         hard=hard, keep_data=keep_data, home=home, purge=purge, archived=archived
     )
