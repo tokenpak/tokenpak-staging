@@ -262,6 +262,19 @@ tokenpak = [
 [tool.setuptools.dynamic]
 version = {attr = "tokenpak.__version__"}
 
+[tool.coverage.run]
+# Test code is not production surface and must not sit in the coverage
+# denominator. `--cov=tokenpak` measures the whole package, which contains an
+# in-package test tree at `tokenpak/tests/`. Those files are never executed —
+# `[tool.pytest.ini_options] testpaths` collects only the top-level `tests/`
+# directory — so every statement in them counted as missed production code.
+#
+# That single directory was 32,005 statements, 40% of the reported coverage
+# gap, understating the measured figure by roughly 12 points.
+omit = [
+    "tokenpak/tests/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = [
     "tests",
