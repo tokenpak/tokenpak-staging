@@ -99,3 +99,49 @@ def test_both_surfaces_name_the_user_content_hard_destroys(destroyed, monkeypatc
     monkeypatch.setattr(U.sys.stdout, "isatty", lambda: False, raising=False)
     U.run_uninstall()
     assert destroyed.lower() in capsys.readouterr().err.lower()
+
+
+def test_messages_hedge_so_they_cannot_go_stale(monkeypatch, capsys):
+    """Both surfaces must hedge, because neither is coupled to the purge list.
+
+    This message was wrong three times running: once by overstating what
+    `--hard` removes, once by understating it, and once by reading as an
+    exhaustive list that covered 13 of 18 entries. Nothing links the prose to
+    `_HARD_PURGE_NAMES`, so any addition to that tuple silently makes both
+    surfaces stale again. The hedge is what makes them true independent of the
+    list; this test is what stops the hedge being dropped as redundant.
+    """
+    monkeypatch.setattr("builtins.input", lambda *_a: "")
+    U._choose_mode()
+    assert "including" in capsys.readouterr().out
+
+    monkeypatch.setattr(U.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(U.sys.stdout, "isatty", lambda: False, raising=False)
+    U.run_uninstall()
+    assert "including" in capsys.readouterr().err
+
+
+def test_user_facing_purge_entries_are_named_or_hedged(monkeypatch, capsys):
+    """Drift guard: a new user-facing purge target must reach the messages.
+
+    Names that a user would recognise as their own content are called out
+    individually; the rest rely on the hedge. If someone adds a user-facing
+    entry to `_HARD_PURGE_NAMES`, this fails and points at the prose.
+    """
+    monkeypatch.setattr("builtins.input", lambda *_a: "")
+    U._choose_mode()
+    text = capsys.readouterr().out.lower()
+
+    # Entries a user authored or paid for, which must be named explicitly.
+    must_name = {
+        "paks": "paks",
+        "templates": "templates",
+        "cards": "cards",
+        "license.json": "license",
+    }
+    for entry, word in must_name.items():
+        assert entry in U._HARD_PURGE_NAMES, f"{entry} left the purge list — update this test"
+        assert word in text, f"{entry} is destroyed but no longer named in the prompt"
+
+    # Everything else is covered by the hedge rather than enumerated.
+    assert "including" in text
