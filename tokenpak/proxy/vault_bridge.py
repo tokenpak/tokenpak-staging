@@ -32,10 +32,16 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast
 
 from tokenpak.core.config_loader import get as _cfg
 from tokenpak.vault.project_scope import (
-    PROJECT_FILTERING_CAPABILITY,
-    SCOPE_RESOLUTION_CAPABILITY,
-    AmbiguityPolicy,
-    ProjectScopeCapabilities,
+    PROJECT_FILTERING_CAPABILITY as _PROJECT_FILTERING_CAPABILITY,
+)
+from tokenpak.vault.project_scope import (
+    SCOPE_RESOLUTION_CAPABILITY as _SCOPE_RESOLUTION_CAPABILITY,
+)
+from tokenpak.vault.project_scope import (
+    AmbiguityPolicy as _AmbiguityPolicy,
+)
+from tokenpak.vault.project_scope import (
+    ProjectScopeCapabilities as _ProjectScopeCapabilities,
 )
 from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 
@@ -296,7 +302,7 @@ def _project_scope_filter(
     return scope_filter if scope_filter.active else None
 
 
-class VaultIndex(ProjectScopeCapabilities):
+class VaultIndex(_ProjectScopeCapabilities):
     """
     Read-only BM25-searchable index loaded from .tokenpak/index.json + blocks/.
     Reloads periodically to pick up git-pulled changes.
@@ -309,7 +315,7 @@ class VaultIndex(ProjectScopeCapabilities):
 
     project_scope_implementation_id = "json_blocks"
     project_scope_capabilities = frozenset(
-        {PROJECT_FILTERING_CAPABILITY, SCOPE_RESOLUTION_CAPABILITY}
+        {_PROJECT_FILTERING_CAPABILITY, _SCOPE_RESOLUTION_CAPABILITY}
     )
 
     def search_scoped(
@@ -321,7 +327,7 @@ class VaultIndex(ProjectScopeCapabilities):
         project: str | None = None,
         cwd: str | None = None,
         exclude_roles: "Sequence[str] | None" = None,
-        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
+        on_ambiguous: str = _AmbiguityPolicy.SUPPRESS,
     ) -> "ScopedSearchResult":
         """Scope-resolving search — parity with the SQLite backend's contract."""
         from tokenpak.vault.sqlite_backend import ScopedSearchResult
@@ -365,7 +371,7 @@ class VaultIndex(ProjectScopeCapabilities):
         project: str | None = None,
         cwd: str | None = None,
         exclude_roles: "Sequence[str] | None" = None,
-        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
+        on_ambiguous: str = _AmbiguityPolicy.SUPPRESS,
     ) -> "tuple[ScopeResolution, bool, tuple[str, ...]]":
         """Decide the scope for a query: ``(resolution, suppressed, spanned)``.
 
@@ -375,7 +381,6 @@ class VaultIndex(ProjectScopeCapabilities):
         """
         from tokenpak.vault.project_scope import (
             SHARED,
-            AmbiguityPolicy,
             ScopeConflictError,
             ScopeResolution,
             spanned_projects,
@@ -412,10 +417,10 @@ class VaultIndex(ProjectScopeCapabilities):
         probed = self.search(query, 0, min_score, exclude_roles=exclude_roles)
         spanned = spanned_projects(registry, [str(b.get("source_path", "")) for b, _ in probed])
 
-        if len(spanned) <= 1 or on_ambiguous == AmbiguityPolicy.UNSCOPED:
+        if len(spanned) <= 1 or on_ambiguous == _AmbiguityPolicy.UNSCOPED:
             return scope, False, spanned
 
-        if on_ambiguous == AmbiguityPolicy.DOMINANT:
+        if on_ambiguous == _AmbiguityPolicy.DOMINANT:
             mass: dict[str, float] = {}
             for block, score in probed:
                 ids = registry.resolve_path(str(block.get("source_path", ""))).project_ids
@@ -1191,7 +1196,7 @@ class VaultIndex(ProjectScopeCapabilities):
         *,
         project: str | None = None,
         cwd: str | None = None,
-        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
+        on_ambiguous: str = _AmbiguityPolicy.SUPPRESS,
     ) -> tuple[str, int, list[str]]:
         """
         Search vault and compile injection text within budget.

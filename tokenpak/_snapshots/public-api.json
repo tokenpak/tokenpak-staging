@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-07-26T16:01:58Z",
+  "generated_at": "2026-07-27T23:31:31Z",
   "package_version": "1.16.0",
   "symbols": [
     {
@@ -17285,6 +17285,10 @@
     },
     {
       "module": "tokenpak.vault.backend_protocol",
+      "name": "ProjectScopeCapabilities"
+    },
+    {
+      "module": "tokenpak.vault.backend_protocol",
       "name": "RetrievalBackend"
     },
     {
@@ -17782,6 +17786,70 @@
     {
       "module": "tokenpak.vault.progressive_disclosure",
       "name": "render_section_map"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "AmbiguityPolicy"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "PROJECT_FILTERING_CAPABILITY"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "PathMembership"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "Project"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ProjectRegistry"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ProjectRoot"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ProjectScopeCapabilities"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ProjectScopeImplementation"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "SCOPE_RESOLUTION_CAPABILITY"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "SHARED"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ScopeConflictError"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ScopeFilter"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "ScopeResolution"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "discover_project_scope_implementations"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "normalize_path"
+    },
+    {
+      "module": "tokenpak.vault.project_scope",
+      "name": "spanned_projects"
     },
     {
       "module": "tokenpak.vault.query_expansion",
@@ -18418,6 +18486,10 @@
     {
       "module": "tokenpak.vault.sqlite_backend",
       "name": "SQLiteRetrievalBackend"
+    },
+    {
+      "module": "tokenpak.vault.sqlite_backend",
+      "name": "ScopedSearchResult"
     },
     {
       "module": "tokenpak.vault.symbol_extraction",

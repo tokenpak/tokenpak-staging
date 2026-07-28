@@ -52,9 +52,10 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Optional, cast
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Iterable, Optional, cast
 
-if TYPE_CHECKING:
+if _TYPE_CHECKING:
     from tokenpak.vault.project_scope import ProjectRegistry
 
 SCHEMA_VERSION = 1
