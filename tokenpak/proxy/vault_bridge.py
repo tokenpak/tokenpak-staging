@@ -294,7 +294,14 @@ def _project_scope_filter(
     project: str | None, exclude_roles: "Sequence[str] | None"
 ) -> "ScopeFilter | None":
     """Build a membership predicate, or None when nothing would be filtered."""
-    registry, _ = _get_project_registry()
+    registry, error = _get_project_registry()
+    if error is not None:
+        from tokenpak.vault.project_scope import ScopeConflictError
+
+        raise ScopeConflictError(
+            f"project registry failed to load ({error}); refusing to answer "
+            "rather than filtering with stale membership"
+        )
     if not registry.active and not project:
         return None
     from tokenpak.vault.project_scope import ScopeFilter

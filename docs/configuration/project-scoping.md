@@ -80,6 +80,12 @@ exactly as before, and retrieval stays unscoped.
 | `roots[].shared` | Boolean. `true` makes the root visible from every project's scope. Quoted strings are invalid. |
 | `roots[].projects` | Explicit membership list, for a root genuinely shared by named projects. |
 
+Project ids, aliases, root paths, roles, and entries in `roots[].projects` are
+strings, not values TokenPak coerces into strings. Aliases and paths must also
+be non-empty. Invalid types make the registry unreadable and scoped retrieval
+refuses service; for example, `aliases: [7]` cannot mint a numeric query signal,
+and `role: [archive]` cannot evade the default archive exclusion.
+
 ### Overlap and multiple directories
 
 Two rules keep overlapping declarations safe:
@@ -136,6 +142,9 @@ If no project registry is declared, compatibility behavior applies only when
 the caller supplied no project signal. An explicit project, an environment pin,
 or a working directory is a request for scoped retrieval; TokenPak refuses that
 request rather than silently discarding it and returning unscoped results.
+If a declared registry becomes unreadable, both direct `search(project=...)`
+filtering and ambiguity-resolving entry points refuse instead of consulting
+last-known-good membership as though it were current.
 
 ## Practical guidance
 

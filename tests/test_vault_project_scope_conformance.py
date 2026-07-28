@@ -297,6 +297,42 @@ def test_broken_then_fixed_registry_recovers_across_matrix(
     ).results
 
 
+@pytest.mark.parametrize("entry_point", ["search", "compile_injection"])
+def test_broken_registry_refuses_direct_project_filter_across_matrix(
+    backend_case: BackendCase,
+    scoped_vault: tuple[Path, Path],
+    tmp_path: Path,
+    entry_point: str,
+) -> None:
+    """The lower-level filtering contract must not use stale membership."""
+    _, config_path = scoped_vault
+    original = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        original.replace(
+            f"      - path: {tmp_path}/workspace/bluefin\n",
+            f"      - path: {tmp_path}/workspace/acme\n",
+        ),
+        encoding="utf-8",
+    )
+    _force_reload(backend_case.backend)
+
+    if entry_point == "search":
+        with pytest.raises(ScopeConflictError):
+            backend_case.backend.search(
+                COLLIDING_QUERY,
+                min_score=0.0,
+                project="acme",
+            )
+    else:
+        # Automatic injection has a non-throwing public contract: a scope
+        # refusal is represented by contributing no content, tokens, or refs.
+        assert backend_case.backend.compile_injection(
+            COLLIDING_QUERY,
+            min_score=0.0,
+            project="acme",
+        ) == ("", 0, [])
+
+
 @pytest.mark.parametrize("signal", ["explicit", "environment", "cwd"])
 def test_any_scope_signal_without_registry_refuses_across_matrix(
     backend_case: BackendCase,

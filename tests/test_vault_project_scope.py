@@ -365,6 +365,27 @@ def test_shared_root_carries_the_sentinel(tmp_path):
             [{"id": "a", "roots": [{"path": "/x", "shared": "false"}]}],
             id="shared-must-be-boolean",
         ),
+        pytest.param([{"id": 123, "roots": []}], id="project-id-must-be-string"),
+        pytest.param(
+            [{"id": "a", "aliases": "", "roots": []}],
+            id="empty-alias-is-not-a-query-wildcard",
+        ),
+        pytest.param(
+            [{"id": "a", "aliases": [123], "roots": []}],
+            id="alias-must-be-string",
+        ),
+        pytest.param(
+            [{"id": "a", "roots": [{"path": 123}]}],
+            id="root-path-must-be-string",
+        ),
+        pytest.param(
+            [{"id": "a", "roots": [{"path": "/x", "role": ["archive"]}]}],
+            id="root-role-must-be-string",
+        ),
+        pytest.param(
+            [{"id": "a", "roots": [{"path": "/x", "projects": [123]}]}],
+            id="root-project-membership-must-be-string",
+        ),
         pytest.param(
             [{"id": "a", "roots": [{"path": "/x", "projects": ["a", "ghost"]}]}],
             id="undeclared-project-reference",

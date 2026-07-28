@@ -354,7 +354,12 @@ class ProjectRegistry:
             if not isinstance(item, Mapping) or "id" not in item:
                 raise ScopeConflictError(f"vault.yaml: invalid project entry: {item!r}")
 
-            pid = str(item["id"]).strip().lower()
+            raw_pid = item["id"]
+            if not isinstance(raw_pid, str):
+                raise ScopeConflictError(
+                    f"vault.yaml: project id must be a string, got {raw_pid!r}"
+                )
+            pid = raw_pid.strip().lower()
             if not _VALID_ID.match(pid):
                 raise ScopeConflictError(
                     f"vault.yaml: invalid project id {pid!r} "
@@ -365,7 +370,7 @@ class ProjectRegistry:
             if pid in projects:
                 raise ScopeConflictError(f"vault.yaml: duplicate project id {pid!r}")
 
-            aliases = _str_tuple(item.get("aliases"))
+            aliases = _str_tuple(item.get("aliases"), field=f"project {pid!r} aliases")
             projects[pid] = Project(id=pid, aliases=aliases)
 
             for raw_root in _iter_roots(item.get("roots"), pid):
@@ -630,14 +635,31 @@ def _fmt(members: Iterable[str]) -> str:
     return ", ".join(sorted(members)) or "(none)"
 
 
-def _str_tuple(value: object) -> tuple[str, ...]:
+def _str_tuple(value: object, *, field: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
-        return (value.strip().lower(),)
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ScopeConflictError(f"vault.yaml: {field} cannot contain an empty value")
+        return (normalized,)
     if isinstance(value, (list, tuple)):
-        return tuple(str(v).strip().lower() for v in value if str(v).strip())
-    raise ScopeConflictError(f"vault.yaml: expected a string or list, got {value!r}")
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ScopeConflictError(
+                    f"vault.yaml: {field} values must be strings, got {item!r}"
+                )
+            clean = item.strip().lower()
+            if not clean:
+                raise ScopeConflictError(
+                    f"vault.yaml: {field} cannot contain an empty value"
+                )
+            normalized.append(clean)
+        return tuple(normalized)
+    raise ScopeConflictError(
+        f"vault.yaml: {field} must be a string or list of strings, got {value!r}"
+    )
 
 
 def _iter_roots(value: object, pid: str) -> list[Mapping[str, object]]:
@@ -659,9 +681,17 @@ def _iter_roots(value: object, pid: str) -> list[Mapping[str, object]]:
 def _build_root(raw: Mapping[str, object], *, owner: str) -> ProjectRoot:
     if "path" not in raw:
         raise ScopeConflictError(f"vault.yaml: project {owner!r}: root missing 'path'")
+    path = raw["path"]
+    if not isinstance(path, str) or not path.strip():
+        raise ScopeConflictError(
+            f"vault.yaml: project {owner!r}: root path must be a non-empty string, "
+            f"got {path!r}"
+        )
 
     members: list[str] = []
-    declared = _str_tuple(raw.get("projects"))
+    declared = _str_tuple(
+        raw.get("projects"), field=f"project {owner!r} root projects"
+    )
     members.extend(declared or (owner,))
     shared = raw.get("shared", False)
     if not isinstance(shared, bool):
@@ -672,12 +702,18 @@ def _build_root(raw: Mapping[str, object], *, owner: str) -> ProjectRoot:
     if shared:
         members.append(SHARED)
 
+    role = raw.get("role", "unspecified")
+    if not isinstance(role, str):
+        raise ScopeConflictError(
+            f"vault.yaml: project {owner!r}: root role must be a string, got {role!r}"
+        )
+
     # Deduplicate while preserving order so the stored rows are stable.
     seen: set[str] = set()
     ordered = tuple(m for m in members if not (m in seen or seen.add(m)))
 
     return ProjectRoot(
-        path=normalize_path(str(raw["path"])),
-        role=str(raw.get("role", "unspecified")).strip().lower() or "unspecified",
+        path=normalize_path(path),
+        role=role.strip().lower() or "unspecified",
         projects=ordered,
     )

@@ -28,7 +28,9 @@ unchanged, so existing configs load untouched):
   resolve deterministically regardless of declaration order.
 - Declaring the same normalized path more than once is a load-time error rather
   than a membership or role tiebreak. `shared` accepts booleans only, so a
-  quoted `"false"` cannot accidentally grant universal membership.
+  quoted `"false"` cannot accidentally grant universal membership. Project
+  ids, aliases, root paths, roles, and named memberships accept strings only;
+  blank aliases and paths are rejected rather than becoming wildcard signals.
 - Roots carry a role; archived copies are excluded from results by default so
   stale duplicates cannot outrank the live tree.
 
@@ -44,8 +46,10 @@ scope request from `project`, `$TOKENPAK_PROJECT`, or `cwd` that the active
 retrieval backend cannot honor returns `501
 scoping_unsupported` instead of silently returning unscoped results, and a
 project registry that is present but unreadable causes scoped queries to be
-refused while preserving the last known-good membership. SQLite registry edits
-also block scoped queries until the matching membership transaction commits.
+refused while preserving the last known-good membership. That refusal applies
+to direct `search(project=...)` filtering as well as ambiguity-resolving search
+and automatic injection. SQLite registry edits also block scoped queries until
+the matching membership transaction commits.
 
 Every public retrieval entry point uses the same rule. Vault-Pak search routes
 through ambiguity-aware scoped search; Pak inspection authorizes against the
