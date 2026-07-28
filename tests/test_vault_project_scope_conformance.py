@@ -364,11 +364,14 @@ def test_public_pak_search_uses_scope_resolution_across_matrix(
 
     # No scope signal over a colliding corpus fails closed rather than
     # returning a labelled-but-still-blended Pak list.
-    assert search_as_paks(
-        COLLIDING_QUERY,
-        min_score=0.0,
-        vault_index=backend_case.backend,
-    ) == []
+    assert (
+        search_as_paks(
+            COLLIDING_QUERY,
+            min_score=0.0,
+            vault_index=backend_case.backend,
+        )
+        == []
+    )
 
     scoped = search_as_paks(
         COLLIDING_QUERY,
@@ -459,6 +462,7 @@ def test_sqlite_valid_registry_edit_blocks_until_membership_sync_commits(
 
 def test_sqlite_reload_serializes_registry_publication_and_membership_sync(
     backend_case: BackendCase,
+    scoped_vault: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An older valid reload cannot clear a later unreadable-registry error."""
@@ -468,19 +472,62 @@ def test_sqlite_reload_serializes_registry_publication_and_membership_sync(
     from tokenpak.vault import sqlite_backend
 
     backend = backend_case.backend
+    _, config_path = scoped_vault
     backend._check_interval = 0
+    config_path.write_text(
+        "version: 1\n"
+        "paths: []\n"
+        "projects:\n"
+        "  - id: acme\n"
+        "    roots:\n"
+        f"      - path: {config_path.parent}/workspace/bluefin\n"
+        "  - id: bluefin\n"
+        "    roots:\n"
+        f"      - path: {config_path.parent}/workspace/acme\n",
+        encoding="utf-8",
+    )
+    changed_registry, changed_error = sqlite_backend._load_registry()
+    assert changed_error is None
+    assert changed_registry != backend.registry
+
     first_loader_entered = threading.Event()
-    second_loader_entered = threading.Event()
     release_first_loader = threading.Event()
-    state_lock = threading.Lock()
+    second_lock_attempted = threading.Event()
+    second_lock_blocked = threading.Event()
+    second_lock_acquired_without_wait = threading.Event()
+    counter_lock = threading.Lock()
     calls = 0
     active_loaders = 0
     max_active_loaders = 0
+    membership_syncs = 0
     thread_errors: list[BaseException] = []
+
+    class ObservedReloadLock:
+        """Expose the second caller's lock boundary without timing guesses."""
+
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def __enter__(self):
+            if threading.current_thread().name == "later-broken-reload":
+                second_lock_attempted.set()
+                if self._inner.acquire(blocking=False):
+                    second_lock_acquired_without_wait.set()
+                else:
+                    second_lock_blocked.set()
+                    self._inner.acquire()
+            else:
+                self._inner.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            self._inner.release()
+
+    backend._reload_lock = ObservedReloadLock(backend._reload_lock)
 
     def ordered_load():
         nonlocal calls, active_loaders, max_active_loaders
-        with state_lock:
+        with counter_lock:
             calls += 1
             call = calls
             active_loaders += 1
@@ -490,12 +537,18 @@ def test_sqlite_reload_serializes_registry_publication_and_membership_sync(
                 first_loader_entered.set()
                 if not release_first_loader.wait(timeout=5):
                     raise TimeoutError("first registry load was not released")
-                return backend.registry, None
-            second_loader_entered.set()
+                return changed_registry, None
             return backend.registry.__class__(), "simulated unreadable vault.yaml"
         finally:
-            with state_lock:
+            with counter_lock:
                 active_loaders -= 1
+
+    original_resolve_memberships = backend._resolve_memberships
+
+    def traced_membership_sync(conn):
+        nonlocal membership_syncs
+        membership_syncs += 1
+        return original_resolve_memberships(conn)
 
     def reload_in_thread() -> None:
         try:
@@ -504,29 +557,176 @@ def test_sqlite_reload_serializes_registry_publication_and_membership_sync(
             thread_errors.append(exc)
 
     monkeypatch.setattr(sqlite_backend, "_load_registry", ordered_load)
-    first = threading.Thread(target=reload_in_thread)
-    second = threading.Thread(target=reload_in_thread)
+    monkeypatch.setattr(backend, "_resolve_memberships", traced_membership_sync)
+    first = threading.Thread(target=reload_in_thread, name="older-valid-reload")
+    second = threading.Thread(target=reload_in_thread, name="later-broken-reload")
     first.start()
     assert first_loader_entered.wait(timeout=5)
     second.start()
 
-    # An unlocked implementation enters the second loader while the older
-    # valid load is still paused. The serialized implementation cannot.
-    second_loader_entered.wait(timeout=0.25)
+    assert second_lock_attempted.wait(timeout=5)
+    second_was_blocked = second_lock_blocked.wait(timeout=5)
     release_first_loader.set()
     first.join(timeout=5)
     second.join(timeout=5)
 
+    assert second_was_blocked
     assert not first.is_alive()
     assert not second.is_alive()
     assert thread_errors == []
     assert calls == 2
     assert max_active_loaders == 1
+    assert not second_lock_acquired_without_wait.is_set()
+    assert membership_syncs == 1
+
+    conn = backend._connect()
+    try:
+        rows = conn.execute(
+            "SELECT block_id, project_id FROM block_projects "
+            "WHERE block_id IN ('acme-pr100', 'bluefin-pr100')"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert set(rows) == {("acme-pr100", "bluefin"), ("bluefin-pr100", "acme")}
+
     assert backend._registry_error == "simulated unreadable vault.yaml"
     with pytest.raises(ScopeConflictError, match="simulated unreadable"):
         backend.search_scoped(COLLIDING_QUERY, project="acme", min_score=0.0)
     with pytest.raises(ScopeConflictError, match="simulated unreadable"):
         backend.search(COLLIDING_QUERY, project="acme", min_score=0.0)
+
+
+def test_sqlite_scoped_search_observes_one_registry_generation(
+    backend_case: BackendCase,
+    scoped_vault: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scope resolution and membership filtering cannot straddle a reload."""
+    if backend_case.name != "sqlite":
+        pytest.skip("NOT APPLICABLE: only SQLite persists a membership join table")
+
+    backend = backend_case.backend
+    _, config_path = scoped_vault
+    backend._check_interval = 0
+    config_path.write_text(
+        "version: 1\n"
+        "paths: []\n"
+        "projects:\n"
+        "  - id: acme\n"
+        "    roots:\n"
+        f"      - path: {config_path.parent}/workspace/bluefin\n"
+        "  - id: bluefin\n"
+        "    roots:\n"
+        f"      - path: {config_path.parent}/workspace/acme\n",
+        encoding="utf-8",
+    )
+
+    scope_resolved = threading.Event()
+    reload_lock_decided = threading.Event()
+    reload_finished = threading.Event()
+    reload_outcome: list[str] = []
+    membership_syncs = 0
+    results = []
+    thread_errors: list[BaseException] = []
+
+    class ObservedStateLock:
+        """Classify whether the writer blocks at the real lock boundary."""
+
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def __enter__(self):
+            if threading.current_thread().name == "registry-reload":
+                if self._inner.acquire(blocking=False):
+                    reload_outcome.append("acquired")
+                else:
+                    reload_outcome.append("blocked")
+                    reload_lock_decided.set()
+                    self._inner.acquire()
+                    return self
+                reload_lock_decided.set()
+            else:
+                self._inner.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            self._inner.release()
+            if threading.current_thread().name == "registry-reload":
+                reload_finished.set()
+
+    backend._reload_lock = ObservedStateLock(backend._reload_lock)
+
+    registry_class = type(backend.registry)
+    original_resolve_scope = registry_class.resolve_scope
+
+    def paused_resolve_scope(registry, *args, **kwargs):
+        resolved = original_resolve_scope(registry, *args, **kwargs)
+        if threading.current_thread().name == "scoped-reader":
+            scope_resolved.set()
+            if not reload_lock_decided.wait(timeout=5):
+                raise TimeoutError("reload did not reach the state-lock boundary")
+            # On the broken implementation the writer acquires immediately;
+            # wait for its real membership transaction so the mixed-generation
+            # result is forced rather than left to scheduler timing.
+            if reload_outcome == ["acquired"] and not reload_finished.wait(timeout=5):
+                raise TimeoutError("unblocked reload did not complete")
+        return resolved
+
+    original_resolve_memberships = backend._resolve_memberships
+
+    def traced_membership_sync(conn):
+        nonlocal membership_syncs
+        membership_syncs += 1
+        return original_resolve_memberships(conn)
+
+    monkeypatch.setattr(registry_class, "resolve_scope", paused_resolve_scope)
+    monkeypatch.setattr(backend, "_resolve_memberships", traced_membership_sync)
+
+    def read_in_thread() -> None:
+        try:
+            results.append(
+                backend.search_scoped(
+                    COLLIDING_QUERY,
+                    min_score=0.0,
+                    cwd=str(config_path.parent / "workspace" / "acme"),
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001 - surfaced in the main thread
+            thread_errors.append(exc)
+
+    def reload_in_thread() -> None:
+        try:
+            backend.maybe_reload()
+        except BaseException as exc:  # noqa: BLE001 - surfaced in the main thread
+            thread_errors.append(exc)
+
+    reader = threading.Thread(target=read_in_thread, name="scoped-reader")
+    reloader = threading.Thread(target=reload_in_thread, name="registry-reload")
+    reader.start()
+    assert scope_resolved.wait(timeout=5)
+    reloader.start()
+    assert reload_lock_decided.wait(timeout=5)
+    reader.join(timeout=5)
+    reloader.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not reloader.is_alive()
+    assert thread_errors == []
+    assert reload_outcome == ["blocked"]
+    assert membership_syncs == 1
+    assert len(results) == 1
+    scoped = results[0]
+    assert scoped.scope is not None
+    assert (scoped.scope.project_id, scoped.scope.source) == ("acme", "cwd")
+    assert all("/workspace/acme/" in path or "/shared/" in path for path in _paths(scoped.results))
+
+    # Prove the writer performed the opposite real transition after the old
+    # read completed; the test did not pass by re-publishing identical state.
+    final_scope = backend.registry.resolve_scope(cwd=str(config_path.parent / "workspace" / "acme"))
+    assert final_scope.project_id == "bluefin"
+    acme_after = _paths(backend.search(COLLIDING_QUERY, min_score=0.0, project="acme"))
+    assert any("/workspace/bluefin/" in path for path in acme_after)
+    assert all("/workspace/acme/" not in path for path in acme_after)
 
 
 def test_sdk_mcp_handlers_fail_closed_and_accept_explicit_scope(
@@ -895,15 +1095,11 @@ def test_pak_inspect_authorizes_against_current_registry_after_valid_edit(
         lambda handler, status, body: responses.append(("json", status, body)),
     )
 
-    app_endpoints._handle_pak_inspect(
-        object(), f"vault:{block_id}", {"project": ["acme"]}
-    )
+    app_endpoints._handle_pak_inspect(object(), f"vault:{block_id}", {"project": ["acme"]})
     assert responses == [("error", 404, "block_not_in_project")]
 
     responses.clear()
-    app_endpoints._handle_pak_inspect(
-        object(), f"vault:{block_id}", {"project": ["bluefin"]}
-    )
+    app_endpoints._handle_pak_inspect(object(), f"vault:{block_id}", {"project": ["bluefin"]})
     assert responses[0][0:2] == ("json", 200)
     assert isinstance(responses[0][2], dict)
     assert responses[0][2]["scope"]["project"] == "bluefin"
@@ -974,9 +1170,7 @@ def test_pak_inspect_honors_full_registry_membership(
 
     for project in ("acme", "bluefin"):
         responses.clear()
-        app_endpoints._handle_pak_inspect(
-            object(), f"vault:{block_id}", {"project": [project]}
-        )
+        app_endpoints._handle_pak_inspect(object(), f"vault:{block_id}", {"project": [project]})
         assert responses[0][0:2] == ("json", 200)
 
 

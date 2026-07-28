@@ -155,9 +155,7 @@ def test_auto_injection_fails_closed(vault):
 
 def test_explicit_scope_excludes_every_other_project(vault):
     backend, tmp_path = vault
-    scoped = backend.search_scoped(
-        COLLIDING_QUERY, top_k=10, min_score=0.0, project="corvid-shop"
-    )
+    scoped = backend.search_scoped(COLLIDING_QUERY, top_k=10, min_score=0.0, project="corvid-shop")
     assert scoped.results
     for path in _paths(scoped.results, tmp_path):
         assert "corvid-shop" in path or "/shared/" in path
@@ -313,9 +311,7 @@ def test_longest_prefix_wins_for_nested_roots(tmp_path):
 
 def test_sibling_prefix_does_not_match(tmp_path):
     """``/srv/foo`` must not match root ``/srv/fo`` the way a string prefix would."""
-    registry = ProjectRegistry.from_config(
-        [{"id": "fo", "roots": [{"path": f"{tmp_path}/fo"}]}]
-    )
+    registry = ProjectRegistry.from_config([{"id": "fo", "roots": [{"path": f"{tmp_path}/fo"}]}])
     assert registry.resolve_path(f"{tmp_path}/foo/a.md").project_ids == ()
     assert registry.resolve_path(f"{tmp_path}/fo/a.md").project_ids == ("fo",)
 
@@ -391,9 +387,7 @@ def test_shared_root_carries_the_sentinel(tmp_path):
             id="undeclared-project-reference",
         ),
         pytest.param([{"id": "*", "roots": []}], id="reserved-sentinel-as-id"),
-        pytest.param(
-            [{"id": "a", "roots": []}, {"id": "a", "roots": []}], id="duplicate-id"
-        ),
+        pytest.param([{"id": "a", "roots": []}, {"id": "a", "roots": []}], id="duplicate-id"),
         pytest.param([{"id": "Bad Id!", "roots": []}], id="malformed-id"),
         pytest.param([{"roots": []}], id="missing-id"),
         pytest.param([{"id": "a", "roots": [{"role": "workbench"}]}], id="root-missing-path"),
@@ -470,9 +464,7 @@ def test_default_json_blocks_backend_enforces_scope(vault, tmp_path, monkeypatch
     assert index.search_scoped(COLLIDING_QUERY, top_k=1, min_score=0.0).suppressed
 
     # An explicit scope returns only that project (plus shared resources).
-    scoped = index.search_scoped(
-        COLLIDING_QUERY, top_k=10, min_score=0.0, project="corvid-shop"
-    )
+    scoped = index.search_scoped(COLLIDING_QUERY, top_k=10, min_score=0.0, project="corvid-shop")
     assert scoped.results
     for block, _ in scoped.results:
         path = str(block.get("source_path", "")).replace(str(tmp_path), "")

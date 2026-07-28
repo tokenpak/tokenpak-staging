@@ -166,11 +166,12 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         self.tokenpak_dir = Path(tokenpak_dir)
         self.db_path = self.tokenpak_dir / "retrieval.db"
         self._lock = threading.Lock()
-        # Registry publication and its matching membership transaction are one
-        # reload operation. Separate foreground and background callers may both
-        # invoke maybe_reload(); serializing the whole operation prevents an
-        # older successful load from clearing a newer unreadable-registry error.
-        self._reload_lock = threading.Lock()
+        # Registry publication, its matching membership transaction, and every
+        # request that resolves scope from that state form one generation.
+        # The lock is reentrant so a guarded entry point may call another
+        # guarded helper without weakening the reader/writer boundary. Lock
+        # order is always this state lock followed by ``_lock``.
+        self._reload_lock = threading.RLock()
         self._last_checked = 0.0
         self._block_count = 0
         self._token_count = 0
@@ -217,9 +218,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
 
     def _registry_signature(self) -> str:
         """Stable fingerprint of the declared roots and their membership."""
-        parts = [
-            f"{r.path}\x1f{r.role}\x1f{','.join(r.projects)}" for r in self._registry.roots
-        ]
+        parts = [f"{r.path}\x1f{r.role}\x1f{','.join(r.projects)}" for r in self._registry.roots]
         return hashlib.sha256("\x1e".join(parts).encode("utf-8")).hexdigest()[:16]
 
     # ------------------------------------------------------------------
@@ -310,9 +309,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         with self._lock:
             try:
                 self._ensure_schema(conn)
-                row = conn.execute(
-                    "SELECT value FROM meta WHERE key='scope_signature'"
-                ).fetchone()
+                row = conn.execute("SELECT value FROM meta WHERE key='scope_signature'").fetchone()
                 if row and str(row[0]) == signature:
                     self._synced_signature = signature
                     return None
@@ -326,10 +323,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
                 return None
             except sqlite3.Error as exc:
                 conn.rollback()
-                return (
-                    "project membership synchronization failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
+                return f"project membership synchronization failed: {type(exc).__name__}: {exc}"
             finally:
                 conn.close()
 
@@ -347,8 +341,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
             if conn.execute("SELECT 1 FROM block_projects LIMIT 1").fetchone():
                 conn.execute("DELETE FROM block_projects")
                 conn.execute(
-                    "UPDATE blocks SET scope_role='unspecified' "
-                    "WHERE scope_role != 'unspecified'"
+                    "UPDATE blocks SET scope_role='unspecified' WHERE scope_role != 'unspecified'"
                 )
             return
 
@@ -368,8 +361,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         def flush() -> None:
             if memberships:
                 conn.executemany(
-                    "INSERT OR IGNORE INTO block_projects (block_id, project_id) "
-                    "VALUES (?, ?)",
+                    "INSERT OR IGNORE INTO block_projects (block_id, project_id) VALUES (?, ?)",
                     memberships,
                 )
                 memberships.clear()
@@ -432,6 +424,29 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
                 return []
 
     def search_scoped(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: Optional[str] = None,
+        cwd: Optional[str] = None,
+        exclude_roles: Optional[Sequence[str]] = None,
+        on_ambiguous: str = AmbiguityPolicy.SUPPRESS,
+    ) -> ScopedSearchResult:
+        """Resolve and search against one coherent registry generation."""
+        with self._reload_lock:
+            return self._search_scoped_locked(
+                query,
+                top_k,
+                min_score,
+                project=project,
+                cwd=cwd,
+                exclude_roles=exclude_roles,
+                on_ambiguous=on_ambiguous,
+            )
+
+    def _search_scoped_locked(
         self,
         query: str,
         top_k: int = 5,
@@ -543,9 +558,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         try:
             conn = self._connect()
         except sqlite3.Error as exc:
-            raise ScopeConflictError(
-                f"cannot verify project contention: {exc}"
-            ) from exc
+            raise ScopeConflictError(f"cannot verify project contention: {exc}") from exc
         try:
             placeholders = ",".join("?" * len(block_ids))
             rows = conn.execute(
@@ -553,9 +566,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
                 list(block_ids),
             ).fetchall()
         except sqlite3.Error as exc:
-            raise ScopeConflictError(
-                f"cannot verify project contention: {exc}"
-            ) from exc
+            raise ScopeConflictError(f"cannot verify project contention: {exc}") from exc
         finally:
             conn.close()
 
@@ -566,9 +577,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         # given the same vault.yaml and the same query.
         return spanned_projects(self._registry, [str(r[0]) for r in rows])
 
-    def _dominant_project(
-        self, results: Sequence[Tuple[VaultBlock, float]]
-    ) -> Optional[str]:
+    def _dominant_project(self, results: Sequence[Tuple[VaultBlock, float]]) -> Optional[str]:
         """The project holding the most scoring mass in *results*."""
         if not results:
             return None

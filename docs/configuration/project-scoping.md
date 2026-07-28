@@ -158,3 +158,6 @@ last-known-good membership as though it were current.
   registry and membership transaction as one guarded state; if synchronization
   fails, scoped queries are refused until it succeeds. Reload callers are
   serialized, so a slower older reload cannot overwrite a newer config error.
+  Scoped readers hold the same state guard from project resolution through
+  membership filtering, so a request cannot combine an old registry decision
+  with a newly committed membership table.

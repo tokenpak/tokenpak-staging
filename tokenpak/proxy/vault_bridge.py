@@ -263,9 +263,7 @@ _PROJECT_REGISTRY_STATE: "tuple[ProjectRegistry, str | None] | None" = None
 _PROJECT_REGISTRY_LOCK = threading.Lock()
 
 
-def _get_project_registry(
-    *, force_reload: bool = False
-) -> "tuple[ProjectRegistry, str | None]":
+def _get_project_registry(*, force_reload: bool = False) -> "tuple[ProjectRegistry, str | None]":
     """Load or refresh the project registry, preserving the last good value.
 
     Searches read the cached value; the normal index reload timer calls this

@@ -97,9 +97,7 @@ def test_vault_search_forwards_companion_environment_pin(monkeypatch) -> None:
     )
 
     tools._handle_vault_search(None, {"query": "secret"})
-    assert calls == [
-        ("/tpk/v1/vault/search", {"q": "secret", "limit": 5, "project": "acme"})
-    ]
+    assert calls == [("/tpk/v1/vault/search", {"q": "secret", "limit": 5, "project": "acme"})]
 
 
 def test_vault_retrieve_by_id_forwards_environment_pin_with_explicit_precedence(

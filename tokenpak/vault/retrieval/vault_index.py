@@ -107,9 +107,7 @@ def _get_project_registry(*, force_reload: bool = False):
     return state
 
 
-def _project_scope_filter(
-    project: Optional[str], exclude_roles: Optional[Sequence[str]]
-):
+def _project_scope_filter(project: Optional[str], exclude_roles: Optional[Sequence[str]]):
     """Build a membership predicate, or None when nothing would be filtered.
 
     A *successful* load is cached per process: this index is constructed per MCP
@@ -696,11 +694,7 @@ class VaultIndex(ProjectScopeCapabilities):
         # cannot consume a result slot; the sort key is untouched, so ordering
         # within a scope matches the unscoped ordering of the same blocks.
         ranked = sorted(
-            (
-                (bid, score)
-                for bid, score in scores.items()
-                if _in_scope(bid)
-            ),
+            ((bid, score) for bid, score in scores.items() if _in_scope(bid)),
             key=lambda x: (-x[1], blocks[x[0]].get("source_path", ""), x[0]),
         )
         if top_k > 0:
@@ -770,9 +764,7 @@ class VaultIndex(ProjectScopeCapabilities):
         if on_ambiguous == AmbiguityPolicy.DOMINANT:
             mass: dict[str, float] = {}
             for block, score in probed:
-                project_ids = registry.resolve_path(
-                    str(block.get("source_path", ""))
-                ).project_ids
+                project_ids = registry.resolve_path(str(block.get("source_path", ""))).project_ids
                 if SHARED in project_ids:
                     continue
                 for project_id in project_ids:

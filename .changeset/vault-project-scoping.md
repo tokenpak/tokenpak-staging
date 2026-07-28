@@ -51,7 +51,9 @@ to direct `search(project=...)` filtering as well as ambiguity-resolving search
 and automatic injection. SQLite registry edits also block scoped queries until
 the matching membership transaction commits, and concurrent foreground or
 background reload callers are serialized so an older successful reload cannot
-erase a newer registry error.
+erase a newer registry error. Scoped SQLite readers now share that state guard
+across resolution and membership filtering, preventing mixed-generation
+results during a concurrent valid registry reload.
 
 Every public retrieval entry point uses the same rule. Vault-Pak search routes
 through ambiguity-aware scoped search; Pak inspection authorizes against the

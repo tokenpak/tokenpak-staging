@@ -1303,7 +1303,7 @@ def _try_handle_pak_get(handler: Any, path: str, parsed: Any) -> bool:
         from urllib.parse import unquote
 
         pak_id = unquote(path[len("/pak/v1/inspect/") :])
-        _handle_pak_inspect(handler, pak_id, parse_qs(parsed.query or ''))
+        _handle_pak_inspect(handler, pak_id, parse_qs(parsed.query or ""))
         return True
 
     _send_error(
@@ -1788,9 +1788,7 @@ def _handle_pak_inspect(
                     return
             from tokenpak.vault.pak_adapter import vault_block_to_pak
 
-            registry_state = (
-                (requested_registry, None) if requested_registry is not None else None
-            )
+            registry_state = (requested_registry, None) if requested_registry is not None else None
             pak = vault_block_to_pak(block_dict, _registry_state=registry_state)
             _send_json(handler, 200, pak.to_dict())
             return

@@ -331,7 +331,9 @@ class ProjectRegistry:
     # -- construction -----------------------------------------------------
 
     @classmethod
-    def from_config(cls, raw_projects: Optional[Sequence[Mapping[str, object]]]) -> "ProjectRegistry":
+    def from_config(
+        cls, raw_projects: Optional[Sequence[Mapping[str, object]]]
+    ) -> "ProjectRegistry":
         """Build a registry from the ``projects:`` block of ``vault.yaml``.
 
         Raises:
@@ -366,7 +368,9 @@ class ProjectRegistry:
                     "(expected lowercase alphanumeric, '.', '_' or '-')"
                 )
             if pid == SHARED:
-                raise ScopeConflictError(f"vault.yaml: {SHARED!r} is reserved and cannot be a project id")
+                raise ScopeConflictError(
+                    f"vault.yaml: {SHARED!r} is reserved and cannot be a project id"
+                )
             if pid in projects:
                 raise ScopeConflictError(f"vault.yaml: duplicate project id {pid!r}")
 
@@ -464,9 +468,7 @@ class ProjectRegistry:
         pinned = (environ.get("TOKENPAK_PROJECT") or "").strip().lower()
         if pinned:
             if pinned not in self.projects:
-                raise ScopeConflictError(
-                    f"TOKENPAK_PROJECT={pinned!r} is not a declared project"
-                )
+                raise ScopeConflictError(f"TOKENPAK_PROJECT={pinned!r} is not a declared project")
             return ScopeResolution(project_id=pinned, source="env")
 
         named = self.projects_named_in(query) if query else ()
@@ -590,9 +592,7 @@ class ScopeFilter:
         return self._project in membership.project_ids or SHARED in membership.project_ids
 
 
-def spanned_projects(
-    registry: "ProjectRegistry", source_paths: Iterable[str]
-) -> tuple[str, ...]:
+def spanned_projects(registry: "ProjectRegistry", source_paths: Iterable[str]) -> tuple[str, ...]:
     """Projects genuinely in contention across *source_paths*.
 
     Only ``shared: true`` (the ``*`` sentinel) grants universal cover. Every
@@ -652,9 +652,7 @@ def _str_tuple(value: object, *, field: str) -> tuple[str, ...]:
                 )
             clean = item.strip().lower()
             if not clean:
-                raise ScopeConflictError(
-                    f"vault.yaml: {field} cannot contain an empty value"
-                )
+                raise ScopeConflictError(f"vault.yaml: {field} cannot contain an empty value")
             normalized.append(clean)
         return tuple(normalized)
     raise ScopeConflictError(
@@ -684,20 +682,16 @@ def _build_root(raw: Mapping[str, object], *, owner: str) -> ProjectRoot:
     path = raw["path"]
     if not isinstance(path, str) or not path.strip():
         raise ScopeConflictError(
-            f"vault.yaml: project {owner!r}: root path must be a non-empty string, "
-            f"got {path!r}"
+            f"vault.yaml: project {owner!r}: root path must be a non-empty string, got {path!r}"
         )
 
     members: list[str] = []
-    declared = _str_tuple(
-        raw.get("projects"), field=f"project {owner!r} root projects"
-    )
+    declared = _str_tuple(raw.get("projects"), field=f"project {owner!r} root projects")
     members.extend(declared or (owner,))
     shared = raw.get("shared", False)
     if not isinstance(shared, bool):
         raise ScopeConflictError(
-            f"vault.yaml: project {owner!r}: root 'shared' must be a boolean, "
-            f"got {shared!r}"
+            f"vault.yaml: project {owner!r}: root 'shared' must be a boolean, got {shared!r}"
         )
     if shared:
         members.append(SHARED)

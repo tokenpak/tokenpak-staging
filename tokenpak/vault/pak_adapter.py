@@ -122,9 +122,7 @@ def _infer_project(
             return None
         if registry.active:
             claimed = [
-                pid
-                for pid in registry.resolve_path(source_path).project_ids
-                if pid != SHARED
+                pid for pid in registry.resolve_path(source_path).project_ids if pid != SHARED
             ]
             return claimed[0] if len(claimed) == 1 else None
     except Exception:  # noqa: BLE001 — inference is best-effort by contract
