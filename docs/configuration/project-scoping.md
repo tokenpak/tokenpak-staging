@@ -156,4 +156,5 @@ last-known-good membership as though it were current.
 - Editing `projects:` re-resolves membership on the next reload — no reindex
   needed, since only path membership changed. SQLite publishes the new
   registry and membership transaction as one guarded state; if synchronization
-  fails, scoped queries are refused until it succeeds.
+  fails, scoped queries are refused until it succeeds. Reload callers are
+  serialized, so a slower older reload cannot overwrite a newer config error.

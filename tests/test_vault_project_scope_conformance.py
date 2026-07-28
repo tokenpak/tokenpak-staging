@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -454,6 +455,78 @@ def test_sqlite_valid_registry_edit_blocks_until_membership_sync_commits(
         backend.search_scoped(COLLIDING_QUERY, project="acme", min_score=0.0).results
     )
     assert all("/workspace/acme/" not in path for path in acme_paths)
+
+
+def test_sqlite_reload_serializes_registry_publication_and_membership_sync(
+    backend_case: BackendCase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older valid reload cannot clear a later unreadable-registry error."""
+    if backend_case.name != "sqlite":
+        pytest.skip("NOT APPLICABLE: only SQLite persists a membership join table")
+
+    from tokenpak.vault import sqlite_backend
+
+    backend = backend_case.backend
+    backend._check_interval = 0
+    first_loader_entered = threading.Event()
+    second_loader_entered = threading.Event()
+    release_first_loader = threading.Event()
+    state_lock = threading.Lock()
+    calls = 0
+    active_loaders = 0
+    max_active_loaders = 0
+    thread_errors: list[BaseException] = []
+
+    def ordered_load():
+        nonlocal calls, active_loaders, max_active_loaders
+        with state_lock:
+            calls += 1
+            call = calls
+            active_loaders += 1
+            max_active_loaders = max(max_active_loaders, active_loaders)
+        try:
+            if call == 1:
+                first_loader_entered.set()
+                if not release_first_loader.wait(timeout=5):
+                    raise TimeoutError("first registry load was not released")
+                return backend.registry, None
+            second_loader_entered.set()
+            return backend.registry.__class__(), "simulated unreadable vault.yaml"
+        finally:
+            with state_lock:
+                active_loaders -= 1
+
+    def reload_in_thread() -> None:
+        try:
+            backend.maybe_reload()
+        except BaseException as exc:  # noqa: BLE001 - surfaced in the main test thread
+            thread_errors.append(exc)
+
+    monkeypatch.setattr(sqlite_backend, "_load_registry", ordered_load)
+    first = threading.Thread(target=reload_in_thread)
+    second = threading.Thread(target=reload_in_thread)
+    first.start()
+    assert first_loader_entered.wait(timeout=5)
+    second.start()
+
+    # An unlocked implementation enters the second loader while the older
+    # valid load is still paused. The serialized implementation cannot.
+    second_loader_entered.wait(timeout=0.25)
+    release_first_loader.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert thread_errors == []
+    assert calls == 2
+    assert max_active_loaders == 1
+    assert backend._registry_error == "simulated unreadable vault.yaml"
+    with pytest.raises(ScopeConflictError, match="simulated unreadable"):
+        backend.search_scoped(COLLIDING_QUERY, project="acme", min_score=0.0)
+    with pytest.raises(ScopeConflictError, match="simulated unreadable"):
+        backend.search(COLLIDING_QUERY, project="acme", min_score=0.0)
 
 
 def test_sdk_mcp_handlers_fail_closed_and_accept_explicit_scope(

@@ -166,6 +166,11 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         self.tokenpak_dir = Path(tokenpak_dir)
         self.db_path = self.tokenpak_dir / "retrieval.db"
         self._lock = threading.Lock()
+        # Registry publication and its matching membership transaction are one
+        # reload operation. Separate foreground and background callers may both
+        # invoke maybe_reload(); serializing the whole operation prevents an
+        # older successful load from clearing a newer unreadable-registry error.
+        self._reload_lock = threading.Lock()
         self._last_checked = 0.0
         self._block_count = 0
         self._token_count = 0
@@ -199,14 +204,16 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         to without touching ``index.json``, so membership cannot be keyed off
         the index checkpoint alone.
         """
-        # Publish a blocking state before the new registry. Until the database
-        # membership transaction commits, the two representations describe
-        # different worlds and no scoped query may observe either as complete.
-        self._registry_error = "project membership refresh pending"
-        self._registry = registry
-        self._registry_managed = False
-        self._synced_signature = None
-        self._last_checked = 0.0
+        with self._reload_lock:
+            # Publish a blocking state before the new registry. Until the
+            # database membership transaction commits, the two representations
+            # describe different worlds and no scoped query may observe either
+            # as complete.
+            self._registry_error = "project membership refresh pending"
+            self._registry = registry
+            self._registry_managed = False
+            self._synced_signature = None
+            self._last_checked = 0.0
 
     def _registry_signature(self) -> str:
         """Stable fingerprint of the declared roots and their membership."""
@@ -233,45 +240,46 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
 
     def maybe_reload(self) -> None:
         """Check if the vault index has changed and rebuild if necessary."""
-        now = time.time()
-        if now - self._last_checked < self._check_interval:
-            return
-        self._last_checked = now
+        with self._reload_lock:
+            now = time.time()
+            if now - self._last_checked < self._check_interval:
+                return
+            self._last_checked = now
 
-        registry_usable = True
-        if self._registry_managed:
-            loaded_registry, registry_error = _load_registry()
-            if registry_error is not None:
-                # Keep last-good membership but refuse guarded operations until
-                # the declaration is readable again.
-                self._registry_error = registry_error
-                registry_usable = False
-            else:
-                if loaded_registry != self._registry:
-                    # The blocking flag is visible before the new registry.
-                    # It stays set until _sync_memberships_if_stale commits the
-                    # corresponding block_projects transaction.
-                    self._registry_error = "project membership refresh pending"
-                    self._registry = loaded_registry
-                    self._synced_signature = None
+            registry_usable = True
+            if self._registry_managed:
+                loaded_registry, registry_error = _load_registry()
+                if registry_error is not None:
+                    # Keep last-good membership but refuse guarded operations
+                    # until the declaration is readable again.
+                    self._registry_error = registry_error
+                    registry_usable = False
+                else:
+                    if loaded_registry != self._registry:
+                        # The blocking flag is visible before the new registry.
+                        # It stays set until _sync_memberships_if_stale commits
+                        # the corresponding block_projects transaction.
+                        self._registry_error = "project membership refresh pending"
+                        self._registry = loaded_registry
+                        self._synced_signature = None
 
-        index_path = self.tokenpak_dir / "index.json"
-        if not index_path.exists():
-            return
+            index_path = self.tokenpak_dir / "index.json"
+            if not index_path.exists():
+                return
 
-        try:
-            index_mtime = index_path.stat().st_mtime
-        except OSError:
-            return
+            try:
+                index_mtime = index_path.stat().st_mtime
+            except OSError:
+                return
 
-        db_checkpoint = self._get_checkpoint()
-        if not self._initialized or index_mtime > db_checkpoint:
-            self._rebuild_incremental(index_path, index_mtime)
+            db_checkpoint = self._get_checkpoint()
+            if not self._initialized or index_mtime > db_checkpoint:
+                self._rebuild_incremental(index_path, index_mtime)
 
-        # Membership can go stale without index.json moving — editing
-        # ``projects:`` re-partitions blocks that themselves never changed.
-        if registry_usable:
-            self._registry_error = self._sync_memberships_if_stale(force=True)
+            # Membership can go stale without index.json moving — editing
+            # ``projects:`` re-partitions blocks that themselves never changed.
+            if registry_usable:
+                self._registry_error = self._sync_memberships_if_stale(force=True)
 
     def _sync_memberships_if_stale(self, *, force: bool = False) -> Optional[str]:
         """Recompute block→project membership when the registry has changed.

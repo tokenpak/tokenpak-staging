@@ -49,7 +49,9 @@ project registry that is present but unreadable causes scoped queries to be
 refused while preserving the last known-good membership. That refusal applies
 to direct `search(project=...)` filtering as well as ambiguity-resolving search
 and automatic injection. SQLite registry edits also block scoped queries until
-the matching membership transaction commits.
+the matching membership transaction commits, and concurrent foreground or
+background reload callers are serialized so an older successful reload cannot
+erase a newer registry error.
 
 Every public retrieval entry point uses the same rule. Vault-Pak search routes
 through ambiguity-aware scoped search; Pak inspection authorizes against the
