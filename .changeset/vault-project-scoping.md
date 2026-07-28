@@ -26,8 +26,9 @@ unchanged, so existing configs load untouched):
   every scope.
 - Roots resolve by longest prefix, so nested and overlapping declarations
   resolve deterministically regardless of declaration order.
-- Declaring the same path under two different projects is a load-time error
-  rather than a silent tiebreak.
+- Declaring the same normalized path more than once is a load-time error rather
+  than a membership or role tiebreak. `shared` accepts booleans only, so a
+  quoted `"false"` cannot accidentally grant universal membership.
 - Roots carry a role; archived copies are excluded from results by default so
   stale duplicates cannot outrank the live tree.
 
@@ -39,10 +40,18 @@ ambiguous_project_scope` with the candidate list, and automatic context
 injection contributes nothing rather than a blend.
 
 Because the guarantee is a safety property, degradation paths fail closed too: a
-`project` request that the active retrieval backend cannot honor returns `501
+scope request from `project`, `$TOKENPAK_PROJECT`, or `cwd` that the active
+retrieval backend cannot honor returns `501
 scoping_unsupported` instead of silently returning unscoped results, and a
 project registry that is present but unreadable causes scoped queries to be
-refused while preserving the last known-good membership.
+refused while preserving the last known-good membership. SQLite registry edits
+also block scoped queries until the matching membership transaction commits.
+
+Every public retrieval entry point uses the same rule. Vault-Pak search routes
+through ambiguity-aware scoped search; Pak inspection authorizes against the
+current registry's full membership tuple (including shared and named
+multi-project roots), never the Pak's single descriptive project label. The
+companion forwards its session's environment pin to the separate proxy process.
 
 The default `json_blocks`, optional SQLite, and editor-plugin retrieval indexes
 all enforce the same filter and ambiguity contract. A discovery-driven

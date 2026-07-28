@@ -350,6 +350,22 @@ def test_shared_root_carries_the_sentinel(tmp_path):
             id="same-root-two-projects",
         ),
         pytest.param(
+            [
+                {
+                    "id": "a",
+                    "roots": [
+                        {"path": "/x", "role": "archive"},
+                        {"path": "/x", "role": "workbench"},
+                    ],
+                }
+            ],
+            id="same-root-conflicting-roles",
+        ),
+        pytest.param(
+            [{"id": "a", "roots": [{"path": "/x", "shared": "false"}]}],
+            id="shared-must-be-boolean",
+        ),
+        pytest.param(
             [{"id": "a", "roots": [{"path": "/x", "projects": ["a", "ghost"]}]}],
             id="undeclared-project-reference",
         ),

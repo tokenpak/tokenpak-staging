@@ -73,6 +73,7 @@ from tokenpak.vault.project_scope import (
     ProjectScopeCapabilities,
     ScopeConflictError,
     ScopeResolution,
+    _scope_requested,
     spanned_projects,
 )
 
@@ -198,8 +199,11 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         to without touching ``index.json``, so membership cannot be keyed off
         the index checkpoint alone.
         """
+        # Publish a blocking state before the new registry. Until the database
+        # membership transaction commits, the two representations describe
+        # different worlds and no scoped query may observe either as complete.
+        self._registry_error = "project membership refresh pending"
         self._registry = registry
-        self._registry_error = None
         self._registry_managed = False
         self._synced_signature = None
         self._last_checked = 0.0
@@ -234,17 +238,22 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
             return
         self._last_checked = now
 
+        registry_usable = True
         if self._registry_managed:
             loaded_registry, registry_error = _load_registry()
             if registry_error is not None:
                 # Keep last-good membership but refuse guarded operations until
                 # the declaration is readable again.
                 self._registry_error = registry_error
+                registry_usable = False
             else:
                 if loaded_registry != self._registry:
+                    # The blocking flag is visible before the new registry.
+                    # It stays set until _sync_memberships_if_stale commits the
+                    # corresponding block_projects transaction.
+                    self._registry_error = "project membership refresh pending"
                     self._registry = loaded_registry
                     self._synced_signature = None
-                self._registry_error = None
 
         index_path = self.tokenpak_dir / "index.json"
         if not index_path.exists():
@@ -261,29 +270,35 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
 
         # Membership can go stale without index.json moving — editing
         # ``projects:`` re-partitions blocks that themselves never changed.
-        self._sync_memberships_if_stale()
+        if registry_usable:
+            self._registry_error = self._sync_memberships_if_stale(force=True)
 
-    def _sync_memberships_if_stale(self) -> None:
+    def _sync_memberships_if_stale(self, *, force: bool = False) -> Optional[str]:
         """Recompute block→project membership when the registry has changed.
 
         Reload runs on a timer, so the steady state — signature unchanged — must
         cost nothing. The in-memory guard short-circuits before any connection
         is opened; the persisted signature is only consulted once per process.
+
+        Returns an error detail when the refresh could not be committed. The
+        caller publishes that error as a blocking scope state; swallowing it
+        would pair the new in-memory registry with old database membership and
+        can return another project's block under an explicit scope.
         """
-        if self._registry_error is not None:
+        if self._registry_error is not None and not force:
             # Keep the last known-good membership. Re-resolving against an
             # empty registry would delete it, destroying the only correct data
             # we still have on the basis of a config we could not read.
-            return
+            return self._registry_error
         signature = self._registry_signature()
         if self._synced_signature == signature:
-            return
+            return None
         if not self.db_path.exists():
-            return
+            return None
         try:
             conn = self._connect()
-        except sqlite3.Error:
-            return
+        except sqlite3.Error as exc:
+            return f"project membership synchronization failed: {type(exc).__name__}: {exc}"
         with self._lock:
             try:
                 self._ensure_schema(conn)
@@ -292,7 +307,7 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
                 ).fetchone()
                 if row and str(row[0]) == signature:
                     self._synced_signature = signature
-                    return
+                    return None
                 self._resolve_memberships(conn)
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('scope_signature', ?)",
@@ -300,9 +315,13 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
                 )
                 conn.commit()
                 self._synced_signature = signature
-            except sqlite3.Error as e:
-                print(f"  ⚠️ SQLite backend: scope sync error: {e}")
+                return None
+            except sqlite3.Error as exc:
                 conn.rollback()
+                return (
+                    "project membership synchronization failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
             finally:
                 conn.close()
 
@@ -377,6 +396,11 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
         outside that scope are never scored. Positional arity is unchanged, so
         this stays a drop-in for ``VaultIndex.search``.
         """
+        if project and self._registry_error is not None:
+            raise ScopeConflictError(
+                f"project registry is unavailable ({self._registry_error}); "
+                "refusing an explicitly scoped search"
+            )
         if not self.available:
             return []
 
@@ -441,11 +465,10 @@ class SQLiteRetrievalBackend(ProjectScopeCapabilities):
             # results here would silently ignore what the caller asked for and
             # manufacture exactly the false confidence this module exists to
             # prevent — a vault.yaml typo would quietly unscope every call.
-            if project:
+            if _scope_requested(explicit=project, cwd=cwd):
                 raise ScopeConflictError(
-                    f"project {project!r} requested but no project registry is "
-                    "declared; refusing to return unscoped results for an "
-                    "explicitly scoped query"
+                    "a project scope was requested but no project registry is "
+                    "declared; refusing to return unscoped results"
                 )
             return ScopedSearchResult(
                 results=self.search(query, top_k, min_score, exclude_roles=exclude_roles),

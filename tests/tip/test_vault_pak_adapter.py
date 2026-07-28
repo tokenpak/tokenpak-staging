@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -273,10 +275,10 @@ class _StubVaultIndex:
     def __init__(self, blocks):
         self._blocks = blocks
 
-    def search(self, query, top_k=5, min_score=2.0):
+    def search_scoped(self, query, top_k=5, min_score=2.0, **kwargs):
         # Return all blocks with synthetic scores; honor top_k.
         scored = [(b, 5.0) for b in self._blocks]
-        return scored[:top_k]
+        return SimpleNamespace(results=scored[:top_k], suppressed=False, spanned=())
 
 
 def test_search_as_paks_returns_paks(vault_block):
@@ -300,7 +302,7 @@ def test_search_as_paks_handles_search_exception(vault_block):
     """If the underlying vault search raises, the adapter degrades to []."""
 
     class _RaisingIndex:
-        def search(self, query, top_k=5, min_score=2.0):
+        def search_scoped(self, query, top_k=5, min_score=2.0, **kwargs):
             raise RuntimeError("vault corrupt")
 
     paks = search_as_paks("anything", vault_index=_RaisingIndex())
@@ -311,6 +313,39 @@ def test_search_as_paks_respects_top_k(vault_block):
     idx = _StubVaultIndex([vault_block, vault_block, vault_block])
     paks = search_as_paks("anything", top_k=2, vault_index=idx)
     assert len(paks) == 2
+
+
+def test_search_as_paks_suppresses_ambiguous_results(vault_block):
+    class _AmbiguousIndex:
+        def search_scoped(self, query, top_k=5, min_score=2.0, **kwargs):
+            return SimpleNamespace(
+                results=[(vault_block, 5.0)],
+                suppressed=True,
+                spanned=("acme", "bluefin"),
+            )
+
+    assert search_as_paks("anything", vault_index=_AmbiguousIndex()) == []
+
+
+def test_search_as_paks_forwards_scope_signals(vault_block):
+    index = _StubVaultIndex([vault_block])
+    index.search_scoped = MagicMock(
+        return_value=SimpleNamespace(results=[], suppressed=False, spanned=())
+    )
+    search_as_paks(
+        "anything",
+        project="acme",
+        cwd="/workspace/acme",
+        vault_index=index,
+    )
+    index.search_scoped.assert_called_once_with(
+        "anything",
+        top_k=5,
+        min_score=2.0,
+        project="acme",
+        cwd="/workspace/acme",
+        on_ambiguous="suppress",
+    )
 
 
 # ---------------------------------------------------------------------------

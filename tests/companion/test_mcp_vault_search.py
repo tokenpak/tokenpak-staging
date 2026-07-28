@@ -6,7 +6,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from tokenpak.companion.mcp import tools
+
+
+@pytest.fixture(autouse=True)
+def _clear_project_pin(monkeypatch):
+    monkeypatch.delenv("TOKENPAK_PROJECT", raising=False)
 
 
 def test_vault_search_calls_proxy_search_endpoint(monkeypatch) -> None:
@@ -76,3 +83,43 @@ def test_vault_search_proxy_error_passes_through(monkeypatch) -> None:
     body = json.loads(tools._handle_vault_search(None, {"query": "cache policy"}))
 
     assert body == {"error": "vault_unavailable", "detail": "index not loaded"}
+
+
+def test_vault_search_forwards_companion_environment_pin(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+    monkeypatch.setenv("TOKENPAK_PROJECT", "acme")
+    monkeypatch.setattr(
+        tools,
+        "_proxy_get",
+        lambda path, params=None: (
+            calls.append((path, params)) or (200, {"query": "secret", "results": []})
+        ),
+    )
+
+    tools._handle_vault_search(None, {"query": "secret"})
+    assert calls == [
+        ("/tpk/v1/vault/search", {"q": "secret", "limit": 5, "project": "acme"})
+    ]
+
+
+def test_vault_retrieve_by_id_forwards_environment_pin_with_explicit_precedence(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+    monkeypatch.setenv("TOKENPAK_PROJECT", "acme")
+
+    def fake_get(path: str, params: dict[str, Any] | None = None):
+        calls.append((path, params))
+        return 200, {"block_id": "block-a", "content": "secret"}
+
+    monkeypatch.setattr(tools, "_proxy_get", fake_get)
+
+    tools._handle_vault_retrieve(None, {"block_id": "block-a"})
+    tools._handle_vault_retrieve(
+        None,
+        {"block_id": "block-b", "project": "bluefin"},
+    )
+    assert calls == [
+        ("/tpk/v1/vault/block/block-a", {"project": "acme"}),
+        ("/tpk/v1/vault/block/block-b", {"project": "bluefin"}),
+    ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from tokenpak.sdk.integrations.claude_code.mcp_server import (
@@ -31,6 +32,11 @@ def _make_index_mock(available: bool = True, search_results=None):
     m.available = available
     m.maybe_reload.return_value = None
     m.search.return_value = search_results or []
+    m.search_scoped.return_value = SimpleNamespace(
+        results=search_results or [],
+        suppressed=False,
+        spanned=(),
+    )
     m._get_content.return_value = "mock snippet content"
     return m
 
@@ -484,7 +490,13 @@ class TestHandleBuildContextPack:
                 "tokenpak.vault.search.extract_must_hit_terms",
                 return_value=[],
             ):
-                result = _handle_build_context_pack({"query": "vault search"})
+                result = _handle_build_context_pack(
+                    {
+                        "query": "vault search",
+                        "project": "acme",
+                        "cwd": "/workspace/acme",
+                    }
+                )
 
         assert result["status"] == "ok"
         assert result["query"] == "vault search"
@@ -492,6 +504,10 @@ class TestHandleBuildContextPack:
         assert "entities" in result
         assert "related_issues" in result
         assert "summary" in result
+        assert mock_index.search_scoped.call_count == 2
+        for call in mock_index.search_scoped.call_args_list:
+            assert call.kwargs["project"] == "acme"
+            assert call.kwargs["cwd"] == "/workspace/acme"
 
     def test_include_related_false_skips_related(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TOKENPAK_VAULT_ROOT", str(tmp_path))
@@ -530,7 +546,13 @@ class TestHandlePrepareReviewPacket:
             ):
                 with patch("tokenpak.compression.budgets.policy.CompactionPolicy") as MockCP:
                     MockCP.default.return_value = mock_policy
-                    result = _handle_prepare_review_packet({"branch": "feature/abc"})
+                    result = _handle_prepare_review_packet(
+                        {
+                            "branch": "feature/abc",
+                            "project": "acme",
+                            "cwd": "/workspace/acme",
+                        }
+                    )
 
         assert result["status"] == "ok"
         assert result["branch"] == "feature/abc"
@@ -540,6 +562,10 @@ class TestHandlePrepareReviewPacket:
         assert "compacted_context" in result
         assert "summary" in result
         assert "policy" in result
+        assert mock_index.search_scoped.call_count == 2
+        for call in mock_index.search_scoped.call_args_list:
+            assert call.kwargs["project"] == "acme"
+            assert call.kwargs["cwd"] == "/workspace/acme"
 
     def test_diff_summary_computed_from_diff(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TOKENPAK_VAULT_ROOT", str(tmp_path))

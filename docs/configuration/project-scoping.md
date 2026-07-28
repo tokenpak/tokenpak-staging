@@ -77,7 +77,7 @@ exactly as before, and retrieval stays unscoped.
 | `aliases` | Other names that identify the project in query text. |
 | `roots[].path` | A directory belonging to the project. |
 | `roots[].role` | What kind of copy this is — `workbench`, `staging`, `archive`, `notes`, or anything you choose. |
-| `roots[].shared` | `true` makes the root visible from every project's scope. |
+| `roots[].shared` | Boolean. `true` makes the root visible from every project's scope. Quoted strings are invalid. |
 | `roots[].projects` | Explicit membership list, for a root genuinely shared by named projects. |
 
 ### Overlap and multiple directories
@@ -89,9 +89,10 @@ resolves ahead of a broader one regardless of declaration order. Given roots
 `~/project-notes` (project `notes-archive`) and `~/project-notes/acme` (project
 `acme-storefront`), a file under the latter resolves to `acme-storefront`.
 
-**Ambiguity is an error, not a tiebreak.** Declaring the same path under two
-different projects fails at config load with a message naming both. Genuine
-sharing is expressed *within one root* instead:
+**Ambiguity is an error, not a tiebreak.** Declaring the same normalized path
+more than once fails at config load, even when the repeated declarations name
+the same projects. Membership and role must not depend on declaration order.
+Genuine sharing is expressed *within one root* instead:
 
 ```yaml
   - id: acme-storefront
@@ -131,6 +132,11 @@ retrieval fails closed:
 A single-project result set is never ambiguous, so ordinary queries against a
 one-project vault are unaffected.
 
+If no project registry is declared, compatibility behavior applies only when
+the caller supplied no project signal. An explicit project, an environment pin,
+or a working directory is a request for scoped retrieval; TokenPak refuses that
+request rather than silently discarding it and returning unscoped results.
+
 ## Practical guidance
 
 - Name the project, or work from inside one of its roots. Deictic phrasing —
@@ -139,4 +145,6 @@ one-project vault are unaffected.
 - Declare every directory that belongs to a project, including staging and
   archived copies. A root you leave out is unreachable from that project's scope.
 - Editing `projects:` re-resolves membership on the next reload — no reindex
-  needed, since only path membership changed.
+  needed, since only path membership changed. SQLite publishes the new
+  registry and membership transaction as one guarded state; if synchronization
+  fails, scoped queries are refused until it succeeds.

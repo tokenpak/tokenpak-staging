@@ -297,14 +297,52 @@ def test_broken_then_fixed_registry_recovers_across_matrix(
     ).results
 
 
-def test_explicit_scope_without_registry_refuses_across_matrix(
-    backend_case: BackendCase, scoped_vault: tuple[Path, Path]
+@pytest.mark.parametrize("signal", ["explicit", "environment", "cwd"])
+def test_any_scope_signal_without_registry_refuses_across_matrix(
+    backend_case: BackendCase,
+    scoped_vault: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    signal: str,
 ) -> None:
     _, config_path = scoped_vault
     config_path.write_text("version: 1\npaths: []\n", encoding="utf-8")
     _force_reload(backend_case.backend)
+
+    kwargs: dict[str, str] = {}
+    if signal == "explicit":
+        kwargs["project"] = "acme"
+    elif signal == "environment":
+        monkeypatch.setenv("TOKENPAK_PROJECT", "acme")
+    else:
+        kwargs["cwd"] = str(config_path.parent / "workspace" / "acme")
+
     with pytest.raises(ScopeConflictError):
-        backend_case.backend.search_scoped(COLLIDING_QUERY, project="acme")
+        backend_case.backend.search_scoped(COLLIDING_QUERY, **kwargs)
+
+
+def test_public_pak_search_uses_scope_resolution_across_matrix(
+    backend_case: BackendCase, scoped_vault: tuple[Path, Path]
+) -> None:
+    from tokenpak.vault.pak_adapter import search_as_paks
+
+    # No scope signal over a colliding corpus fails closed rather than
+    # returning a labelled-but-still-blended Pak list.
+    assert search_as_paks(
+        COLLIDING_QUERY,
+        min_score=0.0,
+        vault_index=backend_case.backend,
+    ) == []
+
+    scoped = search_as_paks(
+        COLLIDING_QUERY,
+        min_score=0.0,
+        vault_index=backend_case.backend,
+        project="acme",
+    )
+    assert scoped
+    assert any(pak.scope.project == "acme" for pak in scoped)
+    assert all(pak.scope.project != "bluefin" for pak in scoped)
+    assert all("bluefin-pr100" not in pak.pak_id for pak in scoped)
 
 
 def test_membership_read_failure_matrix(
@@ -326,6 +364,60 @@ def test_membership_read_failure_matrix(
     monkeypatch.setattr(backend, "_connect", fail_second_connect)
     with pytest.raises(ScopeConflictError, match="cannot verify project contention"):
         backend.search_scoped(COLLIDING_QUERY, min_score=0.0)
+
+
+def test_sqlite_valid_registry_edit_blocks_until_membership_sync_commits(
+    backend_case: BackendCase,
+    scoped_vault: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if backend_case.name != "sqlite":
+        pytest.skip("NOT APPLICABLE: only SQLite persists a membership join table")
+
+    backend = backend_case.backend
+    _, config_path = scoped_vault
+    config_path.write_text(
+        "version: 1\n"
+        "paths: []\n"
+        "projects:\n"
+        "  - id: acme\n"
+        "    roots:\n"
+        f"      - path: {config_path.parent}/workspace/bluefin\n"
+        "  - id: bluefin\n"
+        "    roots:\n"
+        f"      - path: {config_path.parent}/workspace/acme\n",
+        encoding="utf-8",
+    )
+
+    original_connect = backend._connect
+    calls = 0
+
+    def fail_membership_sync():
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # checkpoint read succeeds; membership transaction fails
+            raise sqlite3.OperationalError("simulated membership sync failure")
+        return original_connect()
+
+    monkeypatch.setattr(backend, "_connect", fail_membership_sync)
+    _force_reload(backend)
+
+    assert backend._registry_error is not None
+    assert "membership synchronization failed" in backend._registry_error
+    assert backend._registry.resolve_path(
+        str(config_path.parent / "workspace" / "acme" / "notes" / "pr-100.md")
+    ).project_ids == ("bluefin",)
+    with pytest.raises(ScopeConflictError):
+        backend.search_scoped(COLLIDING_QUERY, project="acme", min_score=0.0)
+    with pytest.raises(ScopeConflictError):
+        backend.search(COLLIDING_QUERY, project="acme", min_score=0.0)
+
+    monkeypatch.setattr(backend, "_connect", original_connect)
+    _force_reload(backend)
+    acme_paths = _paths(
+        backend.search_scoped(COLLIDING_QUERY, project="acme", min_score=0.0).results
+    )
+    assert all("/workspace/acme/" not in path for path in acme_paths)
 
 
 def test_sdk_mcp_handlers_fail_closed_and_accept_explicit_scope(
@@ -354,6 +446,43 @@ def test_sdk_mcp_handlers_fail_closed_and_accept_explicit_scope(
     invalid = mcp_server._handle_search_corpus({"query": COLLIDING_QUERY, "project": "ghost"})
     assert invalid["status"] == "invalid-project-scope"
     assert invalid["results"] == []
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "query_key"),
+    [
+        ("_handle_build_context_pack", "query"),
+        ("_handle_prepare_review_packet", "branch"),
+    ],
+)
+def test_sdk_composite_handlers_enforce_scope_contract(
+    scoped_vault: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    handler_name: str,
+    query_key: str,
+) -> None:
+    from tokenpak.sdk.integrations.claude_code import mcp_server
+    from tokenpak.vault.retrieval import vault_index as sdk_index
+
+    _, config_path = scoped_vault
+    handler = getattr(mcp_server, handler_name)
+    monkeypatch.setattr(sdk_index, "_PROJECT_REGISTRY_STATE", None)
+
+    ambiguous = handler({query_key: COLLIDING_QUERY})
+    assert ambiguous["status"] == "ambiguous-project-scope"
+
+    explicit = handler({query_key: COLLIDING_QUERY, "project": "acme"})
+    assert explicit["status"] == "ok"
+    assert explicit["corpus_hits"]
+    assert all("/workspace/acme/" in row["source_path"] for row in explicit["corpus_hits"])
+
+    invalid = handler({query_key: COLLIDING_QUERY, "project": "ghost"})
+    assert invalid["status"] == "invalid-project-scope"
+
+    config_path.write_text("version: 1\npaths: []\n", encoding="utf-8")
+    monkeypatch.setattr(sdk_index, "_PROJECT_REGISTRY_STATE", None)
+    no_registry = handler({query_key: COLLIDING_QUERY, "project": "acme"})
+    assert no_registry["status"] == "invalid-project-scope"
 
 
 def test_search_endpoint_fails_closed_across_matrix(
@@ -495,6 +624,60 @@ def test_block_endpoint_refuses_explicit_scope_without_registry(
     assert sent == [(501, "scoping_unavailable")]
 
 
+@pytest.mark.parametrize("signal", ["cwd", "environment"])
+def test_block_endpoint_fails_closed_when_registry_lookup_raises_for_implicit_scope(
+    scoped_vault: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    signal: str,
+) -> None:
+    from tokenpak.proxy import app_endpoints, vault_bridge
+    from tokenpak.vault import sqlite_backend
+
+    block_id = "bluefin-pr100"
+    index = type(
+        "BlockIndex",
+        (),
+        {
+            "available": True,
+            "blocks": {
+                block_id: {
+                    "block_id": block_id,
+                    "source_path": str(tmp_path / "workspace" / "bluefin" / "pr-100.md"),
+                    "raw_tokens": 4,
+                }
+            },
+            "tokenpak_dir": str(tmp_path / ".tokenpak"),
+        },
+    )()
+    monkeypatch.setattr(vault_bridge, "get_vault_index", lambda: index)
+    monkeypatch.setattr(
+        sqlite_backend,
+        "_load_registry",
+        lambda: (_ for _ in ()).throw(OSError("simulated registry read failure")),
+    )
+    query: dict[str, list[str]] = {}
+    if signal == "cwd":
+        query["cwd"] = [str(tmp_path / "workspace" / "acme")]
+    else:
+        monkeypatch.setenv("TOKENPAK_PROJECT", "acme")
+
+    sent: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        app_endpoints,
+        "_send_error",
+        lambda handler, status, code, detail="": sent.append((status, code)),
+    )
+    monkeypatch.setattr(
+        app_endpoints,
+        "_send_json",
+        lambda *args, **kwargs: pytest.fail("endpoint served content after scope lookup failed"),
+    )
+
+    app_endpoints._handle_vault_block(object(), block_id, query)
+    assert sent == [(503, "project_scope_unavailable")]
+
+
 def test_block_endpoint_enforces_cwd_scope(
     scoped_vault: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -562,12 +745,138 @@ def test_pak_inspect_refuses_explicit_scope_without_registry(
     assert sent == [(501, "scoping_unavailable")]
 
 
+def test_pak_inspect_authorizes_against_current_registry_after_valid_edit(
+    scoped_vault: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tokenpak.proxy import app_endpoints, vault_bridge
+    from tokenpak.vault import pak_adapter
+
+    _, config_path = scoped_vault
+    block_id = "target#12345678"
+    block = {
+        "block_id": block_id,
+        "source_path": str(tmp_path / "workspace" / "acme" / "secret.md"),
+        "raw_tokens": 4,
+    }
+    assert pak_adapter.vault_block_to_pak(block).scope.project == "acme"
+
+    config_path.write_text(
+        "version: 1\n"
+        "paths: []\n"
+        "projects:\n"
+        "  - id: acme\n"
+        "    roots:\n"
+        f"      - path: {tmp_path}/workspace/retired-acme\n"
+        "  - id: bluefin\n"
+        "    roots:\n"
+        f"      - path: {tmp_path}/workspace/acme\n",
+        encoding="utf-8",
+    )
+    index = type("BlockIndex", (), {"blocks": {block_id: block}})()
+    monkeypatch.setattr(vault_bridge, "get_vault_index", lambda: index)
+    responses: list[tuple[str, int, object]] = []
+    monkeypatch.setattr(
+        app_endpoints,
+        "_send_error",
+        lambda handler, status, code, detail="": responses.append(("error", status, code)),
+    )
+    monkeypatch.setattr(
+        app_endpoints,
+        "_send_json",
+        lambda handler, status, body: responses.append(("json", status, body)),
+    )
+
+    app_endpoints._handle_pak_inspect(
+        object(), f"vault:{block_id}", {"project": ["acme"]}
+    )
+    assert responses == [("error", 404, "block_not_in_project")]
+
+    responses.clear()
+    app_endpoints._handle_pak_inspect(
+        object(), f"vault:{block_id}", {"project": ["bluefin"]}
+    )
+    assert responses[0][0:2] == ("json", 200)
+    assert isinstance(responses[0][2], dict)
+    assert responses[0][2]["scope"]["project"] == "bluefin"
+
+
+@pytest.mark.parametrize("membership", ["shared", "multi_project"])
+def test_pak_inspect_honors_full_registry_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, membership: str
+) -> None:
+    from tokenpak.proxy import app_endpoints, vault_bridge
+
+    source_root = tmp_path / "library"
+    config_path = tmp_path / "vault.yaml"
+    common = (
+        "version: 1\n"
+        "paths: []\n"
+        "projects:\n"
+        "  - id: acme\n"
+        "    roots: []\n"
+        "  - id: bluefin\n"
+        "    roots: []\n"
+    )
+    if membership == "shared":
+        declaration = (
+            common
+            + "  - id: library\n"
+            + "    roots:\n"
+            + f"      - path: {source_root}\n"
+            + "        shared: true\n"
+        )
+    else:
+        declaration = (
+            "version: 1\n"
+            "paths: []\n"
+            "projects:\n"
+            "  - id: acme\n"
+            "    roots:\n"
+            f"      - path: {source_root}\n"
+            "        projects: [acme, bluefin]\n"
+            "  - id: bluefin\n"
+            "    roots: []\n"
+        )
+    config_path.write_text(declaration, encoding="utf-8")
+    monkeypatch.setenv("TOKENPAK_VAULT_CONFIG", str(config_path))
+
+    block_id = "library#12345678"
+    block = {
+        "block_id": block_id,
+        "source_path": str(source_root / "guide.md"),
+        "raw_tokens": 4,
+    }
+    monkeypatch.setattr(
+        vault_bridge,
+        "get_vault_index",
+        lambda: type("BlockIndex", (), {"blocks": {block_id: block}})(),
+    )
+    responses: list[tuple[str, int, object]] = []
+    monkeypatch.setattr(
+        app_endpoints,
+        "_send_error",
+        lambda handler, status, code, detail="": responses.append(("error", status, code)),
+    )
+    monkeypatch.setattr(
+        app_endpoints,
+        "_send_json",
+        lambda handler, status, body: responses.append(("json", status, body)),
+    )
+
+    for project in ("acme", "bluefin"):
+        responses.clear()
+        app_endpoints._handle_pak_inspect(
+            object(), f"vault:{block_id}", {"project": [project]}
+        )
+        assert responses[0][0:2] == ("json", 200)
+
+
 def test_pak_emission_uses_declared_registry(
     scoped_vault: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tokenpak.vault import pak_adapter
 
-    monkeypatch.setattr(pak_adapter, "_REGISTRY_CACHE", None)
+    _, config_path = scoped_vault
     pak = pak_adapter.vault_block_to_pak(
         {
             "block_id": "acme-pr100#12345678",
@@ -585,3 +894,24 @@ def test_pak_emission_uses_declared_registry(
         }
     )
     assert unclaimed.scope.project is None
+
+    config_path.write_text(
+        "version: 1\n"
+        "paths: []\n"
+        "projects:\n"
+        "  - id: acme\n"
+        "    roots:\n"
+        f"      - path: {tmp_path}/workspace/retired-acme\n"
+        "  - id: bluefin\n"
+        "    roots:\n"
+        f"      - path: {tmp_path}/workspace/acme\n",
+        encoding="utf-8",
+    )
+    refreshed = pak_adapter.vault_block_to_pak(
+        {
+            "block_id": "acme-pr100#12345678",
+            "source_path": str(tmp_path / "workspace" / "acme" / "pr-100.md"),
+            "raw_tokens": 10,
+        }
+    )
+    assert refreshed.scope.project == "bluefin"

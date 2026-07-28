@@ -42,6 +42,7 @@ from tokenpak.vault.project_scope import (
     SCOPE_RESOLUTION_CAPABILITY,
     AmbiguityPolicy,
     ProjectScopeCapabilities,
+    _scope_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -734,11 +735,10 @@ class VaultIndex(ProjectScopeCapabilities):
             )
 
         if not registry.active:
-            if project:
+            if _scope_requested(explicit=project, cwd=cwd):
                 raise ScopeConflictError(
-                    f"project {project!r} requested but no project registry is "
-                    "declared; refusing to return unscoped results for an "
-                    "explicitly scoped query"
+                    "a project scope was requested but no project registry is "
+                    "declared; refusing to return unscoped results"
                 )
             return ScopedSearchResult(
                 results=self.search(query, top_k, min_score, exclude_roles=exclude_roles),

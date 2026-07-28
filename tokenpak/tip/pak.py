@@ -171,8 +171,10 @@ class PakPrivacyClass(str, Enum):
 class PakScope:
     """User / project / topic scoping (``project_scope``, ``topic_scope``).
 
-    Cross-project leakage is blocked by default — recall hard-filters on
-    ``project`` when an explicit project_scope is declared by the caller.
+    These fields describe the Pak; they are not an authorization predicate.
+    Consumers that enforce project scope must validate against their source's
+    full membership relation, which can include several projects or a shared
+    sentinel that this single-valued record cannot represent.
     """
 
     user: Optional[str] = None

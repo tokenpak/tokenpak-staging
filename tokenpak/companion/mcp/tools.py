@@ -12,6 +12,7 @@ goes through CompanionState methods so it's centralized and testable.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -399,6 +400,18 @@ def _proxy_post(
 # ---------------------------------------------------------------------------
 
 
+def _requested_vault_project(args: dict[str, Any]) -> str:
+    """Return explicit project scope, or this companion session's env pin.
+
+    The proxy is a separate process and may not share TOKENPAK_PROJECT with the
+    MCP server. Forwarding the effective pin is therefore part of the request
+    contract, not redundant metadata. An explicit tool argument wins, matching
+    the canonical explicit → env resolution order.
+    """
+    explicit = str(args.get("project", "") or "").strip()
+    return explicit or os.environ.get("TOKENPAK_PROJECT", "").strip()
+
+
 def _handle_vault_search(state: CompanionState, args: dict[str, Any]) -> str:
     """Search the vault via the proxy's /tpk/v1/vault/search endpoint."""
     query = str(args.get("query", "")).strip()
@@ -413,7 +426,7 @@ def _handle_vault_search(state: CompanionState, args: dict[str, Any]) -> str:
     params: dict[str, Any] = {"q": query, "limit": limit}
     # Scope the search to one project. Without it a vault holding several
     # projects can return a blend that reads as a single coherent answer.
-    project = str(args.get("project", "")).strip()
+    project = _requested_vault_project(args)
     if project:
         params["project"] = project
     # Forwarded only when the caller supplies it. The companion process's own
@@ -456,7 +469,7 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
     # cross-project answer produced by a lookup that looked exact. It fails
     # closed today only by accident, because a 409 body carries an empty
     # `results` list that falls through to `block_not_found`.
-    project = str(args.get("project", "")).strip()
+    project = _requested_vault_project(args)
     cwd = str(args.get("cwd", "")).strip()
     if not block_id and path_hint:
         resolve_params: dict[str, Any] = {"q": path_hint, "limit": 1}

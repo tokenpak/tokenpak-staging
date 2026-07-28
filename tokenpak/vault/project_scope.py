@@ -210,6 +210,25 @@ class ScopeConflictError(ValueError):
     """Raised when the declared registry cannot resolve a path unambiguously."""
 
 
+def _scope_requested(
+    *,
+    explicit: Optional[str] = None,
+    cwd: Optional[str | os.PathLike[str]] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> bool:
+    """Return whether a caller supplied any authoritative scope signal.
+
+    Explicit ``project=``, the session's ``TOKENPAK_PROJECT`` pin, and ``cwd``
+    are all requests to bind retrieval to one declared project. When no
+    registry exists they must therefore fail together; checking only the
+    explicit parameter silently drops the other two signals and returns an
+    answer with false scope confidence.
+    """
+    environ = os.environ if env is None else env
+    pinned = (environ.get("TOKENPAK_PROJECT") or "").strip()
+    return bool((explicit or "").strip() or pinned or (str(cwd).strip() if cwd else ""))
+
+
 class AmbiguityPolicy:
     """What retrieval does when scope is unresolved and candidates span projects.
 
@@ -325,8 +344,11 @@ class ProjectRegistry:
 
         projects: dict[str, Project] = {}
         roots: list[ProjectRoot] = []
-        # normalized path -> the membership already claimed there
-        claimed: dict[str, tuple[str, frozenset[str]]] = {}
+        # normalized path -> the declaration that already claimed it. A root
+        # has one role as well as one membership relation; accepting the same
+        # path twice makes the role depend on declaration order and can turn an
+        # archive exclusion into a workbench inclusion (or vice versa).
+        claimed: dict[str, tuple[str, frozenset[str], str]] = {}
 
         for item in raw_projects:
             if not isinstance(item, Mapping) or "id" not in item:
@@ -350,15 +372,16 @@ class ProjectRegistry:
                 root = _build_root(raw_root, owner=pid)
                 prior = claimed.get(root.path)
                 members = frozenset(root.projects)
-                if prior is not None and prior[1] != members:
+                if prior is not None:
                     raise ScopeConflictError(
-                        f"vault.yaml: path {root.path!r} is claimed by "
-                        f"{_fmt(prior[1])} and again by {_fmt(members)}. "
-                        "Declare shared resources once with "
-                        "'projects: [a, b]' or 'shared: true' instead of "
-                        "repeating the root under each project."
+                        f"vault.yaml: path {root.path!r} is declared more than once "
+                        f"(first: projects={_fmt(prior[1])}, role={prior[2]!r}; "
+                        f"again: projects={_fmt(members)}, role={root.role!r}). "
+                        "Declare each normalized root once; express multi-project "
+                        "membership in that declaration with 'projects: [a, b]' "
+                        "or 'shared: true'."
                     )
-                claimed[root.path] = (pid, members)
+                claimed[root.path] = (pid, members, root.role)
                 roots.append(root)
 
         # Every referenced project must be declared — a typo in a multi-project
@@ -640,7 +663,13 @@ def _build_root(raw: Mapping[str, object], *, owner: str) -> ProjectRoot:
     members: list[str] = []
     declared = _str_tuple(raw.get("projects"))
     members.extend(declared or (owner,))
-    if bool(raw.get("shared", False)):
+    shared = raw.get("shared", False)
+    if not isinstance(shared, bool):
+        raise ScopeConflictError(
+            f"vault.yaml: project {owner!r}: root 'shared' must be a boolean, "
+            f"got {shared!r}"
+        )
+    if shared:
         members.append(SHARED)
 
     # Deduplicate while preserving order so the stored rows are stable.

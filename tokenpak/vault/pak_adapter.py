@@ -18,7 +18,7 @@ path; Pak content stays local. Privacy contract tests in
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Protocol
@@ -53,9 +53,16 @@ _FILE_TYPE_TO_SOURCE_TYPE = {
 
 
 class _VaultSearch(Protocol):
-    def search(
-        self, query: str, *, top_k: int, min_score: float
-    ) -> Sequence[tuple[Mapping[str, object], float]]: ...
+    def search_scoped(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 2.0,
+        *,
+        project: Optional[str] = None,
+        cwd: Optional[str] = None,
+        on_ambiguous: str = "suppress",
+    ) -> object: ...
 
 
 def _file_type_to_source_type(file_type: Optional[str]) -> PakSourceType:
@@ -69,31 +76,11 @@ def _file_type_to_source_type(file_type: Optional[str]) -> PakSourceType:
     return _FILE_TYPE_TO_SOURCE_TYPE.get(file_type.lower(), PakSourceType.FILE)
 
 
-_REGISTRY_CACHE: "tuple[object, object] | None" = None
-
-
-def _cached_registry() -> "tuple[object, object]":
-    """Load the project registry once per process.
-
-    ``vault_block_to_pak`` runs per block, so an uncached load put a file read
-    and a YAML parse on every converted block — every other call site in the
-    tree caches this.
-    """
-    global _REGISTRY_CACHE
-    if _REGISTRY_CACHE is None:
-        from tokenpak.vault.sqlite_backend import _load_registry
-
-        _REGISTRY_CACHE = _load_registry()
-    return _REGISTRY_CACHE
-
-
-def reset_registry_cache() -> None:
-    """Drop the cached registry so the next call re-reads ``vault.yaml``."""
-    global _REGISTRY_CACHE
-    _REGISTRY_CACHE = None
-
-
-def _infer_project(source_path: str) -> Optional[str]:
+def _infer_project(
+    source_path: str,
+    *,
+    _registry_state: Optional[tuple[object, object]] = None,
+) -> Optional[str]:
     """Best-effort project scope for an emitted Pak, resolved from a source path.
 
     Resolution order: the declared project registry first; the legacy path-shape
@@ -101,11 +88,10 @@ def _infer_project(source_path: str) -> Optional[str]:
     one keep their previous behaviour. Returns None when a registry is declared
     but does not claim this path, or claims it for more than one project.
 
-    The result is *descriptive* — it populates ``PakScope.project`` on the emitted
-    Pak. Nothing in the tree filters on it: the ``project=`` filter used by Pak
-    listing reads the ``paks.project`` column, which is written through a separate
-    path. So a None here narrows nothing and widens nothing; it only declines to
-    assert a project the registry did not.
+    The result is *descriptive* — it populates ``PakScope.project`` on the
+    emitted Pak. Authorization must use the registry's full membership tuple,
+    because one path can legitimately be shared or belong to several named
+    projects; this single-valued field cannot express either case.
     """
     if not source_path:
         return None
@@ -126,7 +112,12 @@ def _infer_project(source_path: str) -> Optional[str]:
     try:
         from tokenpak.vault.project_scope import SHARED
 
-        registry, registry_error = _cached_registry()
+        if _registry_state is None:
+            from tokenpak.vault.sqlite_backend import _load_registry
+
+            registry, registry_error = _load_registry()
+        else:
+            registry, registry_error = _registry_state
         if registry_error is not None:
             return None
         if registry.active:
@@ -210,6 +201,7 @@ def vault_block_to_pak(
     summary: Optional[str] = None,
     content_hash: Optional[str] = None,
     confidence: Optional[PakConfidence] = None,
+    _registry_state: Optional[tuple[object, object]] = None,
 ) -> Pak:
     """Convert a vault block dict (from :meth:`VaultIndex.search`) to a Pak.
 
@@ -266,7 +258,7 @@ def vault_block_to_pak(
         source_hash=content_hash or _content_hash_from_block_id(block_id),
     )
 
-    scope = PakScope(project=_infer_project(source_path))
+    scope = PakScope(project=_infer_project(source_path, _registry_state=_registry_state))
 
     return Pak(
         pak_id=pak_id,
@@ -288,12 +280,17 @@ def search_as_paks(
     top_k: int = 5,
     min_score: float = 2.0,
     vault_index: _VaultSearch | None = None,
+    project: Optional[str] = None,
+    cwd: Optional[str] = None,
+    on_ambiguous: str = "suppress",
 ) -> list[Pak]:
     """Search the vault and return results as Vault Paks.
 
-    Returned list is in the same order as :meth:`VaultIndex.search` —
-    descending BM25 score, deterministic on ties. Empty list when no
-    blocks meet ``min_score`` or no vault index is available.
+    Returned list is in the same order as :meth:`VaultIndex.search_scoped` —
+    descending BM25 score, deterministic on ties. Ambiguous multi-project
+    results are suppressed by default. Empty list when no blocks meet
+    ``min_score``, no vault index is available, or the supplied backend cannot
+    provide the scope-resolution contract.
 
     Pass ``vault_index`` explicitly. When no index is available, the function
     returns an empty result rather than importing upward into the proxy layer.
@@ -306,11 +303,30 @@ def search_as_paks(
         return []
 
     try:
-        results = vault_index.search(query, top_k=top_k, min_score=min_score)
+        scoped = vault_index.search_scoped(
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            project=project,
+            cwd=cwd,
+            on_ambiguous=on_ambiguous,
+        )
+        if bool(getattr(scoped, "suppressed", False)):
+            return []
+        results = getattr(scoped, "results")
     except Exception:
         return []
 
-    return [vault_block_to_pak(block, score=score) for block, score in results]
+    # One fresh registry snapshot labels the whole result page consistently.
+    # The old process-lifetime cache let valid registry edits report and, in one
+    # consumer, authorize stale membership for the rest of the session.
+    from tokenpak.vault.sqlite_backend import _load_registry
+
+    registry_state = _load_registry()
+    return [
+        vault_block_to_pak(block, score=score, _registry_state=registry_state)
+        for block, score in results
+    ]
 
 
 __all__ = [

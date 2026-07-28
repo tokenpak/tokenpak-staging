@@ -98,6 +98,14 @@ invalid_project_scope`, a block outside the project returns `404
 block_not_in_project`, and a requested scope without a usable registry returns
 `501 scoping_unavailable` or `503 project_registry_unavailable`. The endpoint
 does not fall back to path-shape inference for an explicit project request.
+Authorization uses the current registry's complete membership relation, so a
+`shared: true` block is visible from every declared project and a named
+multi-project root is visible from each named member. `PakScope.project` remains
+descriptive and is never used as the authorization predicate.
+
+The Python `search_as_paks()` adapter also routes through `search_scoped()`.
+Ambiguous multi-project searches return an empty list by default; callers can
+provide `project=` or `cwd=` to bind the search before ranking.
 
 ### `POST /pak/v1/recall`
 

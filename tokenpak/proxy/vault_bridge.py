@@ -43,6 +43,7 @@ from tokenpak.vault.project_scope import (
 from tokenpak.vault.project_scope import (
     ProjectScopeCapabilities as _ProjectScopeCapabilities,
 )
+from tokenpak.vault.project_scope import _scope_requested
 from tokenpak.vault.walker import MAX_FILE_SIZE as _VAULT_BLOCK_MAX_BYTES
 
 # `project_scope` is pure-stdlib and cheap, so the policy constants come in at
@@ -395,11 +396,10 @@ class VaultIndex(_ProjectScopeCapabilities):
             )
 
         if not registry.active:
-            if project:
+            if _scope_requested(explicit=project, cwd=cwd):
                 raise ScopeConflictError(
-                    f"project {project!r} requested but no project registry is "
-                    "declared; refusing to return unscoped results for an "
-                    "explicitly scoped query"
+                    "a project scope was requested but no project registry is "
+                    "declared; refusing to return unscoped results"
                 )
             return ScopeResolution(project_id=None, source="no_registry"), False, ()
 
