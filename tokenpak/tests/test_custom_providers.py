@@ -77,9 +77,10 @@ class TestLoadCustomProviders:
         from tokenpak.proxy.custom_providers import load_custom_providers
 
         cfg = _sample_providers_yaml()
-        with _patch_config(cfg):
+        with _patch_config(cfg) as load_config:
             providers = load_custom_providers()
 
+        load_config.assert_called_once_with()
         assert len(providers) == 2
         names = {p.name for p in providers}
         assert names == {"my-local-llm", "deepseek"}
@@ -172,13 +173,6 @@ class TestLoadCustomProviders:
             providers = load_custom_providers()
 
         assert providers == []
-
-    def test_config_loader_import_error(self):
-
-        # When config_loader is not available, should return empty
-        with patch.dict("sys.modules", {"tokenpak.core.config_loader": None}):
-            # The function catches ImportError internally
-            pass  # Already tested by the fallback path
 
     def test_api_key_resolution(self):
         from tokenpak.proxy.custom_providers import load_custom_providers

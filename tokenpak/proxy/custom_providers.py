@@ -89,12 +89,9 @@ def load_custom_providers() -> list[CustomProvider]:
     """Load custom providers from ``~/.tokenpak/config.yaml``.
 
     Returns a (possibly empty) list of ``CustomProvider`` objects.
-    Never raises -- config errors are logged and the offending entry skipped.
+    Invalid entries are logged and skipped.
     """
-    try:
-        from tokenpak import config_loader as _cl
-    except ImportError:
-        return []
+    from tokenpak.core import config_loader as _cl
 
     cfg = _cl.load_config()
     if not isinstance(cfg, dict):
