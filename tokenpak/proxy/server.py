@@ -1,10 +1,10 @@
 """
 TokenPak Proxy Server — Modular Architecture
 
-HTTP proxy server for LLM API traffic. Routes requests through the
-tokenpak pipeline (vault injection, cost tracking, compression) based
-on per-route policy (Claude Code byte-preserved, OpenClaw full pipeline,
-SDK sanitized).
+HTTP proxy server for LLM API traffic. Routes requests through per-route
+handling while keeping Claude Code request bodies byte-preserved. The built-in
+default HTTP path does not invoke the legacy ``compact_request_body`` helper;
+that helper runs only when an integration calls it explicitly.
 
 This is the canonical modular proxy server. The monolith at repo root
 (proxy.py) is being incrementally decomposed into this module tree.
@@ -12,8 +12,8 @@ This is the canonical modular proxy server. The monolith at repo root
 Env vars (all optional):
     TOKENPAK_PORT          (default 8766)
     TOKENPAK_MODE          (default hybrid) — strict|hybrid|aggressive
-    TOKENPAK_COMPACT       (default 1) — master on/off switch
-    TOKENPAK_COMPACT_THRESHOLD_TOKENS (default 1500 in the balanced profile)
+    TOKENPAK_COMPACT       — compatibility-only; no default-HTTP consumer
+    TOKENPAK_COMPACT_THRESHOLD_TOKENS — explicit compact helper threshold
     TOKENPAK_DB            (default .tokenpak/monitor.db)
     NOTIFY_SOCKET          systemd sd_notify socket path (set by systemd, not TokenPak)
 

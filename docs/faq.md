@@ -6,16 +6,9 @@
 
 ### How much will TokenPak save me?
 
-It depends on your usage pattern:
-
-| Use case | Relative savings |
-|---|---|
-| Short Q&A / chat | Minimal |
-| Code review with large context | Moderate |
-| Long document analysis | High |
-| Codebase search + compressed context | High (with vault indexing) |
-
-Compression only activates above the threshold (default: 1,500 tokens). Small requests pass through unchanged.
+It depends on the request path and the features you explicitly enable. The
+default HTTP proxy does not invoke `compact_request_body`, so its legacy
+threshold does not predict proxy savings.
 
 Check your actual savings:
 
@@ -26,9 +19,12 @@ tokenpak savings
 
 ### Does TokenPak change my responses?
 
-No. TokenPak compresses the *input* (your prompts and context), not the output. The response from the LLM is forwarded to your client unchanged.
+The provider response is forwarded unchanged by the receipt display. Explicit
+request hooks may transform eligible input; the default HTTP path does not call
+the legacy compact helper, and Claude Code request bodies remain byte-preserved.
 
-Optionally, TokenPak can append a one-line stats footer to responses:
+Optionally, TokenPak can print a one-line stats footer to the proxy terminal's
+standard error:
 
 ```bash
 TOKENPAK_STATS_FOOTER=1 tokenpak serve
@@ -172,32 +168,23 @@ tokenpak trace --last
 ### How do I know compression is working?
 
 ```bash
-tokenpak status --full
-# Should show: compression: enabled | mode: hybrid
-
-# After making a request:
-tokenpak cost --today
-# Shows: saved X% via compression
+tokenpak compress --help
+# Run tokenpak compress with representative local input.
 ```
 
-Or watch the stats footer appended to each response:
-```
-[TokenPak: 4,231→2,847 tokens | saved 33% | $0.004]
-```
+For an integration that explicitly calls `compact_request_body`, verify its
+before/after token evidence. A config or status value alone is not proof that
+the default proxy transformed a body.
 
 ### Some of my requests aren't being compressed
 
-Normal — compression is only applied when beneficial. By design:
+This is expected on the default HTTP path: it has no
+`compact_request_body` call site. `TOKENPAK_COMPACT` /
+`compression.enabled` do not toggle that path, and lowering
+`TOKENPAK_COMPACT_THRESHOLD_TOKENS` on `tokenpak serve` does not activate it.
 
-- Requests under the threshold (`compression.threshold_tokens`, default 1500) are passed through
-- If the compressed version would only save <5% tokens, it's skipped
-- Code blocks are preserved by default (lossy compression on code is risky)
-
-To lower the threshold:
-
-```bash
-tokenpak config set compression.threshold_tokens 2000
-```
+The threshold applies only inside an integration that explicitly calls the
+legacy helper. Use `tokenpak compress` for explicit local compaction.
 
 ### Compression seems to be changing my prompt
 
@@ -325,12 +312,11 @@ tokenpak budget alert --at 80
 
 ```
 [INFO] TokenPak proxy starting on :8766
-[INFO] Compression: enabled (hybrid mode, threshold=1500 tokens)
 [INFO] Telemetry: active → ~/.tokenpak/telemetry.db
 [INFO] Ready.
 ```
 
-### Per-request trace (debug mode)
+### Per-request trace from an explicitly enabled reduction hook
 
 ```
 [DEBUG] POST /v1/messages → anthropic (claude-opus-4-6)

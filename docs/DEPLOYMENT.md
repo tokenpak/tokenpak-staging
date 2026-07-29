@@ -159,6 +159,13 @@ Default location: `~/.tokenpak/config.json`
 }
 ```
 
+The `compression.enabled` / `TOKENPAK_COMPACT` setting is retained for
+configuration compatibility but has no consumer in the default HTTP request
+path. `compression.threshold_tokens` /
+`TOKENPAK_COMPACT_THRESHOLD_TOKENS` is used only by integrations that
+explicitly call `compact_request_body`; it does not activate proxy body
+compaction.
+
 ### Environment Variables
 
 All env vars override config file values. **Env vars take priority.**
@@ -172,8 +179,8 @@ All env vars override config file values. **Env vars take priority.**
 | `TOKENPAK_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces) |
 | `TOKENPAK_MODE` | `hybrid` | Compression mode: `strict`, `hybrid`, `aggressive` |
 | `TOKENPAK_PROFILE` | `balanced` | Workflow profile: `safe`, `balanced`, `aggressive`, `agentic`, `transparent` |
-| `TOKENPAK_COMPACT` | `1` | Master compression switch (`0` to disable) |
-| `TOKENPAK_COMPACT_THRESHOLD_TOKENS` | `1500` in `balanced` | Min tokens before compression activates |
+| `TOKENPAK_COMPACT` | `1` | Legacy compatibility value; no default-HTTP effect |
+| `TOKENPAK_COMPACT_THRESHOLD_TOKENS` | `1500` in `balanced` | Threshold for explicit `compact_request_body` callers only |
 | `TOKENPAK_DB` | `~/.tokenpak/monitor.db` | SQLite telemetry database path |
 | `TOKENPAK_STATS_FOOTER` | `0` | Print per-request savings receipt to proxy stderr |
 | `TOKENPAK_DEBUG` | `0` | Enable debug logging |
@@ -254,9 +261,8 @@ Group=tokenpak
 # Load API keys from protected file
 EnvironmentFile=/etc/tokenpak/secrets.env
 
-# Compression settings
+# Request-policy profile
 Environment=TOKENPAK_MODE=hybrid
-Environment=TOKENPAK_COMPACT=1
 Environment=PYTHONUNBUFFERED=1
 
 ExecStart=/usr/local/bin/tokenpak serve --port 8766
@@ -311,7 +317,6 @@ services:
  - "127.0.0.1:8766:8766"
  environment:
  - TOKENPAK_MODE=hybrid
- - TOKENPAK_COMPACT=1
  - TOKENPAK_PORT=8766
  env_file:
  - .env.secrets # ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
@@ -490,20 +495,15 @@ Common fixes:
 - **Permission denied on port <1024:** Use ports ≥1024 or set `CAP_NET_BIND_SERVICE`
 - **Python version too old:** `python --version` must be 3.10+
 
-### Requests not being compressed
+### `TOKENPAK_COMPACT` does not change proxy request bodies
 
-```bash
-# Check compression status
-tokenpak status
-# Look for "Compression: enabled"
+This is expected. The default HTTP path does not call the legacy
+`compact_request_body` helper, so `TOKENPAK_COMPACT`, `compression.enabled`,
+and a lower `TOKENPAK_COMPACT_THRESHOLD_TOKENS` value do not activate body
+compaction for `tokenpak serve`.
 
-# Lower threshold for testing
-TOKENPAK_COMPACT_THRESHOLD_TOKENS=100 tokenpak serve
-```
-
-Compression only activates above the active profile's token threshold
-(`balanced`: 1,500). Short requests pass through unchanged — this is correct
-behavior.
+Use `tokenpak compress` for explicit, local compaction. Integrations that call
+`compact_request_body` directly may use the threshold setting for that call.
 
 ### API key errors
 
@@ -524,14 +524,13 @@ curl https://api.anthropic.com/v1/models \
 # Enable debug mode to see timing breakdown
 TOKENPAK_DEBUG=1 tokenpak serve
 
-# Profile compression overhead
+# Benchmark the configured request path
 tokenpak benchmark --samples 10
 ```
 
-Typical compression overhead: 5–50ms. If you're seeing >200ms, try:
-- Reduce `--workers` (CPU contention)
-- Set `TOKENPAK_MODE=hybrid` (avoids aggressive compression on small requests)
-- Disable ML compression: `pip uninstall llmlingua`
+The default HTTP path does not incur legacy `compact_request_body` work. If an
+integration explicitly invokes that helper, benchmark the integration's full
+request path and compare with the helper disabled there.
 
 ### Debug mode
 
@@ -539,7 +538,8 @@ Typical compression overhead: 5–50ms. If you're seeing >200ms, try:
 TOKENPAK_DEBUG=1 tokenpak serve 2>&1 | tee /tmp/tokenpak-debug.log
 ```
 
-Debug output shows: request routing, compression ratio per request, provider response times, cache hits/misses.
+Debug output shows request routing, observed token counts, provider response
+times, and cache hits or misses.
 
 ### Performance tuning
 

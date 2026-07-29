@@ -2264,32 +2264,21 @@ def cmd_models(args: CommandArgs) -> None:
 
 
 def _apply_safe_mode_defaults() -> None:
-    """Restore pre-1.1 passthrough defaults atomically (--safe flag)."""
+    """Apply the legacy ``--safe`` compatibility settings atomically."""
     import os as _os
 
-    _os.environ["TOKENPAK_COMPACT"] = "0"  # disable compaction
-    _os.environ["TOKENPAK_COMPACT_THRESHOLD_TOKENS"] = "4500"  # old threshold
+    # TOKENPAK_COMPACT is a no-op compatibility value; the threshold remains
+    # available to explicit legacy helper callers. Neither controls body
+    # compaction in the default HTTP proxy path.
+    _os.environ["TOKENPAK_COMPACT"] = "0"
+    _os.environ["TOKENPAK_COMPACT_THRESHOLD_TOKENS"] = "4500"
     _os.environ["TOKENPAK_BUDGET_CONTROLLER"] = "0"  # disable budget controller
     # TOKENPAK_VALIDATION_GATE: already True in both old and new defaults, no change
 
 
 def _maybe_show_compression_notice(safe: bool) -> None:
-    """Print one-time first-run notice to stderr when compression is active."""
-    if safe:
-        return
-    import sys as _sys
-
-    _marker = _paths_mod().write_home() / ".compression-default-notice-shown"
-    if not _marker.exists():
-        print(
-            "tokenpak now compresses by default — disable with 'tokenpak serve --safe'",
-            file=_sys.stderr,
-        )
-        try:
-            _marker.parent.mkdir(parents=True, exist_ok=True)
-            _marker.touch()
-        except OSError:
-            pass  # non-fatal — notice will repeat on next start
+    """Compatibility no-op: the default HTTP path does not compact bodies."""
+    _ = safe
 
 
 def cmd_serve(args: CommandArgs) -> None:
@@ -2304,11 +2293,11 @@ def cmd_serve(args: CommandArgs) -> None:
     if getattr(args, "stats_footer", False):
         os.environ["TOKENPAK_STATS_FOOTER"] = "1"
 
-    # --safe: restore old passthrough defaults BEFORE any proxy modules are imported
+    # --safe: apply legacy compatibility settings before proxy imports.
     if getattr(args, "safe", False):
         _apply_safe_mode_defaults()
 
-    # First-run compression notice (stderr only, once per install)
+    # Retained as an internal compatibility seam; it intentionally emits nothing.
     _maybe_show_compression_notice(safe=getattr(args, "safe", False))
 
     if getattr(args, "telemetry", False):
@@ -4177,8 +4166,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Disable compression defaults (restore pre-1.1 passthrough behavior). "
-            "Equivalent to TOKENPAK_COMPACT=0."
+            "Apply legacy safety compatibility settings for this process; "
+            "does not toggle default HTTP body compaction."
         ),
     )
     p_serve.set_defaults(func=cmd_serve)
@@ -10592,8 +10581,8 @@ def _build_compress_parser(sub: Subparsers) -> argparse.ArgumentParser:
         description=(
             "Compress a piece of text, JSON, or code using TokenPak's compression.\n"
             "Shows token savings and compressed output.\n\n"
-            "Note: The proxy handles compression automatically for API requests.\n"
-            "Use this command to test compression on arbitrary content.\n\n"
+            "The default HTTP proxy does not invoke this body-compaction path.\n"
+            "Use this command explicitly to compress arbitrary content.\n\n"
             "Example:\n"
             "  tokenpak compress < myfile.json\n"
             '  echo \'{"data": "...large JSON..."}\' | tokenpak compress --verbose'

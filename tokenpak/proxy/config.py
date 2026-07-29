@@ -173,6 +173,11 @@ def _cfg(
 # ---------------------------------------------------------------------------
 # Named Workflow Profiles — TOKENPAK_PROFILE sets sensible flag bundles
 # Profile is a floor: explicit env vars always win (setdefault semantics)
+#
+# The TOKENPAK_COMPACT_THRESHOLD_TOKENS entries below are retained for callers
+# that explicitly invoke tokenpak.compression.pipeline.compact_request_body.
+# Selecting a profile does not activate body compaction in the default HTTP
+# proxy path.
 # ---------------------------------------------------------------------------
 _PROFILE_PRESETS: dict[str, dict[str, str]] = {
     "safe": {
@@ -355,8 +360,14 @@ BUDGET_ALERT_THRESHOLD_PCT = float(os.environ.get("TOKENPAK_BUDGET_ALERT_PCT", "
 # mutation_audit TTL — prune rows older than this many days
 MUTATION_AUDIT_TTL_DAYS: int = int(os.environ.get("TOKENPAK_MUTATION_AUDIT_TTL_DAYS", "30"))
 VAULT_SYNC_INTERVAL = 60
+# Legacy compatibility surface.  ``compression.enabled`` / ``TOKENPAK_COMPACT``
+# are still loaded and exported, but the default HTTP proxy path does not read
+# this value and does not invoke ``compact_request_body``.  Keep the setting so
+# existing configuration continues to parse without implying runtime control.
 ENABLE_COMPACTION = _cfg("compression.enabled", True, "TOKENPAK_COMPACT", bool)
 COMPACT_MAX_CHARS = _cfg("compression.max_chars", 120, "TOKENPAK_COMPACT_MAX_CHARS", int)
+# Used only by explicit ``compact_request_body`` callers; it is not an
+# activation threshold for default HTTP proxy requests.
 COMPACT_THRESHOLD_TOKENS = _cfg(
     "compression.threshold_tokens",
     1500,
@@ -850,6 +861,8 @@ class ProxyConfig:
         self.port: int = PROXY_PORT
         self.listen_address: str = LISTEN_ADDRESS
         self.compilation_mode: str = COMPILATION_MODE
+        # Compatibility-only for the default HTTP proxy path; see the module
+        # constant above.
         self.enable_compaction: bool = ENABLE_COMPACTION
         self.upstream_routes: Dict[str, str] = UPSTREAM_ROUTES
         self.upstream_timeout: int = UPSTREAM_TIMEOUT

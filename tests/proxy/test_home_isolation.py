@@ -114,11 +114,11 @@ def test_no_home_hardcode_for_runtime_state():
     assert not offenders, f"fleet-home hardcodes remain: {offenders}"
 
 
-# ── Test 6 (repro-pin + default preservation): unset TOKENPAK_HOME resolves to
-#    the legacy ~/.tokenpak home (current fleet behavior). ──────────────────────
+# ── Test 6 (repro-pin + default preservation): a fresh unscoped install uses
+#    the canonical ~/.tpk home. ─────────────────────────────────────────────────
 def test_default_behavior_preserved_when_home_unset(monkeypatch):
     monkeypatch.delenv("TOKENPAK_HOME", raising=False)
     if _paths.canonical_home().exists():
         pytest.skip("~/.tpk present — canonical home active; legacy-default check N/A")
-    assert _paths.home() == Path.home() / ".tokenpak"
-    assert _paths.under("proxy.pid") == Path.home() / ".tokenpak" / "proxy.pid"
+    assert _paths.home() == Path.home() / ".tpk"
+    assert _paths.under("proxy.pid") == Path.home() / ".tpk" / "proxy.pid"
