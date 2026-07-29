@@ -18,6 +18,11 @@ and should have to break a test that says so.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from tokenpak.proxy import config as cfg_mod
@@ -27,9 +32,9 @@ from tokenpak.proxy.request import ProxyRequest
 BODY = b'{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}'
 
 
-def _req():
+def _req(*, body: bytes = BODY):
     return ProxyRequest(
-        method="POST", url="https://api.anthropic.com/v1/messages", headers={}, body=BODY
+        method="POST", url="https://api.anthropic.com/v1/messages", headers={}, body=body
     )
 
 
@@ -66,26 +71,53 @@ def fake_retrieval(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_shipped_default_is_off():
-    """The SHIPPED default must be OFF.
+def test_shipped_default_resolves_off(tmp_path: Path):
+    """A clean runtime resolves the production default to OFF.
 
-    Asserts the *declared* default, not the resolved runtime value. An earlier
-    version asserted `cfg_mod.VAULT_INJECTION_ENABLED is False`, which fails on
-    any host that has legitimately enabled the flag — `TOKENPAK_VAULT_INJECTION=1`
-    made 5 of 7 tests in this file fail, with diagnostics telling the operator
-    "someone changed the default. That is a governance decision" when they had
-    merely used the flag for its stated purpose.
-
-    A test must not accuse a correct operator of a governance violation.
+    Resolve the value through the real loader in an isolated process. This
+    remains stable on hosts that explicitly enabled injection while still
+    failing if the shipped default changes.
     """
-    import inspect
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env.pop("TOKENPAK_VAULT_INJECTION", None)
+    env["HOME"] = str(tmp_path)
+    env["TOKENPAK_HOME"] = str(tmp_path / ".tpk")
+    env["TOKENPAK_CONFIG"] = str(tmp_path / "missing-config.yaml")
+    env["PYTHONPATH"] = str(repo_root)
 
-    src = inspect.getsource(cfg_mod)
-    assert 'features.vault_injection", False' in src, (
-        "the shipped default for features.vault_injection is no longer False — "
-        "that is a governance decision requiring the DLP and spend-guard ordering "
-        "to land first"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tokenpak.proxy.config import VAULT_INJECTION_ENABLED; "
+            "print(VAULT_INJECTION_ENABLED)",
+        ],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
     )
+
+    assert completed.stdout.strip() == "False", completed.stderr
+
+
+@pytest.mark.parametrize("policy", [{}, {"vault_injection": "disabled"}])
+def test_disabled_route_wins_over_master_switch(policy):
+    """A route that does not request injection reports the specific reason."""
+    _out, stage = stage_vault_injection(_req(), policy)
+
+    assert stage.skipped
+    assert stage.skip_reason == "disabled_or_empty"
+
+
+def test_empty_body_wins_over_master_switch():
+    """An empty request reports the specific reason before the global switch."""
+    _out, stage = stage_vault_injection(_req(body=b""), {"vault_injection": "json_inject"})
+
+    assert stage.skipped
+    assert stage.skip_reason == "disabled_or_empty"
 
 
 def test_disabled_by_default_skips_with_a_distinct_reason(fake_retrieval):
@@ -103,8 +135,8 @@ def test_disabled_by_default_skips_with_a_distinct_reason(fake_retrieval):
     assert stage.skip_reason != "disabled_or_empty"
 
 
-def test_switch_beats_route_policy(fake_retrieval):
-    """Route policy asking for injection does not override the master switch."""
+def test_switch_blocks_routes_that_request_injection(fake_retrieval):
+    """A route requesting injection does not override the master switch."""
     for mode in ("json_inject", "byte_splice"):
         _out, stage = stage_vault_injection(_req(), {"vault_injection": mode})
         assert stage.skipped, f"{mode} ran despite the master switch being off"
