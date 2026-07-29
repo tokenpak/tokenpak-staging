@@ -883,6 +883,61 @@ def cmd_help(args: CommandArgs) -> None:
         _print_full_help()
 
 
+# ── TOKENPAK_HOME sandbox guard ───────────────────────────────────────────────
+#
+# TOKENPAK_HOME exists to sandbox writes (CI, multi-tenant hosts). A symlink
+# planted inside the override that points at the live config defeats a purely
+# textual check, because open(path, "w") follows links.
+#
+# This started as a closure inside cmd_setup guarding one path. Review found the
+# same write reachable through two other unguarded targets and a second command,
+# so it is module-level: a guard that protects one of a command's write targets
+# protects nothing.
+
+
+def _home_override_escape(*candidates: Path) -> Optional[str]:
+    """Return a refusal message if any candidate resolves outside TOKENPAK_HOME.
+
+    ``None`` when the override is unset, or when every candidate stays inside it.
+    Every path a command may WRITE must be passed — including directories, whose
+    creation and logs land outside the sandbox just as a config file would.
+    """
+    raw = os.environ.get("TOKENPAK_HOME", "").strip()
+    if not raw:
+        return None
+    root = Path(raw).expanduser().resolve()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            # resolve() follows symlinks, which is the point.
+            candidate.resolve().relative_to(root)
+        except (ValueError, OSError, RuntimeError):
+            # RuntimeError: Path.resolve() raises it on a symlink loop up to
+            # Python 3.12. Omitting it turned a refusal into an uncaught
+            # traceback.
+            return (
+                f"✗ Refusing to write outside TOKENPAK_HOME: {candidate}\n"
+                f"  resolves outside {root}.\n"
+                "  TOKENPAK_HOME exists to sandbox; a symlinked target defeats that."
+            )
+        # Python 3.13 resolve() returns a symlink loop unresolved instead of
+        # raising, and the unresolved path sits inside root — so containment
+        # passes and the later write raises ELOOP uncaught. Probe the loop
+        # directly: stat() is version-independent (kernel ELOOP). A missing
+        # path is a legitimate not-yet-created write target.
+        try:
+            os.stat(candidate)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return (
+                f"✗ Refusing to write through an unresolvable symlink: {candidate}\n"
+                "  the target cannot be opened (symlink loop or unreadable link chain)."
+            )
+    return None
+
+
 # ── Alias commands ────────────────────────────────────────────────────────────
 
 
@@ -904,6 +959,17 @@ def cmd_init(args: CommandArgs) -> int:
     config_file = _p.config_write_path()
     existing_config = _p.config_read_path()
     env_file = config_dir / ".env"
+
+    # `init` had no sandbox guard at all — a second writer of config_write_path()
+    # plus .env. Driven through a pty it overwrote the real config while printing
+    # a success banner naming the sandbox, so the false claim rode on top of the
+    # data loss. Guarded before any prompt, so the refusal costs no keystrokes.
+    _escape = _home_override_escape(config_dir, config_file, env_file)
+    if _escape:
+        from tokenpak.cli.exit_codes import EXIT_FAILURE as _EXIT_FAILURE
+
+        print(_escape)
+        return _EXIT_FAILURE
 
     # `init` is interactive by nature. Every prompt below aborts on a closed
     # stdin, and click raises Abort — which surfaced as a raw traceback and a
@@ -1034,6 +1100,7 @@ def cmd_setup(args: CommandArgs) -> int:
     import yaml
 
     from tokenpak import _paths as _tp_paths
+    from tokenpak.cli.exit_codes import EXIT_FAILURE
 
     from .core.profiles import get_profile
 
@@ -1051,6 +1118,27 @@ def cmd_setup(args: CommandArgs) -> int:
     config_dir = _tp_paths.write_home()
     config_file = _tp_paths.config_write_path()
     existing_config = _tp_paths.config_read_path()
+    # ...but never outside an explicit TOKENPAK_HOME. That override exists to
+    # sandbox (the standard names CI and multi-tenant hosts), and
+    # `read_candidates()` deliberately also lists the real homes so a caller can
+    # *find* older state — its docstring is explicit that doing so never implies
+    # a valid write target. Honouring a config discovered there turns a sandboxed
+    # run into a write against the operator's live config: `TOKENPAK_HOME=/tmp/x
+    # tokenpak setup --yes` wrote nothing to /tmp/x and overwrote the real
+    # ~/.tokenpak/config.yaml, with no backup.
+    if os.environ.get("TOKENPAK_HOME", "").strip():
+        if existing_config is not None and _home_override_escape(existing_config):
+            existing_config = None
+    # EVERY write target must resolve inside the override, not just the config
+    # file. Guarding config_file alone still destroyed the real config through
+    # config_dir: `startup_log = config_dir / "proxy-startup.log"` is opened "w",
+    # so a planted symlink took the startup banner straight into the live config
+    # (51 → 1041 bytes, no backup). A guard that covers one of a command's write
+    # targets protects nothing.
+    _escape = _home_override_escape(config_dir, config_file)
+    if _escape:
+        print(_escape)
+        return EXIT_FAILURE
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Check for existing config
@@ -1340,7 +1428,14 @@ def cmd_start(args: CommandArgs) -> int:
     )
     from tokenpak.core.runtime import lifecycle as _lifecycle
 
-    port = int(os.environ.get("TOKENPAK_PORT", "8766"))
+    # --port is declared on this command and was being ignored: the port came
+    # from the environment only, so `tokenpak start --port 8799` ran its
+    # ownership preflight against 8766 and refused whenever anything else held
+    # the default port. Explicit flag wins, then TOKENPAK_PORT, then the default.
+    _flag_port = getattr(args, "port", None)
+    port = (
+        int(_flag_port) if _flag_port is not None else int(os.environ.get("TOKENPAK_PORT", "8766"))
+    )
 
     # Validate config on boot (P1-T5)
     from tokenpak.core.config_loader import config_load_error, load_config
@@ -1407,7 +1502,7 @@ def cmd_start(args: CommandArgs) -> int:
         print(f"A proxy is already answering on port {port}, but this install did not start it.")
         print("   TokenPak will not manage a process it does not own.")
         print("   Run `tokenpak status` to inspect it, or choose another port:")
-        print("     TOKENPAK_PORT=<port> tokenpak start")
+        print("     tokenpak start --port <port>")
         return EXIT_RUNTIME_UNAVAILABLE
 
     if snap.pid_alive and not snap.health_ok:
@@ -2542,18 +2637,47 @@ def cmd_preview(args: CommandArgs):
 
     from tokenpak.cli.exit_codes import EXIT_FAILURE
 
+    def _bail(*lines: str) -> int:
+        """Refuse the input, honouring the --json contract.
+
+        --json is a machine-readable contract: it emits JSON on *every* path,
+        including failures, so a caller parsing stdout never hits prose. The
+        input guards below originally printed prose and returned before the
+        --json branch, which broke that for `preview --json <path>`.
+        """
+        if getattr(args, "json", False):
+            # Build the contract object rather than hand-rolling a dict. The
+            # invariant is that a non-MEASURED state carries **null** numerics,
+            # never 0 — `PreviewResult.validate()` raises on zeros, and
+            # test_cli_preview_json_nulls_are_not_zeros asserts it. Hand-rolling
+            # produced a second, incompatible shape under the same
+            # `state: "error"` label, so a consumer branching on
+            # `saved_tokens is None` read a refusal as "measured, saved nothing".
+            from tokenpak.services.preview import PreviewResult, PreviewState
+
+            _err = PreviewResult(
+                state=PreviewState.ERROR,
+                reason=" ".join(line.strip() for line in lines),
+            )
+            _err.validate()
+            print(json.dumps(_err.to_json(), indent=2))
+        else:
+            for line in lines:
+                print(line)
+        return EXIT_FAILURE
+
     # Get input text
     if args.file:
         src = Path(args.file)
         if not src.is_file():
-            print(f"✗ No such file: {args.file}")
-            print('  Check the path, or pass text directly: tokenpak preview "<text>"')
-            return EXIT_FAILURE
+            return _bail(
+                f"✗ No such file: {args.file}",
+                '  Check the path, or pass text directly: tokenpak preview "<text>"',
+            )
         try:
             text = src.read_text()
         except OSError as exc:
-            print(f"✗ Could not read {args.file}: {exc}")
-            return EXIT_FAILURE
+            return _bail(f"✗ Could not read {args.file}: {exc}")
         # A .json/.jsonl file that does not parse would otherwise be compressed
         # as raw prose and reported as a confident, meaningless number. Refuse
         # instead: a silent wrong answer is worse than an error.
@@ -2569,11 +2693,10 @@ def cmd_preview(args: CommandArgs):
                         if line.strip():
                             _json.loads(line)
             except ValueError as exc:
-                print(f"✗ {args.file} is not valid {suffix.lstrip('.').upper()}: {exc}")
-                print(
-                    f"  Fix the file, or pipe it as plain text: cat {args.file} | tokenpak preview"
+                return _bail(
+                    f"✗ {args.file} is not valid {suffix.lstrip('.').upper()}: {exc}",
+                    f"  Fix the file, or pipe it as plain text: cat {args.file} | tokenpak preview",
                 )
-                return EXIT_FAILURE
     elif args.input:
         text = args.input
         # The positional argument is literal TEXT. Passing a filename — the most
@@ -2587,9 +2710,10 @@ def cmd_preview(args: CommandArgs):
             except OSError:
                 looks_like_file = False
             if looks_like_file:
-                print("✗ That is a file path, but this argument takes literal text.")
-                print(f"  Did you mean:  tokenpak preview --file {stripped}")
-                return EXIT_FAILURE
+                return _bail(
+                    "✗ That is a file path, but this argument takes literal text.",
+                    f"  Did you mean:  tokenpak preview --file {stripped}",
+                )
     else:
         # Read from stdin
         text = sys.stdin.read()
@@ -3897,7 +4021,15 @@ def build_parser() -> argparse.ArgumentParser:
             "The proxy reads config from tokenpak.yaml or ~/.tokenpak/config.yaml"
         ),
     )
-    p_start.add_argument("--port", type=int, default=8766, help="Port to listen on (default: 8766)")
+    # default=None, not 8766: cmd_start must be able to tell "user passed a
+    # port" from "user passed nothing". With a concrete default, honouring the
+    # flag would silently override TOKENPAK_PORT on every unflagged run.
+    p_start.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to listen on (default: 8766, or TOKENPAK_PORT)",
+    )
     p_start.add_argument(
         "--workers", type=int, default=2, help="Number of worker processes (default: 2)"
     )
@@ -6231,7 +6363,12 @@ def cmd_config_validate(args: CommandArgs):
     With --config FILE: validates a proxy config file (JSON/YAML) against JSON Schema.
     Without --config: validates the TokenPak meta config (config.json).
     """
-    from tokenpak.cli.exit_codes import EXIT_FAILURE, EXIT_NOT_CONFIGURED
+    from tokenpak.cli.exit_codes import (
+        EXIT_CORRUPT_STATE,
+        EXIT_FAILURE,
+        EXIT_NOT_CONFIGURED,
+        EXIT_OK,
+    )
 
     # Route to JSON schema validator when --config is provided
     config_file = getattr(args, "config_file", None)
@@ -6251,9 +6388,57 @@ def cmd_config_validate(args: CommandArgs):
     except Exception as exc:
         # A validator that cannot read its target has not validated anything.
         # Returning 0 here reported success to `set -e` scripts and CI.
+        # The legacy meta config (config.json) is a different artifact from the
+        # config `setup` writes (config.yaml), and nothing creates it on a modern
+        # install. Telling the user to run `setup` was a loop: setup succeeds,
+        # this still fails, forever. A correctly-configured install with no
+        # legacy meta config has nothing to validate here and is not an error —
+        # returning non-zero for it broke `config validate && …` wrappers.
+        # A file that exists but will not parse is its own state, distinct from
+        # one that is absent — the repo carries EXIT_CORRUPT_STATE and a test
+        # named test_corrupt_config_is_not_missing_config for exactly this.
+        # `config_read_path()` tests existence only, and its candidate list
+        # includes config.json, so probing with it would hand back the very file
+        # that just failed to parse and report success on it.
+        if _TOKENPAK_CFG.exists():
+            print(f"✗ The TokenPak meta config at {_TOKENPAK_CFG} exists but could not be read.")
+            print(f"  {exc}")
+            print("  This is a corrupt config, not a missing one — repair or remove the file.")
+            return EXIT_CORRUPT_STATE
+
+        _modern = None
+        try:
+            from tokenpak import _paths as _vp_paths
+
+            _modern = _vp_paths.config_read_path()
+        except Exception:
+            _modern = None
+        if _modern is not None and _modern != _TOKENPAK_CFG:
+            # config_read_path() is an EXISTENCE probe. Claiming "✓ configured
+            # at <file>" on the strength of it made `config validate` exit 0 on a
+            # config that `start` (8) and `status` both refuse to parse — a
+            # fail-open regression against merge-base, on the file every modern
+            # install has. Validate means read it.
+            try:
+                import yaml as _v_yaml
+
+                with open(_modern, encoding="utf-8") as _vf:
+                    _v_yaml.safe_load(_vf)
+            except FileNotFoundError:
+                pass  # vanished between probe and read; fall through to the
+                # not-configured path below rather than claim either way.
+            except Exception as _v_exc:
+                print(f"✗ The config at {_modern} could not be parsed: {_v_exc}")
+                print("  This is a corrupt config, not a missing one — repair or remove the file.")
+                return EXIT_CORRUPT_STATE
+            else:
+                print("✓ No legacy meta config to validate.")
+                print(f"  This install is configured at {_modern}.")
+                print("  To validate a proxy config file: tokenpak config validate --config <file>")
+                return EXIT_OK
         print(f"✗ Could not read the TokenPak meta config at {_TOKENPAK_CFG}: {exc}")
-        print("  Run `tokenpak setup` to create one, or pass --config <file> to")
-        print("  validate a proxy config instead.")
+        print("  This install has no configuration at all — run `tokenpak setup`.")
+        print("  To validate a proxy config file instead: --config <file>")
         return EXIT_NOT_CONFIGURED
 
     errors: list[str] = []
