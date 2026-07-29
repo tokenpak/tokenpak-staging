@@ -104,8 +104,8 @@ def injection_switch_on(monkeypatch):
 
     PR647 adds `VAULT_INJECTION_ENABLED`, default OFF, guarding the top of
     `stage_vault_injection`. Without this fixture, once that lands the stage
-    returns at the guard and the strict xfail below can NEVER xpass again —
-    silently reverting this suite to the exact defect it was written to fix.
+    returns at the guard and the provider-bound assertion can never exercise
+    the injection path this suite is meant to prove.
 
     `raising=False` so the suite works on trees where the flag does not exist yet.
     """
@@ -251,9 +251,8 @@ def _eligible_request() -> dict:
             return body  # fail-open: no system array found
 
     Without it the splice target does not exist, so the body comes back unchanged
-    however correct injection becomes — and the xfail below could never xpass.
-    A permanently-red xfail masking a *working* feature is the exact outcome
-    `strict=True` was chosen to prevent.
+    however correct injection becomes, producing a false failure against a
+    request shape the byte-splice path cannot modify.
 
     Real Claude Code requests always carry a system array, so this is also the
     representative payload for the route the session header forces.
@@ -302,35 +301,10 @@ def test_the_request_actually_reaches_the_injection_stage(
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN P0: vault injection does not modify the request. On THIS route "
-        "(byte_splice) the minimal repair set is TWO defects, verified by running "
-        "every combination:\n"
-        "  (2) inject_vault_context returns a 3-tuple while the pipeline only "
-        "      populates injection_text from a 4-tuple, so byte-restore short-circuits;\n"
-        "  (3) pipeline.py does getattr(vault_bridge, 'extract_query_signal'), but "
-        "      that name is a FUNCTION-LOCAL import there, so hasattr is False; the "
-        "      AttributeError is swallowed by a catch-all and the query signal is ''.\n"
-        "Repairing {2,3} alone makes this XPASS.\n"
-        "\n"
-        "A THIRD defect is real but does NOT gate this route: adapter starvation "
-        "(_detect_adapter called with empty path/headers → PassthroughAdapter). On "
-        "byte_splice the adapter's mutated body is discarded (pipeline.py:134-139 "
-        "keeps only injection_text), so it gates json_inject, not this test. Earlier "
-        "versions of this reason claimed all three were required — they were wrong."
-    ),
-    strict=True,
-)
 def test_vault_content_reaches_the_provider(
     proxy, upstream, vault_with_content, injection_stage_spy
 ):
-    """The claim, asserted where it is either true or false.
-
-    Marked xfail(strict) deliberately: it documents the defect as executable
-    evidence rather than prose, and it will fail loudly the moment the fix lands
-    and the marker starts arriving — at which point the marker is removed.
-    """
+    """Retrieved vault content reaches the provider on the byte-splice route."""
     _, upstream_url = proxy
     _, recorder = upstream
 

@@ -179,8 +179,16 @@ def test_run_dir_is_under_canonical_home():
     """run_dir lives beside the journal, in the canonical home — never legacy."""
     from tokenpak import _paths
 
-    cfg = CompanionConfig()
-    assert cfg.run_dir == _paths.write_home() / "companion" / "run"
+    # This test exercises the default HOME-based resolution. A developer's
+    # explicit runtime overrides must not redirect its fixture outside the
+    # suite's isolated HOME.
+    with patch.dict(
+        os.environ,
+        {"TOKENPAK_HOME": "", "TOKENPAK_COMPANION_JOURNAL_DIR": ""},
+    ):
+        cfg = CompanionConfig()
+        expected = _paths.write_home() / "companion" / "run"
+    assert cfg.run_dir == expected
     assert ".tokenpak" not in str(cfg.run_dir)
 
 
