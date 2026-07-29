@@ -16,6 +16,8 @@ import sqlite3
 
 import pytest
 
+import tokenpak.telemetry.cost as cost_module
+from tokenpak.models import PricingContext, RateBand
 from tokenpak.telemetry.cost import (
     CURRENT_EFFECTIVE_DATE,
     CURRENT_PRICING_VERSION,
@@ -37,6 +39,52 @@ def engine(tmp_path):
     """CostEngine backed by a temp DB."""
     db = tmp_path / "cost_test.db"
     return CostEngine(db_path=str(db))
+
+
+@pytest.fixture
+def banded_engine(tmp_path, monkeypatch):
+    """CostEngine seeded with synthetic contextual bands."""
+    source_url = "https://example.com/pricing"
+    bands = [
+        (
+            "anthropic",
+            "claude-sonnet-4-6",
+            RateBand(
+                band_id="long-context",
+                input_per_mtok=6.0,
+                output_per_mtok=30.0,
+                source="official",
+                source_url=source_url,
+                min_input_tokens=2_000,
+            ),
+        ),
+        (
+            "anthropic",
+            "claude-sonnet-4-6",
+            RateBand(
+                band_id="batch",
+                input_per_mtok=1.5,
+                output_per_mtok=7.5,
+                source="official",
+                source_url=source_url,
+                service_tiers=("batch",),
+            ),
+        ),
+        (
+            "anthropic",
+            "claude-sonnet-4-6",
+            RateBand(
+                band_id="audio-input",
+                input_per_mtok=9.0,
+                output_per_mtok=15.0,
+                source="official",
+                source_url=source_url,
+                input_modalities=("audio",),
+            ),
+        ),
+    ]
+    monkeypatch.setattr(cost_module, "SEED_PRICING_BANDS", bands)
+    return CostEngine(db_path=str(tmp_path / "banded-cost.db"))
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +180,61 @@ class TestGetPricing:
         assert p.source == "official"
 
 
+class TestContextAwarePricing:
+    def test_scalar_lookup_remains_compatible(self, banded_engine):
+        pricing = banded_engine.get_pricing("claude-sonnet-4-6")
+
+        assert pricing.input_rate == pytest.approx(3.0)
+        assert pricing.output_rate == pytest.approx(15.0)
+        assert pricing.rate_band_id is None
+
+    @pytest.mark.parametrize(
+        ("context", "expected_id", "expected_input"),
+        [
+            (PricingContext(input_tokens=2_000), "long-context", 6.0),
+            (PricingContext(input_tokens=1_000, service_tier="batch"), "batch", 1.5),
+            (PricingContext(input_tokens=1_000, input_modality="audio"), "audio-input", 9.0),
+        ],
+    )
+    def test_context_selects_seeded_band(self, banded_engine, context, expected_id, expected_input):
+        pricing = banded_engine.get_pricing("claude-sonnet-4-6", context=context)
+
+        assert pricing.rate_band_id == expected_id
+        assert pricing.input_rate == pytest.approx(expected_input)
+        assert pricing.source_url == "https://example.com/pricing"
+
+    def test_context_without_matching_band_uses_scalar(self, banded_engine):
+        pricing = banded_engine.get_pricing(
+            "claude-sonnet-4-6", context=PricingContext(input_tokens=1_000)
+        )
+
+        assert pricing.rate_band_id is None
+        assert pricing.input_rate == pytest.approx(3.0)
+
+    def test_threshold_crossing_prices_baseline_and_actual_separately(self, banded_engine):
+        result = banded_engine.calculate(
+            "claude-sonnet-4-6",
+            raw_input_tokens=2_500,
+            final_input_tokens=1_000,
+            output_tokens=0,
+        )
+
+        assert result.baseline_cost == pytest.approx(0.015)
+        assert result.actual_cost == pytest.approx(0.003)
+        assert result.savings_amount == pytest.approx(0.012)
+
+    def test_missing_band_cache_rate_uses_band_input_rate(self, banded_engine):
+        result = banded_engine.calculate(
+            "claude-sonnet-4-6",
+            raw_input_tokens=2_000,
+            final_input_tokens=2_000,
+            output_tokens=0,
+            cache_read_tokens=2_000,
+        )
+
+        assert result.actual_cost == pytest.approx(0.012)
+
+
 # ---------------------------------------------------------------------------
 # add_pricing / list_pricing
 # ---------------------------------------------------------------------------
@@ -212,6 +315,7 @@ class TestPricingCatalog:
 
         with sqlite3.connect(db) as conn:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(tp_pricing)")}
+            band_columns = {row[1] for row in conn.execute("PRAGMA table_info(tp_pricing_bands)")}
             current_rows = conn.execute(
                 "SELECT COUNT(*) FROM tp_pricing WHERE version = ?",
                 (CURRENT_PRICING_VERSION,),
@@ -221,8 +325,42 @@ class TestPricingCatalog:
             ).fetchone()[0]
 
         assert {"cache_read_rate", "cache_write_rate"}.issubset(columns)
+        assert {
+            "pricing_id",
+            "band_id",
+            "input_modalities",
+            "output_modalities",
+            "service_tiers",
+            "source_url",
+        }.issubset(band_columns)
         assert current_rows == len(SEED_PRICING)
         assert historical_rows == 1
+
+    def test_contextual_seed_is_idempotent(self, tmp_path, monkeypatch):
+        band = RateBand(
+            band_id="long-context",
+            input_per_mtok=6.0,
+            output_per_mtok=30.0,
+            source="official",
+            source_url="https://example.com/pricing",
+            min_input_tokens=2_000,
+        )
+        monkeypatch.setattr(
+            cost_module,
+            "SEED_PRICING_BANDS",
+            [("anthropic", "claude-sonnet-4-6", band)],
+        )
+        db = tmp_path / "idempotent-bands.db"
+
+        CostEngine(db_path=str(db))
+        CostEngine(db_path=str(db))
+
+        with sqlite3.connect(db) as conn:
+            band_count = conn.execute(
+                "SELECT COUNT(*) FROM tp_pricing_bands WHERE band_id = 'long-context'"
+            ).fetchone()[0]
+
+        assert band_count == 1
 
 
 # ---------------------------------------------------------------------------

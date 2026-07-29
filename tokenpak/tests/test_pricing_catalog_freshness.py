@@ -9,12 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from tokenpak.models import get_rates, get_registry
+from tokenpak.models import RateBand, get_rates, get_registry
 from tokenpak.prove.adapter import _get_model_rates, list_providers
 from tokenpak.telemetry.cost import (
     CURRENT_EFFECTIVE_DATE,
     CURRENT_PRICING_VERSION,
     SEED_PRICING,
+    SEED_PRICING_BANDS,
 )
 from tokenpak.telemetry.model_analytics import get_model_pricing
 from tokenpak.telemetry.pricing import _STALENESS_DAYS, PricingCatalog
@@ -25,6 +26,24 @@ OFFICIAL_SOURCES = {
     "anthropic": "https://platform.claude.com/docs/en/about-claude/pricing",
     "openai": "https://developers.openai.com/api/docs/pricing",
     "google": "https://ai.google.dev/gemini-api/docs/pricing",
+}
+PRICING_BANDS_SCHEMA = {
+    "version": "v1",
+    "entry_required": ["id", "rates", "provenance"],
+    "selectors": [
+        "min_input_tokens",
+        "max_input_tokens",
+        "input_modalities",
+        "output_modalities",
+        "service_tiers",
+    ],
+    "selector_defaults": "min 0; max unbounded; modalities and service tiers wildcard",
+    "token_range": "min inclusive; max exclusive",
+    "rates_required": ["input", "output"],
+    "rates_optional": ["cache_read", "cache_write"],
+    "provenance_required": ["source", "source_url"],
+    "selection": "unique strict-subset match; incomparable overlaps are invalid",
+    "cache_read_fallback": "selected input rate",
 }
 
 
@@ -46,6 +65,25 @@ def test_seed_catalog_metadata_is_current_and_sourced():
     assert data["_meta"]["sources"] == OFFICIAL_SOURCES
     assert data["_meta"]["pricing_version"] == CURRENT_PRICING_VERSION
     assert data["_meta"]["effective_date"] == CURRENT_EFFECTIVE_DATE
+
+
+def test_catalog_declares_contextual_rate_band_schema_without_unverified_rows():
+    data = _catalog_data()
+
+    assert data["_meta"]["version"] == "v5"
+    assert data["_meta"]["pricing_bands_schema"] == PRICING_BANDS_SCHEMA
+
+    declared_bands = []
+    for model, model_data in data["models"].items():
+        bands = model_data.get("pricing_bands", [])
+        assert isinstance(bands, list), f"{model}: pricing_bands must be a list"
+        parsed = [RateBand.from_mapping(band) for band in bands]
+        band_ids = [band.band_id for band in parsed]
+        assert len(band_ids) == len(set(band_ids)), f"{model}: duplicate pricing band ids"
+        declared_bands.extend(parsed)
+
+    assert declared_bands == []
+    assert SEED_PRICING_BANDS == []
 
 
 def test_sonnet_5_introductory_rate_has_not_expired():

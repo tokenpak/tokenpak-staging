@@ -3,6 +3,7 @@ TokenPak Cost Calculation Engine (cost.py)
 
 Service layer for cost calculation with:
   - tp_pricing table for versioned per-model rates
+  - tp_pricing_bands child table for contextual rate tuples
   - Baseline / actual / savings formulas
   - Pricing version resolution by event timestamp
   - CostResult dataclass
@@ -33,6 +34,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, cast
+
+from tokenpak.models import PricingContext, RateBand
+from tokenpak.models._pricing import select_rate_band
 
 logger = logging.getLogger(__name__)
 
@@ -81,18 +85,23 @@ except (ImportError, AttributeError):
 # ---------------------------------------------------------------------------
 PricingSeedValue = str | float | None
 PricingRowValue = str | int | float
+PricingBandSeed = tuple[str, str, RateBand]
 
 
-def _load_seed_pricing() -> tuple[List[dict[str, PricingSeedValue]], str, str]:
+def _load_seed_pricing() -> tuple[
+    List[dict[str, PricingSeedValue]], List[PricingBandSeed], str, str
+]:
     """Build telemetry seed rows from the canonical model catalog."""
     catalog_path = Path(__file__).parents[1] / "models" / "data" / "seed_catalog.json"
     raw = json.loads(catalog_path.read_text(encoding="utf-8"))
     meta = raw["_meta"]
     rows: List[dict[str, PricingSeedValue]] = []
+    bands: List[PricingBandSeed] = []
     for model, data in raw["models"].items():
+        provider = str(data["provider"])
         rows.append(
             {
-                "provider": data["provider"],
+                "provider": provider,
                 "model": model,
                 "input_rate": float(data["input"]),
                 "output_rate": float(data["output"]),
@@ -105,10 +114,18 @@ def _load_seed_pricing() -> tuple[List[dict[str, PricingSeedValue]], str, str]:
                 "source": data.get("source", "official"),
             }
         )
-    return rows, str(meta["pricing_version"]), str(meta["effective_date"])
+        bands.extend(
+            (provider, model, RateBand.from_mapping(band)) for band in data.get("pricing_bands", [])
+        )
+    return rows, bands, str(meta["pricing_version"]), str(meta["effective_date"])
 
 
-SEED_PRICING, CURRENT_PRICING_VERSION, CURRENT_EFFECTIVE_DATE = _load_seed_pricing()
+(
+    SEED_PRICING,
+    SEED_PRICING_BANDS,
+    CURRENT_PRICING_VERSION,
+    CURRENT_EFFECTIVE_DATE,
+) = _load_seed_pricing()
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +174,8 @@ class Pricing:
     source: str = "official"
     cache_read_rate: float | None = None  # USD per 1M cache-read tokens
     cache_write_rate: float | None = None  # USD per 1M cache-write tokens
+    source_url: str | None = None
+    rate_band_id: str | None = None
 
     @property
     def input_per_token(self) -> float:
@@ -209,6 +228,28 @@ class CostEngine:
         ON tp_pricing(model, effective_date);
     CREATE INDEX IF NOT EXISTS idx_tp_pricing_version
         ON tp_pricing(version);
+    CREATE TABLE IF NOT EXISTS tp_pricing_bands (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        pricing_id        INTEGER NOT NULL,
+        band_id           TEXT    NOT NULL,
+        min_input_tokens  INTEGER NOT NULL DEFAULT 0,
+        max_input_tokens  INTEGER,
+        input_modalities  TEXT    NOT NULL DEFAULT '["*"]',
+        output_modalities TEXT    NOT NULL DEFAULT '["*"]',
+        service_tiers     TEXT    NOT NULL DEFAULT '["*"]',
+        input_rate        REAL    NOT NULL,
+        output_rate       REAL    NOT NULL,
+        cache_read_rate   REAL,
+        cache_write_rate  REAL,
+        source            TEXT    NOT NULL,
+        source_url        TEXT    NOT NULL,
+        created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (pricing_id) REFERENCES tp_pricing(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tp_pricing_bands_unique
+        ON tp_pricing_bands(pricing_id, band_id);
+    CREATE INDEX IF NOT EXISTS idx_tp_pricing_bands_parent
+        ON tp_pricing_bands(pricing_id);
     """
 
     # Uniqueness key: without it, concurrent COUNT-then-seed races (the
@@ -233,7 +274,7 @@ class CostEngine:
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = str(resolved_path)
         self._lock = threading.Lock()
-        self._pricing_cache: dict[tuple[str, str], Pricing] = {}
+        self._pricing_cache: dict[tuple[str, str, PricingContext | None], Pricing] = {}
         self._init_db()
 
     # ------------------------------------------------------------------
@@ -298,7 +339,7 @@ class CostEngine:
             conn.commit()
 
     def _seed(self, conn: sqlite3.Connection) -> None:
-        """Insert default pricing rows (idempotent via the uniqueness key)."""
+        """Insert scalar and contextual pricing rows idempotently."""
         for row in SEED_PRICING:
             conn.execute(
                 """INSERT OR IGNORE INTO tp_pricing
@@ -317,15 +358,56 @@ class CostEngine:
                     row["source"],
                 ),
             )
+        for provider, model, band in SEED_PRICING_BANDS:
+            parent = conn.execute(
+                """SELECT id FROM tp_pricing
+                   WHERE version = ? AND provider = ? AND model = ?""",
+                (CURRENT_PRICING_VERSION, provider, model),
+            ).fetchone()
+            if parent is None:
+                logger.warning("Skipping pricing band %s: parent row not found", band.band_id)
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO tp_pricing_bands
+                   (pricing_id, band_id, min_input_tokens, max_input_tokens,
+                    input_modalities, output_modalities, service_tiers,
+                    input_rate, output_rate, cache_read_rate, cache_write_rate,
+                    source, source_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    parent["id"],
+                    band.band_id,
+                    band.min_input_tokens,
+                    band.max_input_tokens,
+                    json.dumps(band.input_modalities),
+                    json.dumps(band.output_modalities),
+                    json.dumps(band.service_tiers),
+                    band.input_per_mtok,
+                    band.output_per_mtok,
+                    band.cache_read_per_mtok,
+                    band.cache_write_per_mtok,
+                    band.source,
+                    band.source_url,
+                ),
+            )
         conn.commit()
         logger.info(
-            f"tp_pricing seeded with {len(SEED_PRICING)} rows (version {CURRENT_PRICING_VERSION})"
+            "tp_pricing seeded with %d scalar rows and %d bands (version %s)",
+            len(SEED_PRICING),
+            len(SEED_PRICING_BANDS),
+            CURRENT_PRICING_VERSION,
         )
 
     # ------------------------------------------------------------------
     # Pricing resolution
     # ------------------------------------------------------------------
-    def get_pricing(self, model: str, event_ts: Optional[str] = None) -> Pricing:
+    def get_pricing(
+        self,
+        model: str,
+        event_ts: Optional[str] = None,
+        *,
+        context: PricingContext | None = None,
+    ) -> Pricing:
         """
         Resolve pricing for a model at a given event timestamp.
 
@@ -340,53 +422,101 @@ class CostEngine:
             Pricing record.
         """
         event_date = self._parse_date(event_ts)
-        cache_key = (model, event_date)
+        cache_key = (model, event_date, context)
 
         if cache_key in self._pricing_cache:
             return self._pricing_cache[cache_key]
 
         conn = self._connect()
-        # Exact match first
-        row = conn.execute(
-            """SELECT * FROM tp_pricing
-               WHERE model = ? AND effective_date <= ?
-               ORDER BY effective_date DESC LIMIT 1""",
-            (model, event_date),
-        ).fetchone()
+        try:
+            # Exact match first
+            row = conn.execute(
+                """SELECT * FROM tp_pricing
+                   WHERE model = ? AND effective_date <= ?
+                   ORDER BY effective_date DESC LIMIT 1""",
+                (model, event_date),
+            ).fetchone()
 
-        if row is None:
-            # Try fuzzy: partial model name match
-            row = self._fuzzy_match(conn, model, event_date)
+            if row is None:
+                # Try fuzzy: partial model name match
+                row = self._fuzzy_match(conn, model, event_date)
 
-        conn.close()
-
-        if row:
-            pricing = Pricing(
-                provider=row["provider"],
-                model=row["model"],
-                input_rate=row["input_rate"],
-                output_rate=row["output_rate"],
-                version=row["version"],
-                effective_date=row["effective_date"],
-                source=row["source"],
-                cache_read_rate=row["cache_read_rate"],
-                cache_write_rate=row["cache_write_rate"],
-            )
-        else:
-            # Fallback pricing for unknown models
-            pricing = Pricing(
-                provider="unknown",
-                model=model,
-                input_rate=self._FALLBACK_INPUT_RATE,
-                output_rate=self._FALLBACK_OUTPUT_RATE,
-                version="fallback",
-                effective_date=event_date,
-                source="estimated",
-            )
-            logger.warning(f"No pricing found for model '{model}', using fallback")
+            if row:
+                pricing = Pricing(
+                    provider=row["provider"],
+                    model=row["model"],
+                    input_rate=row["input_rate"],
+                    output_rate=row["output_rate"],
+                    version=row["version"],
+                    effective_date=row["effective_date"],
+                    source=row["source"],
+                    cache_read_rate=row["cache_read_rate"],
+                    cache_write_rate=row["cache_write_rate"],
+                )
+                if context is not None:
+                    pricing = self._contextual_pricing(conn, row, pricing, context)
+            else:
+                # Fallback pricing for unknown models
+                pricing = Pricing(
+                    provider="unknown",
+                    model=model,
+                    input_rate=self._FALLBACK_INPUT_RATE,
+                    output_rate=self._FALLBACK_OUTPUT_RATE,
+                    version="fallback",
+                    effective_date=event_date,
+                    source="estimated",
+                )
+                logger.warning(f"No pricing found for model '{model}', using fallback")
+        finally:
+            conn.close()
 
         self._pricing_cache[cache_key] = pricing
         return pricing
+
+    @staticmethod
+    def _contextual_pricing(
+        conn: sqlite3.Connection,
+        row: sqlite3.Row,
+        scalar: Pricing,
+        context: PricingContext,
+    ) -> Pricing:
+        band_rows = conn.execute(
+            "SELECT * FROM tp_pricing_bands WHERE pricing_id = ? ORDER BY band_id",
+            (row["id"],),
+        ).fetchall()
+        bands = [
+            RateBand(
+                band_id=band_row["band_id"],
+                input_per_mtok=band_row["input_rate"],
+                output_per_mtok=band_row["output_rate"],
+                source=band_row["source"],
+                source_url=band_row["source_url"],
+                cache_read_per_mtok=band_row["cache_read_rate"],
+                cache_write_per_mtok=band_row["cache_write_rate"],
+                min_input_tokens=band_row["min_input_tokens"],
+                max_input_tokens=band_row["max_input_tokens"],
+                input_modalities=tuple(json.loads(band_row["input_modalities"])),
+                output_modalities=tuple(json.loads(band_row["output_modalities"])),
+                service_tiers=tuple(json.loads(band_row["service_tiers"])),
+            )
+            for band_row in band_rows
+        ]
+        selected = select_rate_band(bands, context)
+        if selected is None:
+            return scalar
+        return Pricing(
+            provider=scalar.provider,
+            model=scalar.model,
+            input_rate=selected.input_per_mtok,
+            output_rate=selected.output_per_mtok,
+            version=scalar.version,
+            effective_date=scalar.effective_date,
+            source=selected.source,
+            cache_read_rate=selected.cache_read_per_mtok,
+            cache_write_rate=selected.cache_write_per_mtok,
+            source_url=selected.source_url,
+            rate_band_id=selected.band_id,
+        )
 
     def _fuzzy_match(
         self, conn: sqlite3.Connection, model: str, event_date: str
@@ -431,6 +561,9 @@ class CostEngine:
         output_tokens: int,
         event_ts: Optional[str] = None,
         cache_read_tokens: int = 0,
+        input_modality: str = "text",
+        output_modality: str = "text",
+        service_tier: str = "standard",
     ) -> CostResult:
         """
         Calculate baseline, actual, and savings for a single event.
@@ -442,6 +575,9 @@ class CostEngine:
             output_tokens: Output tokens (same for baseline and actual).
             event_ts: Event ISO timestamp for pricing version resolution.
             cache_read_tokens: Tokens served from prompt cache.
+            input_modality: Provider pricing input-modality selector.
+            output_modality: Provider pricing output-modality selector.
+            service_tier: Provider pricing service-tier selector.
 
         Returns:
             CostResult with all cost fields.
@@ -452,23 +588,44 @@ class CostEngine:
         out = max(0, output_tokens)
         cache_read = min(max(0, cache_read_tokens), final)
 
-        pricing = self.get_pricing(model, event_ts)
+        baseline_pricing = self.get_pricing(
+            model,
+            event_ts,
+            context=PricingContext(
+                input_tokens=raw,
+                input_modality=input_modality,
+                output_modality=output_modality,
+                service_tier=service_tier,
+            ),
+        )
+        actual_pricing = self.get_pricing(
+            model,
+            event_ts,
+            context=PricingContext(
+                input_tokens=final,
+                input_modality=input_modality,
+                output_modality=output_modality,
+                service_tier=service_tier,
+            ),
+        )
 
         # Baseline: what would have been billed without compression
-        baseline_cost = raw * pricing.input_per_token + out * pricing.output_per_token
+        baseline_cost = (
+            raw * baseline_pricing.input_per_token + out * baseline_pricing.output_per_token
+        )
 
         # Actual: billed tokens after compression
         effective_input = final - cache_read
         # A missing cache rate means the model has no verified cache discount;
         # charge those tokens at the normal input rate instead of treating them
         # as free.
-        cache_read_rate = pricing.cache_read_per_token
+        cache_read_rate = actual_pricing.cache_read_per_token
         if cache_read_rate is None:
-            cache_read_rate = pricing.input_per_token
+            cache_read_rate = actual_pricing.input_per_token
         actual_cost = (
-            effective_input * pricing.input_per_token
+            effective_input * actual_pricing.input_per_token
             + cache_read * cache_read_rate
-            + out * pricing.output_per_token
+            + out * actual_pricing.output_per_token
         )
 
         # Savings (never negative — rounding artifacts clamped)
@@ -477,7 +634,7 @@ class CostEngine:
 
         return CostResult(
             model=model,
-            pricing_version=pricing.version,
+            pricing_version=actual_pricing.version,
             raw_input_tokens=raw,
             final_input_tokens=final,
             output_tokens=out,
@@ -485,7 +642,7 @@ class CostEngine:
             actual_cost=actual_cost,
             savings_amount=savings_amount,
             savings_pct=savings_pct,
-            data_source=pricing.source,
+            data_source=actual_pricing.source,
         )
 
     # ------------------------------------------------------------------

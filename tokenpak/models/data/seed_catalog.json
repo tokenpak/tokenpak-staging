@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "v4",
+    "version": "v5",
     "pricing_version": "2026.07",
     "effective_date": "2026-07-28",
     "description": "Unified model registry seed data — costs are USD per 1,000,000 tokens",
@@ -10,13 +10,25 @@
       "openai": "https://developers.openai.com/api/docs/pricing",
       "google": "https://ai.google.dev/gemini-api/docs/pricing"
     },
+    "pricing_bands_schema": {
+      "version": "v1",
+      "entry_required": ["id", "rates", "provenance"],
+      "selectors": ["min_input_tokens", "max_input_tokens", "input_modalities", "output_modalities", "service_tiers"],
+      "selector_defaults": "min 0; max unbounded; modalities and service tiers wildcard",
+      "token_range": "min inclusive; max exclusive",
+      "rates_required": ["input", "output"],
+      "rates_optional": ["cache_read", "cache_write"],
+      "provenance_required": ["source", "source_url"],
+      "selection": "unique strict-subset match; incomparable overlaps are invalid",
+      "cache_read_fallback": "selected input rate"
+    },
     "notes": [
       "This is the single source of truth for model metadata across tokenpak",
       "Family rules in _families.py handle unknown models automatically",
       "Explicit entries here override family-inferred values",
       "cache_read/cache_write: null means provider does not support prompt caching",
       "context_windows: max input-context tokens (provider Models API max_input_tokens); omit a model rather than guessing — consumers fall back to a static threshold for unknowns",
-      "Only directly verified standard-tier scalar rates are active. Context-length-tiered models need threshold-aware pricing support before they can be represented without under- or over-counting.",
+      "Only directly verified standard-tier scalar rates are active. Optional pricing_bands can represent verified context-length, modality, and service-tier rates; this catalog version declares the schema without activating unverified band rates.",
       "Claude Sonnet 5 uses its introductory rate through 2026-08-31 and must be refreshed before 2026-09-01."
     ]
   },
