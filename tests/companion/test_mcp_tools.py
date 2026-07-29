@@ -291,6 +291,25 @@ def test_prune_context_elision_marker_present(tmp_path):
     assert "elided" in result["pruned_text"]
 
 
+def test_prune_context_reduction_wrapped_in_pak_envelope(tmp_path):
+    """Actual reductions carry the Pak envelope so re-injected content is
+    attributable to TokenPak."""
+    text = "word " * 2200
+    state = _make_state(tmp_path)
+    result = json.loads(_handle_prune_context(state, {"text": text, "max_tokens": 100}))
+    assert result["reduction_pct"] > 0
+    assert result["pruned_text"].startswith("[PAK id=")
+    assert result["pruned_text"].rstrip().endswith("[/PAK]")
+
+
+def test_prune_context_no_reduction_not_enveloped(tmp_path):
+    """Zero-reduction passthrough stays byte-identical — no envelope."""
+    text = "short text"
+    state = _make_state(tmp_path)
+    result = json.loads(_handle_prune_context(state, {"text": text, "max_tokens": 2000}))
+    assert result["pruned_text"] == text
+
+
 # ---------------------------------------------------------------------------
 # load_capsule
 # ---------------------------------------------------------------------------

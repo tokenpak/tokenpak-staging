@@ -227,6 +227,13 @@ def _handle_prune_context(state: CompanionState, args: dict[str, Any]) -> str:
         return json.dumps({"error": "proxy_unreachable", "detail": resp.get("detail", "")})
     if status >= 400:
         return json.dumps(resp)
+    # Wrap actual reductions in the Pak envelope so compressed content that
+    # re-enters model context is attributable to TokenPak.
+    if isinstance(resp, dict) and resp.get("pruned_text") and resp.get("reduction_pct", 0) > 0:
+        from ..capsules.builder import _wrap_capsule
+
+        resp = dict(resp)
+        resp["pruned_text"] = _wrap_capsule(text, resp["pruned_text"])
     return json.dumps(resp)
 
 
