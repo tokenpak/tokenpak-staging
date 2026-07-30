@@ -1273,6 +1273,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         input_tokens = 0
         sent_input_tokens = 0
         protected_tokens = 0
+        vault_injected_tokens = 0
+        vault_injected_sources = ""
         is_streaming = False
         cache_read_tokens = 0
         cache_creation_tokens = 0
@@ -1309,6 +1311,68 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         _policy = get_policy(_route)
         _source_platform = _policy["platform_tag"]
         _is_byte_preserved = _policy.get("body") == "byte_preserved"
+
+        if should_log and is_model_request and body:
+            try:
+                route = ps.router.route(target_url, dict(self.headers), body)
+                model = route.model
+            except Exception:
+                pass
+
+        # Pin the no-TokenPak counterfactual before any request mutation.  The
+        # final provider-bound estimate is recorded separately after injection,
+        # Spend Guard, and DLP so retrieved context can never masquerade as
+        # savings or disappear from projected provider cost.
+        if should_log and is_model_request and body:
+            input_tokens = _estimate_tokens_from_body(body)
+
+        # Vault injection admits retrieved content to the provider-bound body,
+        # so it must run before the controls that authorize and scan that body.
+        # The default-off master switch in stage_vault_injection keeps this path
+        # inert until activation is explicitly approved.
+        if should_log and is_model_request and body and _is_byte_preserved:
+            is_streaming = b'"stream":true' in body or b'"stream": true' in body
+            try:
+                from tokenpak.proxy.pipeline import process_request as _pipeline_run
+                from tokenpak.proxy.request import ProxyRequest as _PReq
+                from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
+
+                _pr = _PReq(
+                    method="POST",
+                    url=target_url,
+                    headers=dict(self.headers),
+                    body=body,
+                    source_platform=_source_platform,
+                    session_id=_rsi(self.headers, model),
+                )
+                _result = _pipeline_run(
+                    _pr,
+                    _policy,
+                    route=_route,
+                    client_has_auth=True,
+                )
+                body = _result.request.body
+                for _stage in _result.stages:
+                    if _stage.name != "vault_injection":
+                        continue
+                    vault_injected_tokens = max(0, int(_stage.tokens_delta or 0))
+                    _sources = _stage.details.get("injected_sources", [])
+                    if isinstance(_sources, (list, tuple)):
+                        vault_injected_sources = ",".join(str(item) for item in _sources)
+                    elif _sources:
+                        vault_injected_sources = str(_sources)
+                    break
+            except Exception as _injection_exc:
+                # Injection remains fail-open, but a structural failure must be
+                # visible: Spend Guard and DLP will still evaluate the unchanged
+                # request body below.
+                import logging as _injection_log
+
+                _injection_log.getLogger(__name__).warning(
+                    "tokenpak.vault_injection: request left unchanged after %s: %s",
+                    type(_injection_exc).__name__,
+                    _injection_exc,
+                )
 
         # Platform adapter detection (feature-flagged via TOKENPAK_PLATFORM_ADAPTERS, default ON)
         _adapters_enabled = os.environ.get("TOKENPAK_PLATFORM_ADAPTERS", "1") != "0"
@@ -1504,14 +1568,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _dlp_exc,
                 )
 
+        if should_log and is_model_request and body and _is_byte_preserved:
+            sent_input_tokens = _estimate_tokens_from_body(body)
+
         # Run compression pipeline hook if registered
         if should_log and is_model_request and body:
-            try:
-                route = ps.router.route(target_url, dict(self.headers), body)
-                model = route.model
-            except Exception:
-                pass
-            input_tokens = _estimate_tokens_from_body(body)
+            if input_tokens == 0:
+                input_tokens = _estimate_tokens_from_body(body)
 
             # Observe-only optimization pipeline.
             # Pipeline composition lives in services/optimization/, which
@@ -1589,26 +1652,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if _is_byte_preserved:
                 # Byte-preserved path (Claude Code): detect streaming from raw
                 # bytes only — never json.loads/json.dumps the body.
-                # Use the modular pipeline for vault injection (byte splice)
-                # but skip compression entirely to preserve Anthropic billing routing.
+                # Injection already ran before Spend Guard and DLP. Compression
+                # remains disabled to preserve Anthropic billing routing.
                 is_streaming = b'"stream":true' in body or b'"stream": true' in body
-                try:
-                    from tokenpak.proxy.pipeline import process_request as _pipeline_run
-                    from tokenpak.proxy.request import ProxyRequest as _PReq
-                    from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
-
-                    _pr = _PReq(
-                        method="POST",
-                        url=target_url,
-                        headers=dict(self.headers),
-                        body=body,
-                        source_platform=_source_platform,
-                        session_id=_rsi(self.headers, model),
-                    )
-                    _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
-                    body = _result.request.body
-                except Exception:
-                    pass  # fail-open: vault injection failure must never break a request
             else:
                 # READ-ONLY parse — body bytes must NOT be reconstructed from this dict
                 try:
@@ -2366,8 +2412,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             compilation_mode=ps.compilation_mode,
                             protected_tokens=protected_tokens,
                             compressed_tokens=max(0, input_tokens - sent_input_tokens),
-                            injected_tokens=0,
-                            injected_sources="",
+                            injected_tokens=vault_injected_tokens,
+                            injected_sources=vault_injected_sources,
                             cache_read_tokens=cache_read_tokens,
                             cache_creation_tokens=cache_creation_tokens,
                             cache_creation_ephemeral_1h_tokens=cache_creation_1h_tokens,

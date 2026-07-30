@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -155,6 +156,38 @@ def injection_stage_spy(monkeypatch):
 
     monkeypatch.setattr(pl, "stage_vault_injection", _spy, raising=True)
     return calls
+
+
+@pytest.fixture
+def safety_control_observer(monkeypatch):
+    """Record the exact bodies authorized and scanned before provider send."""
+    from tokenpak.proxy import spend_guard
+    from tokenpak.security import dlp
+
+    seen: dict[str, list[bytes]] = {"spend_guard": [], "dlp": []}
+
+    def _evaluate(body, *_args, **_kwargs):
+        seen["spend_guard"].append(body)
+        return SimpleNamespace(
+            kind="forward",
+            body=body,
+            admission_ticket=None,
+            response_body=None,
+            http_status=None,
+            headers=None,
+        )
+
+    class _Scanner:
+        mode = "warn"
+
+        def scan(self, text):
+            seen["dlp"].append(text.encode("utf-8"))
+            return []
+
+    monkeypatch.setattr(spend_guard, "evaluate", _evaluate, raising=True)
+    monkeypatch.setattr(dlp, "DLPScanner", _Scanner, raising=True)
+    monkeypatch.setenv("TOKENPAK_DLP_ENABLED", "1")
+    return seen
 
 
 PROXY_PORT = 18873
@@ -337,3 +370,54 @@ def test_request_still_reaches_upstream_intact_when_vault_has_content(
     assert recorder.received_bodies, "nothing reached the upstream"
     sent = b"".join(recorder.received_bodies).decode("utf-8", "replace")
     assert "what did we decide about auth?" in sent, "the user's own prompt was lost"
+
+
+def test_injected_content_is_authorized_and_scanned_before_provider_send(
+    proxy,
+    upstream,
+    vault_with_content,
+    safety_control_observer,
+):
+    """Spend Guard and DLP must inspect the provider-bound injected body."""
+    _, upstream_url = proxy
+    _, recorder = upstream
+
+    _send(_eligible_request(), upstream_url)
+
+    assert safety_control_observer["spend_guard"], "Spend Guard did not evaluate the request"
+    assert safety_control_observer["dlp"], "DLP did not scan the request"
+    assert VAULT_MARKER.encode() in b"".join(safety_control_observer["spend_guard"])
+    assert VAULT_MARKER.encode() in b"".join(safety_control_observer["dlp"])
+    assert VAULT_MARKER.encode() in b"".join(recorder.received_bodies)
+
+
+def test_injection_is_costed_as_sent_without_inflating_savings(
+    proxy,
+    upstream,
+    vault_with_content,
+    monkeypatch,
+):
+    """Keep the raw counterfactual and final provider-bound count separate."""
+    from tokenpak.proxy import server as server_module
+
+    estimates: list[bytes] = []
+
+    def _estimate(body):
+        estimates.append(body)
+        return 140 if VAULT_MARKER.encode() in body else 100
+
+    monkeypatch.setattr(server_module, "_estimate_tokens_from_body", _estimate, raising=True)
+    proxy_server, upstream_url = proxy
+
+    _send(_eligible_request(), upstream_url)
+
+    deadline = time.time() + 2
+    while proxy_server.session["requests"] == 0 and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert estimates, "request token accounting never ran"
+    assert VAULT_MARKER.encode() not in estimates[0], "counterfactual was measured after injection"
+    assert any(VAULT_MARKER.encode() in body for body in estimates[1:])
+    assert proxy_server.session["input_tokens"] == 100
+    assert proxy_server.session["sent_input_tokens"] == 140
+    assert proxy_server.session["saved_tokens"] == 0
