@@ -1,6 +1,6 @@
 # TokenPak — Known Limitations & When NOT to Use
 
-An honest list of what isn't yet at production quality in the open-source release, and where TokenPak is *not* the right fit today. Current as of **v1.14.0**. Each entry names a **retirement condition** — the concrete signal that removes it.
+An honest list of what isn't yet at production quality in the open-source release, and where TokenPak is *not* the right fit today. Each entry names a **retirement condition** — the concrete signal that removes it.
 
 ## Activation does not unlock Pro features yet
 

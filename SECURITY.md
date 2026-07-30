@@ -19,8 +19,8 @@ Include the TokenPak version (`tokenpak --version`), reproduction steps, and you
 
 | Version | Supported |
 | ------- | --------- |
-| 1.15.x (latest minor) | ✅ Security fixes |
-| < 1.15 | ❌ Unsupported — please upgrade |
+| Latest public minor release | ✅ Security fixes |
+| Earlier minor releases | ❌ Unsupported — please upgrade |
 
 TokenPak is in beta: security fixes target the **latest public minor release line** unless a security advisory explicitly extends support to an earlier line. This table is checked at each release.
 
