@@ -15,6 +15,7 @@ Covers the two D5 deliverables (packet p0-d5-monitor-db-feed-normalization-2026-
 
 import os
 import sqlite3
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -140,9 +141,18 @@ def test_resolve_agent_id_sentinel_when_absent():
     assert _resolve_agent_id({"X-Other": "v"}) == ""
 
 
+def test_attribution_header_length_is_bounded_and_value_is_not_logged(caplog):
+    valid = "a" * 128
+    invalid = "a" * 129
+
+    assert _resolve_agent_id({"X-Tokenpak-Agent": valid}) == valid
+    assert _resolve_agent_id({"X-Tokenpak-Agent": invalid}) == ""
+    assert invalid not in caplog.text
+    assert "sha256=" in caplog.text
+
+
 def test_resolve_cycle_id_captured_or_sentinel():
-    # captured verbatim (not lower-cased — cycle ids may be case-significant)
-    assert _resolve_cycle_id({"X-Tokenpak-Cycle": "C-9"}) == "C-9"
+    assert _resolve_cycle_id({"X-Tokenpak-Cycle": "cycle-9"}) == "cycle-9"
     # no caller sets it today -> sentinel, never fabricated
     assert _resolve_cycle_id({}) == ""
 
@@ -238,7 +248,7 @@ def test_log_persists_known_attribution_source(tmp_path):
     assert rows and rows[-1][0] == "openclaw_active_session_file"
 
 
-def test_attribution_source_empty_sentinel_when_unknown(tmp_path):
+def test_attribution_source_unknown_sentinel_when_unknown(tmp_path):
     db = tmp_path / "monitor.db"
     m = Monitor(str(db))
     m.log(
@@ -251,8 +261,7 @@ def test_attribution_source_empty_sentinel_when_unknown(tmp_path):
         endpoint="http://y",
     )
     rows = _attr_rows(db)
-    # '' sentinel (never NULL, never fabricated) so 'non-empty == known origin'
-    assert rows and rows[-1][0] == ""
+    assert rows and rows[-1][0] == "unknown"
 
 
 def test_path_c_mapping_unknown_origin_is_empty_not_fabricated():
@@ -277,15 +286,16 @@ def test_path_c_mapping_unknown_origin_is_empty_not_fabricated():
 
 
 def test_attribution_coverage_metric(tmp_path):
-    """Coverage = % of requests rows with a non-empty (known) origin."""
+    """Strict coverage requires agent, cycle, and non-unknown provenance."""
     from tokenpak.cli.commands.doctor import attribution_coverage
 
     db = tmp_path / "monitor.db"
     m = Monitor(str(db))
-    for src in (
-        "openclaw_active_session_file",
-        "anonymous_user_agent_only",
-        "openclaw_active_session_file",
+    for agent_id, cycle_id, src in (
+        ("worker-a", "worker", "header"),
+        ("worker-b", "worker", "unknown"),
+        ("", "worker", "header"),
+        ("worker-c", "", "header"),
     ):
         m.log(
             model="claude-opus-4-8",
@@ -295,21 +305,54 @@ def test_attribution_coverage_metric(tmp_path):
             latency_ms=1,
             status_code=200,
             endpoint="http://x",
+            agent_id=agent_id,
+            cycle_id=cycle_id,
             attribution_source=src,
         )
-    m.log(
-        model="claude-opus-4-8",
-        input_tokens=1,
-        output_tokens=1,
-        cost=0.0,
-        latency_ms=1,
-        status_code=200,
-        endpoint="http://y",
-    )  # unknown -> ''
     _drain(db)
     known, total, pct = attribution_coverage(str(db))
-    assert (known, total) == (3, 4)
-    assert pct == pytest.approx(75.0)
+    assert (known, total) == (1, 4)
+    assert pct == pytest.approx(25.0)
+
+
+def test_attribution_coverage_uses_local_24h_and_supports_all_time(tmp_path):
+    """Legacy unknown spellings stay unknown; all-time is an explicit opt-in."""
+    from tokenpak.cli.commands.doctor import attribution_coverage
+
+    db = tmp_path / "monitor.db"
+    m = Monitor(str(db))
+    for agent_id in ("recent-known", "recent-unknown", "old-known"):
+        m.log(
+            model="claude-opus-4-8",
+            input_tokens=1,
+            output_tokens=1,
+            cost=0.0,
+            latency_ms=1,
+            status_code=200,
+            endpoint="http://x",
+            agent_id=agent_id,
+            cycle_id="worker",
+            attribution_source="header",
+        )
+    _drain(db)
+
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "UPDATE requests SET attribution_source = ' UNKNOWN ' WHERE agent_id = 'recent-unknown'"
+        )
+        conn.execute(
+            "UPDATE requests SET timestamp = ? WHERE agent_id = 'old-known'",
+            ((datetime.now() - timedelta(hours=25)).isoformat(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert attribution_coverage(str(db)) == (1, 2, 50.0)
+    known, total, pct = attribution_coverage(str(db), since_hours=None)
+    assert (known, total) == (2, 3)
+    assert pct == pytest.approx(100 * 2 / 3)
 
 
 def test_attribution_coverage_graceful_when_absent(tmp_path):

@@ -3,9 +3,9 @@
 
 Entry point: run_fleet(since_days, as_json, db_path)
 
-Reads from rollup_daily (populated nightly by fleet-telemetry-rollup.sh).
-If rollup_daily is empty or missing, falls back to a live aggregation from
-the requests table so the command is useful before the first cron run.
+Reads from rollup_daily (maintained on local writes and reconciled by the
+fleet-telemetry rollup job). If rollup_daily is empty or missing, falls back
+to a live local aggregation from the requests table.
 """
 
 from __future__ import annotations
@@ -189,7 +189,7 @@ def run_fleet(
     conn = _open_db(resolved)
     if conn is None:
         print(f"⚠️  Fleet status: monitor.db not found at {resolved}")
-        print("   Run fleet-telemetry-rollup.sh or start the proxy to populate data.")
+        print("   Start the proxy to create request and daily rollup data.")
         return
 
     rows = _query_rollup(conn, since_days)
@@ -215,12 +215,18 @@ def _print_fleet_table(
     since_days: int,
     live_fallback: bool,
 ) -> None:
-    header_note = " (live, rollup pending)" if live_fallback else ""
+    cross_host = not live_fallback and any(bool(row.get("host")) for row in rows)
+    if live_fallback:
+        header_note = " (local monitor.db fallback; cross-host rollup unavailable)"
+    elif cross_host:
+        header_note = " (rollup_daily; cross-host freshness unverified)"
+    else:
+        header_note = " (local rollup_daily; cross-host rollup unavailable)"
     print(f"\n  Fleet status — last {since_days}d{header_note}")
     print("  " + "─" * 82)
 
     if not rows:
-        print("  No data found. Run fleet-telemetry-rollup.sh or check monitor.db.")
+        print("  No data found in rollup_daily or the local monitor.db fallback.")
         print()
         return
 
@@ -266,9 +272,13 @@ def _print_fleet_json(
     since_days: int,
     live_fallback: bool,
 ) -> None:
+    cross_host = not live_fallback and any(bool(row.get("host")) for row in rows)
     output: Dict[str, Any] = {
         "since_days": since_days,
         "source": "live_requests" if live_fallback else "rollup_daily",
+        "scope": "fleet_rollup" if cross_host else "local",
+        "cross_host": cross_host,
+        "freshness": "unverified" if cross_host else "local-only",
         "row_count": len(rows),
         "rows": [],
     }

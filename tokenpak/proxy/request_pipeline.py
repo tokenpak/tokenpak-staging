@@ -20,8 +20,10 @@ __all__ = (
 )
 
 
+import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -35,6 +37,8 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ATTRIBUTION_HEADER_RE = re.compile(r"^[a-z0-9-]{1,128}$")
 
 if TYPE_CHECKING:
     from tokenpak.core.validation_gate import ValidationGate
@@ -733,30 +737,39 @@ def _resolve_agent_id(headers: object) -> str:
     Returns ``""`` (the unknown-attribution sentinel, classified ``unknown``
     downstream) when no caller set the header. Never fabricated.
     """
+    return _resolve_attribution_header(headers, "x-tokenpak-agent")
+
+
+def _resolve_attribution_header(headers: object, header_name: str) -> str:
+    """Resolve one internal attribution header without logging its value."""
     try:
-        for hk, hv in _header_items(headers):
-            if str(hk).lower() == "x-tokenpak-agent":
-                return str(hv).strip().lower()
+        for header_key, header_value in _header_items(headers):
+            if str(header_key).lower() != header_name:
+                continue
+            value = str(header_value).strip().lower()
+            if _ATTRIBUTION_HEADER_RE.fullmatch(value):
+                return value
+            digest = hashlib.sha256(
+                str(header_value).encode("utf-8", errors="replace")
+            ).hexdigest()[:16]
+            logger.warning(
+                "invalid %s header ignored; sha256=%s",
+                header_name,
+                digest,
+            )
+            return ""
     except Exception:
-        pass
+        return ""
     return ""
 
 
 def _resolve_cycle_id(headers: object) -> str:
     """Resolve the cycle id from the ``X-Tokenpak-Cycle`` header.
 
-    No caller stamps this header today; it is resolved here so
-    a future worker that sets it is captured with no code change. Until then
-    the ``""`` sentinel is written and classified ``unknown`` —
-    never fabricated.
+    The fleet wrappers stamp this alongside the agent header. Missing or
+    invalid values use the ``""`` sentinel and are never fabricated.
     """
-    try:
-        for hk, hv in _header_items(headers):
-            if str(hk).lower() == "x-tokenpak-cycle":
-                return str(hv).strip()
-    except Exception:
-        pass
-    return ""
+    return _resolve_attribution_header(headers, "x-tokenpak-cycle")
 
 
 # ---------------------------------------------------------------------------

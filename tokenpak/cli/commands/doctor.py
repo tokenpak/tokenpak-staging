@@ -514,11 +514,14 @@ def verify_integration_target(key: str, proxy_url: str) -> tuple[bool, str]:
 
 def attribution_coverage(
     db_path: str | PathLike[str],
+    since_hours: int | None = 24,
 ) -> tuple[int, int, float | None]:
-    """Return ``(known, total, pct)`` attribution coverage over the requests
-    ledger — the share of rows whose origin is genuinely known (non-empty
-    ``attribution_source``). Internal gate measure only; NOT a public number.
-    Degrades to ``(0, 0, None)`` when the db / table / column is absent."""
+    """Return strict F2 ``(known, total, pct)`` request attribution coverage.
+
+    A row is known only when agent, cycle, and non-unknown provenance are all
+    present. Internal gate measure only; NOT a public number. Degrades to
+    ``(0, 0, None)`` when the database or required schema is absent.
+    """
     import sqlite3 as _sq
 
     try:
@@ -527,13 +530,32 @@ def attribution_coverage(
         return (0, 0, None)
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(requests)")]
-        if "attribution_source" not in cols:
+        required = {"timestamp", "agent_id", "cycle_id", "attribution_source"}
+        if not required.issubset(cols):
             return (0, 0, None)
-        total = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] or 0
+        if since_hours is None:
+            window_sql = ""
+            window_args: tuple[object, ...] = ()
+        else:
+            # Monitor rows use local ``datetime.now().isoformat()`` timestamps.
+            # Normalize the stored ``T`` separator and use a local cutoff; a
+            # raw comparison against UTC ``datetime('now')`` mis-windows the
+            # gate by the host UTC offset and by the separator ordering.
+            window_sql = "WHERE datetime(timestamp) >= datetime('now', 'localtime', ?)"
+            window_args = (f"-{max(1, int(since_hours))} hours",)
+        total = (
+            conn.execute(f"SELECT COUNT(*) FROM requests {window_sql}", window_args).fetchone()[0]
+            or 0
+        )
+        known_prefix = "AND" if window_sql else "WHERE"
         known = (
             conn.execute(
-                "SELECT COUNT(*) FROM requests "
-                "WHERE attribution_source IS NOT NULL AND attribution_source != ''"
+                f"SELECT COUNT(*) FROM requests {window_sql} "
+                f"{known_prefix} TRIM(COALESCE(agent_id, '')) != '' "
+                "AND TRIM(COALESCE(cycle_id, '')) != '' "
+                "AND LOWER(TRIM(COALESCE(attribution_source, ''))) "
+                "NOT IN ('', 'unknown')",
+                window_args,
             ).fetchone()[0]
             or 0
         )
@@ -826,8 +848,7 @@ def run_doctor(
                 detail=health_reason,
             )
 
-        # Attribution coverage — % of ledger rows with a genuinely known origin
-        # (non-empty attribution_source). Internal gate measure; NOT a public
+        # Strict F2 attribution coverage. Internal gate measure; NOT a public
         # number. Informational only — does not fail/penalize the doctor exit.
         try:
             _mon_db = _paths.monitor_db("read")
@@ -841,7 +862,10 @@ def run_doctor(
                     "pass",
                     f"Attribution         {_cov_pct:.0f}% known origin "
                     f"({_cov_known}/{_cov_total} reqs)",
-                    detail=f"non-empty attribution_source on {_cov_known}/{_cov_total} requests rows",
+                    detail=(
+                        "last-24h agent_id + cycle_id + non-unknown attribution_source "
+                        f"on {_cov_known}/{_cov_total} requests rows"
+                    ),
                 )
     else:
         # Fall back to TCP check

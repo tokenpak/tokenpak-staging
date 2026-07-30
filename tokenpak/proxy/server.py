@@ -2065,11 +2065,35 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         except Exception:
                             sse_observation_buffer = b""
                     sse_usage = extract_sse_tokens(sse_observation_buffer)
+                    # Codex Responses nests provider usage under
+                    # ``response.completed.response`` rather than the top-level
+                    # OpenAI/Anthropic shapes handled by ``extract_sse_tokens``.
+                    try:
+                        from tokenpak.proxy.adapters.openai_codex_responses_adapter import (
+                            _codex_response_completed_usage,
+                        )
+
+                        _codex_usage = _codex_response_completed_usage(sse_observation_buffer)
+                    except Exception:
+                        _codex_usage = {}
+                    _codex_model = _codex_usage.get("model")
+                    if isinstance(_codex_model, str) and _codex_model:
+                        model = _codex_model
+                    _codex_input = int(_codex_usage.get("input_tokens") or 0)
+                    if _codex_input:
+                        sent_input_tokens = _codex_input
+                        if input_tokens == 0:
+                            input_tokens = _codex_input
                     # stop_reason from message_delta (read-only on the buffered
                     # copy - forwarded stream bytes already went out unmodified).
                     stop_reason = _extract_sse_stop_reason(sse_observation_buffer)
-                    output_tokens = sse_usage.get("output_tokens", 0)
-                    cache_read_tokens = sse_usage.get("cache_read_input_tokens", 0)
+                    output_tokens = int(
+                        _codex_usage.get("output_tokens") or sse_usage.get("output_tokens", 0)
+                    )
+                    cache_read_tokens = int(
+                        _codex_usage.get("cache_read_tokens")
+                        or sse_usage.get("cache_read_input_tokens", 0)
+                    )
                     cache_creation_tokens = sse_usage.get("cache_creation_input_tokens", 0)
                     # Per-TTL prompt-cache attribution (additive telemetry).
                     cache_creation_1h_tokens = sse_usage.get(
@@ -2334,25 +2358,35 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _mon_session_id = _rsi_mon(self.headers, "")
                     _mon_agent_id = _rai_mon(self.headers)
                     _mon_cycle_id = _rci_mon(self.headers)
+                    _mon_header_present = any(
+                        str(key).lower() in {"x-tokenpak-agent", "x-tokenpak-cycle"}
+                        for key in self.headers
+                    )
                 except Exception:
                     _mon_session_id = ""
                     _mon_agent_id = ""
                     _mon_cycle_id = ""
+                    _mon_header_present = False
                 # Honest platform-origin attribution (Path C): non-empty ONLY when
                 # the origin is genuinely known (a recognized active-session file
                 # or platform User-Agent). '' sentinel otherwise — never
                 # fabricated, never attributed to the proxy itself. Read-only.
+                if _mon_agent_id and _mon_cycle_id:
+                    _mon_attribution_source = "header"
+                else:
+                    _mon_attribution_source = ""
                 try:
                     from tokenpak.services.routing_service.platform_bridge import (
                         _openclaw_extract as _oce_mon,
                     )
 
                     _mon_origin = _oce_mon(dict(self.headers), b"")
-                    _mon_attribution_source = (
-                        _mon_origin.attribution_source if _mon_origin is not None else ""
-                    ) or ""
+                    if not _mon_attribution_source and not _mon_header_present:
+                        _mon_attribution_source = (
+                            _mon_origin.attribution_source if _mon_origin is not None else ""
+                        ) or ""
                 except Exception:
-                    _mon_attribution_source = ""
+                    pass
                 if ps.monitor is not None:
                     try:
                         ps.monitor.log(

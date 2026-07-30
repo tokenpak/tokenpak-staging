@@ -319,6 +319,18 @@ def _parse_sse_tokens(sse_bytes: bytes) -> dict[str, int]:
                 result["output_tokens"] = event["usage"]["completion_tokens"]
     except Exception:
         pass
+    try:
+        from tokenpak.proxy.adapters.openai_codex_responses_adapter import (
+            _codex_response_completed_usage,
+        )
+
+        codex_usage = _codex_response_completed_usage(sse_bytes)
+        result["output_tokens"] = int(codex_usage.get("output_tokens") or result["output_tokens"])
+        result["cache_read_input_tokens"] = int(
+            codex_usage.get("cache_read_tokens") or result["cache_read_input_tokens"]
+        )
+    except Exception:
+        pass
     return result
 
 
@@ -338,6 +350,8 @@ def _build_forward_headers(request: Request, target_url: str) -> dict[str, str]:
         "trailer",
         "upgrade",
         "accept-encoding",
+        "x-tokenpak-agent",
+        "x-tokenpak-cycle",
     }
     headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
     headers["host"] = parsed.netloc
@@ -590,6 +604,7 @@ async def _forward_request(request: Request, target_url: str) -> Response:
             }
 
             async def _inner_stream() -> AsyncIterator[bytes]:
+                nonlocal model, input_tokens, sent_input_tokens
                 nonlocal output_tokens, cache_read_tokens, cache_creation_tokens
                 _buf = bytearray()
                 try:
@@ -602,6 +617,22 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                         output_tokens = usage["output_tokens"]
                         cache_read_tokens = usage["cache_read_input_tokens"]
                         cache_creation_tokens = usage["cache_creation_input_tokens"]
+                        try:
+                            from tokenpak.proxy.adapters.openai_codex_responses_adapter import (
+                                _codex_response_completed_usage,
+                            )
+
+                            codex_usage = _codex_response_completed_usage(bytes(_buf))
+                            provider_model = codex_usage.get("model")
+                            if isinstance(provider_model, str) and provider_model:
+                                model = provider_model
+                            provider_input = int(codex_usage.get("input_tokens") or 0)
+                            if provider_input:
+                                sent_input_tokens = provider_input
+                                if input_tokens == 0:
+                                    input_tokens = provider_input
+                        except Exception:
+                            pass
                     # Record telemetry after stream
                     latency_ms = int((time.monotonic() - t0) * 1000)
                     _record_telemetry(
@@ -615,6 +646,9 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                         cache_read_tokens,
                         cache_creation_tokens,
                         latency_ms,
+                        status_code=upstream.status_code,
+                        endpoint=target_url,
+                        headers=request.headers,
                     )
                 except retry_policy.retryable_exceptions as stream_exc:
                     with ps._session_lock:
@@ -747,6 +781,9 @@ async def _forward_request(request: Request, target_url: str) -> Response:
                 cache_read_tokens,
                 cache_creation_tokens,
                 latency_ms,
+                status_code=resp.status_code,
+                endpoint=target_url,
+                headers=request.headers,
             )
 
             resp_headers = {
@@ -817,6 +854,9 @@ def _record_telemetry(
     cache_read_tokens: int,
     cache_creation_tokens: int,
     latency_ms: int,
+    status_code: int = 0,
+    endpoint: str = "",
+    headers: object | None = None,
 ) -> None:
     """Record telemetry for a completed request. Thread-safe."""
     if input_tokens == 0:
@@ -884,6 +924,40 @@ def _record_telemetry(
                 "cost_saved": round(cost_saved, 6),
                 "percent_saved": round(saved / input_tokens * 100, 1) if input_tokens else 0.0,
             }
+
+        monitor = getattr(ps, "monitor", None)
+        if monitor is not None:
+            try:
+                from tokenpak.proxy.request_pipeline import (
+                    _resolve_agent_id,
+                    _resolve_cycle_id,
+                    _resolve_session_id,
+                )
+
+                session_id = _resolve_session_id(headers, "") if headers is not None else ""
+                agent_id = _resolve_agent_id(headers) if headers is not None else ""
+                cycle_id = _resolve_cycle_id(headers) if headers is not None else ""
+                monitor.log(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                    latency_ms=latency_ms,
+                    status_code=status_code,
+                    endpoint=endpoint,
+                    compilation_mode=getattr(ps, "compilation_mode", "") or "",
+                    protected_tokens=protected_tokens,
+                    compressed_tokens=max(0, input_tokens - sent_input_tokens),
+                    cache_read_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                    would_have_saved=int(saved),
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    cycle_id=cycle_id,
+                    attribution_source=("header" if agent_id and cycle_id else "unknown"),
+                )
+            except Exception:
+                pass
     except Exception:
         pass  # telemetry must never break the proxy
 

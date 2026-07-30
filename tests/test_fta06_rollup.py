@@ -32,6 +32,8 @@ import pytest
 # happens once during pytest collection, not inside each timed test.
 from tokenpak.cli._impl import _saved_pct, run_fleet
 from tokenpak.cli.commands.status import _parse_since
+from tokenpak.proxy import monitor as monitor_mod
+from tokenpak.proxy.monitor import Monitor
 
 _RECENT_DATE = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -201,6 +203,47 @@ def test_rollup_idempotent(fixture_db: sqlite3.Connection) -> None:
     assert a1_row["requests"] == 2, "re-run must not double the request count"
 
 
+@pytest.mark.oss
+def test_monitor_creates_and_populates_strict_daily_rollup(tmp_path: Path) -> None:
+    """The canonical writer keeps rollup_daily current without a fixture-only script."""
+    db_path = tmp_path / "monitor.db"
+    monitor = Monitor(db_path)
+    common = {
+        "model": "claude-sonnet-4-6",
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "cost": 0.01,
+        "latency_ms": 3,
+        "status_code": 200,
+        "endpoint": "https://api.anthropic.com/v1/messages",
+    }
+    monitor.log(**common, agent_id="worker-a", cycle_id="worker")
+    monitor.log(**common)
+    monitor_mod._DB_WRITE_QUEUE.join()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rollup_columns = {row[1] for row in conn.execute("PRAGMA table_info(rollup_daily)")}
+        totals = conn.execute("SELECT SUM(requests) FROM rollup_daily").fetchone()
+        attribution_totals = conn.execute(
+            "SELECT SUM(attributed_requests), SUM(unattributed_requests) "
+            "FROM rollup_daily_attribution"
+        ).fetchone()
+        # The governed fleet reconciliation job writes the established 11
+        # values without a column list. Automatic maintenance must preserve
+        # that contract while keeping strict counts in the companion table.
+        conn.execute(
+            "INSERT OR REPLACE INTO rollup_daily VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("2099-01-01", "compat", "local", "test-model", 1, 1, 1, 0, 0, 0.0, 0),
+        )
+    finally:
+        conn.close()
+
+    assert "attributed_requests" not in rollup_columns
+    assert totals == (2,)
+    assert attribution_totals == (1, 1)
+
+
 # ---------------------------------------------------------------------------
 # Test 3: run_fleet table output for a fixture DB
 # ---------------------------------------------------------------------------
@@ -285,6 +328,8 @@ def test_run_fleet_json_schema(tmp_path: Path, capsys: pytest.CaptureFixture) ->
     assert "source" in data
     assert "row_count" in data
     assert "rows" in data
+    assert data["cross_host"] is True
+    assert data["freshness"] == "unverified"
     assert isinstance(data["rows"], list)
     assert len(data["rows"]) >= 1
 
@@ -348,6 +393,33 @@ def test_run_fleet_empty_db(tmp_path: Path, capsys: pytest.CaptureFixture) -> No
     out = capsys.readouterr().out
     # Should not crash and should print a user-facing message
     assert "No data" in out or "Fleet status" in out
+
+
+@pytest.mark.oss
+def test_run_fleet_labels_live_fallback_as_local(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A missing rollup never presents local request rows as fleet truth."""
+    db_path = str(tmp_path / "local-only.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(REQUESTS_DDL)
+    conn.execute(
+        """INSERT INTO requests
+           (timestamp, model, agent_id, host, input_tokens, output_tokens)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (f"{_RECENT_DATE} 10:00:00", "claude-sonnet-4-6", "worker-a", "", 10, 2),
+    )
+    conn.commit()
+    conn.close()
+
+    run_fleet(since_days=7, as_json=False, db_path=db_path)
+    assert "local monitor.db fallback" in capsys.readouterr().out
+
+    run_fleet(since_days=7, as_json=True, db_path=db_path)
+    data = json.loads(capsys.readouterr().out)
+    assert data["source"] == "live_requests"
+    assert data["scope"] == "local"
+    assert data["cross_host"] is False
 
 
 # ---------------------------------------------------------------------------

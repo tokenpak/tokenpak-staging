@@ -49,6 +49,60 @@ def _is_chatgpt_oauth_token(auth_header: str) -> bool:
     return token.startswith("eyJ") and "." in token
 
 
+def _codex_response_completed_usage(sse_bytes: bytes) -> dict[str, int | str]:
+    """Extract content-free usage from Codex ``response.completed`` SSE."""
+    result: dict[str, int | str] = {
+        "model": "",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+    }
+    try:
+        lines = sse_bytes.decode("utf-8", errors="replace").splitlines()
+    except Exception:
+        return result
+
+    sse_event_name = ""
+    for line in lines:
+        if not line.strip():
+            sse_event_name = ""
+            continue
+        if line.startswith("event:"):
+            sse_event_name = line[6:].strip()
+            continue
+        if not line.startswith("data:"):
+            continue
+        raw_payload = line[5:].strip()
+        if not raw_payload or raw_payload == "[DONE]":
+            continue
+        try:
+            event = json.loads(raw_payload)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        if sse_event_name != "response.completed" and event.get("type") != "response.completed":
+            continue
+        response = event.get("response")
+        if not isinstance(response, dict):
+            continue
+        model = response.get("model")
+        if isinstance(model, str) and model:
+            result["model"] = model
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        try:
+            result["input_tokens"] = int(usage.get("input_tokens") or 0)
+            result["output_tokens"] = int(usage.get("output_tokens") or 0)
+            details = usage.get("input_tokens_details")
+            if isinstance(details, dict):
+                result["cache_read_tokens"] = int(details.get("cached_tokens") or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return result
+
+
 class OpenAICodexResponsesAdapter(OpenAIResponsesAdapter):
     """Codex Responses adapter — same format, different upstream + detection.
 

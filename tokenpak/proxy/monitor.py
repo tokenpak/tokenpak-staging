@@ -128,6 +128,76 @@ _REQUEST_INSERT_COLUMNS = (
     "stop_reason",
 )
 
+_ROLLUP_DAILY_DDL = """
+CREATE TABLE IF NOT EXISTS rollup_daily (
+    date TEXT NOT NULL,
+    agent_id TEXT,
+    host TEXT,
+    model TEXT,
+    requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost REAL NOT NULL DEFAULT 0.0,
+    would_have_saved INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, agent_id, host, model)
+)
+"""
+
+_ROLLUP_DAILY_ATTRIBUTION_DDL = """
+CREATE TABLE IF NOT EXISTS rollup_daily_attribution (
+    date TEXT PRIMARY KEY,
+    attributed_requests INTEGER NOT NULL DEFAULT 0,
+    unattributed_requests INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+_ROLLUP_DAILY_TRIGGER_DDL = """
+CREATE TRIGGER IF NOT EXISTS requests_rollup_daily_after_insert
+AFTER INSERT ON requests
+BEGIN
+    INSERT INTO rollup_daily (
+        date, agent_id, host, model, requests,
+        input_tokens, output_tokens, cache_read_tokens,
+        cache_creation_tokens, estimated_cost, would_have_saved
+    ) VALUES (
+        date(NEW.timestamp), COALESCE(NEW.agent_id, ''),
+        COALESCE(NEW.host, ''), NEW.model, 1,
+        COALESCE(NEW.input_tokens, 0), COALESCE(NEW.output_tokens, 0),
+        COALESCE(NEW.cache_read_tokens, 0), COALESCE(NEW.cache_creation_tokens, 0),
+        COALESCE(NEW.estimated_cost, 0.0), COALESCE(NEW.would_have_saved, 0)
+    )
+    ON CONFLICT(date, agent_id, host, model) DO UPDATE SET
+        requests = requests + 1,
+        input_tokens = input_tokens + excluded.input_tokens,
+        output_tokens = output_tokens + excluded.output_tokens,
+        cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+        cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens,
+        estimated_cost = estimated_cost + excluded.estimated_cost,
+        would_have_saved = would_have_saved + excluded.would_have_saved;
+
+    INSERT INTO rollup_daily_attribution (
+        date, attributed_requests, unattributed_requests
+    ) VALUES (
+        date(NEW.timestamp),
+        CASE WHEN TRIM(COALESCE(NEW.agent_id, '')) != ''
+                  AND TRIM(COALESCE(NEW.cycle_id, '')) != ''
+                  AND LOWER(TRIM(COALESCE(NEW.attribution_source, '')))
+                      NOT IN ('', 'unknown')
+             THEN 1 ELSE 0 END,
+        CASE WHEN TRIM(COALESCE(NEW.agent_id, '')) != ''
+                  AND TRIM(COALESCE(NEW.cycle_id, '')) != ''
+                  AND LOWER(TRIM(COALESCE(NEW.attribution_source, '')))
+                      NOT IN ('', 'unknown')
+             THEN 0 ELSE 1 END
+    )
+    ON CONFLICT(date) DO UPDATE SET
+        attributed_requests = attributed_requests + excluded.attributed_requests,
+        unattributed_requests = unattributed_requests + excluded.unattributed_requests;
+END
+"""
+
 
 def _request_insert_sql() -> str:
     """Build the shared requests INSERT statement from the column tuple."""
@@ -387,7 +457,8 @@ class Monitor:
                 session_id TEXT DEFAULT '',
                 agent_id TEXT DEFAULT '',
                 cycle_id TEXT DEFAULT '',
-                attribution_source TEXT DEFAULT ''
+                attribution_source TEXT DEFAULT 'unknown',
+                host TEXT DEFAULT ''
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -456,17 +527,19 @@ class Monitor:
         ):
             _apply_schema_migration(conn, _alter)
         # D5 (finishes Fix A): agent/cycle attribution columns on requests.
-        # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
-        # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
-        # 'unknown', never fabricated). Idempotent — columns may pre-exist
+        # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle.
+        # Missing/invalid values use the '' sentinel and are never fabricated.
+        # Idempotent — columns may pre-exist
         # from a peer migration. Telemetry contract: '' sentinel, not NULL.
         for _alter in (
             "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
             "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
-            # attribution_source <- platform-origin extractor (Path C). Non-empty
-            # only when origin is genuinely known; '' sentinel otherwise (never
-            # fabricated). Idempotent — may pre-exist from a peer migration.
-            "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT ''",
+            # attribution_source <- validated header pair or platform-origin
+            # extractor. Unknown provenance uses the explicit 'unknown' sentinel.
+            "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT 'unknown'",
+            # Local rollup identity. Existing fleet mirror jobs already inspect
+            # this column and treat the empty sentinel as local-only.
+            "ALTER TABLE requests ADD COLUMN host TEXT DEFAULT ''",
         ):
             _apply_schema_migration(conn, _alter)
         # Provider execution truth: stop_reason observed on the response path
@@ -475,6 +548,14 @@ class Monitor:
         # completion on receipt rows. '' sentinel = not observed (legacy rows,
         # errored/truncated streams) - never fabricated. Idempotent.
         _apply_schema_migration(conn, "ALTER TABLE requests ADD COLUMN stop_reason TEXT DEFAULT ''")
+        conn.execute(_ROLLUP_DAILY_DDL)
+        # Keep rollup_daily at the established 11-column FTA-06 contract: the
+        # governed fleet reconciliation job still performs an unqualified
+        # 11-value INSERT. Strict attribution counts live in a companion table
+        # so automatic local maintenance cannot break that existing writer.
+        conn.execute(_ROLLUP_DAILY_ATTRIBUTION_DDL)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rollup_date ON rollup_daily(date DESC)")
+        conn.execute(_ROLLUP_DAILY_TRIGGER_DDL)
         conn.commit()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS budget_alerts (
@@ -571,7 +652,7 @@ class Monitor:
         session_id: str = "",
         agent_id: str = "",
         cycle_id: str = "",
-        attribution_source: str = "",
+        attribution_source: str | None = None,
         stop_reason: str = "",
     ) -> None:
         # ``session_id`` is the resolved Claude Code / TokenPak session id
@@ -584,6 +665,17 @@ class Monitor:
         # "" for localhost / pre-A6 callers. The raw token MUST never be passed
         # in — callers always use ``proxy_auth.hash_token(...)`` first.
         # Enqueue write instead of writing directly (async, <0.1ms return)
+        resolved_agent_id = str(agent_id or "").strip()
+        resolved_cycle_id = str(cycle_id or "").strip()
+        if attribution_source is None:
+            resolved_attribution_source = (
+                "header" if resolved_agent_id and resolved_cycle_id else "unknown"
+            )
+        else:
+            resolved_attribution_source = str(attribution_source).strip().lower()
+            if not resolved_attribution_source or resolved_attribution_source == "unknown":
+                resolved_attribution_source = "unknown"
+
         insert_params = (
             datetime.now().isoformat(),
             model,
@@ -608,9 +700,9 @@ class Monitor:
             int(cache_creation_ephemeral_5m_tokens or 0),
             ttl_attribution,
             session_id or "",
-            agent_id or "",
-            cycle_id or "",
-            attribution_source or "",
+            resolved_agent_id,
+            resolved_cycle_id,
+            resolved_attribution_source,
             stop_reason or "",
         )
         _queued = False
