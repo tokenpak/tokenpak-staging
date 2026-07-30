@@ -1330,10 +1330,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # so it must run before the controls that authorize and scan that body.
         # The default-off master switch in stage_vault_injection keeps this path
         # inert until activation is explicitly approved.
-        if should_log and is_model_request and body and _is_byte_preserved:
+        if (
+            should_log
+            and is_model_request
+            and body
+            and _policy.get("vault_injection") != "disabled"
+        ):
             is_streaming = b'"stream":true' in body or b'"stream": true' in body
             try:
-                from tokenpak.proxy.pipeline import process_request as _pipeline_run
+                from tokenpak.proxy.pipeline import (
+                    process_request as _pipeline_run,
+                )
+                from tokenpak.proxy.pipeline import (
+                    stage_vault_injection as _json_injection_stage,
+                )
                 from tokenpak.proxy.request import ProxyRequest as _PReq
                 from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsi
 
@@ -1345,14 +1355,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     source_platform=_source_platform,
                     session_id=_rsi(self.headers, model),
                 )
-                _result = _pipeline_run(
-                    _pr,
-                    _policy,
-                    route=_route,
-                    client_has_auth=True,
-                )
-                body = _result.request.body
-                for _stage in _result.stages:
+                if _is_byte_preserved:
+                    _result = _pipeline_run(
+                        _pr,
+                        _policy,
+                        route=_route,
+                        client_has_auth=True,
+                    )
+                    _injection_stages = _result.stages
+                    body = _result.request.body
+                else:
+                    _pr, _json_stage = _json_injection_stage(_pr, _policy)
+                    _injection_stages = [_json_stage]
+                    body = _pr.body
+
+                for _stage in _injection_stages:
                     if _stage.name != "vault_injection":
                         continue
                     vault_injected_tokens = max(0, int(_stage.tokens_delta or 0))
@@ -1568,7 +1585,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _dlp_exc,
                 )
 
-        if should_log and is_model_request and body and _is_byte_preserved:
+        if should_log and is_model_request and body:
             sent_input_tokens = _estimate_tokens_from_body(body)
 
         # Run compression pipeline hook if registered
@@ -1672,9 +1689,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
             if ps.request_hook and not _is_byte_preserved:
                 try:
-                    body, sent_input_tokens, input_tokens, protected_tokens = ps.request_hook(
+                    body, sent_input_tokens, _hook_input_tokens, protected_tokens = ps.request_hook(
                         body, model, trace
                     )
+                    if input_tokens == 0:
+                        input_tokens = _hook_input_tokens
                 except Exception as hook_err:
                     # Graceful degradation: compression failed — forward original request unchanged.
                     # The user still gets a response; we log and track the event.

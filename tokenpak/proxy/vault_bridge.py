@@ -1269,7 +1269,9 @@ def _inject_vault_context_with_text(
     if not vault_idx.available:
         return body_bytes, 0, [], ""
 
-    active_adapter = adapter or _detect_adapter("", {}, body_bytes)
+    request_path = request.url if request is not None else ""
+    request_headers = request.headers if request is not None else {}
+    active_adapter = adapter or _detect_adapter(request_path, request_headers, body_bytes)
 
     # --- Sub-step timing (surfaced in vault_stage.details via SESSION) ---
     _t = time.perf_counter()

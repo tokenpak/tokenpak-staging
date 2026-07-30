@@ -242,23 +242,22 @@ def proxy(upstream, intercepted_localhost):
     time.sleep(0.2)
 
 
-def _send(body: dict, upstream_url: str) -> None:
+def _send(body: dict, upstream_url: str, *, claude_code: bool = True) -> None:
     """Send in absolute-URI proxy form so the target is the mock upstream."""
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": "test-key",
+        "anthropic-version": "2023-06-01",
+    }
+    if claude_code:
+        # Classifies the request onto the byte-preserved route. Without it the
+        # same request exercises the SDK/default json_inject route instead.
+        headers["X-Claude-Code-Session-Id"] = "ground-truth-e2e"
+
     req = urllib.request.Request(
         f"{upstream_url}/v1/messages",
         data=json.dumps(body).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": "test-key",
-            "anthropic-version": "2023-06-01",
-            # Classifies the request onto the claude-code route, which is the
-            # only route whose policy is byte-preserved — and the byte-preserved
-            # branch is the ONLY place the request pipeline is invoked. Without
-            # this header the request takes the full_pipeline branch, which never
-            # calls the pipeline at all, and the suite would report "no injection"
-            # for a request that never reached the injector.
-            "X-Claude-Code-Session-Id": "ground-truth-e2e",
-        },
+        headers=headers,
         method="POST",
     )
     # Route it through the proxy rather than straight to the mock.
@@ -421,3 +420,21 @@ def test_injection_is_costed_as_sent_without_inflating_savings(
     assert proxy_server.session["input_tokens"] == 100
     assert proxy_server.session["sent_input_tokens"] == 140
     assert proxy_server.session["saved_tokens"] == 0
+
+
+def test_json_inject_route_reaches_controls_and_provider(
+    proxy,
+    upstream,
+    vault_with_content,
+    safety_control_observer,
+):
+    """The SDK/default route has an independent provider-bound proof."""
+    _, upstream_url = proxy
+    _, recorder = upstream
+
+    _send(_eligible_request(), upstream_url, claude_code=False)
+
+    marker = VAULT_MARKER.encode()
+    assert marker in b"".join(safety_control_observer["spend_guard"])
+    assert marker in b"".join(safety_control_observer["dlp"])
+    assert marker in b"".join(recorder.received_bodies)
