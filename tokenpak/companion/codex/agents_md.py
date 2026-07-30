@@ -82,9 +82,10 @@ def generate_agents_md(style: str | None = None) -> str:
     """Return the AGENTS.md content for TokenPak companion.
 
     ``style`` selects the response-style block appended to the section; it
-    defaults to the ``TOKENPAK_COMPANION_STYLE`` environment value.  The block
-    lands inside the managed section, below a ``##`` heading, so it is replaced
-    and removed with the rest of the section rather than surviving as an orphan.
+    defaults to the ``TOKENPAK_COMPANION_STYLE`` environment value, then to
+    ``standard`` (no block) when unset.  The block lands inside the managed
+    section, below a ``##`` heading, so it is replaced and removed with the
+    rest of the section rather than surviving as an orphan.
     """
     return _AGENTS_CONTENT + _style.directive(style)
 
