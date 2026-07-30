@@ -32,6 +32,14 @@ def test_default_profile_is_balanced():
     assert cfg.profile == "balanced"
 
 
+def test_default_style_is_standard():
+    """Unchanged launches preserve the host's native response style."""
+    env_clean = {k: v for k, v in os.environ.items() if not k.startswith("TOKENPAK_COMPANION_")}
+    with patch.dict(os.environ, env_clean, clear=True):
+        cfg = CompanionConfig.from_env()
+    assert cfg.style == "standard"
+
+
 def test_default_budget_is_zero():
     """Default daily budget is 0 (unlimited)."""
     env_clean = {k: v for k, v in os.environ.items() if not k.startswith("TOKENPAK_COMPANION_")}
