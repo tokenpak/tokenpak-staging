@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 _log = logging.getLogger(__name__)
+_BUSY_TIMEOUT_MS = 5000
 
 # Single source of truth for event_type values (used by analytics queries).
 EVENT_TYPES = frozenset(
@@ -48,6 +49,17 @@ def _db_path(audit_db_path: str) -> Path:
     p = Path(os.path.expanduser(audit_db_path))
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    """Open the shared guard store with the same lock-wait bound as pending.py."""
+    conn = sqlite3.connect(str(path), timeout=_BUSY_TIMEOUT_MS / 1000)
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    except Exception:
+        conn.close()
+        raise
+    return conn
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -94,7 +106,7 @@ def write_audit(
     """Insert one audit row. Best-effort — never raises into caller."""
     try:
         path = _db_path(audit_db_path)
-        conn = sqlite3.connect(str(path), timeout=2.0)
+        conn = _connect(path)
         try:
             _ensure_schema(conn)
             tip_json = ""
@@ -146,7 +158,7 @@ def query_recent(
 ) -> list[dict[str, Any]]:
     """Read the most recent audit rows. Used by tests and `tokenpak doctor`."""
     path = _db_path(audit_db_path)
-    conn = sqlite3.connect(str(path), timeout=2.0)
+    conn = _connect(path)
     conn.row_factory = sqlite3.Row
     try:
         _ensure_schema(conn)
