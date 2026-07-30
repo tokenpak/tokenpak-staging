@@ -18,7 +18,7 @@ docker run -p 8766:8766 tokenpak
 
 # With a custom config (optional — built-in defaults are used if omitted)
 docker run -p 8766:8766 \
- -v $(pwd)/config/config.yaml:/home/tokenpak/.tokenpak/config.yaml:ro \
+ -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro \
  -v tokenpak-logs:/logs \
  tokenpak
 
@@ -36,7 +36,7 @@ docker run -p 8766:8766 \
 cp .env.example .env
 
 # (Optional) Provide a custom config at config/config.yaml — Compose mounts it
-# to /home/tokenpak/.tokenpak/config.yaml. Omit it to run with built-in defaults.
+# to /app/config/config.yaml. Omit it to run with built-in defaults.
 
 # Start services
 docker-compose up -d
@@ -89,7 +89,7 @@ Mount configuration at container startup:
 
 ```bash
 # Using docker run
-docker run -v $(pwd)/config/config.yaml:/home/tokenpak/.tokenpak/config.yaml:ro tokenpak
+docker run -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro tokenpak
 
 # Using docker-compose (automatic)
 docker-compose up
