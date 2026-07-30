@@ -51,6 +51,24 @@ def test_build_release_publish_require_tag_push_event():
         assert _TAG_TERM in cond, f"job '{job}' lost its tag-ref guard: {cond!r}"
 
 
+def test_build_job_validates_tag_sha_reachable_from_main():
+    """A real tag push still has to point at a commit reachable from main."""
+    runs = [
+        step.get("run", "")
+        for step in _release_jobs()["build"].get("steps", [])
+        if isinstance(step, dict)
+    ]
+    ancestry_step = next(
+        (run for run in runs if "git merge-base --is-ancestor" in run),
+        "",
+    )
+
+    assert ancestry_step, "build job lost its tag-source ancestry check"
+    assert "${{ github.sha }}" in ancestry_step
+    assert "origin/main" in ancestry_step
+    assert "exit 1" in ancestry_step
+
+
 def test_publish_still_excludes_prereleases():
     """Guard parity must not weaken publish's existing rc/alpha/beta exclusion."""
     cond = _release_jobs()["publish"].get("if", "")
