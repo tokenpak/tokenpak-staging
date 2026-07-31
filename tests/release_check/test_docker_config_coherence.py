@@ -174,8 +174,7 @@ def test_docker_config_path_is_coherent():
 def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     exact_file_mount = f"-v {GUIDE_FILE_CONFIG_MOUNT}"
     wrong_value = (
-        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml.bak "
-        f"{exact_file_mount} tokenpak"
+        f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml.bak {exact_file_mount} tokenpak"
     )
     conflicting_values = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
@@ -183,12 +182,10 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
         f"{exact_file_mount} tokenpak"
     )
     environment_after_image = (
-        f"docker run {exact_file_mount} tokenpak "
-        "-e TOKENPAK_CONFIG=/app/config/config.yaml"
+        f"docker run {exact_file_mount} tokenpak -e TOKENPAK_CONFIG=/app/config/config.yaml"
     )
     volume_after_image = (
-        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml tokenpak "
-        f"{exact_file_mount}"
+        f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml tokenpak {exact_file_mount}"
     )
     wrong_mount_target = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
@@ -203,12 +200,10 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
         f"-v $(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:rw tokenpak"
     )
     valid_memory_option = (
-        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        f"{exact_file_mount} -m 512m tokenpak"
+        f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml {exact_file_mount} -m 512m tokenpak"
     )
     memory_without_image = (
-        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        f"{exact_file_mount} -m 512m"
+        f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml {exact_file_mount} -m 512m"
     )
     name_without_image = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
