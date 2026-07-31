@@ -12,7 +12,17 @@ HOST_CONFIG_PATH = "./config/config.yaml"
 CONTAINER_CONFIG_PATH = "/app/config/config.yaml"
 CONTAINER_CONFIG_DIRECTORY = "/app/config"
 LEGACY_CONTAINER_CONFIG_PATH = "/home/tokenpak/.tokenpak/config.yaml"
-DOCKER_OPTIONS_WITH_VALUES = {"-e", "--env", "-p", "--publish", "-v", "--volume"}
+DOCKER_OPTIONS_WITH_VALUES = {
+    "-e",
+    "--env",
+    "-m",
+    "--memory",
+    "--name",
+    "-p",
+    "--publish",
+    "-v",
+    "--volume",
+}
 
 
 def _docker_run_commands(guide: str) -> list[str]:
@@ -39,10 +49,12 @@ def _docker_run_commands(guide: str) -> list[str]:
     return commands
 
 
-def _docker_run_options(command: str) -> list[str]:
-    """Return only Docker options before the required image token."""
+def _docker_run_options(command: str) -> list[str] | None:
+    """Return options for a complete, supported Docker run command."""
     tokens = shlex.split(command)
-    assert tokens[:2] == ["docker", "run"], "expected a docker run command"
+    if tokens[:2] != ["docker", "run"]:
+        return None
+
     options = []
     index = 2
 
@@ -50,24 +62,34 @@ def _docker_run_options(command: str) -> list[str]:
         token = tokens[index]
         if token == "--":
             index += 1
-            break
-        if not token.startswith("-"):
+            if index != len(tokens) - 1 or tokens[index].startswith("-"):
+                return None
             return options
+        if not token.startswith("-"):
+            return options if index == len(tokens) - 1 else None
 
-        options.append(token)
-        if token in DOCKER_OPTIONS_WITH_VALUES:
+        option, separator, value = token.partition("=")
+        if separator:
+            if option not in DOCKER_OPTIONS_WITH_VALUES or not value:
+                return None
+            options.append(token)
             index += 1
-            assert index < len(tokens), f"Docker option {token} has no value"
-            options.append(tokens[index])
-        index += 1
+            continue
 
-    assert index < len(tokens), "docker run command has no image"
-    return options
+        if token not in DOCKER_OPTIONS_WITH_VALUES or index + 1 >= len(tokens):
+            return None
+        options.extend((token, tokens[index + 1]))
+        index += 2
+
+    return None
 
 
 def _tokenpak_config_assignments(command: str) -> list[str]:
     """Return TOKENPAK_CONFIG assignments attached to Docker env options."""
     options = _docker_run_options(command)
+    if options is None:
+        return []
+
     assignments = []
 
     for index, token in enumerate(options):
@@ -88,6 +110,9 @@ def _tokenpak_config_assignments(command: str) -> list[str]:
 def _docker_volume_mounts(command: str) -> list[str]:
     """Return volume mounts attached to Docker options before the image."""
     options = _docker_run_options(command)
+    if options is None:
+        return []
+
     mounts = []
 
     for index, token in enumerate(options):
@@ -160,9 +185,39 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
         "-v ./config/config.yaml:/app/config/config.yaml.bak:ro tokenpak"
     )
+    valid_memory_option = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        "-v ./config/config.yaml:/app/config/config.yaml:ro -m 512m tokenpak"
+    )
+    memory_without_image = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        "-v ./config/config.yaml:/app/config/config.yaml:ro -m 512m"
+    )
+    name_without_image = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        "-v ./config/config.yaml:/app/config/config.yaml:ro --name tokenpak-demo"
+    )
+    unknown_option_without_image = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        "-v ./config/config.yaml:/app/config/config.yaml:ro --future-option value"
+    )
+    trailing_environment_after_valid_options = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        "-v ./config/config.yaml:/app/config/config.yaml:ro tokenpak "
+        "-e TOKENPAK_CONFIG=/app/config/config.yaml"
+    )
 
     assert not _has_exact_config_binding(wrong_value)
     assert not _has_exact_config_binding(conflicting_values)
     assert not _has_exact_config_binding(environment_after_image)
     assert not _docker_volume_mounts(volume_after_image)
     assert not _has_config_mount(wrong_mount_target)
+    assert _has_exact_config_binding(valid_memory_option)
+    assert _has_config_mount(valid_memory_option)
+    assert not _has_exact_config_binding(memory_without_image)
+    assert not _has_config_mount(memory_without_image)
+    assert not _has_exact_config_binding(name_without_image)
+    assert not _has_config_mount(name_without_image)
+    assert not _has_exact_config_binding(unknown_option_without_image)
+    assert not _has_config_mount(unknown_option_without_image)
+    assert not _has_exact_config_binding(trailing_environment_after_valid_options)
