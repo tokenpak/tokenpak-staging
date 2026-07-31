@@ -92,6 +92,14 @@ def _docker_run_options(command: str) -> list[str] | None:
     return None
 
 
+def _supported_docker_run_commands(guide: str) -> list[str] | None:
+    """Return every command only when the complete guide grammar is supported."""
+    commands = _docker_run_commands(guide)
+    if not commands or any(_docker_run_options(command) is None for command in commands):
+        return None
+    return commands
+
+
 def _tokenpak_config_assignments(command: str) -> list[str]:
     """Return TOKENPAK_CONFIG assignments attached to Docker env options."""
     options = _docker_run_options(command)
@@ -153,6 +161,11 @@ def _has_config_mount(command: str) -> bool:
     return len(mounts) == 1 and mounts[0] in GUIDE_CONFIG_MOUNTS
 
 
+def _is_config_command(command: str) -> bool:
+    """Return whether a command declares a config assignment or related mount."""
+    return bool(_tokenpak_config_assignments(command) or _config_related_mounts(command))
+
+
 def _has_exact_config_binding(command: str) -> bool:
     expected = f"TOKENPAK_CONFIG={CONTAINER_CONFIG_PATH}"
     return _tokenpak_config_assignments(command) == [expected]
@@ -172,9 +185,10 @@ def test_docker_config_path_is_coherent():
     assert GUIDE_DIRECTORY_CONFIG_MOUNT in guide
     assert f"to {CONTAINER_CONFIG_PATH}" in guide
 
-    docker_run_commands = _docker_run_commands(guide)
+    docker_run_commands = _supported_docker_run_commands(guide)
+    assert docker_run_commands is not None
     config_mount_commands = [
-        command for command in docker_run_commands if _config_related_mounts(command)
+        command for command in docker_run_commands if _is_config_command(command)
     ]
     config_mounts = [
         mount for command in config_mount_commands for mount in _config_related_mounts(command)
@@ -229,6 +243,14 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
         f"{exact_file_mount} {exact_file_mount} tokenpak"
     )
+    config_without_mount = "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml tokenpak"
+    post_image_extra_command = (
+        f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml {exact_file_mount} tokenpak extra"
+    )
+    unknown_option_extra_command = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} --future-option value tokenpak"
+    )
     valid_memory_option = (
         f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml {exact_file_mount} -m 512m tokenpak"
     )
@@ -271,6 +293,10 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     assert not _has_config_mount(conflicting_mount_mode)
     assert len(_config_related_mounts(duplicate_exact_mount)) == 2
     assert not _has_config_mount(duplicate_exact_mount)
+    assert _is_config_command(config_without_mount)
+    assert not _has_config_mount(config_without_mount)
+    assert _supported_docker_run_commands(post_image_extra_command) is None
+    assert _supported_docker_run_commands(unknown_option_extra_command) is None
     assert _has_exact_config_binding(valid_memory_option)
     assert _has_config_mount(valid_memory_option)
     assert not _has_exact_config_binding(memory_without_image)
