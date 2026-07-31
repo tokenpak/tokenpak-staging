@@ -15,6 +15,8 @@ LEGACY_CONTAINER_CONFIG_PATH = "/home/tokenpak/.tokenpak/config.yaml"
 GUIDE_FILE_CONFIG_MOUNT = f"$(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:ro"
 GUIDE_DIRECTORY_CONFIG_MOUNT = f"$(pwd)/config:{CONTAINER_CONFIG_DIRECTORY}:ro"
 GUIDE_CONFIG_MOUNTS = {GUIDE_FILE_CONFIG_MOUNT, GUIDE_DIRECTORY_CONFIG_MOUNT}
+GUIDE_CONFIG_SOURCES = {"$(pwd)/config/config.yaml", "$(pwd)/config"}
+GUIDE_CONFIG_TARGETS = {CONTAINER_CONFIG_PATH, CONTAINER_CONFIG_DIRECTORY}
 DOCKER_OPTIONS_WITH_VALUES = {
     "-e",
     "--env",
@@ -131,9 +133,24 @@ def _docker_volume_mounts(command: str) -> list[str]:
     return mounts
 
 
+def _config_related_mounts(command: str) -> list[str]:
+    """Return mounts using a documented config source or container target."""
+    mounts = []
+
+    for mount in _docker_volume_mounts(command):
+        fields = mount.split(":")
+        source = fields[0]
+        target = fields[1] if len(fields) > 1 else ""
+        if source in GUIDE_CONFIG_SOURCES or target in GUIDE_CONFIG_TARGETS:
+            mounts.append(mount)
+
+    return mounts
+
+
 def _has_config_mount(command: str) -> bool:
-    """Return whether a Docker option uses an exact documented config mount."""
-    return any(mount in GUIDE_CONFIG_MOUNTS for mount in _docker_volume_mounts(command))
+    """Return whether a Docker option uses one exact documented config mount."""
+    mounts = _config_related_mounts(command)
+    return len(mounts) == 1 and mounts[0] in GUIDE_CONFIG_MOUNTS
 
 
 def _has_exact_config_binding(command: str) -> bool:
@@ -157,17 +174,16 @@ def test_docker_config_path_is_coherent():
 
     docker_run_commands = _docker_run_commands(guide)
     config_mount_commands = [
-        command for command in docker_run_commands if _has_config_mount(command)
+        command for command in docker_run_commands if _config_related_mounts(command)
     ]
     config_mounts = [
-        mount
-        for command in docker_run_commands
-        for mount in _docker_volume_mounts(command)
-        if mount in GUIDE_CONFIG_MOUNTS
+        mount for command in config_mount_commands for mount in _config_related_mounts(command)
     ]
     assert len(config_mount_commands) == 3
+    assert len(config_mounts) == 3
     assert config_mounts.count(GUIDE_FILE_CONFIG_MOUNT) == 2
     assert config_mounts.count(GUIDE_DIRECTORY_CONFIG_MOUNT) == 1
+    assert all(_has_config_mount(command) for command in config_mount_commands)
     assert all(_has_exact_config_binding(command) for command in config_mount_commands)
 
 
@@ -198,6 +214,20 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     wrong_mount_mode = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
         f"-v $(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:rw tokenpak"
+    )
+    conflicting_mount_source = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} "
+        f"-v $(pwd)/config/missing.yaml:{CONTAINER_CONFIG_PATH}:ro tokenpak"
+    )
+    conflicting_mount_mode = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} "
+        f"-v $(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:rw tokenpak"
+    )
+    duplicate_exact_mount = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} {exact_file_mount} tokenpak"
     )
     valid_memory_option = (
         f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml {exact_file_mount} -m 512m tokenpak"
@@ -235,6 +265,12 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     assert not _has_config_mount(wrong_mount_target)
     assert not _has_config_mount(wrong_mount_source)
     assert not _has_config_mount(wrong_mount_mode)
+    assert len(_config_related_mounts(conflicting_mount_source)) == 2
+    assert not _has_config_mount(conflicting_mount_source)
+    assert len(_config_related_mounts(conflicting_mount_mode)) == 2
+    assert not _has_config_mount(conflicting_mount_mode)
+    assert len(_config_related_mounts(duplicate_exact_mount)) == 2
+    assert not _has_config_mount(duplicate_exact_mount)
     assert _has_exact_config_binding(valid_memory_option)
     assert _has_config_mount(valid_memory_option)
     assert not _has_exact_config_binding(memory_without_image)
