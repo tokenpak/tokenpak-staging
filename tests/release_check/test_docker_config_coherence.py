@@ -31,9 +31,7 @@ def _docker_run_commands(guide: str) -> list[str]:
             assert index < len(lines), "unterminated docker run command"
             command_lines.append(lines[index].strip())
 
-        commands.append(
-            " ".join(line.removesuffix("\\").rstrip() for line in command_lines)
-        )
+        commands.append(" ".join(line.removesuffix("\\").rstrip() for line in command_lines))
         index += 1
 
     return commands
