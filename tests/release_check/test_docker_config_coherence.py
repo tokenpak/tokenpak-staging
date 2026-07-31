@@ -112,8 +112,8 @@ def _tokenpak_config_assignments(command: str) -> list[str]:
         if token in {"-e", "--env"}:
             assert index + 1 < len(options), "Docker environment option has no value"
             assignment = options[index + 1]
-        elif token.startswith("--env="):
-            assignment = token.removeprefix("--env=")
+        elif token.startswith(("-e=", "--env=")):
+            assignment = token.partition("=")[2]
         else:
             continue
 
@@ -135,8 +135,8 @@ def _docker_volume_mounts(command: str) -> list[str]:
         if token in {"-v", "--volume"}:
             assert index + 1 < len(options), "Docker volume option has no value"
             mounts.append(options[index + 1])
-        elif token.startswith("--volume="):
-            mounts.append(token.removeprefix("--volume="))
+        elif token.startswith(("-v=", "--volume=")):
+            mounts.append(token.partition("=")[2])
 
     return mounts
 
@@ -203,12 +203,25 @@ def test_docker_config_path_is_coherent():
 
 def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     exact_file_mount = f"-v {GUIDE_FILE_CONFIG_MOUNT}"
+    attached_short_exact_binding = (
+        "docker run -e=TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"-v={GUIDE_FILE_CONFIG_MOUNT} tokenpak"
+    )
+    attached_short_environment_only = (
+        "docker run -e=TOKENPAK_CONFIG=/app/config/config.yaml tokenpak"
+    )
+    attached_short_volume_only = f"docker run -v={GUIDE_FILE_CONFIG_MOUNT} tokenpak"
     wrong_value = (
         f"docker run -e TOKENPAK_CONFIG=/app/config/config.yaml.bak {exact_file_mount} tokenpak"
     )
     conflicting_values = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
         "-e TOKENPAK_CONFIG=/app/config/config.yaml.bak "
+        f"{exact_file_mount} tokenpak"
+    )
+    attached_short_conflicting_value = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        "-e=TOKENPAK_CONFIG=/app/config/config.yaml.bak "
         f"{exact_file_mount} tokenpak"
     )
     environment_after_image = (
@@ -233,6 +246,11 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
         f"{exact_file_mount} "
         f"-v $(pwd)/config/missing.yaml:{CONTAINER_CONFIG_PATH}:ro tokenpak"
+    )
+    attached_short_conflicting_mount_source = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} "
+        f"-v=$(pwd)/config/missing.yaml:{CONTAINER_CONFIG_PATH}:ro tokenpak"
     )
     conflicting_mount_mode = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
@@ -280,8 +298,13 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
         "-e TOKENPAK_CONFIG=/app/config/config.yaml"
     )
 
+    assert _has_exact_config_binding(attached_short_exact_binding)
+    assert _has_config_mount(attached_short_exact_binding)
+    assert _is_config_command(attached_short_environment_only)
+    assert _is_config_command(attached_short_volume_only)
     assert not _has_exact_config_binding(wrong_value)
     assert not _has_exact_config_binding(conflicting_values)
+    assert not _has_exact_config_binding(attached_short_conflicting_value)
     assert not _has_exact_config_binding(environment_after_image)
     assert not _docker_volume_mounts(volume_after_image)
     assert not _has_config_mount(wrong_mount_target)
@@ -289,6 +312,8 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     assert not _has_config_mount(wrong_mount_mode)
     assert len(_config_related_mounts(conflicting_mount_source)) == 2
     assert not _has_config_mount(conflicting_mount_source)
+    assert len(_config_related_mounts(attached_short_conflicting_mount_source)) == 2
+    assert not _has_config_mount(attached_short_conflicting_mount_source)
     assert len(_config_related_mounts(conflicting_mount_mode)) == 2
     assert not _has_config_mount(conflicting_mount_mode)
     assert len(_config_related_mounts(duplicate_exact_mount)) == 2
