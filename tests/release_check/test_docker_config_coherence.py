@@ -12,6 +12,9 @@ HOST_CONFIG_PATH = "./config/config.yaml"
 CONTAINER_CONFIG_PATH = "/app/config/config.yaml"
 CONTAINER_CONFIG_DIRECTORY = "/app/config"
 LEGACY_CONTAINER_CONFIG_PATH = "/home/tokenpak/.tokenpak/config.yaml"
+GUIDE_FILE_CONFIG_MOUNT = f"$(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:ro"
+GUIDE_DIRECTORY_CONFIG_MOUNT = f"$(pwd)/config:{CONTAINER_CONFIG_DIRECTORY}:ro"
+GUIDE_CONFIG_MOUNTS = {GUIDE_FILE_CONFIG_MOUNT, GUIDE_DIRECTORY_CONFIG_MOUNT}
 DOCKER_OPTIONS_WITH_VALUES = {
     "-e",
     "--env",
@@ -70,7 +73,7 @@ def _docker_run_options(command: str) -> list[str] | None:
 
         option, separator, value = token.partition("=")
         if separator:
-            if option not in DOCKER_OPTIONS_WITH_VALUES or not value:
+            if option not in DOCKER_OPTIONS_WITH_VALUES or not value or value.startswith("-"):
                 return None
             options.append(token)
             index += 1
@@ -78,7 +81,10 @@ def _docker_run_options(command: str) -> list[str] | None:
 
         if token not in DOCKER_OPTIONS_WITH_VALUES or index + 1 >= len(tokens):
             return None
-        options.extend((token, tokens[index + 1]))
+        option_value = tokens[index + 1]
+        if option_value.startswith("-"):
+            return None
+        options.extend((token, option_value))
         index += 2
 
     return None
@@ -126,16 +132,8 @@ def _docker_volume_mounts(command: str) -> list[str]:
 
 
 def _has_config_mount(command: str) -> bool:
-    """Return whether a Docker option mounts the exact config file or directory."""
-    expected_targets = {CONTAINER_CONFIG_PATH, CONTAINER_CONFIG_DIRECTORY}
-
-    for mount in _docker_volume_mounts(command):
-        fields = mount.split(":")
-        assert len(fields) in {2, 3}, f"unsupported Docker volume form: {mount}"
-        if fields[1] in expected_targets:
-            return True
-
-    return False
+    """Return whether a Docker option uses an exact documented config mount."""
+    return any(mount in GUIDE_CONFIG_MOUNTS for mount in _docker_volume_mounts(command))
 
 
 def _has_exact_config_binding(command: str) -> bool:
@@ -153,57 +151,85 @@ def test_docker_config_path_is_coherent():
 
     guide = GUIDE_PATH.read_text(encoding="utf-8")
     assert LEGACY_CONTAINER_CONFIG_PATH not in guide
-    assert f"$(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:ro" in guide
+    assert GUIDE_FILE_CONFIG_MOUNT in guide
+    assert GUIDE_DIRECTORY_CONFIG_MOUNT in guide
     assert f"to {CONTAINER_CONFIG_PATH}" in guide
 
+    docker_run_commands = _docker_run_commands(guide)
     config_mount_commands = [
-        command for command in _docker_run_commands(guide) if _has_config_mount(command)
+        command for command in docker_run_commands if _has_config_mount(command)
+    ]
+    config_mounts = [
+        mount
+        for command in docker_run_commands
+        for mount in _docker_volume_mounts(command)
+        if mount in GUIDE_CONFIG_MOUNTS
     ]
     assert len(config_mount_commands) == 3
+    assert config_mounts.count(GUIDE_FILE_CONFIG_MOUNT) == 2
+    assert config_mounts.count(GUIDE_DIRECTORY_CONFIG_MOUNT) == 1
     assert all(_has_exact_config_binding(command) for command in config_mount_commands)
 
 
 def test_docker_config_binding_rejects_wrong_or_conflicting_values():
+    exact_file_mount = f"-v {GUIDE_FILE_CONFIG_MOUNT}"
     wrong_value = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml.bak "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro tokenpak"
+        f"{exact_file_mount} tokenpak"
     )
     conflicting_values = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
         "-e TOKENPAK_CONFIG=/app/config/config.yaml.bak "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro tokenpak"
+        f"{exact_file_mount} tokenpak"
     )
     environment_after_image = (
-        "docker run -v ./config/config.yaml:/app/config/config.yaml:ro tokenpak "
+        f"docker run {exact_file_mount} tokenpak "
         "-e TOKENPAK_CONFIG=/app/config/config.yaml"
     )
     volume_after_image = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml tokenpak "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro"
+        f"{exact_file_mount}"
     )
     wrong_mount_target = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        "-v ./config/config.yaml:/app/config/config.yaml.bak:ro tokenpak"
+        "-v $(pwd)/config/config.yaml:/app/config/config.yaml.bak:ro tokenpak"
+    )
+    wrong_mount_source = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"-v $(pwd)/config/missing.yaml:{CONTAINER_CONFIG_PATH}:ro tokenpak"
+    )
+    wrong_mount_mode = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"-v $(pwd)/config/config.yaml:{CONTAINER_CONFIG_PATH}:rw tokenpak"
     )
     valid_memory_option = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro -m 512m tokenpak"
+        f"{exact_file_mount} -m 512m tokenpak"
     )
     memory_without_image = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro -m 512m"
+        f"{exact_file_mount} -m 512m"
     )
     name_without_image = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro --name tokenpak-demo"
+        f"{exact_file_mount} --name tokenpak-demo"
     )
     unknown_option_without_image = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro --future-option value"
+        f"{exact_file_mount} --future-option value"
+    )
+    missing_memory_value = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} -m --name tokenpak"
+    )
+    missing_environment_value = f"docker run -e {exact_file_mount} tokenpak"
+    missing_attached_value = (
+        "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
+        f"{exact_file_mount} --memory= tokenpak"
     )
     trailing_environment_after_valid_options = (
         "docker run -e TOKENPAK_CONFIG=/app/config/config.yaml "
-        "-v ./config/config.yaml:/app/config/config.yaml:ro tokenpak "
+        f"{exact_file_mount} tokenpak "
         "-e TOKENPAK_CONFIG=/app/config/config.yaml"
     )
 
@@ -212,6 +238,8 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     assert not _has_exact_config_binding(environment_after_image)
     assert not _docker_volume_mounts(volume_after_image)
     assert not _has_config_mount(wrong_mount_target)
+    assert not _has_config_mount(wrong_mount_source)
+    assert not _has_config_mount(wrong_mount_mode)
     assert _has_exact_config_binding(valid_memory_option)
     assert _has_config_mount(valid_memory_option)
     assert not _has_exact_config_binding(memory_without_image)
@@ -220,4 +248,11 @@ def test_docker_config_binding_rejects_wrong_or_conflicting_values():
     assert not _has_config_mount(name_without_image)
     assert not _has_exact_config_binding(unknown_option_without_image)
     assert not _has_config_mount(unknown_option_without_image)
+    assert not _has_exact_config_binding(missing_memory_value)
+    assert not _has_config_mount(missing_memory_value)
+    assert not _has_exact_config_binding(missing_environment_value)
+    assert not _has_config_mount(missing_environment_value)
+    assert not _has_exact_config_binding(missing_attached_value)
+    assert not _has_config_mount(missing_attached_value)
     assert not _has_exact_config_binding(trailing_environment_after_valid_options)
+    assert not _has_config_mount(trailing_environment_after_valid_options)
