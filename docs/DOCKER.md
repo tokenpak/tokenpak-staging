@@ -18,6 +18,7 @@ docker run -p 8766:8766 tokenpak
 
 # With a custom config (optional — built-in defaults are used if omitted)
 docker run -p 8766:8766 \
+ -e TOKENPAK_CONFIG=/app/config/config.yaml \
  -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro \
  -v tokenpak-logs:/logs \
  tokenpak
@@ -89,7 +90,8 @@ Mount configuration at container startup:
 
 ```bash
 # Using docker run
-docker run -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro tokenpak
+docker run -e TOKENPAK_CONFIG=/app/config/config.yaml \
+ -v $(pwd)/config/config.yaml:/app/config/config.yaml:ro tokenpak
 
 # Using docker-compose (automatic)
 docker-compose up
@@ -134,7 +136,8 @@ volumes:
 For live config updates during development:
 
 ```bash
-docker run -v $(pwd)/config:/app/config:ro tokenpak
+docker run -e TOKENPAK_CONFIG=/app/config/config.yaml \
+ -v $(pwd)/config:/app/config:ro tokenpak
 ```
 
 ## Running Behind Nginx
