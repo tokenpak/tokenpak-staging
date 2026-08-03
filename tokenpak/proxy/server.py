@@ -731,6 +731,90 @@ class _ThreadedHTTPServer(HTTPServer):
 
 
 # ---------------------------------------------------------------------------
+# Vault-injection receipt
+# ---------------------------------------------------------------------------
+
+#: Name of the pipeline stage that performs vault injection.
+_VAULT_STAGE_NAME = "vault_injection"
+
+
+def _read_injection_receipt(result: object) -> tuple[int, str]:
+    """Extract ``(injected_tokens, injected_sources)`` from a pipeline result.
+
+    The vault stage records both onto ``StageResult.details``. Nothing consumed
+    them, so the monitor row and the live session both reported zero while
+    injection was working correctly on every eligible request.
+
+    ``injected_sources`` is stored as a comma-separated string because that is
+    the column type the monitor already declares (``injected_sources TEXT``).
+
+    Returns ``(0, "")`` when the stage is absent or was skipped — a measured
+    zero, not a default.
+    """
+    stages = getattr(result, "stages", None) or []
+    for stage in stages:
+        if getattr(stage, "name", "") != _VAULT_STAGE_NAME:
+            continue
+        if getattr(stage, "skipped", False):
+            return 0, ""
+        details = getattr(stage, "details", None) or {}
+        tokens = details.get("injected_tokens", 0)
+        sources = details.get("injected_sources", "")
+        try:
+            tokens = int(tokens)
+        except (TypeError, ValueError):
+            tokens = 0
+        if isinstance(sources, (list, tuple)):
+            sources = ",".join(str(s) for s in sources if s)
+        elif not isinstance(sources, str):
+            sources = str(sources) if sources else ""
+        return tokens, sources
+    return 0, ""
+
+
+#: Upper bound on distinct source names retained on the session for display.
+_MAX_SESSION_SOURCES = 20
+
+
+def _record_injection_in_session(injected_tokens: int, injected_sources: str = "") -> None:
+    """Accumulate injection totals onto the live session.
+
+    ``tokenpak status`` reads ``injected_tokens`` and ``injection_hits`` from the
+    session dict. Neither had a writer anywhere in the tree, so both were phantom
+    reads that always returned their defaults.
+
+    ``injection_hits`` counts requests that actually injected, so the rendered
+    "N tokens across M requests" describes injecting requests rather than all
+    traffic.
+
+    Distinct source names are retained (bounded by ``_MAX_SESSION_SOURCES``) so
+    the receipt can name what was added, not merely how much. Insertion order is
+    preserved and the cap drops the oldest — an unbounded set here would grow
+    with session length.
+
+    Best-effort: telemetry must never affect a request.
+    """
+    if injected_tokens <= 0:
+        return
+    try:
+        from tokenpak.core.runtime.proxy import SESSION as _session
+
+        _session["injected_tokens"] = int(_session.get("injected_tokens", 0)) + injected_tokens
+        _session["injection_hits"] = int(_session.get("injection_hits", 0)) + 1
+
+        if injected_sources:
+            seen = _session.get("injected_source_names")
+            if not isinstance(seen, list):
+                seen = []
+            for name in (s.strip() for s in injected_sources.split(",")):
+                if name and name not in seen:
+                    seen.append(name)
+            _session["injected_source_names"] = seen[-_MAX_SESSION_SOURCES:]
+    except Exception:
+        pass  # fail-open: never break a request over telemetry
+
+
+# ---------------------------------------------------------------------------
 # Request handler
 # ---------------------------------------------------------------------------
 
@@ -1586,6 +1670,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass  # fail-open: never break a request over telemetry
 
+            # Vault-injection receipt for this request. Defaults stand for every
+            # path that does not inject (non-byte-preserved routes, and the
+            # fail-open path below) so the recorded value is always the measured
+            # one — zero because nothing was injected, never zero by omission.
+            _injected_tokens = 0
+            _injected_sources = ""
+
             if _is_byte_preserved:
                 # Byte-preserved path (Claude Code): detect streaming from raw
                 # bytes only — never json.loads/json.dumps the body.
@@ -1607,6 +1698,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                     _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
                     body = _result.request.body
+                    # Carry the vault-injection receipt off the pipeline. The stage
+                    # computes these and they were previously dropped here, which left
+                    # `tokenpak status` reporting "0 across 0 requests" forever while
+                    # injection was working. Reported values must come from the stage
+                    # that did the work, never from a default.
+                    _injected_tokens, _injected_sources = _read_injection_receipt(_result)
+                    _record_injection_in_session(_injected_tokens, _injected_sources)
                 except Exception:
                     pass  # fail-open: vault injection failure must never break a request
             else:
@@ -2366,8 +2464,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             compilation_mode=ps.compilation_mode,
                             protected_tokens=protected_tokens,
                             compressed_tokens=max(0, input_tokens - sent_input_tokens),
-                            injected_tokens=0,
-                            injected_sources="",
+                            injected_tokens=_injected_tokens,
+                            injected_sources=_injected_sources,
                             cache_read_tokens=cache_read_tokens,
                             cache_creation_tokens=cache_creation_tokens,
                             cache_creation_ephemeral_1h_tokens=cache_creation_1h_tokens,
