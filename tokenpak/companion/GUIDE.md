@@ -25,7 +25,7 @@ profile, `.env`, or CI environment.  Values are read once at launch via
 | `TOKENPAK_COMPANION_ENABLED` | `1` | Master switch. Set `0` to disable companion without removing the launcher. |
 | `TOKENPAK_COMPANION_BUDGET` | `0` (unlimited) | Daily budget in USD. Set to e.g. `5.00` to cap daily spend. `0` = no cap. |
 | `TOKENPAK_COMPANION_PROFILE` | `balanced` | Preset profile: `lean`, `balanced`, or `verbose`. Controls prune threshold and cost display. |
-| `TOKENPAK_COMPANION_STYLE` | `lean` | Response style: `lean` or `standard`. `lean` asks for dense technical markdown to cut output tokens; `standard` leaves the host's native style untouched. Independent of `PROFILE`. |
+| `TOKENPAK_COMPANION_STYLE` | `standard` | Response style: `lean` or `standard`. `standard` preserves the host's native style; set `lean` to explicitly opt into dense technical markdown that can cut output tokens. Independent of `PROFILE`. |
 | `TOKENPAK_COMPANION_JOURNAL_DIR` | `~/.tokenpak/companion` | Directory for journal database, budget database, and capsule storage. |
 | `TOKENPAK_COMPANION_HOOKS` | `1` | Enable/disable the `UserPromptSubmit` hook pipeline (token estimation, cost journaling, budget gate). |
 | `TOKENPAK_COMPANION_MCP` | `1` | Enable/disable the MCP server. When disabled, no MCP tools are injected. |
@@ -47,6 +47,9 @@ profile, `.env`, or CI environment.  Values are read once at launch via
 export TOKENPAK_COMPANION_BUDGET=5.00
 export TOKENPAK_COMPANION_PROFILE=lean
 tokenpak claude
+
+# Explicitly opt into dense technical markdown
+TOKENPAK_COMPANION_STYLE=lean tokenpak claude
 
 # Custom journal directory (e.g. project-scoped storage)
 export TOKENPAK_COMPANION_JOURNAL_DIR=/my/project/.tokenpak

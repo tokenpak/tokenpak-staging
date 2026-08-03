@@ -5,8 +5,8 @@ The Claude companion appends this to its system prompt; the Codex companion
 renders it into the managed ``AGENTS.md`` section.  Both read the same constant
 so the two hosts cannot drift apart.
 
-Enabled by default.  ``TOKENPAK_COMPANION_STYLE=standard`` omits the block and
-leaves the host's native response style untouched.
+Disabled by default so unchanged launches preserve the host's native response
+style.  ``TOKENPAK_COMPANION_STYLE=lean`` explicitly opts into the directive.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 LEAN = "lean"
 STANDARD = "standard"
 
-DEFAULT = LEAN
+DEFAULT = STANDARD
 
 _ENV_VAR = "TOKENPAK_COMPANION_STYLE"
 

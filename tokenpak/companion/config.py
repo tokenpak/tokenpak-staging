@@ -10,7 +10,7 @@ Env vars
 TOKENPAK_COMPANION_ENABLED      Master switch (default: 1)
 TOKENPAK_COMPANION_BUDGET       Daily budget in USD (default: 0 = unlimited)
 TOKENPAK_COMPANION_PROFILE      Preset: lean | balanced | verbose (default: balanced)
-TOKENPAK_COMPANION_STYLE        Response style: lean | standard (default: lean).
+TOKENPAK_COMPANION_STYLE        Response style: lean | standard (default: standard).
                                 ``lean`` appends a dense-technical-markdown
                                 directive to the host's instructions; ``standard``
                                 omits it and leaves native style untouched.
