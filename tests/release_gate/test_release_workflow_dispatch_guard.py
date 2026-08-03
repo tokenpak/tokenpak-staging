@@ -26,6 +26,8 @@ _SNAPSHOT = _REPO_ROOT / "tokenpak" / "_snapshots" / "workflow-steps.json"
 _PUSH_TERM = "github.event_name == 'push'"
 _TAG_TERM = "startsWith(github.ref, 'refs/tags/v')"
 _GUARDED_JOBS = ("build", "release", "publish")
+_SITE_SYNC_JOB = "site-sync"
+_SITE_SYNC_STEP = "Dispatch release-synced event to website"
 
 
 def _release_jobs() -> dict:
@@ -60,6 +62,24 @@ def test_publish_still_excludes_prereleases():
         )
 
 
+def test_site_sync_dispatches_only_after_successful_publication():
+    """The cross-repository event must follow PyPI publication, not merely the
+    earlier GitHub Release creation step."""
+    job = _release_jobs()[_SITE_SYNC_JOB]
+    assert job.get("needs") == "publish"
+
+    steps = {step.get("name"): step for step in job.get("steps", [])}
+    assert _SITE_SYNC_STEP in steps
+    dispatch = steps[_SITE_SYNC_STEP]
+    assert dispatch.get("env", {}).get("GH_TOKEN") == "${{ secrets.SITE_REPO_TOKEN }}"
+
+    command = dispatch.get("run", "")
+    assert "repos/tokenpak/site/dispatches" in command
+    assert "event_type=release-synced" in command
+    assert 'if [ -z "${GH_TOKEN:-}" ]' in command
+    assert "exit 1" in command
+
+
 def test_workflow_steps_snapshot_pins_dispatch_guards():
     """The committed snapshot must record each guarded job's ``if`` with the
     push-event term, so a regenerated snapshot after a ref-only regression
@@ -72,3 +92,9 @@ def test_workflow_steps_snapshot_pins_dispatch_guards():
         assert _PUSH_TERM in guards[key], (
             f"snapshot guard for {key} is not push-event gated: {guards[key]!r}"
         )
+
+
+def test_workflow_steps_snapshot_pins_site_sync_dispatch():
+    snap = json.loads(_SNAPSHOT.read_text(encoding="utf-8"))
+    steps = {(step["workflow"], step["job"], step["name"]) for step in snap.get("steps", [])}
+    assert ("release.yml", _SITE_SYNC_JOB, _SITE_SYNC_STEP) in steps

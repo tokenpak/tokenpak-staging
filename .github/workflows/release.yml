@@ -510,3 +510,28 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1 (v1.14.0)
+
+  # Refresh the public website only after both the GitHub Release and PyPI
+  # publication succeed. The site retains manual and scheduled fallbacks.
+  site-sync:
+    name: Trigger website release sync
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch release-synced event to website
+        env:
+          GH_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::SITE_REPO_TOKEN is not configured; run the website sync fallback manually."
+            exit 1
+          fi
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            repos/tokenpak/site/dispatches \
+            -f event_type=release-synced
