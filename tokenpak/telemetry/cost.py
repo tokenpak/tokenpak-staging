@@ -25,6 +25,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -75,148 +76,39 @@ except (ImportError, AttributeError):
     }
 
 # ---------------------------------------------------------------------------
-# Current pricing rates (USD per 1K input/output tokens)
-# Source: official docs, 2026-02 snapshot
+# Current pricing rates (USD per 1,000,000 tokens).
+# Loaded from the model registry seed so telemetry and routing cannot drift.
 # ---------------------------------------------------------------------------
-PricingSeedValue = str | float
+PricingSeedValue = str | float | None
 PricingRowValue = str | int | float
 
 
-SEED_PRICING: List[dict[str, PricingSeedValue]] = [
-    # Anthropic
-    {
-        "provider": "anthropic",
-        "model": "claude-opus-4-6",
-        "input_rate": 15.00,
-        "output_rate": 75.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-opus-4-5",
-        "input_rate": 15.00,
-        "output_rate": 75.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-sonnet-4-6",
-        "input_rate": 3.00,
-        "output_rate": 15.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-sonnet-4-5",
-        "input_rate": 3.00,
-        "output_rate": 15.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-haiku-4-6",
-        "input_rate": 0.80,
-        "output_rate": 4.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-haiku-4-5",
-        "input_rate": 0.80,
-        "output_rate": 4.00,
-        "source": "official",
-    },
-    {
-        "provider": "anthropic",
-        "model": "claude-haiku-3-5",
-        "input_rate": 0.80,
-        "output_rate": 4.00,
-        "source": "official",
-    },
-    # OpenAI
-    {
-        "provider": "openai",
-        "model": "gpt-4o",
-        "input_rate": 5.00,
-        "output_rate": 15.00,
-        "source": "official",
-    },
-    {
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "input_rate": 0.15,
-        "output_rate": 0.60,
-        "source": "official",
-    },
-    {
-        "provider": "openai",
-        "model": "gpt-4-turbo",
-        "input_rate": 10.00,
-        "output_rate": 30.00,
-        "source": "official",
-    },
-    {
-        "provider": "openai",
-        "model": "gpt-3.5-turbo",
-        "input_rate": 0.50,
-        "output_rate": 1.50,
-        "source": "official",
-    },
-    {
-        "provider": "openai",
-        "model": "o1",
-        "input_rate": 15.00,
-        "output_rate": 60.00,
-        "source": "official",
-    },
-    {
-        "provider": "openai",
-        "model": "o1-mini",
-        "input_rate": 3.00,
-        "output_rate": 12.00,
-        "source": "official",
-    },
-    # Google
-    {
-        "provider": "google",
-        "model": "gemini-2.0-flash",
-        "input_rate": 0.10,
-        "output_rate": 0.40,
-        "source": "official",
-    },
-    {
-        "provider": "google",
-        "model": "gemini-2.0-pro",
-        "input_rate": 3.50,
-        "output_rate": 10.50,
-        "source": "official",
-    },
-    {
-        "provider": "google",
-        "model": "gemini-1.5-pro",
-        "input_rate": 3.50,
-        "output_rate": 10.50,
-        "source": "official",
-    },
-    {
-        "provider": "google",
-        "model": "gemini-1.5-flash",
-        "input_rate": 0.075,
-        "output_rate": 0.30,
-        "source": "official",
-    },
-    # Fallback (unknown model)
-    {
-        "provider": "unknown",
-        "model": "_fallback",
-        "input_rate": 3.00,
-        "output_rate": 15.00,
-        "source": "estimated",
-    },
-]
+def _load_seed_pricing() -> tuple[List[dict[str, PricingSeedValue]], str, str]:
+    """Build telemetry seed rows from the canonical model catalog."""
+    catalog_path = Path(__file__).parents[1] / "models" / "data" / "seed_catalog.json"
+    raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+    meta = raw["_meta"]
+    rows: List[dict[str, PricingSeedValue]] = []
+    for model, data in raw["models"].items():
+        rows.append(
+            {
+                "provider": data["provider"],
+                "model": model,
+                "input_rate": float(data["input"]),
+                "output_rate": float(data["output"]),
+                "cache_read_rate": (
+                    float(data["cache_read"]) if data.get("cache_read") is not None else None
+                ),
+                "cache_write_rate": (
+                    float(data["cache_write"]) if data.get("cache_write") is not None else None
+                ),
+                "source": data.get("source", "official"),
+            }
+        )
+    return rows, str(meta["pricing_version"]), str(meta["effective_date"])
 
-CURRENT_PRICING_VERSION = "2026.02"
-CURRENT_EFFECTIVE_DATE = "2026-02-01"
+
+SEED_PRICING, CURRENT_PRICING_VERSION, CURRENT_EFFECTIVE_DATE = _load_seed_pricing()
 
 
 # ---------------------------------------------------------------------------
@@ -258,19 +150,33 @@ class Pricing:
 
     provider: str
     model: str
-    input_rate: float  # USD per 1K tokens
-    output_rate: float  # USD per 1K tokens
+    input_rate: float  # USD per 1M tokens
+    output_rate: float  # USD per 1M tokens
     version: str
     effective_date: str
     source: str = "official"
+    cache_read_rate: float | None = None  # USD per 1M cache-read tokens
+    cache_write_rate: float | None = None  # USD per 1M cache-write tokens
 
     @property
     def input_per_token(self) -> float:
-        return self.input_rate / 1000.0
+        return self.input_rate / 1_000_000.0
 
     @property
     def output_per_token(self) -> float:
-        return self.output_rate / 1000.0
+        return self.output_rate / 1_000_000.0
+
+    @property
+    def cache_read_per_token(self) -> float | None:
+        if self.cache_read_rate is None:
+            return None
+        return self.cache_read_rate / 1_000_000.0
+
+    @property
+    def cache_write_per_token(self) -> float | None:
+        if self.cache_write_rate is None:
+            return None
+        return self.cache_write_rate / 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +199,8 @@ class CostEngine:
         model          TEXT    NOT NULL,
         input_rate     REAL    NOT NULL,
         output_rate    REAL    NOT NULL,
+        cache_read_rate REAL,
+        cache_write_rate REAL,
         currency       TEXT    NOT NULL DEFAULT 'USD',
         source         TEXT    NOT NULL DEFAULT 'official',
         created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -315,7 +223,7 @@ class CostEngine:
     )
 
     # Fallback rates for unknown models
-    _FALLBACK_INPUT_RATE = 3.00  # USD/1K (sonnet-tier estimate)
+    _FALLBACK_INPUT_RATE = 3.00  # USD/1M (sonnet-tier estimate)
     _FALLBACK_OUTPUT_RATE = 15.00
 
     def __init__(self, db_path: str = ""):
@@ -345,16 +253,23 @@ class CostEngine:
                 if stmt:
                     conn.execute(stmt)
             conn.commit()
+            self._ensure_rate_columns(conn)
             self._ensure_unique_pricing_key(conn)
 
-            # Seed if table is empty. The COUNT check is only an
-            # optimization: _seed uses INSERT OR IGNORE against the
-            # UNIQUE(version, provider, model) key, so a concurrent
-            # process that races past the COUNT cannot double-seed.
-            count = conn.execute("SELECT COUNT(*) FROM tp_pricing").fetchone()[0]
-            if count == 0:
-                self._seed(conn)
+            # Seed every catalog version. INSERT OR IGNORE makes this
+            # idempotent while allowing a refreshed version to reach an
+            # already-existing telemetry database.
+            self._seed(conn)
             conn.close()
+
+    @staticmethod
+    def _ensure_rate_columns(conn: sqlite3.Connection) -> None:
+        """Add cache-rate columns to databases created by older releases."""
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tp_pricing)").fetchall()}
+        for name in ("cache_read_rate", "cache_write_rate"):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE tp_pricing ADD COLUMN {name} REAL")
+        conn.commit()
 
     @staticmethod
     def _ensure_unique_pricing_key(conn: sqlite3.Connection) -> None:
@@ -387,8 +302,9 @@ class CostEngine:
         for row in SEED_PRICING:
             conn.execute(
                 """INSERT OR IGNORE INTO tp_pricing
-                   (version, effective_date, provider, model, input_rate, output_rate, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (version, effective_date, provider, model, input_rate, output_rate,
+                    cache_read_rate, cache_write_rate, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     CURRENT_PRICING_VERSION,
                     CURRENT_EFFECTIVE_DATE,
@@ -396,6 +312,8 @@ class CostEngine:
                     row["model"],
                     row["input_rate"],
                     row["output_rate"],
+                    row["cache_read_rate"],
+                    row["cache_write_rate"],
                     row["source"],
                 ),
             )
@@ -451,6 +369,8 @@ class CostEngine:
                 version=row["version"],
                 effective_date=row["effective_date"],
                 source=row["source"],
+                cache_read_rate=row["cache_read_rate"],
+                cache_write_rate=row["cache_write_rate"],
             )
         else:
             # Fallback pricing for unknown models
@@ -476,12 +396,15 @@ class CostEngine:
         rows = cast(
             list[sqlite3.Row],
             conn.execute(
-                "SELECT * FROM tp_pricing WHERE effective_date <= ? ORDER BY effective_date DESC",
+                """SELECT * FROM tp_pricing
+                   WHERE effective_date <= ?
+                   ORDER BY effective_date DESC, LENGTH(model) DESC""",
                 (event_date,),
             ).fetchall(),
         )
         for row in rows:
-            if row["model"] in model_lower or model_lower in row["model"]:
+            row_model = str(row["model"]).lower()
+            if row_model in model_lower:
                 return row
         return None
 
@@ -518,7 +441,7 @@ class CostEngine:
             final_input_tokens: Tokens AFTER compression (actual billing).
             output_tokens: Output tokens (same for baseline and actual).
             event_ts: Event ISO timestamp for pricing version resolution.
-            cache_read_tokens: Cache-read tokens (reduces actual cost).
+            cache_read_tokens: Tokens served from prompt cache.
 
         Returns:
             CostResult with all cost fields.
@@ -527,6 +450,7 @@ class CostEngine:
         raw = max(0, raw_input_tokens)
         final = max(0, final_input_tokens)
         out = max(0, output_tokens)
+        cache_read = min(max(0, cache_read_tokens), final)
 
         pricing = self.get_pricing(model, event_ts)
 
@@ -534,8 +458,18 @@ class CostEngine:
         baseline_cost = raw * pricing.input_per_token + out * pricing.output_per_token
 
         # Actual: billed tokens after compression
-        effective_input = max(0, final - cache_read_tokens)
-        actual_cost = effective_input * pricing.input_per_token + out * pricing.output_per_token
+        effective_input = final - cache_read
+        # A missing cache rate means the model has no verified cache discount;
+        # charge those tokens at the normal input rate instead of treating them
+        # as free.
+        cache_read_rate = pricing.cache_read_per_token
+        if cache_read_rate is None:
+            cache_read_rate = pricing.input_per_token
+        actual_cost = (
+            effective_input * pricing.input_per_token
+            + cache_read * cache_read_rate
+            + out * pricing.output_per_token
+        )
 
         # Savings (never negative — rounding artifacts clamped)
         savings_amount = max(0.0, baseline_cost - actual_cost)
@@ -581,6 +515,8 @@ class CostEngine:
         version: Optional[str] = None,
         effective_date: Optional[str] = None,
         source: str = "official",
+        cache_read_rate: float | None = None,
+        cache_write_rate: float | None = None,
     ) -> int:
         """Insert a new pricing record. Returns the new row id."""
         version = version or CURRENT_PRICING_VERSION
@@ -589,9 +525,20 @@ class CostEngine:
             conn = self._connect()
             cur = conn.execute(
                 """INSERT INTO tp_pricing
-                   (version, effective_date, provider, model, input_rate, output_rate, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (version, effective_date, provider, model, input_rate, output_rate, source),
+                   (version, effective_date, provider, model, input_rate, output_rate,
+                    cache_read_rate, cache_write_rate, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    version,
+                    effective_date,
+                    provider,
+                    model,
+                    input_rate,
+                    output_rate,
+                    cache_read_rate,
+                    cache_write_rate,
+                    source,
+                ),
             )
             conn.commit()
             row_id = cur.lastrowid
@@ -724,6 +671,8 @@ class CostEngine:
                 version=row["version"],
                 effective_date=row["effective_date"],
                 source=row["source"],
+                cache_read_rate=row["cache_read_rate"],
+                cache_write_rate=row["cache_write_rate"],
             )
         return None
 
@@ -742,8 +691,18 @@ def calculate_actual(
     final_input_tokens: int, output_tokens: int, pricing: Pricing, cache_read_tokens: int = 0
 ) -> float:
     """Compute actual cost (after compression)."""
-    effective = max(0, final_input_tokens - cache_read_tokens)
-    return max(0.0, effective * pricing.input_per_token + output_tokens * pricing.output_per_token)
+    final = max(0, final_input_tokens)
+    cache_read = min(max(0, cache_read_tokens), final)
+    effective = final - cache_read
+    cache_read_rate = pricing.cache_read_per_token
+    if cache_read_rate is None:
+        cache_read_rate = pricing.input_per_token
+    return max(
+        0.0,
+        effective * pricing.input_per_token
+        + cache_read * cache_read_rate
+        + max(0, output_tokens) * pricing.output_per_token,
+    )
 
 
 def calculate_savings(baseline: float, actual: float) -> tuple[float, float]:

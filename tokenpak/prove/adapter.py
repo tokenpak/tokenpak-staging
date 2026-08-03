@@ -26,25 +26,19 @@ Three axes, all user-extensible:
     - ``proxy``: HTTPS through the tokenpak proxy (compression, caching active)
     - ``cli``:   subprocess (``claude -p``, ``codex exec``, etc.)
 
-  **Model + pricing** — resolved from the built-in table or user config.
+  **Model + pricing** — resolved from the canonical model registry or user config.
 
-Users register custom providers in ``~/.tokenpak/prove/providers.yaml``::
+Users register custom providers in ``~/.tokenpak/prove/providers.yaml``.
+Official-provider prices come from TokenPak's model registry; custom models
+must declare their own rates. The values below are illustrative::
 
     providers:
-      grok:
+      acme:
         format: openai            # reuse OpenAI-compatible format
-        base_url: https://api.x.ai/v1
-        api_key_env: XAI_API_KEY
+        base_url: https://api.example.com/v1
+        api_key_env: ACME_API_KEY
         models:
-          grok-3:       { input: 3.0, output: 15.0, cached: 0.30 }
-          grok-3-mini:  { input: 0.30, output: 0.50, cached: 0.03 }
-      google:
-        format: google
-        base_url: https://generativelanguage.googleapis.com/v1beta
-        api_key_env: GOOGLE_API_KEY
-        models:
-          gemini-2.5-pro:   { input: 1.25, output: 10.0, cached: 0.3125 }
-          gemini-2.5-flash: { input: 0.15, output: 0.60, cached: 0.0375 }
+          acme-chat: { input: 1.0, output: 5.0, cached: 0.1 }
 """
 
 from __future__ import annotations
@@ -60,6 +54,8 @@ from typing import Protocol, TextIO, TypedDict, cast
 
 import httpx
 import yaml
+
+from tokenpak.models import get_rates, get_registry
 
 # ── Data classes ────────────────────────────────────────────────────────
 
@@ -167,40 +163,17 @@ _BUILTIN_PROVIDERS: dict[str, _ProviderConfig] = {
         "base_url": "https://api.anthropic.com",
         "api_key_env": "ANTHROPIC_API_KEY",
         "cli_command": "claude -p",
-        "models": {
-            "claude-opus-4-6": {"input": 15.0, "output": 75.0, "cached": 1.50},
-            "claude-opus-4-5": {"input": 15.0, "output": 75.0, "cached": 1.50},
-            "claude-sonnet-4-6": {"input": 3.0, "output": 15.0, "cached": 0.30},
-            "claude-sonnet-4-5": {"input": 3.0, "output": 15.0, "cached": 0.30},
-            "claude-haiku-4-5": {"input": 0.80, "output": 4.0, "cached": 0.08},
-        },
     },
     "openai": {
         "format": "openai",
         "base_url": "https://api.openai.com",
         "api_key_env": "OPENAI_API_KEY",
         "cli_command": "codex exec",
-        "models": {
-            "gpt-4o": {"input": 2.50, "output": 10.0, "cached": 1.25},
-            "gpt-4o-mini": {"input": 0.15, "output": 0.60, "cached": 0.075},
-            "o3": {"input": 10.0, "output": 40.0, "cached": 5.0},
-            "o3-mini": {"input": 1.10, "output": 4.40, "cached": 0.55},
-            "o4-mini": {"input": 1.10, "output": 4.40, "cached": 0.55},
-            "o1": {"input": 15.0, "output": 60.0, "cached": 7.50},
-            "gpt-4.1": {"input": 2.0, "output": 8.0, "cached": 0.50},
-            "gpt-4.1-mini": {"input": 0.40, "output": 1.60, "cached": 0.10},
-            "gpt-4.1-nano": {"input": 0.10, "output": 0.40, "cached": 0.025},
-        },
     },
     "google": {
         "format": "google",
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "api_key_env": "GOOGLE_API_KEY",
-        "models": {
-            "gemini-2.5-pro": {"input": 1.25, "output": 10.0, "cached": 0.3125},
-            "gemini-2.5-flash": {"input": 0.15, "output": 0.60, "cached": 0.0375},
-            "gemini-2.0-flash": {"input": 0.075, "output": 0.30, "cached": 0.01875},
-        },
     },
     "xai": {
         "format": "openai",
@@ -251,7 +224,7 @@ def _get_provider(name: str) -> _ProviderConfig:
 
 
 def _get_model_rates(provider: str, model: str) -> dict[str, float]:
-    """Get pricing rates for a model, with prefix fallback."""
+    """Get model rates, preferring explicit provider-config overrides."""
     reg = _get_provider(provider)
     models = reg.get("models", {})
     if model in models:
@@ -259,7 +232,7 @@ def _get_model_rates(provider: str, model: str) -> dict[str, float]:
     for key, rates in models.items():
         if model.startswith(key):
             return rates
-    return {"input": 3.0, "output": 15.0, "cached": 0.30}
+    return get_rates(model)
 
 
 def list_providers() -> list[dict[str, object]]:
@@ -272,12 +245,16 @@ def list_providers() -> list[dict[str, object]]:
                 continue
             seen.add(name)
             merged = _get_provider(name)
+            model_names = set(merged.get("models", {}))
+            model_names.update(
+                info.model_id for info in get_registry().all_models() if info.provider == name
+            )
             result.append(
                 {
                     "name": name,
                     "format": merged.get("format", name),
                     "base_url": merged.get("base_url", ""),
-                    "models": list(merged.get("models", {}).keys()),
+                    "models": sorted(model_names),
                     "source": source,
                 }
             )

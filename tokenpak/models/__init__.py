@@ -9,14 +9,14 @@ Usage::
 
     from tokenpak.models import get_rates, get_tier, translate_model
 
-    get_rates("claude-opus-4-7")
-    # → {"input": 15.0, "output": 75.0, "cached": 1.50}
+    get_rates("claude-opus-4-8")
+    # → {"input": 5.0, "output": 25.0, "cached": 0.50}
 
-    get_tier("claude-opus-4-7")
+    get_tier("claude-opus-4-8")
     # → 4
 
-    translate_model("claude-opus-4-7", "bedrock")
-    # → "anthropic.claude-opus-4-7-v1:0"
+    translate_model("claude-opus-4-8", "bedrock")
+    # → "claude-opus-4-8" (pass-through when no translation is cataloged)
 """
 
 from __future__ import annotations

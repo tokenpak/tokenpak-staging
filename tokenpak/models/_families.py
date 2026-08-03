@@ -3,7 +3,7 @@
 
 When a model ID isn't in the seed catalog, the registry matches it against
 these family rules to infer provider, tier, pricing, and translation templates.
-This is what makes the system dynamic: ``claude-opus-4-7`` auto-resolves to
+This is what makes the system dynamic: ``claude-opus-5`` auto-resolves to
 Opus-family pricing without any code or config change.
 
 Rules are matched longest-pattern-first so ``gpt-4o-mini`` beats ``gpt-4o``.
@@ -58,15 +58,37 @@ class FamilyRule:
 BUILTIN_FAMILIES: list[FamilyRule] = [
     # ── Anthropic ──────────────────────────────────────────────
     FamilyRule(
-        pattern="claude-opus",
+        pattern="claude-fable",
         provider="anthropic",
         tier=4,
+        input_per_mtok=10.0,
+        output_per_mtok=50.0,
+        cache_read_mult=0.10,
+        cache_write_mult=1.25,
+        bedrock_template="anthropic.{model_id}",
+        vertex_template="{model_id}",
+    ),
+    FamilyRule(
+        pattern="claude-opus-4-1",
+        provider="anthropic",
+        tier=3,
         input_per_mtok=15.0,
         output_per_mtok=75.0,
         cache_read_mult=0.10,
         cache_write_mult=1.25,
-        bedrock_template="anthropic.{model_id}-v1:0",
-        vertex_template="{model_id}@latest",
+        bedrock_template="anthropic.{model_id}",
+        vertex_template="{model_id}",
+    ),
+    FamilyRule(
+        pattern="claude-opus",
+        provider="anthropic",
+        tier=4,
+        input_per_mtok=5.0,
+        output_per_mtok=25.0,
+        cache_read_mult=0.10,
+        cache_write_mult=1.25,
+        bedrock_template="anthropic.{model_id}",
+        vertex_template="{model_id}",
     ),
     FamilyRule(
         pattern="claude-sonnet",
@@ -83,8 +105,8 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         pattern="claude-haiku",
         provider="anthropic",
         tier=1,
-        input_per_mtok=0.80,
-        output_per_mtok=4.0,
+        input_per_mtok=1.0,
+        output_per_mtok=5.0,
         cache_read_mult=0.10,
         cache_write_mult=1.25,
         bedrock_template="anthropic.{model_id}-v1:0",
@@ -165,6 +187,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=1,
         input_per_mtok=0.15,
         output_per_mtok=0.60,
+        cache_read_mult=0.50,
     ),
     FamilyRule(
         pattern="gpt-4o",
@@ -172,6 +195,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=2,
         input_per_mtok=2.50,
         output_per_mtok=10.0,
+        cache_read_mult=0.50,
     ),
     FamilyRule(
         pattern="gpt-4.1-nano",
@@ -179,6 +203,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=1,
         input_per_mtok=0.10,
         output_per_mtok=0.40,
+        cache_read_mult=0.25,
     ),
     FamilyRule(
         pattern="gpt-4.1-mini",
@@ -186,6 +211,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=1,
         input_per_mtok=0.40,
         output_per_mtok=1.60,
+        cache_read_mult=0.25,
     ),
     FamilyRule(
         pattern="gpt-4.1",
@@ -193,13 +219,31 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=2,
         input_per_mtok=2.0,
         output_per_mtok=8.0,
+        cache_read_mult=0.25,
+    ),
+    FamilyRule(
+        pattern="gpt-5.3-codex",
+        provider="openai",
+        tier=2,
+        input_per_mtok=1.75,
+        output_per_mtok=14.0,
+        cache_read_mult=0.10,
+    ),
+    FamilyRule(
+        pattern="gpt-5.2-codex",
+        provider="openai",
+        tier=2,
+        input_per_mtok=1.75,
+        output_per_mtok=14.0,
+        cache_read_mult=0.10,
     ),
     FamilyRule(
         pattern="gpt-5",
         provider="openai",
         tier=4,
-        input_per_mtok=10.0,
-        output_per_mtok=40.0,
+        input_per_mtok=1.25,
+        output_per_mtok=10.0,
+        cache_read_mult=0.10,
     ),
     FamilyRule(
         pattern="gpt-4",
@@ -221,6 +265,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=1,
         input_per_mtok=1.10,
         output_per_mtok=4.40,
+        cache_read_mult=0.25,
     ),
     FamilyRule(
         pattern="o3-mini",
@@ -228,6 +273,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=1,
         input_per_mtok=1.10,
         output_per_mtok=4.40,
+        cache_read_mult=0.50,
     ),
     FamilyRule(
         pattern="o1-mini",
@@ -235,13 +281,15 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=1,
         input_per_mtok=1.10,
         output_per_mtok=4.40,
+        cache_read_mult=0.50,
     ),
     FamilyRule(
         pattern="o3",
         provider="openai",
         tier=3,
-        input_per_mtok=10.0,
-        output_per_mtok=40.0,
+        input_per_mtok=2.0,
+        output_per_mtok=8.0,
+        cache_read_mult=0.25,
     ),
     FamilyRule(
         pattern="o1",
@@ -249,6 +297,7 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         tier=3,
         input_per_mtok=15.0,
         output_per_mtok=60.0,
+        cache_read_mult=0.50,
     ),
     FamilyRule(
         pattern="o4",
@@ -261,16 +310,18 @@ BUILTIN_FAMILIES: list[FamilyRule] = [
         pattern="codex",
         provider="openai",
         tier=2,
-        input_per_mtok=3.0,
-        output_per_mtok=12.0,
+        input_per_mtok=1.5,
+        output_per_mtok=6.0,
+        cache_read_mult=0.25,
     ),
     # ── Google ─────────────────────────────────────────────────
     FamilyRule(
         pattern="gemini-",
         provider="google",
         tier=2,
-        input_per_mtok=1.25,
-        output_per_mtok=5.0,
+        input_per_mtok=1.5,
+        output_per_mtok=9.0,
+        cache_read_mult=0.10,
     ),
     # ── Local / OSS ────────────────────────────────────────────
     FamilyRule(pattern="llama", provider="ollama", tier=1, input_per_mtok=0.0, output_per_mtok=0.0),

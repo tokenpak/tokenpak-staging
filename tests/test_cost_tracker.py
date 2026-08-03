@@ -25,8 +25,8 @@ class TestEstimateCost:
         assert abs(cost - 12.50) < 0.001
 
     def test_known_model_gemini_flash(self):
-        cost = estimate_cost("gemini-2-flash", 1_000_000, 1_000_000)
-        assert abs(cost - 0.375) < 0.001
+        cost = estimate_cost("gemini-2.5-flash", 1_000_000, 1_000_000)
+        assert abs(cost - 2.80) < 0.001
 
     def test_known_model_codex(self):
         # 1M input + 1M output = $1.50 + $6.00 = $7.50

@@ -12,9 +12,12 @@ Avoids duplicating test_cost_integration.py coverage; focuses on:
   - Negative / clamped token inputs
 """
 
+import sqlite3
+
 import pytest
 
 from tokenpak.telemetry.cost import (
+    CURRENT_EFFECTIVE_DATE,
     CURRENT_PRICING_VERSION,
     SEED_PRICING,
     CostEngine,
@@ -51,21 +54,22 @@ class TestPricingDataclass:
             input_rate=input_rate,
             output_rate=output_rate,
             version=CURRENT_PRICING_VERSION,
-            effective_date="2026-02-01",
+            effective_date=CURRENT_EFFECTIVE_DATE,
+            cache_read_rate=input_rate * 0.1,
         )
 
     def test_input_per_token(self):
         p = self._make_pricing(input_rate=3.0)
-        assert p.input_per_token == pytest.approx(0.003)
+        assert p.input_per_token == pytest.approx(0.000003)
 
     def test_output_per_token(self):
         p = self._make_pricing(output_rate=15.0)
-        assert p.output_per_token == pytest.approx(0.015)
+        assert p.output_per_token == pytest.approx(0.000015)
 
     def test_haiku_rates(self):
         p = self._make_pricing(input_rate=0.80, output_rate=4.0)
-        assert p.input_per_token == pytest.approx(0.0008)
-        assert p.output_per_token == pytest.approx(0.004)
+        assert p.input_per_token == pytest.approx(0.0000008)
+        assert p.output_per_token == pytest.approx(0.000004)
 
 
 # ---------------------------------------------------------------------------
@@ -84,13 +88,13 @@ class TestGetPricing:
 
     def test_exact_match_haiku(self, engine):
         p = engine.get_pricing("claude-haiku-4-5")
-        assert p.input_rate == pytest.approx(0.80)
-        assert p.output_rate == pytest.approx(4.0)
+        assert p.input_rate == pytest.approx(1.0)
+        assert p.output_rate == pytest.approx(5.0)
 
     def test_exact_match_opus(self, engine):
         p = engine.get_pricing("claude-opus-4-6")
-        assert p.input_rate == pytest.approx(15.0)
-        assert p.output_rate == pytest.approx(75.0)
+        assert p.input_rate == pytest.approx(5.0)
+        assert p.output_rate == pytest.approx(25.0)
 
     def test_fallback_unknown_model(self, engine):
         p = engine.get_pricing("totally-unknown-model-xyz")
@@ -110,6 +114,18 @@ class TestGetPricing:
         """event_ts accepted; pricing resolved."""
         p = engine.get_pricing("gpt-4o", event_ts="2026-03-01T10:00:00Z")
         assert p.input_rate > 0
+
+    def test_fuzzy_match_prefers_longest_current_model_id(self, engine):
+        p = engine.get_pricing("gpt-4o-mini-20260728")
+        assert p.model == "gpt-4o-mini"
+        assert p.input_rate == pytest.approx(0.15)
+        assert p.output_rate == pytest.approx(0.60)
+
+    def test_fuzzy_match_does_not_bind_shorter_unknown_to_longer_model(self, engine):
+        p = engine.get_pricing("gpt-5")
+        assert p.model == "gpt-5"
+        assert p.source == "estimated"
+        assert p.version == "fallback"
 
     def test_source_official_for_seeded_model(self, engine):
         p = engine.get_pricing("claude-sonnet-4-6")
@@ -168,6 +184,46 @@ class TestPricingCatalog:
         # Cache should be cleared; next get_pricing hits DB
         assert len(engine._pricing_cache) == 0
 
+    def test_existing_database_receives_new_catalog_idempotently(self, tmp_path):
+        db = tmp_path / "existing-cost.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                """CREATE TABLE tp_pricing (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    version TEXT NOT NULL,
+                    effective_date DATE NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    input_rate REAL NOT NULL,
+                    output_rate REAL NOT NULL,
+                    currency TEXT NOT NULL DEFAULT 'USD',
+                    source TEXT NOT NULL DEFAULT 'official',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO tp_pricing
+                   (version, effective_date, provider, model, input_rate, output_rate)
+                   VALUES ('2026.02', '2026-02-01', 'test', 'historical-model', 1.0, 2.0)"""
+            )
+
+        CostEngine(db_path=str(db))
+        CostEngine(db_path=str(db))
+
+        with sqlite3.connect(db) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(tp_pricing)")}
+            current_rows = conn.execute(
+                "SELECT COUNT(*) FROM tp_pricing WHERE version = ?",
+                (CURRENT_PRICING_VERSION,),
+            ).fetchone()[0]
+            historical_rows = conn.execute(
+                "SELECT COUNT(*) FROM tp_pricing WHERE model = 'historical-model'"
+            ).fetchone()[0]
+
+        assert {"cache_read_rate", "cache_write_rate"}.issubset(columns)
+        assert current_rows == len(SEED_PRICING)
+        assert historical_rows == 1
+
 
 # ---------------------------------------------------------------------------
 # calculate — cache_read_tokens, clamping
@@ -194,6 +250,23 @@ class TestCalculateEdgeCases:
         r1 = engine.calculate("claude-sonnet-4-6", 1000, 1000, 100, cache_read_tokens=0)
         r2 = engine.calculate("claude-sonnet-4-6", 1000, 1000, 100)
         assert r1.actual_cost == pytest.approx(r2.actual_cost)
+
+    def test_zero_cost_cache_rate_is_not_treated_as_missing(self, engine):
+        engine.add_pricing(
+            provider="test",
+            model="free-cache-model",
+            input_rate=3.0,
+            output_rate=15.0,
+            cache_read_rate=0.0,
+        )
+        result = engine.calculate(
+            "free-cache-model",
+            raw_input_tokens=1000,
+            final_input_tokens=1000,
+            output_tokens=0,
+            cache_read_tokens=1000,
+        )
+        assert result.actual_cost == pytest.approx(0.0)
 
     def test_negative_raw_input_clamped_to_zero(self, engine):
         result = engine.calculate(
@@ -226,7 +299,7 @@ class TestCalculateEdgeCases:
         assert result.savings_pct >= 0.0
 
     def test_result_has_correct_pricing_version(self, engine):
-        result = engine.calculate("claude-haiku-4-6", 1000, 800, 200)
+        result = engine.calculate("claude-haiku-4-5", 1000, 800, 200)
         assert result.pricing_version == CURRENT_PRICING_VERSION
 
 
@@ -294,26 +367,40 @@ class TestModuleLevelHelpers:
             input_rate=3.0,
             output_rate=15.0,
             version=CURRENT_PRICING_VERSION,
-            effective_date="2026-02-01",
+            effective_date=CURRENT_EFFECTIVE_DATE,
+            cache_read_rate=0.30,
         )
 
     def test_calculate_baseline_math(self, sonnet_pricing):
-        # 1000 input * 0.003 + 100 output * 0.015 = 3.0 + 1.5 = 4.5
+        # 1000 input * $3/MTok + 100 output * $15/MTok = $0.0045
         result = calculate_baseline(1000, 100, sonnet_pricing)
-        assert result == pytest.approx(4.5)
+        assert result == pytest.approx(0.0045)
 
     def test_calculate_baseline_zero(self, sonnet_pricing):
         assert calculate_baseline(0, 0, sonnet_pricing) == pytest.approx(0.0)
 
     def test_calculate_actual_with_cache_reads(self, sonnet_pricing):
-        # final=1000, cache_read=400 → effective=600 * 0.003 + 100 * 0.015 = 1.8 + 1.5 = 3.3
+        # 600 standard + 400 cached input tokens, plus 100 output tokens.
         result = calculate_actual(1000, 100, sonnet_pricing, cache_read_tokens=400)
-        assert result == pytest.approx(3.3)
+        assert result == pytest.approx(0.00342)
 
     def test_calculate_actual_no_cache_reads(self, sonnet_pricing):
-        # 1000 * 0.003 + 100 * 0.015 = 3.0 + 1.5 = 4.5
+        # 1000 input + 100 output at per-MTok rates.
         result = calculate_actual(1000, 100, sonnet_pricing)
-        assert result == pytest.approx(4.5)
+        assert result == pytest.approx(0.0045)
+
+    def test_calculate_actual_honors_zero_cost_cache_rate(self, sonnet_pricing):
+        free_cache = Pricing(
+            provider=sonnet_pricing.provider,
+            model=sonnet_pricing.model,
+            input_rate=sonnet_pricing.input_rate,
+            output_rate=sonnet_pricing.output_rate,
+            version=sonnet_pricing.version,
+            effective_date=sonnet_pricing.effective_date,
+            cache_read_rate=0.0,
+        )
+        result = calculate_actual(1000, 0, free_cache, cache_read_tokens=1000)
+        assert result == pytest.approx(0.0)
 
     def test_calculate_savings_normal(self):
         amount, pct = calculate_savings(10.0, 6.0)

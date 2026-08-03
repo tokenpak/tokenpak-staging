@@ -13,69 +13,19 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from tokenpak.models import get_model_costs, get_registry
 from tokenpak.proxy.stats import CompressionStats, default_log_path
 
-# Standard model pricing (USD per million tokens)
-# Canonical source: tokenpak/telemetry/data/pricing_catalog.json
-# This inline table is for analytics display; sync with catalog when
-# updating prices.  Last synced: 2026-04-15.
-MODEL_PRICING = {
-    "gpt-4": {"input": 30.0, "output": 60.0},
-    "gpt-4-turbo": {"input": 10.0, "output": 30.0},
-    "gpt-4o": {"input": 2.50, "output": 10.0},
-    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "gpt-4-vision": {"input": 10.0, "output": 30.0},
-    "claude-3-opus": {"input": 15.0, "output": 75.0},
-    "claude-3-sonnet": {"input": 3.0, "output": 15.0},
-    "claude-3-haiku": {"input": 0.25, "output": 1.25},
-    "claude-3-5-opus": {"input": 18.0, "output": 90.0},
-    "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
-    "claude-3-5-haiku": {"input": 0.80, "output": 4.0},
-    "claude-opus-4-5": {"input": 15.0, "output": 75.0},
-    "claude-opus-4-6": {"input": 15.0, "output": 75.0},
-    "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
-    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-haiku-4-5": {"input": 0.80, "output": 4.0},
-    "claude-4": {"input": 5.0, "output": 25.0},
-    "gemini-pro": {"input": 0.50, "output": 1.50},
-    "gemini-1.5-pro": {"input": 1.25, "output": 5.0},
-    "gemini-2-flash": {"input": 0.075, "output": 0.30},
-    "llama-2-70b": {"input": 0.75, "output": 1.00},
+# Compatibility snapshot for callers that import the historical constant.
+# Runtime lookups below resolve directly through the canonical registry.
+MODEL_PRICING: Dict[str, Dict[str, float]] = {
+    info.model_id: get_model_costs(info.model_id) for info in get_registry().all_models()
 }
 
 
 def get_model_pricing(model_name: str) -> Dict[str, float]:
-    """Get pricing for a model, with fuzzy matching fallback."""
-    # Exact match
-    if model_name in MODEL_PRICING:
-        return MODEL_PRICING[model_name]
-
-    # Fuzzy match (e.g., "claude-3-5-sonnet-20250319" → "claude-3-5-sonnet")
-    lower_name = model_name.lower()
-    for key in MODEL_PRICING:
-        if key in lower_name:
-            return MODEL_PRICING[key]
-
-    # Fallback to generic pricing
-    if "gpt" in lower_name:
-        if "4o" in lower_name and "mini" not in lower_name:
-            return {"input": 5.0, "output": 15.0}
-        elif "4" in lower_name:
-            return {"input": 10.0, "output": 30.0}
-    elif "claude" in lower_name:
-        if "opus" in lower_name:
-            return {"input": 15.0, "output": 75.0}
-        elif "haiku" in lower_name:
-            return {"input": 0.25, "output": 1.25}
-        else:
-            return {"input": 3.0, "output": 15.0}
-    elif "gemini" in lower_name:
-        return {"input": 0.50, "output": 1.50}
-    elif "llama" in lower_name:
-        return {"input": 0.75, "output": 1.00}
-
-    # Default: assume mid-tier pricing
-    return {"input": 1.0, "output": 5.0}
+    """Get current model pricing through the canonical model registry."""
+    return get_model_costs(model_name)
 
 
 @dataclass

@@ -27,9 +27,9 @@ from tokenpak.models import (
 class TestKnownModels:
     def test_opus_4_6_rates(self):
         rates = get_rates("claude-opus-4-6")
-        assert rates["input"] == 15.0
-        assert rates["output"] == 75.0
-        assert rates["cached"] == 1.5
+        assert rates["input"] == 5.0
+        assert rates["output"] == 25.0
+        assert rates["cached"] == 0.5
 
     def test_sonnet_4_6_rates(self):
         rates = get_rates("claude-sonnet-4-6")
@@ -39,9 +39,9 @@ class TestKnownModels:
 
     def test_haiku_4_5_rates(self):
         rates = get_rates("claude-haiku-4-5")
-        assert rates["input"] == 0.8
-        assert rates["output"] == 4.0
-        assert rates["cached"] == 0.08
+        assert rates["input"] == 1.0
+        assert rates["output"] == 5.0
+        assert rates["cached"] == 0.1
 
     def test_gpt_4o_rates(self):
         rates = get_rates("gpt-4o")
@@ -77,35 +77,35 @@ class TestUnknownModels:
     def test_opus_4_7_rates(self):
         """A future Opus release should get Opus-family pricing."""
         rates = get_rates("claude-opus-4-7")
-        assert rates["input"] == 15.0
-        assert rates["output"] == 75.0
-        assert rates["cached"] == 1.5
+        assert rates["input"] == 5.0
+        assert rates["output"] == 25.0
+        assert rates["cached"] == 0.5
 
     def test_opus_4_7_tier(self):
         assert get_tier("claude-opus-4-7") == 4
 
     def test_opus_4_7_bedrock(self):
         result = translate_model("claude-opus-4-7", "bedrock")
-        assert result == "anthropic.claude-opus-4-7-v1:0"
+        assert result == "claude-opus-4-7"
 
     def test_opus_4_7_vertex(self):
         result = translate_model("claude-opus-4-7", "vertex")
-        assert result == "claude-opus-4-7@latest"
+        assert result == "claude-opus-4-7"
 
-    def test_sonnet_5_0_rates(self):
+    def test_sonnet_6_0_rates(self):
         """A future Sonnet release should get Sonnet-family pricing."""
-        rates = get_rates("claude-sonnet-5-0")
+        rates = get_rates("claude-sonnet-6-0")
         assert rates["input"] == 3.0
         assert rates["output"] == 15.0
 
-    def test_sonnet_5_0_tier(self):
-        assert get_tier("claude-sonnet-5-0") == 2
+    def test_sonnet_6_0_tier(self):
+        assert get_tier("claude-sonnet-6-0") == 2
 
     def test_haiku_5_0_rates(self):
         rates = get_rates("claude-haiku-5-0")
-        assert rates["input"] == 0.8
-        assert rates["output"] == 4.0
-        assert rates["cached"] == 0.08
+        assert rates["input"] == 1.0
+        assert rates["output"] == 5.0
+        assert rates["cached"] == 0.1
 
     def test_haiku_5_0_tier(self):
         assert get_tier("claude-haiku-5-0") == 1
@@ -140,13 +140,13 @@ class TestResolution:
     def test_date_suffix_stripping(self):
         """Model IDs with date suffixes resolve to the base model."""
         rates = get_rates("claude-opus-4-6-20260515")
-        assert rates["input"] == 15.0
+        assert rates["input"] == 5.0
 
     def test_prefix_match(self):
         """Models sharing a prefix with a known model resolve via prefix matching."""
         info = get_pricing("claude-opus-4-6-extended")
         assert info is not None
-        assert info.input_per_mtok == 15.0
+        assert info.input_per_mtok == 5.0
 
     def test_empty_string(self):
         assert get_pricing("") is None
@@ -195,8 +195,8 @@ class TestTranslation:
 
     def test_unknown_model_bedrock(self):
         """Family template generates a bedrock translation for unknown models."""
-        result = translate_model("claude-sonnet-5-0", "bedrock")
-        assert result == "anthropic.claude-sonnet-5-0-v1:0"
+        result = translate_model("claude-sonnet-6-0", "bedrock")
+        assert result == "anthropic.claude-sonnet-6-0-v1:0"
 
     def test_no_translation(self):
         """Pass-through when no translation exists."""
@@ -313,28 +313,28 @@ class TestRegressionValues:
     hardcoded in the various inline dicts.
     """
 
-    def test_opus_4_6_matches_old_proxy(self):
+    def test_opus_4_6_matches_current_catalog(self):
         costs = get_model_costs("claude-opus-4-6")
-        assert costs["input"] == 15.0
-        assert costs["output"] == 75.0
+        assert costs["input"] == 5.0
+        assert costs["output"] == 25.0
 
     def test_sonnet_4_6_matches_old_proxy(self):
         costs = get_model_costs("claude-sonnet-4-6")
         assert costs["input"] == 3.0
         assert costs["output"] == 15.0
 
-    def test_haiku_4_5_matches_old_companion(self):
+    def test_haiku_4_5_matches_current_catalog(self):
         rates = get_rates("claude-haiku-4-5")
-        assert rates["input"] == 0.8
-        assert rates["output"] == 4.0
-        assert rates["cached"] == 0.08
+        assert rates["input"] == 1.0
+        assert rates["output"] == 5.0
+        assert rates["cached"] == 0.1
 
     def test_gpt_4o_matches_old_catalog(self):
         costs = get_model_costs("gpt-4o")
         assert costs["input"] == 2.5
         assert costs["output"] == 10.0
 
-    def test_o3_matches_old_companion(self):
+    def test_o3_matches_current_catalog(self):
         costs = get_model_costs("o3")
-        assert costs["input"] == 10.0
-        assert costs["output"] == 40.0
+        assert costs["input"] == 2.0
+        assert costs["output"] == 8.0

@@ -274,12 +274,12 @@ def test_breakdown_keys_present(tmp_path):
     assert "total" in breakdown
 
 
-# ─── MODEL_RATES — haiku-4-6 added ───────────────────────────────────────────
+# ─── MODEL_RATES — current Haiku contract ────────────────────────────────────
 
 
-def test_haiku_4_6_in_model_rates():
-    assert "claude-haiku-4-6" in MODEL_RATES
-    rates = MODEL_RATES["claude-haiku-4-6"]
-    assert rates["input"] == 0.80
-    assert rates["cached"] == 0.08
-    assert rates["output"] == 4.0
+def test_haiku_4_5_in_model_rates():
+    assert "claude-haiku-4-5" in MODEL_RATES
+    rates = MODEL_RATES["claude-haiku-4-5"]
+    assert rates["input"] == 1.00
+    assert rates["cached"] == 0.10
+    assert rates["output"] == 5.0
