@@ -626,7 +626,7 @@ def _write_settings(config: CompanionConfig) -> str:
 
 
 def _write_system_prompt(config: CompanionConfig) -> str:
-    """Write the companion system prompt fragment."""
+    """Write the prompt fragment, adding style guidance only for lean."""
     path = config.run_dir / "companion-prompt.md"
     path.write_text(_SYSTEM_PROMPT + _style.directive(config.style))
     return str(path)
