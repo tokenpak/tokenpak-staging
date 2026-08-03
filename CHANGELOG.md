@@ -8,6 +8,37 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [1.17.1] — 2026-08-03
+
+This patch release fixes proxy, configuration, and launcher paths and makes the
+TIP v1 schemas citable at stable canonical URLs. It also drains a historical
+changeset-note backlog: 27 notes describing changes that shipped in v1.7.1
+through v1.17.0 are retired in this release with no code effect.
+
+### Fixed
+
+- **Spend Guard rides out state-lock contention and reports an honest error.**
+  Concurrent sessions hitting the spend-guard state lock no longer surface a
+  spurious failure; contention is retried within bounds and an honest error is
+  returned when the budget check genuinely cannot run.
+- **Home-toggle resolution respects runtime repoints again**, restoring the
+  documented resolution order for toggled home directories, with the previously
+  lost test coverage reinstated.
+- **The launcher's fallback prompt hook runs isolated from the working
+  directory.** When only the Python pre-send hook is installed, its spawn now
+  matches the MCP server spawn and cannot be shadowed by a sibling `tokenpak/`
+  directory in the user's current directory.
+
+### Changed
+
+- **TIP v1 schemas now carry canonical, citable `$id` URLs** under
+  `https://docs.tokenpak.ai/schemas/tip/`, replacing bare filename identifiers,
+  with a conformance test pinning every schema to its canonical identity.
+
+### Documentation
+
+- **OpenAI-compatible base URL examples include the required `/v1` suffix.**
+
 ## [1.17.0] — 2026-07-31
 
 This minor release adds opt-in update notifications and an explicit lean
