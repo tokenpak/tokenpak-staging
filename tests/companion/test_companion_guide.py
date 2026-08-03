@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tokenpak.companion import _style
 from tokenpak.companion.mcp.tools import TOOLS
 
 GUIDE = Path(__file__).parents[2] / "tokenpak" / "companion" / "GUIDE.md"
@@ -13,6 +14,12 @@ GUIDE = Path(__file__).parents[2] / "tokenpak" / "companion" / "GUIDE.md"
 
 def _guide() -> str:
     return GUIDE.read_text(encoding="utf-8")
+
+
+def test_guide_style_default_matches_runtime() -> None:
+    content = _guide()
+    assert f"| `TOKENPAK_COMPANION_STYLE` | `{_style.DEFAULT}` |" in content
+    assert "set `lean` to explicitly opt into dense technical markdown" in content
 
 
 def _mcp_tools_section() -> str:
