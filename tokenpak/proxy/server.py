@@ -1715,6 +1715,49 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+                # Vault injection for json_inject routes (OpenClaw, SDK).
+                #
+                # Route policy has declared "vault_injection": "json_inject" for
+                # these routes all along, and nothing ever performed it: the only
+                # pipeline invocation lives in the byte-preserved branch above, so
+                # automatic context reached one client and silently skipped the
+                # rest. The stage itself already implements this mode.
+                #
+                # Only the vault stage runs here, not process_request(). The other
+                # pipeline stages — header forwarding, auth injection, byte restore
+                # — are already handled on this path by the code below, and running
+                # them again would double-apply them.
+                #
+                # This runs BEFORE the compression hook so injected context is
+                # compressed like any other context and is counted by the token
+                # accounting the hook returns. Injecting afterwards would ship it
+                # uncompressed and leave the counts describing the wrong body.
+                try:
+                    from tokenpak.proxy.pipeline import stage_vault_injection
+                    from tokenpak.proxy.request import ProxyRequest as _PReqJ
+                    from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsiJ
+
+                    _prj = _PReqJ(
+                        method="POST",
+                        url=target_url,
+                        headers=dict(self.headers),
+                        body=body,
+                        source_platform=_source_platform,
+                        session_id=_rsiJ(self.headers, model),
+                    )
+                    # json_inject mode applies the mutated body in-stage.
+                    _prj, _vstage = stage_vault_injection(_prj, _policy)
+                    if not _vstage.skipped:
+                        body = _prj.body
+                        _injected_tokens = int(_vstage.details.get("injected_tokens", 0) or 0)
+                        _srcs = _vstage.details.get("injected_sources", "")
+                        if isinstance(_srcs, (list, tuple)):
+                            _srcs = ",".join(str(s) for s in _srcs if s)
+                        _injected_sources = _srcs if isinstance(_srcs, str) else ""
+                        _record_injection_in_session(_injected_tokens, _injected_sources)
+                except Exception:
+                    pass  # fail-open: vault injection failure must never break a request
+
             # Google streaming is signalled by URL, not body: path contains
             # streamGenerateContent or query param ?alt=sse.
             if not is_streaming and (
