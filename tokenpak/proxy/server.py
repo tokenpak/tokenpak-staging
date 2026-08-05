@@ -1,10 +1,10 @@
 """
 TokenPak Proxy Server — Modular Architecture
 
-HTTP proxy server for LLM API traffic. Routes requests through the
-tokenpak pipeline (vault injection, cost tracking, compression) based
-on per-route policy (Claude Code byte-preserved, OpenClaw full pipeline,
-SDK sanitized).
+HTTP proxy server for LLM API traffic. Routes requests through per-route
+handling while keeping Claude Code request bodies byte-preserved. The built-in
+default HTTP path does not invoke the legacy ``compact_request_body`` helper;
+that helper runs only when an integration calls it explicitly.
 
 This is the canonical modular proxy server. The monolith at repo root
 (proxy.py) is being incrementally decomposed into this module tree.
@@ -12,8 +12,8 @@ This is the canonical modular proxy server. The monolith at repo root
 Env vars (all optional):
     TOKENPAK_PORT          (default 8766)
     TOKENPAK_MODE          (default hybrid) — strict|hybrid|aggressive
-    TOKENPAK_COMPACT       (default 1) — master on/off switch
-    TOKENPAK_COMPACT_THRESHOLD_TOKENS (default 1500 in the balanced profile)
+    TOKENPAK_COMPACT       — compatibility-only; no default-HTTP consumer
+    TOKENPAK_COMPACT_THRESHOLD_TOKENS — explicit compact-helper threshold
     TOKENPAK_DB            (default .tokenpak/monitor.db)
     NOTIFY_SOCKET          systemd sd_notify socket path (set by systemd, not TokenPak)
 
@@ -141,7 +141,7 @@ from .proxy_auth import (
     strip_proxy_auth_for_upstream as _strip_proxy_auth_for_upstream,
 )
 from .route_policy import get_policy
-from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost
+from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost, should_intercept
 from .startup import format_startup_report, run_startup_checks
 from .stats import CompressionStats
 from .streaming import _extract_sse_stop_reason, extract_sse_tokens
@@ -1224,7 +1224,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         ps = self._ps
         parsed = urlparse(target_url)
 
-        should_log = any(h in target_url for h in INTERCEPT_HOSTS)
+        # Pass the handler module's public collection explicitly. Tests and
+        # embedders may replace ``server.INTERCEPT_HOSTS`` with an isolated set;
+        # hostname matching itself remains exact inside ``should_intercept``.
+        should_log = should_intercept(target_url, INTERCEPT_HOSTS)
         is_model_request = any(
             endpoint in target_url for endpoint in ("/messages", "/chat/completions", "/responses")
         )
@@ -3471,7 +3474,19 @@ class ProxyServer:
         except Exception:  # pragma: no cover — import failure gracefully degrades
             pass
 
-        self.router = ProviderRouter()
+        from tokenpak.proxy.config import (
+            CUSTOM_PROVIDER_CONFIGURED_COUNT,
+            CUSTOM_PROVIDER_HOSTS,
+            CUSTOM_PROVIDER_REGISTERED_COUNT,
+            CUSTOM_PROVIDER_ROUTES,
+        )
+
+        self.router = ProviderRouter(
+            custom_urls=dict(CUSTOM_PROVIDER_ROUTES),
+            custom_hosts=dict(CUSTOM_PROVIDER_HOSTS),
+        )
+        self.custom_provider_configured_count = CUSTOM_PROVIDER_CONFIGURED_COUNT
+        self.custom_provider_registered_count = CUSTOM_PROVIDER_REGISTERED_COUNT
         self.trace_storage = TraceStorage(max_traces=50)
         self.session_filter = SessionFilter()
         self.session: _SessionState = _new_session()
@@ -3642,6 +3657,9 @@ class ProxyServer:
             for startup_message in (
                 f"TokenPak proxy listening on {self.host}:{self.port} [{self.compilation_mode}]",
                 "  ✓ Zero-config mode enabled (auto-detecting upstream from request headers)",
+                "  ✓ Custom providers: "
+                f"{self.custom_provider_registered_count}/"
+                f"{self.custom_provider_configured_count} registered",
             ):
                 try:
                     print(startup_message)
@@ -4199,6 +4217,35 @@ def _write_proxy_pid_file() -> Path:
     return pid_path
 
 
+def _format_proxy_startup_banner(
+    *,
+    host: str,
+    port: int,
+    profile: str,
+    mode: str,
+    mode_description: str,
+    provider_display: str,
+    custom_configured: int,
+    custom_registered: int,
+    pid: int,
+    pid_path: Path,
+) -> str:
+    """Build the startup banner from the same registered-provider truth."""
+    return f"""
+╔══════════════════════════════════════════════════════════════════╗
+║  TokenPak Proxy  v{_tokenpak_version}
+╠══════════════════════════════════════════════════════════════════╣
+║  Listening:  http://{host}:{port}
+║  Profile:    {profile}
+║  Mode:       {mode} — {mode_description}
+║  Providers:  {provider_display}
+║  Custom:     {custom_registered}/{custom_configured} registered
+║  PID:        {pid}
+║  PID file:   {pid_path}
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+
 def main() -> None:
     """
     Entry point for ``python -m tokenpak.proxy.server``.
@@ -4280,21 +4327,27 @@ def main() -> None:
     # proxy writes its own pid instead of clobbering the default home.
     _pid_path = _write_proxy_pid_file()
 
+    from tokenpak.proxy.config import (
+        CUSTOM_PROVIDER_CONFIGURED_COUNT as _custom_configured,
+    )
+    from tokenpak.proxy.config import (
+        CUSTOM_PROVIDER_REGISTERED_COUNT as _custom_registered,
+    )
     from tokenpak.proxy.config import PROVIDER_DISPLAY as _provider_display
 
     print(
-        f"""
-╔══════════════════════════════════════════════════════════════════╗
-║  TokenPak Proxy  v{_tokenpak_version}
-╠══════════════════════════════════════════════════════════════════╣
-║  Listening:  http://{host}:{port}
-║  Profile:    {profile}
-║  Mode:       {mode} — {_mode_desc.get(mode, "?")}
-║  Providers:  {_provider_display}
-║  PID:        {os.getpid()}
-║  PID file:   {_pid_path}
-╚══════════════════════════════════════════════════════════════════╝
-""",
+        _format_proxy_startup_banner(
+            host=host,
+            port=port,
+            profile=profile,
+            mode=mode,
+            mode_description=_mode_desc.get(mode, "?"),
+            provider_display=_provider_display,
+            custom_configured=_custom_configured,
+            custom_registered=_custom_registered,
+            pid=os.getpid(),
+            pid_path=_pid_path,
+        ),
         flush=True,
     )
 

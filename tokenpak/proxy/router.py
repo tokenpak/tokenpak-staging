@@ -7,8 +7,8 @@ Handles provider detection, cost estimation, and URL construction.
 
 import json
 from dataclasses import dataclass
-from typing import Dict, Optional, cast
-from urllib.parse import urlparse
+from typing import Collection, Dict, Mapping, Optional, cast
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 # Provider base URLs
 PROVIDER_URLS = {
@@ -44,12 +44,67 @@ def _is_codex_oauth_authorization(headers: Dict[str, str]) -> bool:
     return bool(credential) and not credential.lower().startswith("sk-")
 
 
-def should_intercept(url: str) -> bool:
-    """Return True if the given URL targets a known LLM provider we should intercept."""
-    for host in INTERCEPT_HOSTS:
-        if host in url:
-            return True
-    return False
+def normalize_hostname(value: str) -> str:
+    """Return a lower-case hostname from a URL or Host-header value.
+
+    Ports, userinfo, IPv6 brackets, and a terminal DNS dot are normalized by
+    the parser.  Invalid or hostname-free values return an empty string.
+    """
+    candidate = str(value).strip()
+    if not candidate:
+        return ""
+    try:
+        parsed = urlsplit(
+            candidate if "://" in candidate or candidate.startswith("//") else f"//{candidate}"
+        )
+        return (parsed.hostname or "").lower().rstrip(".")
+    except (TypeError, ValueError):
+        return ""
+
+
+def request_hostname(path: str, headers: Mapping[str, str]) -> str:
+    """Resolve the destination hostname from absolute-form path or Host."""
+    if "://" in path or path.startswith("//"):
+        hostname = normalize_hostname(path)
+        if hostname:
+            return hostname
+    for key, value in headers.items():
+        if str(key).lower() == "host":
+            return normalize_hostname(str(value))
+    return ""
+
+
+def should_intercept(url: str, hosts: Optional[Collection[str]] = None) -> bool:
+    """Return True only for an exact hostname in *hosts* or the live registry."""
+    hostname = normalize_hostname(url)
+    intercept_hosts = INTERCEPT_HOSTS if hosts is None else hosts
+    return bool(hostname) and hostname in {normalize_hostname(host) for host in intercept_hosts}
+
+
+def _join_upstream_url(base_url: str, request_path: str) -> str:
+    """Join a configured API base and reverse-proxy request path once."""
+    base = urlsplit(base_url)
+    request = urlsplit(request_path)
+    base_path = base.path.rstrip("/")
+    incoming_path = request.path or "/"
+
+    if not base_path:
+        joined_path = incoming_path
+    else:
+        # Custom endpoints commonly end in /v1 while clients send a path that
+        # also begins /v1.  Preserve any earlier gateway prefix but do not
+        # duplicate the shared terminal API segment.
+        terminal = "/" + base_path.rsplit("/", 1)[-1]
+        if incoming_path == terminal or incoming_path.startswith(terminal + "/"):
+            joined_path = base_path + incoming_path[len(terminal) :]
+        elif incoming_path == base_path or incoming_path.startswith(base_path + "/"):
+            joined_path = incoming_path
+        else:
+            joined_path = f"{base_path}/{incoming_path.lstrip('/')}"
+
+    return urlunsplit(
+        (base.scheme, base.netloc, joined_path, request.query or base.query, request.fragment)
+    )
 
 
 # Default costs for unknown models (used as fallback if registry unavailable)
@@ -80,7 +135,11 @@ class ProviderRouter:
     3. Request body model field
     """
 
-    def __init__(self, custom_urls: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        custom_urls: Optional[Dict[str, str]] = None,
+        custom_hosts: Optional[Dict[str, str]] = None,
+    ):
         """
         Initialize router with optional custom provider URLs.
 
@@ -90,6 +149,11 @@ class ProviderRouter:
         self.provider_urls = {**PROVIDER_URLS}
         if custom_urls:
             self.provider_urls.update(custom_urls)
+        self.custom_hosts = {
+            hostname: provider
+            for raw_hostname, provider in (custom_hosts or {}).items()
+            if (hostname := normalize_hostname(raw_hostname)) and provider in self.provider_urls
+        }
 
     def route(
         self,
@@ -130,7 +194,10 @@ class ProviderRouter:
         # Check if it's already a full URL
         if path.startswith("http"):
             parsed = urlparse(path)
-            provider = self._detect_provider_from_host(parsed.netloc)
+            hostname = normalize_hostname(path)
+            provider = self.custom_hosts.get(hostname) or self._detect_provider_from_host(
+                parsed.netloc
+            )
             model = self._extract_model(body) if body else "unknown"
             from .oauth import analyze_request as _analyze_oauth
 
@@ -147,7 +214,8 @@ class ProviderRouter:
             )
 
         # Reverse proxy mode - determine provider from headers/path
-        provider = self._detect_provider(path, headers, body)
+        hostname = request_hostname(path, headers)
+        provider = self.custom_hosts.get(hostname) or self._detect_provider(path, headers, body)
         base_url = self.provider_urls.get(provider, self.provider_urls["anthropic"])
         model = self._extract_model(body) if body else "unknown"
         from .oauth import analyze_request as _analyze_oauth
@@ -157,10 +225,15 @@ class ProviderRouter:
         if provider == "openai-codex" and path.split("?", 1)[0] == "/v1/responses":
             suffix = "?" + path.split("?", 1)[1] if "?" in path else ""
             upstream_path = "/codex/responses" + suffix
+        full_url = (
+            _join_upstream_url(base_url, upstream_path)
+            if provider.startswith("custom-")
+            else base_url + upstream_path
+        )
         return RouteResult(
             provider=provider,
             base_url=base_url,
-            full_url=base_url + upstream_path,
+            full_url=full_url,
             should_intercept=True,  # Reverse proxy always intercepts
             model=model,
             auth_type=_oauth_ctx.auth_type,
@@ -170,14 +243,19 @@ class ProviderRouter:
 
     def _detect_provider_from_host(self, host: str) -> str:
         """Detect provider from hostname."""
-        host_lower = host.lower()
-        if "anthropic" in host_lower:
+        host_lower = normalize_hostname(host)
+        if host_lower == "anthropic.com" or host_lower.endswith(".anthropic.com"):
             return "anthropic"
-        elif "chatgpt" in host_lower:
+        elif host_lower == "chatgpt.com" or host_lower.endswith(".chatgpt.com"):
             return "openai-codex"
-        elif "openai" in host_lower:
+        elif host_lower == "openai.com" or host_lower.endswith(".openai.com"):
             return "openai"
-        elif "googleapis" in host_lower or "google" in host_lower:
+        elif (
+            host_lower == "googleapis.com"
+            or host_lower.endswith(".googleapis.com")
+            or host_lower == "google.com"
+            or host_lower.endswith(".google.com")
+        ):
             return "google"
         return "unknown"
 

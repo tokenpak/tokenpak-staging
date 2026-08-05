@@ -30,6 +30,71 @@ This project follows [Semantic Versioning](https://semver.org/).
   (checksum verification included), and `pak export` all keep working on them unchanged;
   `inspect` and `import` print a hint pointing at `pak migrate`.
 
+## [1.18.2] — 2026-08-05
+
+This compatible patch restores configured custom-provider routing, corrects
+compression-configuration claims, adds conservative changed-surface CI, and
+hardens local persistence and telemetry shutdown behavior.
+
+### Fixed
+
+- **Configured custom providers load and route through their selected upstream.**
+  TokenPak reads the canonical configuration source, gives an exact normalized
+  hostname match priority over generic wire-format detection, avoids duplicated
+  `/v1` path segments, and exposes configured-versus-registered counts in startup
+  and doctor output. Invalid entries remain skipped with an explicit warning.
+- **Compression flags now describe the behavior that ships.**
+  `TOKENPAK_COMPACT`, `compression.enabled`, and the compact threshold remain
+  accepted compatibility settings, but the built-in default HTTP proxy does not
+  call the legacy body-compaction helper. CLI and documentation surfaces no
+  longer claim that toggling those settings changes default-HTTP request bytes.
+- **Companion pre-send persistence no longer waits on SQLite writes.** Journal
+  and cost updates are queued as one atomic, replayable local intent and drained
+  outside the prompt path. Budget checks reconcile pending intents with the
+  committed database, and interrupted or lock-deferred drains replay without
+  duplicating journal entries or regressing the latest estimate.
+- **Monitor and telemetry SQLite lifecycle handling is deterministic.** Schema
+  setup is transactional and tolerant only of already-applied additive changes;
+  transient writer locks are retried, queued rows retain their target database,
+  shutdown drains are bounded, and failed rows are counted instead of silently
+  reported as persisted.
+
+### Changed
+
+- **CI now classifies changed surfaces conservatively.** An always-running trust
+  baseline, risk-selected jobs, and an always-evaluated result check fail closed
+  for unknown, shared-core, packaging, workflow, large, or multi-surface changes.
+  Existing required staging checks remain in force while parity is established.
+- `tokenpak doctor --json` adds a `custom_providers` diagnostic with additive
+  `configured`, `registered`, and `error` fields.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.2"
+```
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.1"
+```
+
+### Compatibility
+
+- No breaking change or operator-run data migration is required.
+- Python public symbols, TIP wire formats, and public storage schemas are
+  unchanged. Private local Companion and monitor databases receive additive,
+  idempotent plumbing upgrades automatically. The doctor JSON addition is
+  backward-compatible.
+
+### Known limitations
+
+- Default-HTTP body compaction remains unwired. Integrations that explicitly
+  call the legacy compact helper can still use its compatibility settings.
+- Risk-selected CI is additive in this release; it does not replace the existing
+  required staging contexts until separate parity evidence supports migration.
+
 ## [1.18.1] — 2026-08-03
 
 This hotfix restores the documented Codex approval path when the Spend Guard

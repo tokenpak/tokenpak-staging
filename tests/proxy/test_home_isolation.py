@@ -86,6 +86,14 @@ def test_scoped_home_state_paths_and_fleet_untouched(scoped_home):
             assert f.stat().st_mtime_ns == snap[1]
 
 
+def test_oauth_manager_default_path_tracks_scoped_home(scoped_home):
+    from tokenpak.core.auth.oauth_manager import OAuthManager
+
+    manager = OAuthManager()
+
+    assert manager.auth_profiles_file == scoped_home / "auth-profiles.json"
+
+
 # ── Test 4: license path scoped under TOKENPAK_HOME / TOKENPAK_LICENSE_FILE ─────
 def test_license_path_scoped(scoped_home, monkeypatch):
     from tokenpak.licensing import _license_path

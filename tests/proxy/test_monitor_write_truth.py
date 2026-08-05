@@ -373,6 +373,59 @@ def test_apply_schema_migration_raises_on_other_operational_errors():
         )
 
 
+def test_monitor_schema_failure_rolls_back_and_releases_lock(tmp_path, monkeypatch):
+    """A failed ancillary migration cannot commit a partial Monitor schema."""
+    from tokenpak.proxy import db as proxy_db
+
+    db = tmp_path / "monitor.db"
+
+    def _locked(_conn):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(proxy_db, "ensure_schema", _locked)
+
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        Monitor(db_path=str(db))
+
+    # Reopening with a zero wait proves the failed constructor released its
+    # write lock. The enclosing BEGIN IMMEDIATE must also have rolled back all
+    # earlier CREATE/ALTER statements instead of publishing a partial schema.
+    conn = sqlite3.connect(str(db), timeout=0.0)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    finally:
+        conn.close()
+    assert "requests" not in tables
+
+
+def test_monitor_unexpected_schema_failure_is_not_downgraded(tmp_path, monkeypatch):
+    """Unexpected ancillary-schema failures also abort the full transaction."""
+    from tokenpak.proxy import db as proxy_db
+
+    db = tmp_path / "monitor.db"
+
+    def _unexpected(_conn):
+        raise RuntimeError("synthetic schema implementation failure")
+
+    monkeypatch.setattr(proxy_db, "ensure_schema", _unexpected)
+
+    with pytest.raises(RuntimeError, match="synthetic schema implementation failure"):
+        Monitor(db_path=str(db))
+
+    conn = sqlite3.connect(str(db), timeout=0.0)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    finally:
+        conn.close()
+    assert "requests" not in tables
+
+
 # ---------------------------------------------------------------------------
 # B6 — budget alert dedupe (unique key + INSERT OR IGNORE)
 # ---------------------------------------------------------------------------
