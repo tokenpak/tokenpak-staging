@@ -1114,6 +1114,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/inflight":
+            from .inflight_endpoint import build_response as _inflight_build_response
+
+            self._send_json(_inflight_build_response())
+            return
         if path == "/stats":
             self._send_json(ps.stats())
             return
@@ -2121,6 +2126,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
             output_tokens = 0
             provider_usage_object: Mapping[str, object] | None = None
+
+            # Facts-only in-flight registration: started_at reuses the
+            # existing t0 anchor; ttfb/stream-duration/live output-tokens
+            # are filled in below as the request actually progresses. Gated
+            # the same as every other telemetry side effect in this handler.
+            _ttfb_ms: int | None = None
+            _stream_duration_ms: int | None = None
+            _inflight_tracker = None
+            if should_log and is_model_request:
+                from .inflight_registry import register as _inflight_register
+
+                _inflight_register(
+                    _req_id, model=model, started_at=t0, admission_ticket=_sg_admission_ticket
+                )
+
             if is_streaming:
                 # ── Streaming (SSE) path ──────────────────────────────────
                 # Use pool.stream() so the connection is kept alive after SSE ends.
@@ -2200,6 +2220,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.end_headers()
 
                                 sse_content_encoding = resp.headers.get("content-encoding", "")
+                                _stream_first_byte_time: float | None = None
+                                if should_log and is_model_request and not sse_content_encoding:
+                                    from .streaming import IncrementalUsageTracker
+
+                                    # Incremental (mid-stream) parsing only covers
+                                    # cleartext SSE — see IncrementalUsageTracker's
+                                    # docstring for why a gzip-encoded stream can't
+                                    # be tracked chunk-by-chunk. The persisted,
+                                    # end-of-stream count below is unaffected.
+                                    _inflight_tracker = IncrementalUsageTracker()
                                 for chunk in resp.iter_raw():
                                     if not chunk:
                                         continue
@@ -2208,8 +2238,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         self.wfile.flush()
                                     except (BrokenPipeError, ConnectionResetError):
                                         break
+                                    if _stream_first_byte_time is None:
+                                        _stream_first_byte_time = time.time()
+                                        _ttfb_ms = int((_stream_first_byte_time - t0) * 1000)
+                                        if should_log and is_model_request:
+                                            from .inflight_registry import (
+                                                mark_ttfb as _inflight_ttfb,
+                                            )
+
+                                            _inflight_ttfb(_req_id)
                                     if should_log and is_model_request:
                                         sse_buffer += chunk
+                                        if _inflight_tracker is not None:
+                                            _live_output_tokens = _inflight_tracker.feed(chunk)
+                                            from .inflight_registry import (
+                                                update_output_tokens as _inflight_update,
+                                            )
+
+                                            _inflight_update(_req_id, _live_output_tokens)
+                                if _stream_first_byte_time is not None:
+                                    _stream_duration_ms = int(
+                                        (time.time() - _stream_first_byte_time) * 1000
+                                    )
                     except _retry_policy.retryable_exceptions as _stream_exc:
                         # Once we've committed to writing to the client, can't retry —
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
@@ -2497,6 +2547,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         pass
                     _sg_admission_ticket = None
 
+                # Tear down the facts-only in-flight registration — this
+                # request is no longer "in flight" once its outcome is known.
+                try:
+                    from .inflight_registry import finish as _inflight_finish
+
+                    _inflight_finish(_req_id)
+                except Exception:
+                    pass
+
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
                 # otherwise the proxy touched the body and owns the markers.
@@ -2620,6 +2679,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             pricing_source=_cost_observed["pricing_source"],
                             stream_mode="sse" if is_streaming else "json",
                             event_transform_applied=_event_transform_applied,
+                            started_at=datetime.fromtimestamp(t0, tz=timezone.utc).isoformat(),
+                            ttfb_ms=_ttfb_ms,
+                            stream_duration_ms=_stream_duration_ms,
                         )
                     except Exception:
                         pass  # DB errors must never break the request

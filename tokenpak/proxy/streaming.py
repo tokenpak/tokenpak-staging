@@ -278,3 +278,60 @@ class StreamHandler:
     def chunk_count(self) -> int:
         """Number of chunks processed."""
         return self._chunk_count
+
+
+# ---------------------------------------------------------------------------
+# IncrementalUsageTracker (live output-token count mid-stream)
+# ---------------------------------------------------------------------------
+
+
+class IncrementalUsageTracker:
+    """Tracks ``output_tokens`` from ``message_delta`` events as chunks arrive.
+
+    A read-only observation on the bytes already being forwarded to the
+    client — never mutates or delays them. Feed it each raw chunk as it is
+    written; ``output_tokens`` reflects the latest value the provider has
+    sent so far this stream (last-value-wins, matching the end-of-stream
+    ``extract_sse_tokens()`` semantics).
+
+    Cleartext SSE only. A ``content-encoding: gzip`` stream cannot be
+    decompressed incrementally chunk-by-chunk (``zlib`` needs the whole
+    frame in general, and a partial gzip member does not decode to valid
+    UTF-8 text), so callers should not feed gzip-encoded chunks — the
+    tracker would just fail its per-line ``json.loads`` calls and the count
+    would stay at 0 until the caller stops feeding it. The persisted,
+    end-of-stream token count (via ``extract_sse_tokens`` on the fully
+    buffered + decoded stream) is unaffected either way; this class only
+    powers the *live, in-flight* count, not anything written to monitor.db.
+    """
+
+    def __init__(self) -> None:
+        self._line_buffer: str = ""
+        self.output_tokens: int = 0
+
+    def feed(self, chunk: bytes) -> int:
+        """Feed one raw chunk; return the live ``output_tokens`` count so far."""
+        if not chunk:
+            return self.output_tokens
+        try:
+            text = chunk.decode("utf-8", errors="replace")
+        except Exception:
+            return self.output_tokens
+        self._line_buffer += text
+        while "\n" in self._line_buffer:
+            line, self._line_buffer = self._line_buffer.split("\n", 1)
+            payload = _sse_data_payload(line)
+            if payload is None or payload == "[DONE]":
+                continue
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "message_delta":
+                continue
+            usage = event.get("usage")
+            if isinstance(usage, Mapping):
+                value = _usage_int(usage, "output_tokens", "completion_tokens")
+                if value is not None:
+                    self.output_tokens = value
+        return self.output_tokens
