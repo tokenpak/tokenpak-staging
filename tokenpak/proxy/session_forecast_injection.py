@@ -44,7 +44,7 @@ def is_injection_enabled() -> bool:
 
     Resolution order (mirrors every other opt-in proxy flag):
       1. ``TOKENPAK_SESSION_FORECAST_INJECTION`` env var (1/true -> on)
-      2. ``~/.tokenpak/config.json`` "session_forecast_injection.enabled" key
+      2. ``<tpk-home>/config.json`` "session_forecast_injection.enabled" key
       3. Default: False (opt-in — disabled by default)
     """
     env_val = os.environ.get(_ENV_VAR)
