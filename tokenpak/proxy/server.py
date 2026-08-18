@@ -1411,6 +1411,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err_body)
                 return
+        if body:
+            # Scrub any previously-injected session-economics marker before
+            # this body is treated as provider-bound. A byte-identical
+            # no-op whenever the marker is absent (see module docstring).
+            from tokenpak.proxy.session_forecast_injection import scrub_request_body
+
+            _body_before_scrub = body
+            body = scrub_request_body(body)
+            if body is not _body_before_scrub and self.headers.get("Content-Length") is not None:
+                self.headers.replace_header("Content-Length", str(len(body)))
         _original_body = body
         _retry_policy = UpstreamRetryPolicy.from_env(
             body=body,
@@ -2354,7 +2364,36 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("X-Request-ID", _req_id)
                 self.end_headers()
 
-                self.wfile.write(resp_body)
+                # Optional, default-off client-return decoration: a SEPARATE
+                # copy for the client write only. resp_body itself is never
+                # reassigned here, so every accounting/metrics read below
+                # continues to observe the original, undecorated bytes.
+                client_resp_body = resp_body
+                if is_model_request and not is_streaming and not _is_upstream_error:
+                    try:
+                        from tokenpak.proxy.request_pipeline import (
+                            _resolve_session_id as _rsi_inject,
+                        )
+                        from tokenpak.proxy.session_forecast_injection import (
+                            maybe_decorate_response,
+                        )
+
+                        client_resp_body = maybe_decorate_response(
+                            resp_body,
+                            # Explicit-only resolution ("" model arg means no
+                            # last-resort model-name fallback): decoration
+                            # never guesses a shared pseudo-session across
+                            # unrelated clients that both omit a session id.
+                            session_id=_rsi_inject(self.headers, ""),
+                            db_path=getattr(ps.monitor, "db_path", None)
+                            if getattr(ps, "monitor", None)
+                            else None,
+                            model_hint=model,
+                        )
+                    except Exception:
+                        client_resp_body = resp_body  # fail-open
+
+                self.wfile.write(client_resp_body)
                 self.wfile.flush()
 
                 if should_log and is_model_request:
