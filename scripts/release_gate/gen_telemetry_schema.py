@@ -18,6 +18,7 @@ import json
 import os
 import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -29,12 +30,26 @@ os.environ.setdefault("TOKENPAK_SNAPSHOT_GEN", "1")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = REPO_ROOT / "tokenpak" / "_snapshots" / "telemetry-schema.json"
 
-# User-facing SQLite stores tracked by Std 30 §7. Path is relative to user $HOME.
-# Stores that don't exist yet are recorded with empty DDL but a known path
-# (so a future creation produces a snapshot diff that flags the migration).
+# User-facing SQLite stores tracked by Std 30 §7. ``path`` is the documented
+# user-facing location; ``materializer`` names the product initializer used to
+# create the current schema in an isolated temporary directory. Snapshot
+# generation must never inspect the operator's ambient home databases.
 TRACKED_STORES = [
-    {"path": "~/.tokenpak/telemetry.db", "purpose": "User-facing telemetry counters"},
-    {"path": "~/.tokenpak/spend_guard.db", "purpose": "TIP Spend Guard audit log"},
+    {
+        "path": "~/.tpk/telemetry.db",
+        "purpose": "User-facing telemetry counters",
+        "materializer": "telemetry",
+    },
+    {
+        "path": "~/.tokenpak/spend_guard.db",
+        "purpose": "TIP Spend Guard audit and pending-request log",
+        "materializer": "spend_guard",
+    },
+    {
+        "path": "~/.tpk/monitor.db",
+        "purpose": "Proxy request, cost, savings, and timing ledger",
+        "materializer": "monitor",
+    },
 ]
 
 
@@ -54,19 +69,63 @@ def collect_ddl(db_path: Path) -> dict | None:
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+def _materialize_telemetry(db_path: Path) -> None:
+    from tokenpak.telemetry.storage import TelemetryDB
+
+    store = TelemetryDB(db_path)
+    store.close()
+
+
+def _materialize_spend_guard(db_path: Path) -> None:
+    from tokenpak.proxy.spend_guard.audit import query_recent
+    from tokenpak.proxy.spend_guard.pending import (
+        PendingStore,
+        reset_schema_cache_for_testing,
+    )
+
+    # Both components share one store and own distinct schema objects. Exercise
+    # their read paths so the snapshot contains both without inserting data.
+    reset_schema_cache_for_testing()
+    try:
+        PendingStore(str(db_path)).get_by_session("__snapshot__")
+        query_recent(str(db_path), limit=1)
+    finally:
+        reset_schema_cache_for_testing()
+
+
+def _materialize_monitor(db_path: Path) -> None:
+    from tokenpak.proxy.monitor import Monitor
+
+    monitor = Monitor(db_path=str(db_path))
+    if not monitor.stop(timeout=5.0):
+        raise RuntimeError("monitor snapshot writer did not stop cleanly")
+
+
+_MATERIALIZERS = {
+    "telemetry": _materialize_telemetry,
+    "spend_guard": _materialize_spend_guard,
+    "monitor": _materialize_monitor,
+}
+
+
 def build_snapshot() -> dict:
     stores = []
-    for spec in TRACKED_STORES:
-        path = Path(spec["path"]).expanduser()
-        ddl = collect_ddl(path)
-        stores.append(
-            {
-                "path": spec["path"],
-                "purpose": spec["purpose"],
-                "exists": path.is_file(),
-                "ddl": ddl,
-            }
-        )
+    with tempfile.TemporaryDirectory(prefix="tokenpak-schema-snapshot-") as temp_dir:
+        root = Path(temp_dir)
+        for index, spec in enumerate(TRACKED_STORES):
+            db_path = root / f"{index}-{Path(spec['path']).name}"
+            _MATERIALIZERS[spec["materializer"]](db_path)
+            ddl = collect_ddl(db_path)
+            if ddl is None or "error" in ddl:
+                raise RuntimeError(f"failed to materialize {spec['path']}: {ddl}")
+            stores.append(
+                {
+                    "path": spec["path"],
+                    "purpose": spec["purpose"],
+                    "exists": True,
+                    "ddl": ddl,
+                }
+            )
     return {
         "version": "1.0",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
