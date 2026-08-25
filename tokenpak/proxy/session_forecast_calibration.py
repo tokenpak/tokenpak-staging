@@ -242,17 +242,30 @@ def _corpus_for(monitor_db_path: str) -> tuple[_CorpusEntry, ...]:
         conn = _connect_ro(monitor_db_path)
         conn.row_factory = sqlite3.Row
         try:
-            table = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'requests'"
-            ).fetchone()
-            if table is None:
-                return ()
-            fingerprint = _ledger_fingerprint(conn)
-            with _CACHE_LOCK:
-                cached = _CORPUS_CACHE.get(monitor_db_path)
-                if cached is not None and cached[0] == fingerprint:
-                    return cached[1]
-            corpus = _parse_corpus(conn)
+            # The fingerprint read and the corpus parse must observe ONE
+            # consistent snapshot: an explicit transaction holds a read
+            # lock across both statements, so a concurrent writer cannot
+            # commit in the gap between them and leave the cached
+            # fingerprint describing a row count the cached corpus
+            # disagrees with.
+            conn.execute("BEGIN")
+            try:
+                table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'requests'"
+                ).fetchone()
+                if table is None:
+                    return ()
+                fingerprint = _ledger_fingerprint(conn)
+                with _CACHE_LOCK:
+                    cached = _CORPUS_CACHE.get(monitor_db_path)
+                    if cached is not None and cached[0] == fingerprint:
+                        return cached[1]
+                corpus = _parse_corpus(conn)
+            finally:
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -541,12 +554,30 @@ def walk_forward_coverage(
     one_sided: bool = False,
     score_tail: int | None = None,
 ) -> tuple[float | None, int]:
-    """Measured coverage of the deployed procedure (see :func:`_replay`)."""
+    """Measured coverage of the deployed procedure (see :func:`_replay`).
+
+    ``target`` names the coverage level actually being measured — it is
+    validated, not decorative: the tail-scored and central-50% paths only
+    ever measure ``TARGET_50``, and the one-sided path only ever measures
+    ``TARGET_90``. ``score_tail``, when given, must be exactly
+    ``RECENT_WINDOW`` — the only tail length ``_replay`` computes — never
+    silently coerced from an arbitrary int.
+    """
     measurement = _replay(cell_sessions, pool_sessions)
     if score_tail is not None:
+        if score_tail != RECENT_WINDOW:
+            raise ValueError(
+                f"score_tail must be RECENT_WINDOW ({RECENT_WINDOW}) or None, got {score_tail!r}"
+            )
+        if target != TARGET_50:
+            raise ValueError(f"score_tail measures TARGET_50 coverage, got target={target!r}")
         return measurement.cov50_tail, measurement.pts50_tail
     if one_sided:
+        if target != TARGET_90:
+            raise ValueError(f"one_sided measures TARGET_90 coverage, got target={target!r}")
         return measurement.cov90, measurement.pts90
+    if target != TARGET_50:
+        raise ValueError(f"the central-50% path measures TARGET_50 coverage, got target={target!r}")
     return measurement.cov50, measurement.pts50
 
 
@@ -598,7 +629,15 @@ def _source(readiness: CellReadiness) -> str:
 
 def _participants_signature(sessions):
     return tuple(
-        (s.model, s.effort, s.ended_at.isoformat(), s.turns, round(s.total, 3)) for s in sessions
+        (
+            s.model,
+            s.effort,
+            s.ended_at.isoformat(),
+            s.turns,
+            round(s.total, 3),
+            tuple(round(c, 3) for c in s.turn_costs),
+        )
+        for s in sessions
     )
 
 
