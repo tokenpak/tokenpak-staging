@@ -1,18 +1,228 @@
 {
   "version": "1.0",
-  "generated_at": "2026-05-30T17:20:17Z",
+  "generated_at": "2026-08-25T09:44:57Z",
   "stores": [
     {
-      "path": "~/.tokenpak/telemetry.db",
+      "path": "~/.tpk/telemetry.db",
       "purpose": "User-facing telemetry counters",
-      "exists": false,
-      "ddl": null
+      "exists": true,
+      "ddl": {
+        "objects": [
+          {
+            "type": "index",
+            "name": "idx_cache_miss_reason",
+            "sql": "CREATE INDEX idx_cache_miss_reason\n    ON tp_cache_miss_reasons (reason)"
+          },
+          {
+            "type": "index",
+            "name": "idx_cache_miss_ts",
+            "sql": "CREATE INDEX idx_cache_miss_ts\n    ON tp_cache_miss_reasons (timestamp)"
+          },
+          {
+            "type": "index",
+            "name": "idx_events_agent",
+            "sql": "CREATE INDEX idx_events_agent\n    ON tp_events (agent_id)"
+          },
+          {
+            "type": "index",
+            "name": "idx_events_model",
+            "sql": "CREATE INDEX idx_events_model\n    ON tp_events (model)"
+          },
+          {
+            "type": "index",
+            "name": "idx_events_provider",
+            "sql": "CREATE INDEX idx_events_provider\n    ON tp_events (provider)"
+          },
+          {
+            "type": "index",
+            "name": "idx_events_trace",
+            "sql": "CREATE INDEX idx_events_trace\n    ON tp_events (trace_id)"
+          },
+          {
+            "type": "index",
+            "name": "idx_events_ts",
+            "sql": "CREATE INDEX idx_events_ts\n    ON tp_events (ts)"
+          },
+          {
+            "type": "index",
+            "name": "idx_rollup_agent_date",
+            "sql": "CREATE INDEX idx_rollup_agent_date\n    ON tp_rollup_daily_agent (date)"
+          },
+          {
+            "type": "index",
+            "name": "idx_rollup_model_date",
+            "sql": "CREATE INDEX idx_rollup_model_date\n    ON tp_rollup_daily_model (date)"
+          },
+          {
+            "type": "index",
+            "name": "idx_rollup_provider_date",
+            "sql": "CREATE INDEX idx_rollup_provider_date\n    ON tp_rollup_daily_provider (date)"
+          },
+          {
+            "type": "index",
+            "name": "idx_savings_attr_request",
+            "sql": "CREATE INDEX idx_savings_attr_request\n    ON tp_savings_attribution (request_id)"
+          },
+          {
+            "type": "index",
+            "name": "idx_savings_attr_source",
+            "sql": "CREATE INDEX idx_savings_attr_source\n    ON tp_savings_attribution (source)"
+          },
+          {
+            "type": "index",
+            "name": "idx_savings_attr_ts",
+            "sql": "CREATE INDEX idx_savings_attr_ts\n    ON tp_savings_attribution (timestamp)"
+          },
+          {
+            "type": "index",
+            "name": "idx_segments_trace",
+            "sql": "CREATE INDEX idx_segments_trace\n    ON tp_segments (trace_id)"
+          },
+          {
+            "type": "table",
+            "name": "tp_cache_miss_reasons",
+            "sql": "CREATE TABLE tp_cache_miss_reasons (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    request_id  TEXT NOT NULL DEFAULT '',\n    cache_type  TEXT NOT NULL DEFAULT 'semantic',\n    reason      TEXT NOT NULL DEFAULT 'unknown',\n    route_class TEXT NOT NULL DEFAULT '',\n    platform    TEXT NOT NULL DEFAULT '',\n    model       TEXT NOT NULL DEFAULT '',\n    timestamp   REAL NOT NULL DEFAULT 0\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_costs",
+            "sql": "CREATE TABLE tp_costs (\n    trace_id                TEXT NOT NULL PRIMARY KEY,\n    cost_input              REAL NOT NULL DEFAULT 0,\n    cost_output             REAL NOT NULL DEFAULT 0,\n    cost_cache_read         REAL NOT NULL DEFAULT 0,\n    cost_cache_write        REAL NOT NULL DEFAULT 0,\n    cost_total              REAL NOT NULL DEFAULT 0,\n    cost_source             TEXT NOT NULL DEFAULT 'provider',\n    pricing_version         TEXT NOT NULL DEFAULT 'v1',\n    baseline_input_tokens   INTEGER NOT NULL DEFAULT 0,\n    actual_input_tokens     INTEGER NOT NULL DEFAULT 0,\n    output_tokens           INTEGER NOT NULL DEFAULT 0,\n    baseline_cost           REAL NOT NULL DEFAULT 0,\n    actual_cost             REAL NOT NULL DEFAULT 0,\n    savings_total           REAL NOT NULL DEFAULT 0,\n    savings_qmd             REAL NOT NULL DEFAULT 0,\n    savings_tp              REAL NOT NULL DEFAULT 0\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_events",
+            "sql": "CREATE TABLE tp_events (\n    trace_id        TEXT NOT NULL,\n    request_id      TEXT NOT NULL DEFAULT '',\n    event_type      TEXT NOT NULL DEFAULT '',\n    ts              REAL NOT NULL DEFAULT 0,\n    provider        TEXT NOT NULL DEFAULT '',\n    model           TEXT NOT NULL DEFAULT '',\n    agent_id        TEXT NOT NULL DEFAULT '',\n    api             TEXT NOT NULL DEFAULT '',\n    stop_reason     TEXT NOT NULL DEFAULT '',\n    session_id      TEXT NOT NULL DEFAULT '',\n    duration_ms     REAL NOT NULL DEFAULT 0,\n    status          TEXT NOT NULL DEFAULT 'ok',\n    error_class     TEXT,\n    payload         TEXT NOT NULL DEFAULT '{}',\n    span_id         TEXT NOT NULL DEFAULT '',\n    node_id         TEXT NOT NULL DEFAULT '',\n    route           TEXT NOT NULL DEFAULT '',\n    PRIMARY KEY (trace_id, request_id, event_type)\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_pricing_catalog",
+            "sql": "CREATE TABLE tp_pricing_catalog (\n    version         TEXT NOT NULL PRIMARY KEY,\n    captured_at     REAL NOT NULL DEFAULT 0,\n    catalog_json    TEXT NOT NULL DEFAULT '{}'\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_rollup_daily_agent",
+            "sql": "CREATE TABLE tp_rollup_daily_agent (\n    date            TEXT NOT NULL,\n    agent_id        TEXT NOT NULL,\n    total_requests  INTEGER NOT NULL DEFAULT 0,\n    total_tokens    INTEGER NOT NULL DEFAULT 0,\n    total_cost      REAL NOT NULL DEFAULT 0,\n    total_savings   REAL NOT NULL DEFAULT 0,\n    avg_raw_tokens  REAL NOT NULL DEFAULT 0,\n    avg_final_tokens REAL NOT NULL DEFAULT 0,\n    avg_cost        REAL NOT NULL DEFAULT 0,\n    PRIMARY KEY (date, agent_id)\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_rollup_daily_model",
+            "sql": "CREATE TABLE tp_rollup_daily_model (\n    date            TEXT NOT NULL,\n    model           TEXT NOT NULL,\n    total_requests  INTEGER NOT NULL DEFAULT 0,\n    total_tokens    INTEGER NOT NULL DEFAULT 0,\n    total_cost      REAL NOT NULL DEFAULT 0,\n    total_savings   REAL NOT NULL DEFAULT 0,\n    avg_raw_tokens  REAL NOT NULL DEFAULT 0,\n    avg_final_tokens REAL NOT NULL DEFAULT 0,\n    avg_cost        REAL NOT NULL DEFAULT 0,\n    PRIMARY KEY (date, model)\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_rollup_daily_provider",
+            "sql": "CREATE TABLE tp_rollup_daily_provider (\n    date            TEXT NOT NULL,\n    provider        TEXT NOT NULL,\n    total_requests  INTEGER NOT NULL DEFAULT 0,\n    total_tokens    INTEGER NOT NULL DEFAULT 0,\n    total_cost      REAL NOT NULL DEFAULT 0,\n    total_savings   REAL NOT NULL DEFAULT 0,\n    avg_raw_tokens  REAL NOT NULL DEFAULT 0,\n    avg_final_tokens REAL NOT NULL DEFAULT 0,\n    avg_cost        REAL NOT NULL DEFAULT 0,\n    PRIMARY KEY (date, provider)\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_savings_attribution",
+            "sql": "CREATE TABLE tp_savings_attribution (\n    id                  INTEGER PRIMARY KEY AUTOINCREMENT,\n    request_id          TEXT NOT NULL DEFAULT '',\n    timestamp           REAL NOT NULL DEFAULT 0,\n    source              TEXT NOT NULL DEFAULT 'unattributed',\n    raw_tokens          INTEGER NOT NULL DEFAULT 0,\n    sent_tokens         INTEGER NOT NULL DEFAULT 0,\n    saved_tokens        INTEGER NOT NULL DEFAULT 0,\n    estimated_cost_saved REAL NOT NULL DEFAULT 0,\n    cost_available      INTEGER NOT NULL DEFAULT 0,\n    credited_to_tokenpak INTEGER NOT NULL DEFAULT 0,\n    platform            TEXT NOT NULL DEFAULT '',\n    model               TEXT NOT NULL DEFAULT '',\n    notes               TEXT NOT NULL DEFAULT ''\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_segments",
+            "sql": "CREATE TABLE tp_segments (\n    trace_id            TEXT NOT NULL,\n    segment_id          TEXT NOT NULL,\n    ord                 INTEGER NOT NULL DEFAULT 0,\n    segment_type        TEXT NOT NULL DEFAULT '',\n    raw_hash            TEXT NOT NULL DEFAULT '',\n    final_hash          TEXT NOT NULL DEFAULT '',\n    raw_len             INTEGER NOT NULL DEFAULT 0,\n    final_len           INTEGER NOT NULL DEFAULT 0,\n    tokens_raw          INTEGER NOT NULL DEFAULT 0,\n    tokens_after_qmd    INTEGER NOT NULL DEFAULT 0,\n    tokens_after_tp     INTEGER NOT NULL DEFAULT 0,\n    actions             TEXT NOT NULL DEFAULT '[]',\n    relevance_score     REAL NOT NULL DEFAULT 0.5,\n    segment_source      TEXT NOT NULL DEFAULT '',\n    content_type        TEXT NOT NULL DEFAULT 'text',\n    raw_len_chars       INTEGER NOT NULL DEFAULT 0,\n    raw_len_bytes       INTEGER NOT NULL DEFAULT 0,\n    final_len_chars     INTEGER NOT NULL DEFAULT 0,\n    final_len_bytes     INTEGER NOT NULL DEFAULT 0,\n    debug_ref           TEXT,\n    PRIMARY KEY (trace_id, segment_id)\n)"
+          },
+          {
+            "type": "table",
+            "name": "tp_usage",
+            "sql": "CREATE TABLE tp_usage (\n    trace_id              TEXT NOT NULL PRIMARY KEY,\n    usage_source          TEXT NOT NULL DEFAULT 'unknown',\n    confidence            TEXT NOT NULL DEFAULT 'low',\n    input_billed          INTEGER NOT NULL DEFAULT 0,\n    output_billed         INTEGER NOT NULL DEFAULT 0,\n    input_est             INTEGER NOT NULL DEFAULT 0,\n    output_est            INTEGER NOT NULL DEFAULT 0,\n    cache_read            INTEGER NOT NULL DEFAULT 0,\n    cache_write           INTEGER NOT NULL DEFAULT 0,\n    total_tokens          INTEGER NOT NULL DEFAULT 0,\n    total_tokens_billed   INTEGER NOT NULL DEFAULT 0,\n    total_tokens_est      INTEGER NOT NULL DEFAULT 0,\n    provider_usage_raw    TEXT NOT NULL DEFAULT '{}'\n)"
+          }
+        ]
+      }
     },
     {
       "path": "~/.tokenpak/spend_guard.db",
-      "purpose": "TIP Spend Guard audit log",
-      "exists": false,
-      "ddl": null
+      "purpose": "TIP Spend Guard audit and pending-request log",
+      "exists": true,
+      "ddl": {
+        "objects": [
+          {
+            "type": "index",
+            "name": "idx_audit_event_ts",
+            "sql": "CREATE INDEX idx_audit_event_ts ON spend_guard_audit(event_type, ts)"
+          },
+          {
+            "type": "index",
+            "name": "idx_audit_session_ts",
+            "sql": "CREATE INDEX idx_audit_session_ts ON spend_guard_audit(session_id, ts)"
+          },
+          {
+            "type": "index",
+            "name": "idx_pending_hash",
+            "sql": "CREATE INDEX idx_pending_hash ON pending_requests(request_hash, status)"
+          },
+          {
+            "type": "index",
+            "name": "idx_pending_session",
+            "sql": "CREATE INDEX idx_pending_session ON pending_requests(session_id, status)"
+          },
+          {
+            "type": "table",
+            "name": "pending_requests",
+            "sql": "CREATE TABLE pending_requests (\n            pending_id TEXT PRIMARY KEY,\n            session_id TEXT NOT NULL,\n            created_at REAL NOT NULL,\n            expires_at REAL NOT NULL,\n            request_hash TEXT NOT NULL,\n            provider TEXT NOT NULL DEFAULT '',\n            model TEXT NOT NULL DEFAULT '',\n            projected_tokens INTEGER NOT NULL DEFAULT 0,\n            projected_cost_usd REAL NOT NULL DEFAULT 0.0,\n            raw_request_blob BLOB NOT NULL,\n            raw_request_headers TEXT NOT NULL DEFAULT '{}',\n            target_url TEXT NOT NULL DEFAULT '',\n            status TEXT NOT NULL DEFAULT 'pending'\n        )"
+          },
+          {
+            "type": "table",
+            "name": "spend_guard_audit",
+            "sql": "CREATE TABLE spend_guard_audit (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            ts REAL NOT NULL,\n            session_id TEXT NOT NULL DEFAULT '',\n            event_type TEXT NOT NULL,\n            decision TEXT NOT NULL DEFAULT '',\n            reason TEXT NOT NULL DEFAULT '',\n            projected_tokens INTEGER NOT NULL DEFAULT 0,\n            projected_cost_usd REAL NOT NULL DEFAULT 0.0,\n            pending_id TEXT NOT NULL DEFAULT '',\n            request_hash TEXT NOT NULL DEFAULT '',\n            tip_directive_json TEXT NOT NULL DEFAULT '',\n            extra_json TEXT NOT NULL DEFAULT ''\n        )"
+          }
+        ]
+      }
+    },
+    {
+      "path": "~/.tpk/monitor.db",
+      "purpose": "Proxy request, cost, savings, and timing ledger",
+      "exists": true,
+      "ddl": {
+        "objects": [
+          {
+            "type": "index",
+            "name": "idx_budget_alerts_day_period",
+            "sql": "CREATE UNIQUE INDEX idx_budget_alerts_day_period ON budget_alerts(date(timestamp), period)"
+          },
+          {
+            "type": "index",
+            "name": "idx_ma_request_id",
+            "sql": "CREATE INDEX idx_ma_request_id  ON mutation_audit(request_id)"
+          },
+          {
+            "type": "index",
+            "name": "idx_ma_session_id",
+            "sql": "CREATE INDEX idx_ma_session_id  ON mutation_audit(session_id)"
+          },
+          {
+            "type": "index",
+            "name": "idx_provider_events_ts",
+            "sql": "CREATE INDEX idx_provider_events_ts ON provider_events(timestamp)"
+          },
+          {
+            "type": "index",
+            "name": "idx_ts",
+            "sql": "CREATE INDEX idx_ts ON requests(timestamp)"
+          },
+          {
+            "type": "table",
+            "name": "budget_alerts",
+            "sql": "CREATE TABLE budget_alerts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                timestamp TEXT NOT NULL,\n                agent_id TEXT DEFAULT \"\",\n                period TEXT DEFAULT \"daily\",\n                budget_usd REAL,\n                spent_usd REAL,\n                pct_used REAL,\n                triggered INTEGER DEFAULT 1\n            )"
+          },
+          {
+            "type": "table",
+            "name": "mutation_audit",
+            "sql": "CREATE TABLE mutation_audit (\n            id                INTEGER PRIMARY KEY AUTOINCREMENT,\n            request_id        INTEGER,\n            session_id        TEXT,\n            timestamp         TEXT    NOT NULL,\n            pre_hash          TEXT,\n            post_hash         TEXT,\n            rules_applied     TEXT,\n            cache_risk        TEXT,\n            rollback_possible INTEGER,\n            mode              TEXT\n        )"
+          },
+          {
+            "type": "table",
+            "name": "provider_events",
+            "sql": "CREATE TABLE provider_events (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            timestamp TEXT NOT NULL,\n            event TEXT NOT NULL,\n            kind TEXT NOT NULL,\n            severity TEXT NOT NULL,\n            trace_id TEXT,\n            bytes_received INTEGER DEFAULT 0,\n            last_event_kind TEXT DEFAULT '',\n            time_since_last_chunk_ms INTEGER DEFAULT 0,\n            reason TEXT DEFAULT ''\n        )"
+          },
+          {
+            "type": "table",
+            "name": "requests",
+            "sql": "CREATE TABLE requests (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                timestamp TEXT NOT NULL,\n                model TEXT NOT NULL,\n                request_type TEXT,\n                input_tokens INTEGER,\n                output_tokens INTEGER,\n                estimated_cost REAL,\n                latency_ms INTEGER,\n                status_code INTEGER,\n                endpoint TEXT,\n                compilation_mode TEXT,\n                protected_tokens INTEGER,\n                compressed_tokens INTEGER,\n                injected_tokens INTEGER DEFAULT 0,\n                injected_sources TEXT DEFAULT '',\n                cache_read_tokens INTEGER DEFAULT 0,\n                cache_creation_tokens INTEGER DEFAULT 0,\n                would_have_saved INTEGER DEFAULT 0,\n                cache_origin TEXT DEFAULT 'unknown',\n                user_id TEXT DEFAULT '',\n                cache_creation_ephemeral_1h_tokens INTEGER DEFAULT 0,\n                cache_creation_ephemeral_5m_tokens INTEGER DEFAULT 0,\n                ttl_attribution TEXT DEFAULT NULL,\n                session_id TEXT DEFAULT '',\n                agent_id TEXT DEFAULT '',\n                cycle_id TEXT DEFAULT '',\n                attribution_source TEXT DEFAULT '',\n                reasoning_tokens INTEGER DEFAULT NULL,\n                visible_output_tokens INTEGER DEFAULT NULL,\n                total_billable_tokens INTEGER DEFAULT NULL,\n                reasoning_effort TEXT DEFAULT '',\n                reasoning_usage_source TEXT DEFAULT '',\n                provider_usage_ref TEXT DEFAULT '',\n                provider_usage_provider TEXT DEFAULT '',\n                provider_input_tokens INTEGER DEFAULT NULL,\n                provider_output_tokens INTEGER DEFAULT NULL,\n                provider_cache_read_tokens INTEGER DEFAULT NULL,\n                provider_cache_creation_tokens INTEGER DEFAULT NULL,\n                provider_usage_source TEXT DEFAULT '',\n                provider_usage_confidence TEXT DEFAULT '',\n                reasoning_effort_source TEXT DEFAULT '',\n                reasoning_effort_raw TEXT DEFAULT '',\n                cost_basis TEXT DEFAULT '',\n                pricing_source TEXT DEFAULT '',\n                stream_mode TEXT DEFAULT '',\n                event_transform_applied INTEGER DEFAULT 0,\n                stop_reason TEXT DEFAULT ''\n            )"
+          }
+        ]
+      }
     }
   ]
 }
