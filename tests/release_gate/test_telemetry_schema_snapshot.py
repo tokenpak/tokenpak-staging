@@ -11,6 +11,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "release_gate" / "gen_telemetry_schema.py"
+_SNAPSHOT = _REPO_ROOT / "tokenpak" / "_snapshots" / "telemetry-schema.json"
 _SPEC = importlib.util.spec_from_file_location("gen_telemetry_schema_under_test", _SCRIPT)
 assert _SPEC and _SPEC.loader
 schema_snapshot = importlib.util.module_from_spec(_SPEC)
@@ -36,16 +37,22 @@ def snapshot() -> dict:
 
 
 def test_materializes_every_store_without_ambient_home_state(
-    snapshot: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     poisoned_home = tmp_path / "home"
-    poisoned_home.mkdir()
-    (poisoned_home / ".tpk").mkdir()
-    (poisoned_home / ".tpk" / "monitor.db").write_text("not sqlite")
+    (poisoned_home / ".tpk").mkdir(parents=True)
+    (poisoned_home / ".tokenpak").mkdir()
+    for relative_path in (
+        ".tpk/telemetry.db",
+        ".tpk/monitor.db",
+        ".tokenpak/spend_guard.db",
+    ):
+        (poisoned_home / relative_path).write_text("not sqlite")
     monkeypatch.setenv("HOME", str(poisoned_home))
 
     isolated = schema_snapshot.build_snapshot()
-    assert _fingerprint(isolated) == _fingerprint(snapshot)
+    committed = json.loads(_SNAPSHOT.read_text())
+    assert _fingerprint(isolated) == _fingerprint(committed)
     assert [store["path"] for store in isolated["stores"]] == [
         "~/.tpk/telemetry.db",
         "~/.tokenpak/spend_guard.db",
@@ -85,6 +92,7 @@ def test_check_rejects_a_changed_monitor_column(
     requests["sql"] = requests["sql"].replace(",\n                stop_reason TEXT DEFAULT ''", "")
     out = tmp_path / "telemetry-schema.json"
     out.write_text(json.dumps(stale))
+    monkeypatch.setattr(schema_snapshot, "build_snapshot", lambda: snapshot)
     monkeypatch.setattr(sys, "argv", [str(_SCRIPT), "--check", "--out", str(out)])
     assert schema_snapshot.main() == 1
 
