@@ -36,6 +36,7 @@ def snapshot() -> dict:
     return schema_snapshot.build_snapshot()
 
 
+@pytest.mark.timeout(90)
 def test_materializes_every_store_without_ambient_home_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
