@@ -94,11 +94,18 @@ def _materialize_spend_guard(db_path: Path) -> None:
 
 
 def _materialize_monitor(db_path: Path) -> None:
+    from tokenpak.companion.stream import _ensure_events_table
     from tokenpak.proxy.monitor import Monitor
 
     monitor = Monitor(db_path=str(db_path))
     if not monitor.stop(timeout=5.0):
         raise RuntimeError("monitor snapshot writer did not stop cleanly")
+
+    # monitor.db has more than one schema owner. The proxy Monitor initializes
+    # the request ledger, while the companion stream guard owns the additive
+    # provider-event ledger in the same canonical store.
+    with sqlite3.connect(db_path) as conn:
+        _ensure_events_table(conn)
 
 
 _MATERIALIZERS = {

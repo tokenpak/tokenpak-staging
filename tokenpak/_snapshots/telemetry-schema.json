@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-25T02:02:30Z",
+  "generated_at": "2026-08-25T09:44:57Z",
   "stores": [
     {
       "path": "~/.tpk/telemetry.db",
@@ -193,6 +193,11 @@
           },
           {
             "type": "index",
+            "name": "idx_provider_events_ts",
+            "sql": "CREATE INDEX idx_provider_events_ts ON provider_events(timestamp)"
+          },
+          {
+            "type": "index",
             "name": "idx_ts",
             "sql": "CREATE INDEX idx_ts ON requests(timestamp)"
           },
@@ -205,6 +210,11 @@
             "type": "table",
             "name": "mutation_audit",
             "sql": "CREATE TABLE mutation_audit (\n            id                INTEGER PRIMARY KEY AUTOINCREMENT,\n            request_id        INTEGER,\n            session_id        TEXT,\n            timestamp         TEXT    NOT NULL,\n            pre_hash          TEXT,\n            post_hash         TEXT,\n            rules_applied     TEXT,\n            cache_risk        TEXT,\n            rollback_possible INTEGER,\n            mode              TEXT\n        )"
+          },
+          {
+            "type": "table",
+            "name": "provider_events",
+            "sql": "CREATE TABLE provider_events (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            timestamp TEXT NOT NULL,\n            event TEXT NOT NULL,\n            kind TEXT NOT NULL,\n            severity TEXT NOT NULL,\n            trace_id TEXT,\n            bytes_received INTEGER DEFAULT 0,\n            last_event_kind TEXT DEFAULT '',\n            time_since_last_chunk_ms INTEGER DEFAULT 0,\n            reason TEXT DEFAULT ''\n        )"
           },
           {
             "type": "table",

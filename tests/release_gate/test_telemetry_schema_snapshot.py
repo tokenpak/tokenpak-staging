@@ -63,11 +63,23 @@ def test_materializes_every_store_without_ambient_home_state(
     assert all(store["ddl"]["objects"] for store in isolated["stores"])
 
 
-def test_monitor_snapshot_covers_runtime_requests_schema(snapshot: dict) -> None:
+def test_monitor_snapshot_covers_runtime_schema_owners(snapshot: dict) -> None:
     monitor = _store(snapshot, "~/.tpk/monitor.db")
+    object_names = {obj["name"] for obj in monitor["ddl"]["objects"]}
+    assert {"requests", "provider_events", "idx_provider_events_ts"} <= object_names
+
     requests_sql = _object_sql(monitor, object_type="table", name="requests")
     assert "timestamp TEXT NOT NULL" in requests_sql
     assert "stop_reason TEXT DEFAULT ''" in requests_sql
+
+    provider_events_sql = _object_sql(monitor, object_type="table", name="provider_events")
+    assert "event TEXT NOT NULL" in provider_events_sql
+    assert "reason TEXT DEFAULT ''" in provider_events_sql
+
+    provider_events_index_sql = _object_sql(
+        monitor, object_type="index", name="idx_provider_events_ts"
+    )
+    assert "ON provider_events(timestamp)" in provider_events_index_sql
 
 
 def test_shared_spend_guard_store_contains_both_owned_schemas(snapshot: dict) -> None:
