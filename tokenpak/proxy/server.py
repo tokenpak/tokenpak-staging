@@ -2816,16 +2816,37 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
+            # A raw socket error here means the downstream client disappeared
+            # while we were writing its response. No HTTP 502 was delivered,
+            # and the provider request did not fail. Record that transport
+            # outcome separately, then leave the generic proxy-error path
+            # untouched for genuine upstream/internal failures.
+            if _is_client_disconnect_error(exc):
+                latency_ms = int((time.time() - t0) * 1000)
+                try:
+                    log_request(
+                        request_id=_req_id,
+                        client_ip=self.client_address[0] if self.client_address else "",
+                        method=method,
+                        endpoint=parsed.path,
+                        request_body_size=content_length,
+                        response_status=0,
+                        latency_ms=latency_ms,
+                        model=model,
+                        extra={
+                            "outcome": "client_disconnect",
+                            "client_disconnected": True,
+                            "disconnect_type": type(exc).__name__,
+                        },
+                    )
+                except Exception:
+                    pass  # logging must never break the proxy
+                return
+
             # ── Circuit breaker: record failure ───────────────────────────
-            # ...unless OUR client's socket died (BrokenPipeError /
-            # ConnectionResetError writing to self.wfile). That says nothing
-            # about provider health — counting it opened the breaker for a
-            # healthy provider whenever CLIs were killed mid-response.
-            if (
-                _cb_registry is not None
-                and _cb_provider is not None
-                and not _is_client_disconnect_error(exc)
-            ):
+            # Raw downstream disconnects returned above. Every exception that
+            # reaches this point is still an upstream or internal failure.
+            if _cb_registry is not None and _cb_provider is not None:
                 _cb_registry.record_failure(_cb_provider)
 
             with ps._session_lock:
