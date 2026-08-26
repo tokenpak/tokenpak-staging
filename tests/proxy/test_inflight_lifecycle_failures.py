@@ -74,7 +74,11 @@ def _post_stream(port: int, target_url: str) -> tuple[int, bytes]:
             "POST",
             target_url,
             body=body,
-            headers={"Content-Type": "application/json", "x-api-key": "test-key"},
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": "test-key",
+                "x-tokenpak-session-id": "inflight-lifecycle-regression",
+            },
         )
         response = conn.getresponse()
         return response.status, response.read()
@@ -85,8 +89,16 @@ def _post_stream(port: int, target_url: str) -> tuple[int, bytes]:
 @pytest.fixture(autouse=True)
 def _clean_inflight_registry():
     inflight_registry.reset_for_testing()
+    with proxy_server_module._upstream_sem_lock:
+        proxy_server_module._upstream_semaphores.clear()
+        proxy_server_module._upstream_inflight.clear()
+        proxy_server_module._upstream_sem_last_activity.clear()
     yield
     inflight_registry.reset_for_testing()
+    with proxy_server_module._upstream_sem_lock:
+        proxy_server_module._upstream_semaphores.clear()
+        proxy_server_module._upstream_inflight.clear()
+        proxy_server_module._upstream_sem_last_activity.clear()
 
 
 def test_ttfb_is_observed_before_first_downstream_body_write(monkeypatch):
@@ -193,6 +205,7 @@ def test_inflight_cleanup_failure_is_logged_and_propagated(monkeypatch, caplog):
 
     monkeypatch.setenv("TOKENPAK_SPEND_GUARD_ENABLED", "0")
     monkeypatch.setattr(inflight_registry, "finish", _failing_finish)
+    monkeypatch.setattr(proxy_server_module, "_UPSTREAM_CONCURRENCY", 1)
     caplog.set_level(logging.WARNING, logger=proxy_server_module.__name__)
 
     proxy = ProxyServer(host="127.0.0.1", port=free_port())
@@ -216,5 +229,11 @@ def test_inflight_cleanup_failure_is_logged_and_propagated(monkeypatch, caplog):
             for record in caplog.records
         )
         assert inflight_registry.snapshot(), "failed cleanup must remain visible to operators"
+        assert get_upstream_inflight_snapshot() == {}
+        semaphore = proxy_server_module._upstream_semaphores[
+            ("anthropic", "inflight-lifecycle-regression")
+        ]
+        assert semaphore.acquire(blocking=False), "cleanup must return the upstream permit"
+        semaphore.release()
     finally:
         proxy.stop()

@@ -3089,25 +3089,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             # normal-path finish above for prompt disappearance, while this
             # safety net covers upstream exceptions and client disconnects.
             try:
-                from .inflight_registry import finish as _inflight_finish
-
-                _inflight_finish(_req_id)
-            except Exception:
-                logger.warning(
-                    "in-flight registry cleanup failed for request %s",
-                    _req_id,
-                    exc_info=True,
-                )
-                raise
-            # Release the outbound concurrency slot no matter how we exit.
-            if _sem_acquired:
                 try:
-                    _upstream_sem.release()
-                    _upstream_inflight_delta(_sem_provider, -1, _session_key)
-                except ValueError:
-                    # BoundedSemaphore raises if released more times than acquired;
-                    # swallow to keep the handler fail-safe.
-                    pass
+                    from .inflight_registry import finish as _inflight_finish
+
+                    _inflight_finish(_req_id)
+                except Exception:
+                    logger.warning(
+                        "in-flight registry cleanup failed for request %s",
+                        _req_id,
+                        exc_info=True,
+                    )
+                    raise
+            finally:
+                # Release the outbound concurrency slot no matter how we exit,
+                # including when registry cleanup raises above.
+                if _sem_acquired:
+                    try:
+                        _upstream_sem.release()
+                        _upstream_inflight_delta(_sem_provider, -1, _session_key)
+                    except ValueError:
+                        # BoundedSemaphore raises if released more times than acquired;
+                        # swallow to keep the handler fail-safe.
+                        pass
 
     def _handle_count_tokens(self) -> None:
         """Handle POST /v1/messages/count_tokens — compute token count locally.
