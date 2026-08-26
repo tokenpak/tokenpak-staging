@@ -36,6 +36,7 @@ import pytest
 pytestmark = pytest.mark.needs_proxy
 
 from tests.proxy._proxy_subprocess import free_port
+from tokenpak.proxy import inflight_registry
 from tokenpak.proxy import server as proxy_server_module
 from tokenpak.proxy.circuit_breaker import get_circuit_breaker_registry
 from tokenpak.proxy.server import (
@@ -237,6 +238,7 @@ class TestBreakerPolarityEndToEnd:
     def test_client_disconnect_mid_response_is_not_a_provider_failure(
         self, proxy, stub_upstream, breaker_spy, request_log_spy
     ):
+        inflight_registry.reset_for_testing()
         # Big response + delayed stub: the client sends the request, then
         # RST-closes its socket before the proxy writes the response back —
         # the proxy's wfile.write raises BrokenPipe/ConnectionReset.
@@ -291,5 +293,9 @@ class TestBreakerPolarityEndToEnd:
             "a client hanging up mid-response must not count as a provider failure"
         )
         assert "127.0.0.1" not in breaker_spy["success"]
+        deadline = time.time() + 2
+        while inflight_registry.snapshot() and time.time() < deadline:
+            time.sleep(0.01)
+        assert inflight_registry.snapshot() == []
         # Reset stub for any later test.
         _stub_state.update(status=200, delay=0.0, body=b'{"ok": true}')
