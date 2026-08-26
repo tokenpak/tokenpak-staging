@@ -50,8 +50,10 @@ def register(
     """
     if not request_id:
         return
+    now = time.time()
     with _LOCK:
-        _INFLIGHT[request_id] = (model or "", started_at or time.time(), None, 0, admission_ticket)
+        _sweep_expired_locked(now)
+        _INFLIGHT[request_id] = (model or "", started_at or now, None, 0, admission_ticket)
 
 
 def mark_ttfb(request_id: str) -> Optional[int]:
@@ -81,8 +83,14 @@ def update_output_tokens(request_id: str, output_tokens: int) -> None:
         entry = _INFLIGHT.get(request_id)
         if entry is None:
             return
-        model, started_at, ttfb_ms, _prev, ticket = entry
-        _INFLIGHT[request_id] = (model, started_at, ttfb_ms, output_tokens, ticket)
+        model, started_at, ttfb_ms, previous, ticket = entry
+        _INFLIGHT[request_id] = (
+            model,
+            started_at,
+            ttfb_ms,
+            max(previous, output_tokens),
+            ticket,
+        )
 
 
 def finish(request_id: str) -> None:
@@ -113,9 +121,11 @@ def snapshot() -> list[dict]:
     from tokenpak.proxy.spend_guard.rolling_caps import get_admitted_projection
 
     now = time.time()
+    cutoff = now - _INFLIGHT_TTL_SEC
     with _LOCK:
-        _sweep_expired_locked(now)
-        items = list(_INFLIGHT.items())
+        items = [
+            (request_id, entry) for request_id, entry in _INFLIGHT.items() if entry[1] >= cutoff
+        ]
 
     result = []
     for request_id, (model, started_at, ttfb_ms, output_tokens, ticket) in items:

@@ -2243,11 +2243,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 for chunk in resp.iter_raw():
                                     if not chunk:
                                         continue
-                                    try:
-                                        self.wfile.write(chunk)
-                                        self.wfile.flush()
-                                    except (BrokenPipeError, ConnectionResetError):
-                                        break
                                     if _stream_first_byte_time is None:
                                         _stream_first_byte_time = time.time()
                                         _ttfb_ms = int((_stream_first_byte_time - t0) * 1000)
@@ -2257,6 +2252,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                             )
 
                                             _inflight_ttfb(_req_id)
+                                    try:
+                                        self.wfile.write(chunk)
+                                        self.wfile.flush()
+                                    except (BrokenPipeError, ConnectionResetError):
+                                        break
                                     if should_log and is_model_request:
                                         sse_buffer += chunk
                                         if _inflight_tracker is not None:
@@ -3085,6 +3085,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         finally:
+            # Registration is facts-only and finish() is idempotent. Keep the
+            # normal-path finish above for prompt disappearance, while this
+            # safety net covers upstream exceptions and client disconnects.
+            try:
+                from .inflight_registry import finish as _inflight_finish
+
+                _inflight_finish(_req_id)
+            except Exception:
+                pass
             # Release the outbound concurrency slot no matter how we exit.
             if _sem_acquired:
                 try:

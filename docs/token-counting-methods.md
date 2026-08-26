@@ -74,6 +74,12 @@ a report:
   its fallback response `estimator: "chars-per-4-heuristic"` with an explicit
   user-facing note that the count is approximate — the disclosure pattern
   other estimators should follow when they surface a number externally.
+- **`tokenpak/proxy/server.py`**'s `_estimate_tokens_from_body()` and
+  **`tokenpak/proxy/server_async.py`**'s `_estimate_tokens()` — their primary
+  parsed-JSON paths use chars ÷ 4. The synchronous estimator counts strings
+  in recognized `messages`, `input`, or `contents` structures; the asynchronous
+  estimator counts `messages` or `input` plus `system`. They use raw bytes ÷ 4
+  only when JSON parsing or recognized-structure traversal fails.
 
 There is no single shared constant for chars ÷ 4 across the codebase; each
 module defines its own `4` (or a locally named `_CHARS_PER_TOKEN`). That is a
@@ -94,12 +100,13 @@ be wasted work, or where multibyte correctness matters more than raw speed:
   uses `os.path.getsize(...) // 4` (the file is `stat`'d, never opened) for
   speed, alongside the chars ÷ 4 branch for inline prompt text in the same
   function.
-- **`tokenpak/proxy/server.py`**'s `_estimate_tokens_from_body()` and the
-  `_stable_cache_hook` closure, and **`tokenpak/proxy/server_async.py`**'s
-  `_estimate_tokens()` — proxy-side observe-only telemetry over the raw
-  request body. These run on the byte-preserved request path (the body
-  forwarded to the provider is never altered by this estimate) and feed
-  `sent_tokens`/`raw_tokens` savings telemetry.
+- **`tokenpak/proxy/server.py`**'s `_estimate_tokens_from_body()` and
+  **`tokenpak/proxy/server_async.py`**'s `_estimate_tokens()` — bytes ÷ 4 is
+  their fallback when JSON parsing or recognized-structure traversal fails;
+  their primary parsed-string paths are listed in the chars ÷ 4 section above.
+- **`tokenpak/proxy/server.py`**'s `_stable_cache_hook` closure — proxy-side
+  observe-only telemetry over the raw request body. The body forwarded to the
+  provider is never altered by this estimate.
 - **`tokenpak/proxy/capsule_integration.py`** — the outer fallback when the
   request body doesn't parse as JSON (the primary path there is a chars ÷ 4
   walk of the parsed JSON, promoted to bytes ÷ 4 only on parse failure).

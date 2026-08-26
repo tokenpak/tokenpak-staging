@@ -165,11 +165,14 @@ def get_admitted_projection(ticket: Optional[str]) -> Optional[dict]:
     """
     if not ticket:
         return None
+    now = time.time()
     with _INFLIGHT_LOCK:
         entry = _INFLIGHT.get(ticket)
     if entry is None:
         return None
     agent_id, cost_usd, tokens_total, cache_read_tokens, admitted_at = entry
+    if admitted_at < now - _INFLIGHT_TTL_SEC:
+        return None
     return {
         "agent_id": agent_id,
         "projected_cost_usd": cost_usd,

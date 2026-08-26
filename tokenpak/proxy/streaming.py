@@ -290,9 +290,10 @@ class IncrementalUsageTracker:
 
     A read-only observation on the bytes already being forwarded to the
     client — never mutates or delays them. Feed it each raw chunk as it is
-    written; ``output_tokens`` reflects the latest value the provider has
-    sent so far this stream (last-value-wins, matching the end-of-stream
-    ``extract_sse_tokens()`` semantics).
+    written; ``output_tokens`` reflects the greatest cumulative value the
+    provider has sent so far this stream. Provider observations may arrive
+    out of order, but the live count never decreases. This does not change
+    the end-of-stream ``extract_sse_tokens()`` semantics.
 
     Cleartext SSE only. A ``content-encoding: gzip`` stream cannot be
     decompressed incrementally chunk-by-chunk (``zlib`` needs the whole
@@ -333,5 +334,5 @@ class IncrementalUsageTracker:
             if isinstance(usage, Mapping):
                 value = _usage_int(usage, "output_tokens", "completion_tokens")
                 if value is not None:
-                    self.output_tokens = value
+                    self.output_tokens = max(self.output_tokens, value)
         return self.output_tokens
