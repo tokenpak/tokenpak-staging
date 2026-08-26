@@ -6,7 +6,9 @@ from __future__ import annotations
 import contextlib
 import http.client
 import json
+import logging
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -163,5 +165,56 @@ def test_upstream_exception_finishes_inflight_registration(monkeypatch):
         assert status == 502
         _wait_inflight_empty()
         assert get_upstream_inflight_snapshot() == {}
+    finally:
+        proxy.stop()
+
+
+def test_inflight_cleanup_failure_is_logged_and_propagated(monkeypatch, caplog):
+    """Regression: cleanup failure is observable instead of silently swallowed."""
+
+    class _FailingPool:
+        @contextlib.contextmanager
+        def stream(self, *args, **kwargs):
+            raise RuntimeError("injected upstream stream failure")
+            yield  # pragma: no cover
+
+        def close(self) -> None:
+            pass
+
+    def _failing_finish(request_id: str) -> None:
+        raise RuntimeError(f"injected cleanup failure for {request_id}")
+
+    handled_errors: list[BaseException | None] = []
+    error_seen = threading.Event()
+
+    def _capture_handler_error(_request, _client_address) -> None:
+        handled_errors.append(sys.exc_info()[1])
+        error_seen.set()
+
+    monkeypatch.setenv("TOKENPAK_SPEND_GUARD_ENABLED", "0")
+    monkeypatch.setattr(inflight_registry, "finish", _failing_finish)
+    caplog.set_level(logging.WARNING, logger=proxy_server_module.__name__)
+
+    proxy = ProxyServer(host="127.0.0.1", port=free_port())
+    proxy._connection_pool.close()
+    proxy._connection_pool = _FailingPool()
+    proxy.start(blocking=False)
+    assert proxy._server is not None
+    monkeypatch.setattr(proxy._server, "handle_error", _capture_handler_error)
+    try:
+        _wait_ready(proxy.port)
+        status, _ = _post_stream(proxy.port, "https://api.anthropic.com/v1/messages")
+        assert status == 502
+        assert error_seen.wait(timeout=2)
+        assert len(handled_errors) == 1
+        assert isinstance(handled_errors[0], RuntimeError)
+        assert "injected cleanup failure" in str(handled_errors[0])
+        assert any(
+            record.levelno == logging.WARNING
+            and "in-flight registry cleanup failed" in record.getMessage()
+            and record.exc_info is not None
+            for record in caplog.records
+        )
+        assert inflight_registry.snapshot(), "failed cleanup must remain visible to operators"
     finally:
         proxy.stop()

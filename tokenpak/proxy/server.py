@@ -3093,7 +3093,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
                 _inflight_finish(_req_id)
             except Exception:
-                pass
+                logger.warning(
+                    "in-flight registry cleanup failed for request %s",
+                    _req_id,
+                    exc_info=True,
+                )
+                raise
             # Release the outbound concurrency slot no matter how we exit.
             if _sem_acquired:
                 try:
