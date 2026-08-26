@@ -117,6 +117,8 @@ def decorate_response_body(resp_body: bytes, economics_line: str) -> bytes:
         data = json.loads(resp_body)
     except Exception:
         return resp_body
+    if not isinstance(data, dict):
+        return resp_body
     content = data.get("content")
     if not isinstance(content, list):
         return resp_body
@@ -188,6 +190,8 @@ def scrub_request_body(body: bytes) -> bytes:
     try:
         data = json.loads(body)
     except Exception:
+        return body
+    if not isinstance(data, dict):
         return body
     changed = False
     for message in data.get("messages") or []:

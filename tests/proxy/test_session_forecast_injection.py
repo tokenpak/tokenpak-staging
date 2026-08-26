@@ -106,6 +106,11 @@ def test_decorate_response_body_is_noop_on_bad_shape():
     assert inj.decorate_response_body(empty_blocks, "line") is empty_blocks
 
 
+def test_decorate_response_body_fails_open_on_valid_non_object_json():
+    for original in (b"[]", b"null", b"true", b"1", b'"text"'):
+        assert inj.decorate_response_body(original, "line") is original
+
+
 def test_maybe_decorate_response_noop_when_disabled(monkeypatch):
     monkeypatch.setenv("TOKENPAK_SESSION_FORECAST_INJECTION", "0")
     original = _resp("the answer")
@@ -198,3 +203,11 @@ def test_scrub_is_idempotent_across_repeated_turns():
 def test_scrub_fails_open_on_unparseable_body_containing_marker_bytes():
     garbage = b"{not json but contains [TP-ECON marker text"
     assert inj.scrub_request_body(garbage) is garbage
+
+
+def test_scrub_fails_open_on_valid_non_object_json_containing_marker_bytes():
+    for body in (
+        b'"[TP-ECON valid-json-string"',
+        b'["[TP-ECON valid-json-list"]',
+    ):
+        assert inj.scrub_request_body(body) is body
