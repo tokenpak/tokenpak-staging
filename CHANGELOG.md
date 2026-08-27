@@ -42,6 +42,9 @@ accounting, and release-gate schema capture.
   schema is included in drift detection.
 - The legacy stats snapshot now writes to TokenPak's product-owned vault state
   directory instead of a retired private vault layout.
+- Public API snapshot generation now excludes two optional third-party aliases
+  in both installed-extra and dependency-absent environments, preventing
+  environment-dependent phantom exports without changing TokenPak's API.
 
 ### Upgrade
 
