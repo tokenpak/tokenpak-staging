@@ -40,6 +40,8 @@ accounting, and release-gate schema capture.
   Spend Guard, and proxy monitor stores in an isolated temporary directory.
   Snapshot generation no longer reads ambient user databases, and the monitor
   schema is included in drift detection.
+- The legacy stats snapshot now writes to TokenPak's product-owned vault state
+  directory instead of a retired private vault layout.
 
 ### Upgrade
 
