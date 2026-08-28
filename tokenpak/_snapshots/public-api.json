@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-17T22:52:00Z",
-  "package_version": "1.20.0",
+  "generated_at": "2026-08-27T00:13:43Z",
+  "package_version": "1.21.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -9564,6 +9564,34 @@
       "name": "sanitize_headers"
     },
     {
+      "module": "tokenpak.proxy.inflight_endpoint",
+      "name": "build_response"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "finish"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "mark_ttfb"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "register"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "reset_for_testing"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "snapshot"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "update_output_tokens"
+    },
+    {
       "module": "tokenpak.proxy.intelligence",
       "name": "auth"
     },
@@ -10812,6 +10840,46 @@
       "name": "walk_forward_coverage"
     },
     {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_CLOSE"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_OPEN_PREFIX"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_VERSION"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "contains_marker"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "decorate_response_body"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "is_injection_enabled"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "maybe_decorate_response"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "scrub_request_body"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "strip_markers"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "wrap_marker"
+    },
+    {
       "module": "tokenpak.proxy.shadow_hook",
       "name": "DEFAULT_LEDGER_PATH"
     },
@@ -11342,6 +11410,10 @@
     {
       "module": "tokenpak.proxy.stats_api",
       "name": "get_stats_storage"
+    },
+    {
+      "module": "tokenpak.proxy.streaming",
+      "name": "IncrementalUsageTracker"
     },
     {
       "module": "tokenpak.proxy.streaming",

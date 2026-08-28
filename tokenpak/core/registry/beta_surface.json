@@ -44,7 +44,7 @@
     "version"
   ],
   "excluded": {
-    "agent": "Fleet orchestration surface. Not part of the single-machine path a beta tester walks.",
+    "agent": "Multi-instance orchestration surface. Not part of the single-machine path a beta tester walks.",
     "aggregate": "Telemetry aggregation for multi-host deployments; no single-user story yet.",
     "alerts": "Alerting requires a configured notification channel that beta does not provision.",
     "attribution": "Advanced telemetry analysis; overlaps 'report' and 'savings' for the beta path.",

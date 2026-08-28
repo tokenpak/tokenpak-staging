@@ -6,6 +6,77 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-08-26
+
+This backward-compatible minor release adds facts-only request timing and
+live in-flight visibility, plus an optional client-return session-economics
+decoration. It also corrects forecast calibration, downstream-disconnect
+accounting, and release-gate schema capture.
+
+### Added
+
+- The proxy records each request's UTC start time, time to first upstream
+  byte, and stream duration in additive nullable monitor columns. Cleartext
+  SSE responses also expose their latest provider-reported output-token count
+  while the request is active. An auth-gated, read-only `GET /inflight`
+  endpoint reports these facts and any projection already computed at
+  admission; it does not calculate an ETA or mutate accounting state.
+- An opt-in, default-off session-economics decoration can append the existing
+  one-line rendering to the client copy of an eligible non-streaming response.
+  A versioned marker is removed from echoed assistant history before replay,
+  while provider bytes and accounting inputs continue to use undecorated
+  content.
+
+### Fixed
+
+- Session-forecast calibration now validates that coverage targets match the
+  statistic actually measured, includes per-turn cost shape in readiness
+  cache keys, and reads ledger fingerprints and scoring corpora from one
+  consistent transaction.
+- Downstream `BrokenPipeError` and `ConnectionResetError` outcomes are recorded
+  as client disconnects instead of synthetic HTTP 502 or provider failures.
+  Genuine upstream and internal errors retain their existing failure path.
+- The release-gate SQLite schema generator now materializes clean telemetry,
+  Spend Guard, and proxy monitor stores in an isolated temporary directory.
+  Snapshot generation no longer reads ambient user databases, and the monitor
+  schema is included in drift detection.
+- The legacy stats snapshot now writes to TokenPak's product-owned vault state
+  directory instead of a retired private vault layout.
+- Public API snapshot generation now excludes two optional third-party aliases
+  in both installed-extra and dependency-absent environments, preventing
+  environment-dependent phantom exports without changing TokenPak's API.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.21.0"
+```
+
+No manual configuration migration is required. Existing proxy monitor stores
+gain nullable timing columns through the additive migration. The optional
+client-return decoration remains disabled unless explicitly enabled.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.20.0"
+```
+
+The release introduces no destructive state migration. Existing readers
+remain compatible with the additive nullable monitor columns.
+
+### Compatibility
+
+- The public API snapshot contains 4,697 symbols: 18 additive exports and zero
+  removals relative to v1.20.0. The additions comprise the in-flight endpoint
+  builder, six in-flight registry functions, ten session-economics decoration
+  exports, and `IncrementalUsageTracker`.
+- Live mid-stream output usage is available for cleartext SSE. Compressed SSE
+  retains its existing persisted end-of-stream usage path but does not expose
+  a live incremental count.
+- No existing public symbol is removed or reclassified. No breaking changes or
+  deprecations are introduced.
+
 ## [1.20.0] — 2026-08-17
 
 This backward-compatible minor release adds a deterministic session trip
