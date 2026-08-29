@@ -5,7 +5,7 @@ These JSON files are the canonical, checked-in artifacts that gate every PR per 
 | File | Rule | Purpose |
 |---|---|---|
 | `public-api.json` | R7 | Sorted list of every public symbol on every `tokenpak.*` module. PR fails if a public symbol is removed without a `removes-public-symbol:` declaration in the PR body. |
-| `telemetry-schema.json` | R7 | Frozen DDL of every user-facing SQLite store (`~/.tokenpak/telemetry.db`, `~/.tokenpak/spend_guard.db`). PR fails on schema drift unless the same PR carries a migration test and multi-hop migration passes. |
+| `telemetry-schema.json` | R7 | Frozen DDL of every user-facing SQLite store (`~/.tpk/telemetry.db`, `~/.tokenpak/spend_guard.db`, `~/.tpk/monitor.db`). The generator materializes clean stores in an isolated temporary directory; it never reads ambient user databases. A PR fails on schema drift unless the same PR carries a migration test and multi-hop migration passes. |
 | `workflow-steps.json` | R11 | Sorted CI step tuples for `release*.yml` + `release-rehearsal.yml`. PR fails if a step is removed without a `removes-ci-step: <step.id>` declaration. |
 
 ## Updating

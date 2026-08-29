@@ -1,7 +1,7 @@
 """
 TokenPak Monitor — SQLite telemetry, request logging, budget tracking.
 
-Extracted from runtime/proxy.py (Phase 1f of TPK-RESTRUCTURE).
+Extracted from runtime/proxy.py (Phase 1f of the proxy modularization).
 Original location: class Monitor (lines 2320-3204) + SQLite helpers (lines 2248-2319).
 """
 
@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import TypedDict
 
 DbPath = str | os.PathLike[str]
@@ -67,21 +67,31 @@ _DB_QUEUE_LOCK = threading.Lock()
 _DB_QUEUE_MAX_SIZE = 1000
 _DB_BACKGROUND_THREAD: threading.Thread | None = None
 _DB_BACKGROUND_STOP = threading.Event()
+_SCHEMA_INIT_LOCK = threading.Lock()
+_BUDGET_ALERT_LOCK = threading.Lock()
 
 
 def _init_db_write_queue() -> None:
     """Initialize the database write queue and background thread."""
-    global _DB_WRITE_QUEUE, _DB_BACKGROUND_THREAD
+    global _DB_WRITE_QUEUE, _DB_BACKGROUND_THREAD, _DB_BACKGROUND_STOP
     with _DB_QUEUE_LOCK:
         if _DB_WRITE_QUEUE is None:
-            _DB_WRITE_QUEUE = Queue(maxsize=_DB_QUEUE_MAX_SIZE)
-            _DB_BACKGROUND_STOP.clear()
-            _DB_BACKGROUND_THREAD = threading.Thread(
+            queue: Queue[DbWorkItem | None] = Queue(maxsize=_DB_QUEUE_MAX_SIZE)
+            # A stop event belongs to one writer generation. Reusing and
+            # clearing a process-global Event can revive a writer whose prior
+            # bounded stop timed out, leaving two threads to consume the next
+            # generation's queue.
+            stop_event = threading.Event()
+            thread = threading.Thread(
                 target=_db_writer_worker,
+                args=(queue, stop_event),
                 daemon=True,
                 name="TokenPak-DB-Writer",
             )
-            _DB_BACKGROUND_THREAD.start()
+            _DB_WRITE_QUEUE = queue
+            _DB_BACKGROUND_STOP = stop_event
+            _DB_BACKGROUND_THREAD = thread
+            thread.start()
 
 
 # Write durability: bounded retry on transient lock errors before a row is
@@ -126,6 +136,28 @@ _REQUEST_INSERT_COLUMNS = (
     "cycle_id",
     "attribution_source",
     "stop_reason",
+    "reasoning_tokens",
+    "visible_output_tokens",
+    "total_billable_tokens",
+    "reasoning_effort",
+    "reasoning_usage_source",
+    "provider_usage_ref",
+    "provider_usage_provider",
+    "provider_input_tokens",
+    "provider_output_tokens",
+    "provider_cache_read_tokens",
+    "provider_cache_creation_tokens",
+    "provider_usage_source",
+    "provider_usage_confidence",
+    "reasoning_effort_source",
+    "reasoning_effort_raw",
+    "cost_basis",
+    "pricing_source",
+    "stream_mode",
+    "event_transform_applied",
+    "started_at",
+    "ttfb_ms",
+    "stream_duration_ms",
 )
 
 
@@ -136,12 +168,18 @@ def _request_insert_sql() -> str:
     return f"INSERT INTO requests ({cols}) VALUES ({placeholders})"
 
 
-def _record_dropped_row(reason: str, exc: BaseException) -> None:
-    """Count a lost telemetry row and surface the failure on stderr."""
+def _record_dropped_row(reason: str, exc: BaseException, count: int = 1) -> None:
+    """Count ``count`` lost telemetry row(s) and surface the failure on stderr.
+
+    ``count`` defaults to 1 for the common one-row-per-failure call sites;
+    a batch loss (e.g. an abandoned shutdown-drain queue) passes the real
+    row count so the dropped-row counter reflects it exactly, not just
+    "something was dropped this call".
+    """
     global _DB_DROPPED_ROWS
     with _DB_DROPPED_ROWS_LOCK:
-        _DB_DROPPED_ROWS += 1
-    print(f"[TokenPak] DB write dropped ({reason}): {exc}", file=sys.stderr)
+        _DB_DROPPED_ROWS += count
+    print(f"[TokenPak] DB write dropped ({reason}, {count} row(s)): {exc}", file=sys.stderr)
 
 
 def get_dropped_row_count() -> int:
@@ -170,6 +208,7 @@ def _write_row(db_path: DbPath, insert_params: InsertParams) -> None:
     """
     last_exc: sqlite3.OperationalError | None = None
     for attempt in range(_DB_WRITE_RETRY_ATTEMPTS):
+        conn: sqlite3.Connection | None = None
         try:
             with _DB_LOCK:
                 conn = _get_db_connection(db_path)
@@ -180,6 +219,18 @@ def _write_row(db_path: DbPath, insert_params: InsertParams) -> None:
             if not _is_transient_lock_error(exc):
                 raise
             last_exc = exc
+            # A commit-time (as opposed to execute-time) lock error leaves the
+            # just-executed INSERT staged on this connection's still-open
+            # transaction. Retrying without clearing it re-executes on top of
+            # that pending statement, so a later successful commit lands both
+            # -- a silent duplicate row. Roll back before the next attempt so
+            # each retry starts a fresh transaction.
+            if conn is not None:
+                try:
+                    with _DB_LOCK:
+                        conn.rollback()
+                except sqlite3.OperationalError:
+                    pass  # best-effort; the next attempt still gets a clean statement
             if attempt < _DB_WRITE_RETRY_ATTEMPTS - 1:
                 time.sleep(_DB_WRITE_RETRY_BACKOFF_S * (attempt + 1))
     if last_exc is not None:
@@ -187,30 +238,34 @@ def _write_row(db_path: DbPath, insert_params: InsertParams) -> None:
     raise RuntimeError("database write retries exhausted without an exception")
 
 
-def _db_writer_worker() -> None:
-    """Background worker thread that drains the DB write queue."""
-    while not _DB_BACKGROUND_STOP.is_set():
+def _db_writer_worker(queue: Queue[DbWorkItem | None], stop_event: threading.Event) -> None:
+    """Drain one immutable queue generation in a background thread."""
+    while True:
         try:
-            # Block for up to 1 second waiting for items
-            queue = _DB_WRITE_QUEUE
-            if queue is None:
-                return
+            # The queue and stop event are captured by this generation. A
+            # timed-out predecessor must never follow mutable module globals
+            # into a replacement generation.
             work_item = queue.get(timeout=1.0)
+        except Empty:
+            if stop_event.is_set():
+                return
+            continue
+        try:
             if work_item is None:  # Poison pill to stop
-                queue.task_done()
-                break
+                return
 
             db_path, insert_params = work_item
             try:
                 _write_row(db_path, insert_params)
             except Exception as e:
                 _record_dropped_row("async-writer", e)
-            finally:
-                queue.task_done()
-        except Empty:
-            continue
         except Exception as e:
             print(f"[TokenPak] DB worker error: {e}", file=sys.stderr)
+        finally:
+            # Every successful get(), including a poison pill or malformed
+            # item, must retire exactly one unfinished task. Otherwise flush()
+            # can wait forever on work no thread still owns.
+            queue.task_done()
 
 
 def _wait_for_queue_drain(q: Queue[DbWorkItem | None], deadline: float) -> bool:
@@ -235,22 +290,42 @@ def _stop_db_write_queue(timeout: float = 5.0) -> bool:
     with _DB_QUEUE_LOCK:
         q = _DB_WRITE_QUEUE
         thread = _DB_BACKGROUND_THREAD
+        stop_event = _DB_BACKGROUND_STOP
         if q is None:
             return True
         deadline = time.monotonic() + timeout
+        poison_enqueued = False
         try:
             q.put(None, timeout=max(0.0, timeout / 2.0))  # poison pill
-        except Exception:
-            # Queue full and stayed full: stop the worker after its current
-            # item instead of blocking shutdown forever.
-            _DB_BACKGROUND_STOP.set()
+            poison_enqueued = True
+        except Full:
+            # Queue full and stayed full: the generation-owned event makes the
+            # worker exit once it has drained the rows it already owns.
+            pass
+        stop_event.set()
         drained = _wait_for_queue_drain(q, deadline)
-        _DB_BACKGROUND_STOP.set()
         if thread is not None and thread.is_alive():
-            thread.join(timeout=max(0.1, deadline - time.monotonic()))
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        stopped = thread is None or not thread.is_alive()
+        if not drained:
+            # A live timed-out generation retains its private queue and keeps
+            # draining; those rows are pending, not proven dropped. Only a
+            # stopped generation with unfinished row items has confirmed
+            # abandonment. Never count the internal poison pill as a row.
+            unfinished = getattr(q, "unfinished_tasks", 0)
+            abandoned = max(0, unfinished - int(poison_enqueued))
+            if abandoned and stopped:
+                _record_dropped_row(
+                    "shutdown-drain-incomplete",
+                    RuntimeError(
+                        f"{abandoned} queued row(s) abandoned: drain did not "
+                        f"complete within {timeout}s"
+                    ),
+                    count=abandoned,
+                )
         _DB_WRITE_QUEUE = None
         _DB_BACKGROUND_THREAD = None
-        return drained
+        return drained and stopped
 
 
 def _get_db_connection(db_path: DbPath) -> sqlite3.Connection:
@@ -273,7 +348,13 @@ def _get_db_connection(db_path: DbPath) -> sqlite3.Connection:
             requested_path,
             check_same_thread=False,  # Required for ThreadedHTTPServer
         )
-        _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
+        mode_row = _DB_CONNECTION.execute("PRAGMA journal_mode").fetchone()
+        if mode_row is None or str(mode_row[0]).lower() != "wal":
+            # Direct _write_row() callers may supply a database that was not
+            # initialized through Monitor. Normal Monitor databases enter WAL
+            # synchronously in _init_db(), keeping this mode transition out of
+            # the background durability/flush boundary.
+            _DB_CONNECTION.execute("PRAGMA journal_mode=WAL")
         _DB_CONNECTION.execute("PRAGMA synchronous=NORMAL")
         _DB_CONNECTION.execute("PRAGMA busy_timeout=5000")
         _DB_CONNECTION_PATH = requested_path
@@ -299,6 +380,20 @@ def _apply_schema_migration(conn: sqlite3.Connection, ddl: str) -> None:
         if "duplicate column name" in str(exc).lower():
             return
         raise
+
+
+def _apply_missing_schema_migrations(
+    conn: sqlite3.Connection,
+    table: str,
+    migrations: tuple[tuple[str, str], ...],
+) -> None:
+    """Apply only migrations whose target column is absent from *table*."""
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    for column, ddl in migrations:
+        if column in existing:
+            continue
+        _apply_schema_migration(conn, ddl)
+        existing.add(column)
 
 
 def _estimate_bucket_savings_usd(
@@ -349,8 +444,30 @@ class Monitor:
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = db_path
-        self._lock = threading.Lock()
-        self._init_db()
+        self._schema_init_connection: sqlite3.Connection | None = None
+        try:
+            # SQLite remains the cross-process arbiter. Serializing schema
+            # setup here avoids making same-process Monitor constructors spend
+            # their busy-timeout budget contending with one another.
+            with _SCHEMA_INIT_LOCK:
+                self._init_db()
+        except BaseException:
+            # A failed schema transaction must not retain a lock or publish a
+            # partially initialized database. Do not rely on implementation-
+            # specific connection finalization to roll it back and close it.
+            conn = self._schema_init_connection
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+            raise
+        finally:
+            self._schema_init_connection = None
         # Start background worker on first Monitor creation
         try:
             _init_db_write_queue()
@@ -359,10 +476,22 @@ class Monitor:
 
     def _init_db(self) -> None:
         conn = sqlite3.connect(str(self.db_path))
+        self._schema_init_connection = conn
         # Wait out short lock contention instead of failing migrations at
         # startup (a raced ALTER would otherwise surface as 'database is
         # locked' and abort schema setup).
         conn.execute("PRAGMA busy_timeout=5000")
+        # Journal-mode transitions can wait on filesystem/SQLite locks. Own
+        # that transition synchronously with schema initialization instead of
+        # deferring it to the first background write, where it can make a
+        # bounded flush time out with an otherwise healthy queue.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        # Batch all schema work into one durable commit. Without an explicit
+        # transaction SQLite autocommits every CREATE/ALTER separately; on
+        # high-latency filesystems a fresh Monitor could spend >30 seconds on
+        # redundant schema fsyncs and trip the release test timeout.
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,11 +512,38 @@ class Monitor:
                 cache_read_tokens INTEGER DEFAULT 0,
                 cache_creation_tokens INTEGER DEFAULT 0,
                 would_have_saved INTEGER DEFAULT 0,
+                cache_origin TEXT DEFAULT 'unknown',
                 user_id TEXT DEFAULT '',
+                cache_creation_ephemeral_1h_tokens INTEGER DEFAULT 0,
+                cache_creation_ephemeral_5m_tokens INTEGER DEFAULT 0,
+                ttl_attribution TEXT DEFAULT NULL,
                 session_id TEXT DEFAULT '',
                 agent_id TEXT DEFAULT '',
                 cycle_id TEXT DEFAULT '',
-                attribution_source TEXT DEFAULT ''
+                attribution_source TEXT DEFAULT '',
+                reasoning_tokens INTEGER DEFAULT NULL,
+                visible_output_tokens INTEGER DEFAULT NULL,
+                total_billable_tokens INTEGER DEFAULT NULL,
+                reasoning_effort TEXT DEFAULT '',
+                reasoning_usage_source TEXT DEFAULT '',
+                provider_usage_ref TEXT DEFAULT '',
+                provider_usage_provider TEXT DEFAULT '',
+                provider_input_tokens INTEGER DEFAULT NULL,
+                provider_output_tokens INTEGER DEFAULT NULL,
+                provider_cache_read_tokens INTEGER DEFAULT NULL,
+                provider_cache_creation_tokens INTEGER DEFAULT NULL,
+                provider_usage_source TEXT DEFAULT '',
+                provider_usage_confidence TEXT DEFAULT '',
+                reasoning_effort_source TEXT DEFAULT '',
+                reasoning_effort_raw TEXT DEFAULT '',
+                cost_basis TEXT DEFAULT '',
+                pricing_source TEXT DEFAULT '',
+                stream_mode TEXT DEFAULT '',
+                event_transform_applied INTEGER DEFAULT 0,
+                stop_reason TEXT DEFAULT '',
+                started_at TEXT DEFAULT NULL,
+                ttfb_ms INTEGER DEFAULT NULL,
+                stream_duration_ms INTEGER DEFAULT NULL
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -397,85 +553,141 @@ class Monitor:
         # propagate; swallowing it would silently skip the ALTER, leave the
         # schema behind, and make every INSERT fail with 'no such column'
         # until restart.
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN injected_tokens INTEGER DEFAULT 0"
-        )
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN injected_sources TEXT DEFAULT ''"
-        )
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN cache_read_tokens INTEGER DEFAULT 0"
-        )
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0"
-        )
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN would_have_saved INTEGER DEFAULT 0"
-        )
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN cache_origin TEXT DEFAULT 'unknown'"
-        )
-        # Anthropic prompt-cache TTL attribution (additive, backward-compatible).
-        # Older rows have NULL/0 here; readers must COALESCE for aggregation.
-        _apply_schema_migration(
+        _apply_missing_schema_migrations(
             conn,
-            "ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_1h_tokens INTEGER DEFAULT 0",
+            "requests",
+            (
+                (
+                    "injected_tokens",
+                    "ALTER TABLE requests ADD COLUMN injected_tokens INTEGER DEFAULT 0",
+                ),
+                (
+                    "injected_sources",
+                    "ALTER TABLE requests ADD COLUMN injected_sources TEXT DEFAULT ''",
+                ),
+                (
+                    "cache_read_tokens",
+                    "ALTER TABLE requests ADD COLUMN cache_read_tokens INTEGER DEFAULT 0",
+                ),
+                (
+                    "cache_creation_tokens",
+                    "ALTER TABLE requests ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0",
+                ),
+                (
+                    "would_have_saved",
+                    "ALTER TABLE requests ADD COLUMN would_have_saved INTEGER DEFAULT 0",
+                ),
+                (
+                    "cache_origin",
+                    "ALTER TABLE requests ADD COLUMN cache_origin TEXT DEFAULT 'unknown'",
+                ),
+                (
+                    "cache_creation_ephemeral_1h_tokens",
+                    "ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_1h_tokens INTEGER DEFAULT 0",
+                ),
+                (
+                    "cache_creation_ephemeral_5m_tokens",
+                    "ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_5m_tokens INTEGER DEFAULT 0",
+                ),
+                (
+                    "ttl_attribution",
+                    "ALTER TABLE requests ADD COLUMN ttl_attribution TEXT DEFAULT NULL",
+                ),
+                ("user_id", "ALTER TABLE requests ADD COLUMN user_id TEXT DEFAULT ''"),
+                (
+                    "reasoning_tokens",
+                    "ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "visible_output_tokens",
+                    "ALTER TABLE requests ADD COLUMN visible_output_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "total_billable_tokens",
+                    "ALTER TABLE requests ADD COLUMN total_billable_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "reasoning_effort",
+                    "ALTER TABLE requests ADD COLUMN reasoning_effort TEXT DEFAULT ''",
+                ),
+                (
+                    "reasoning_usage_source",
+                    "ALTER TABLE requests ADD COLUMN reasoning_usage_source TEXT DEFAULT ''",
+                ),
+                (
+                    "provider_usage_ref",
+                    "ALTER TABLE requests ADD COLUMN provider_usage_ref TEXT DEFAULT ''",
+                ),
+                (
+                    "provider_usage_provider",
+                    "ALTER TABLE requests ADD COLUMN provider_usage_provider TEXT DEFAULT ''",
+                ),
+                (
+                    "provider_input_tokens",
+                    "ALTER TABLE requests ADD COLUMN provider_input_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "provider_output_tokens",
+                    "ALTER TABLE requests ADD COLUMN provider_output_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "provider_cache_read_tokens",
+                    "ALTER TABLE requests ADD COLUMN provider_cache_read_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "provider_cache_creation_tokens",
+                    "ALTER TABLE requests ADD COLUMN provider_cache_creation_tokens INTEGER DEFAULT NULL",
+                ),
+                (
+                    "provider_usage_source",
+                    "ALTER TABLE requests ADD COLUMN provider_usage_source TEXT DEFAULT ''",
+                ),
+                (
+                    "provider_usage_confidence",
+                    "ALTER TABLE requests ADD COLUMN provider_usage_confidence TEXT DEFAULT ''",
+                ),
+                (
+                    "reasoning_effort_source",
+                    "ALTER TABLE requests ADD COLUMN reasoning_effort_source TEXT DEFAULT ''",
+                ),
+                (
+                    "reasoning_effort_raw",
+                    "ALTER TABLE requests ADD COLUMN reasoning_effort_raw TEXT DEFAULT ''",
+                ),
+                (
+                    "cost_basis",
+                    "ALTER TABLE requests ADD COLUMN cost_basis TEXT DEFAULT ''",
+                ),
+                (
+                    "pricing_source",
+                    "ALTER TABLE requests ADD COLUMN pricing_source TEXT DEFAULT ''",
+                ),
+                ("stream_mode", "ALTER TABLE requests ADD COLUMN stream_mode TEXT DEFAULT ''"),
+                (
+                    "event_transform_applied",
+                    "ALTER TABLE requests ADD COLUMN event_transform_applied INTEGER DEFAULT 0",
+                ),
+                ("agent_id", "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''"),
+                ("cycle_id", "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''"),
+                (
+                    "attribution_source",
+                    "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT ''",
+                ),
+                ("stop_reason", "ALTER TABLE requests ADD COLUMN stop_reason TEXT DEFAULT ''"),
+                (
+                    "started_at",
+                    "ALTER TABLE requests ADD COLUMN started_at TEXT DEFAULT NULL",
+                ),
+                (
+                    "ttfb_ms",
+                    "ALTER TABLE requests ADD COLUMN ttfb_ms INTEGER DEFAULT NULL",
+                ),
+                (
+                    "stream_duration_ms",
+                    "ALTER TABLE requests ADD COLUMN stream_duration_ms INTEGER DEFAULT NULL",
+                ),
+            ),
         )
-        _apply_schema_migration(
-            conn,
-            "ALTER TABLE requests ADD COLUMN cache_creation_ephemeral_5m_tokens INTEGER DEFAULT 0",
-        )
-        _apply_schema_migration(
-            conn, "ALTER TABLE requests ADD COLUMN ttl_attribution TEXT DEFAULT NULL"
-        )
-        # P0-06 (A6): user_id holds the SHA-256 hex of the proxy auth bearer
-        # token when the proxy auth gate accepted the request via the bearer
-        # path. Empty string for localhost / pre-A6 rows. Hash only — never the
-        # raw token.
-        _apply_schema_migration(conn, "ALTER TABLE requests ADD COLUMN user_id TEXT DEFAULT ''")
-        # Reasoning-usage columns (Provider-Native Compatibility Foundation,
-        # Packet A 2026-05-16). Populated by the dynamic per-provider parser
-        # registry under tokenpak.services.providers. Null/0 for pre-feature
-        # rows and for providers without reasoning usage surfaces.
-        for _alter in (
-            "ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER DEFAULT NULL",
-            "ALTER TABLE requests ADD COLUMN visible_output_tokens INTEGER DEFAULT NULL",
-            "ALTER TABLE requests ADD COLUMN total_billable_tokens INTEGER DEFAULT NULL",
-            "ALTER TABLE requests ADD COLUMN reasoning_effort TEXT DEFAULT ''",
-            "ALTER TABLE requests ADD COLUMN reasoning_usage_source TEXT DEFAULT ''",
-            "ALTER TABLE requests ADD COLUMN provider_usage_ref TEXT DEFAULT ''",
-        ):
-            _apply_schema_migration(conn, _alter)
-        # Stream-mode telemetry columns (Provider-Native Compatibility
-        # Foundation, Packet D 2026-05-16). Populated when the stream
-        # translator or byte-passthrough decision path resolves; empty
-        # string for non-streaming or pre-feature rows.
-        for _alter in (
-            "ALTER TABLE requests ADD COLUMN stream_mode TEXT DEFAULT ''",
-            "ALTER TABLE requests ADD COLUMN event_transform_applied INTEGER DEFAULT 0",
-        ):
-            _apply_schema_migration(conn, _alter)
-        # D5 (finishes Fix A): agent/cycle attribution columns on requests.
-        # agent_id <- X-Tokenpak-Agent header; cycle_id <- X-Tokenpak-Cycle
-        # (no caller sets X-Tokenpak-Cycle yet -> '' sentinel, classified
-        # 'unknown', never fabricated). Idempotent — columns may pre-exist
-        # from a peer migration. Telemetry contract: '' sentinel, not NULL.
-        for _alter in (
-            "ALTER TABLE requests ADD COLUMN agent_id TEXT DEFAULT ''",
-            "ALTER TABLE requests ADD COLUMN cycle_id TEXT DEFAULT ''",
-            # attribution_source <- platform-origin extractor (Path C). Non-empty
-            # only when origin is genuinely known; '' sentinel otherwise (never
-            # fabricated). Idempotent — may pre-exist from a peer migration.
-            "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT ''",
-        ):
-            _apply_schema_migration(conn, _alter)
-        # Provider execution truth: stop_reason observed on the response path
-        # (non-streaming JSON `stop_reason`; SSE `message_delta.delta.stop_reason`).
-        # Makes a refusal returned as HTTP 200 distinguishable from a successful
-        # completion on receipt rows. '' sentinel = not observed (legacy rows,
-        # errored/truncated streams) - never fabricated. Idempotent.
-        _apply_schema_migration(conn, "ALTER TABLE requests ADD COLUMN stop_reason TEXT DEFAULT ''")
-        conn.commit()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS budget_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -488,7 +700,6 @@ class Monitor:
                 triggered INTEGER DEFAULT 1
             )
         """)
-        conn.commit()
         # Duplicate-alert guard: at most one budget alert per (local day,
         # period). Pre-existing duplicates from the old check-then-insert
         # race are collapsed to the earliest row so the unique index can be
@@ -502,7 +713,6 @@ class Monitor:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_alerts_day_period "
                 "ON budget_alerts(date(timestamp), period)"
             )
-            conn.commit()
         except sqlite3.OperationalError as exc:
             # Expression indexes need a modern SQLite; without the index the
             # INSERT ... WHERE NOT EXISTS guard still bounds duplicates.
@@ -512,13 +722,13 @@ class Monitor:
             )
 
         # session_id on requests + mutation_audit table
-        try:
-            from tokenpak.proxy.db import ensure_schema as _ccg02_ensure_schema
+        from tokenpak.proxy.db import ensure_schema as _ccg02_ensure_schema
 
-            _ccg02_ensure_schema(conn)
-            conn.commit()
-        except Exception as e:
-            print(f"⚠️  schema migration error (non-fatal): {e}")
+        # Every failure is fatal to this transaction.  Downgrading an
+        # unexpected programming or schema error to a warning would commit a
+        # partially initialized database and defer the failure to later writes.
+        _ccg02_ensure_schema(conn)
+        conn.commit()
 
         # Run migrations to bring DB schema up to current version
         try:
@@ -573,6 +783,28 @@ class Monitor:
         cycle_id: str = "",
         attribution_source: str = "",
         stop_reason: str = "",
+        reasoning_tokens: int | None = None,
+        visible_output_tokens: int | None = None,
+        total_billable_tokens: int | None = None,
+        reasoning_effort: str = "",
+        reasoning_usage_source: str = "",
+        provider_usage_ref: str = "",
+        provider_usage_provider: str = "",
+        provider_input_tokens: int | None = None,
+        provider_output_tokens: int | None = None,
+        provider_cache_read_tokens: int | None = None,
+        provider_cache_creation_tokens: int | None = None,
+        provider_usage_source: str = "",
+        provider_usage_confidence: str = "",
+        reasoning_effort_source: str = "",
+        reasoning_effort_raw: str = "",
+        cost_basis: str = "",
+        pricing_source: str = "",
+        stream_mode: str = "",
+        event_transform_applied: bool = False,
+        started_at: str | None = None,
+        ttfb_ms: int | None = None,
+        stream_duration_ms: int | None = None,
     ) -> None:
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -612,14 +844,39 @@ class Monitor:
             cycle_id or "",
             attribution_source or "",
             stop_reason or "",
+            reasoning_tokens,
+            visible_output_tokens,
+            total_billable_tokens,
+            reasoning_effort or "",
+            reasoning_usage_source or "",
+            provider_usage_ref or "",
+            provider_usage_provider or "",
+            provider_input_tokens,
+            provider_output_tokens,
+            provider_cache_read_tokens,
+            provider_cache_creation_tokens,
+            provider_usage_source or "",
+            provider_usage_confidence or "",
+            reasoning_effort_source or "",
+            reasoning_effort_raw or "",
+            cost_basis or "",
+            pricing_source or "",
+            stream_mode or "",
+            int(bool(event_transform_applied)),
+            started_at,
+            ttfb_ms,
+            stream_duration_ms,
         )
         _queued = False
         try:
-            queue = _DB_WRITE_QUEUE
-            if queue is None:
-                raise RuntimeError("database write queue is not initialized")
-            queue.put_nowait((self.db_path, insert_params))
-            _queued = True
+            # Serialize admission with stop/init so no row can land behind a
+            # poison pill or enter a generation after its stop was requested.
+            with _DB_QUEUE_LOCK:
+                queue = _DB_WRITE_QUEUE
+                if queue is None or _DB_BACKGROUND_STOP.is_set():
+                    raise RuntimeError("database write queue is not accepting rows")
+                queue.put_nowait((self.db_path, insert_params))
+                _queued = True
         except (NameError, Exception):
             # Queue full / uninitialized / stopped: write synchronously through
             # the SAME guarded path the async writer uses (persistent
@@ -654,10 +911,13 @@ class Monitor:
         Returns True when the write queue fully drained within ``timeout``
         seconds. Does not stop the background writer; safe to call any time.
         """
-        q = _DB_WRITE_QUEUE
+        with _DB_QUEUE_LOCK:
+            q = _DB_WRITE_QUEUE
+            thread = _DB_BACKGROUND_THREAD
         if q is None:
             return True
-        return _wait_for_queue_drain(q, time.monotonic() + timeout)
+        drained = _wait_for_queue_drain(q, time.monotonic() + timeout)
+        return drained and thread is not None and thread.is_alive()
 
     def stop(self, timeout: float = 5.0) -> bool:
         """Drain queued writes and stop the background writer thread.
@@ -764,44 +1024,53 @@ class Monitor:
             threshold_pct = 80.0
         if daily_limit <= 0:
             return
-        conn = self._read_connection()
-        try:
-            # Rows are stamped with LOCAL time (datetime.now().isoformat());
-            # the day window must be local too. Bare date('now') is UTC and
-            # would read today's spend as $0 for part of every local day.
-            spent = (
-                conn.execute(
-                    "SELECT COALESCE(SUM(estimated_cost), 0) FROM requests "
-                    "WHERE date(timestamp) = date('now', 'localtime')"
-                ).fetchone()[0]
-                or 0.0
-            )
-            total_spent = float(spent) + float(current_cost)
-            if total_spent >= daily_limit * threshold_pct / 100:
-                import datetime as _dt
-
-                # Dedupe: the UNIQUE(date(timestamp), period) index plus
-                # INSERT OR IGNORE collapse concurrent triggers into one row
-                # per local day; the NOT EXISTS guard keeps behavior bounded
-                # even on SQLite builds without expression-index support.
-                conn.execute(
-                    "INSERT OR IGNORE INTO budget_alerts "
-                    "(timestamp, period, budget_usd, spent_usd, pct_used, triggered) "
-                    "SELECT ?, ?, ?, ?, ?, ? "
-                    "WHERE NOT EXISTS (SELECT 1 FROM budget_alerts "
-                    "WHERE date(timestamp) = date('now', 'localtime') AND period = 'daily')",
-                    (
-                        _dt.datetime.now().isoformat(),
-                        "daily",
-                        daily_limit,
-                        total_spent,
-                        round(total_spent / daily_limit * 100, 2),
-                        1,
-                    ),
+        # A deferred SELECT-then-INSERT transaction can deadlock when two
+        # readers both try to upgrade to writers. Serialize all Monitor
+        # instances in this process and claim SQLite's writer slot before
+        # reading; BEGIN IMMEDIATE remains the cross-process arbiter.
+        with _BUDGET_ALERT_LOCK:
+            conn = self._read_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                # Rows are stamped with LOCAL time (datetime.now().isoformat());
+                # the day window must be local too. Bare date('now') is UTC and
+                # would read today's spend as $0 for part of every local day.
+                spent = (
+                    conn.execute(
+                        "SELECT COALESCE(SUM(estimated_cost), 0) FROM requests "
+                        "WHERE date(timestamp) = date('now', 'localtime')"
+                    ).fetchone()[0]
+                    or 0.0
                 )
+                total_spent = float(spent) + float(current_cost)
+                if total_spent >= daily_limit * threshold_pct / 100:
+                    import datetime as _dt
+
+                    # Dedupe: the UNIQUE(date(timestamp), period) index plus
+                    # INSERT OR IGNORE collapse concurrent triggers into one row
+                    # per local day; the NOT EXISTS guard keeps behavior bounded
+                    # even on SQLite builds without expression-index support.
+                    conn.execute(
+                        "INSERT OR IGNORE INTO budget_alerts "
+                        "(timestamp, period, budget_usd, spent_usd, pct_used, triggered) "
+                        "SELECT ?, ?, ?, ?, ?, ? "
+                        "WHERE NOT EXISTS (SELECT 1 FROM budget_alerts "
+                        "WHERE date(timestamp) = date('now', 'localtime') AND period = 'daily')",
+                        (
+                            _dt.datetime.now().isoformat(),
+                            "daily",
+                            daily_limit,
+                            total_spent,
+                            round(total_spent / daily_limit * 100, 2),
+                            1,
+                        ),
+                    )
                 conn.commit()
-        finally:
-            conn.close()
+            except BaseException:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
 
     def get_budget_alert_status(
         self, _daily_limit: float | None = None, _threshold_pct: float | None = None
