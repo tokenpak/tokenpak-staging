@@ -4,9 +4,9 @@
 When inbound traffic arrives at the proxy, we need to attribute it to the
 calling platform/session so wire-side telemetry can be grouped by the
 operator-visible conversation. Path C uses a filesystem rendezvous: the
-``openclaw-adapter`` hook writes the active session UUID to
-``~/.openclaw/sessions/active.json``; this module reads it on traffic
-keyed by ``User-Agent: openclaw*``.
+``openclaw-adapter`` hook writes the active session UUID to OpenClaw's
+user-owned active-session file; this module reads it on traffic keyed by
+``User-Agent: openclaw*``.
 
 Public surface
 --------------
@@ -141,7 +141,7 @@ _cache_read_ts = 0.0
 
 
 def _read_active_json() -> Optional[dict[str, object]]:
-    """Read and parse ``~/.openclaw/sessions/active.json``.
+    """Read and parse OpenClaw's user-owned active-session file.
 
     Returns the parsed dict on success, or ``None`` when the file is
     absent, unreadable, or malformed. Never raises.

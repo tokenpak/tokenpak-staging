@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-08T22:44:53Z",
-  "package_version": "1.18.5",
+  "generated_at": "2026-08-27T00:13:43Z",
+  "package_version": "1.21.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -2149,6 +2149,10 @@
     },
     {
       "module": "tokenpak.companion.codex.mcp_config",
+      "name": "python_spawn_prefix"
+    },
+    {
+      "module": "tokenpak.companion.codex.mcp_config",
       "name": "register"
     },
     {
@@ -2314,6 +2318,10 @@
     {
       "module": "tokenpak.companion.launcher",
       "name": "main"
+    },
+    {
+      "module": "tokenpak.companion.launcher",
+      "name": "python_spawn_prefix"
     },
     {
       "module": "tokenpak.companion.mcp.server",
@@ -4445,6 +4453,22 @@
     },
     {
       "module": "tokenpak.core.contracts",
+      "name": "SESSION_ECONOMICS_SCHEMA_VERSION"
+    },
+    {
+      "module": "tokenpak.core.contracts",
+      "name": "SessionEconomics"
+    },
+    {
+      "module": "tokenpak.core.contracts",
+      "name": "SessionEconomicsContractError"
+    },
+    {
+      "module": "tokenpak.core.contracts",
+      "name": "UnsupportedSessionEconomicsVersion"
+    },
+    {
+      "module": "tokenpak.core.contracts",
       "name": "error"
     },
     {
@@ -4482,6 +4506,114 @@
     {
       "module": "tokenpak.core.contracts.measured",
       "name": "unavailable"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "BindingConstraint"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "BurnSlope"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "CacheState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "CostBasis"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "CostValue"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "Coverage"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "DriftState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "Forecast"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "ForecastStatus"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "GuardState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "IntervalEstimate"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "ModelRef"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "NumericValue"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "PriceFreshness"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "RateProvenance"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "Runway"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "RunwayStatus"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "SCHEMA_VERSION"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "SessionEconomics"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "SessionEconomicsContractError"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "SessionFacts"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "SessionRef"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "SessionState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "UnsupportedSessionEconomicsVersion"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "ValueState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics_renderer",
+      "name": "render_block"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics_renderer",
+      "name": "render_line"
     },
     {
       "module": "tokenpak.core.cooldown",
@@ -9392,6 +9524,10 @@
       "name": "estimate_ttfb_ms"
     },
     {
+      "module": "tokenpak.proxy.forecast_endpoint",
+      "name": "resolve_default_session_id"
+    },
+    {
       "module": "tokenpak.proxy.handlers",
       "name": "rate_limit"
     },
@@ -9426,6 +9562,34 @@
     {
       "module": "tokenpak.proxy.headers",
       "name": "sanitize_headers"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_endpoint",
+      "name": "build_response"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "finish"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "mark_ttfb"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "register"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "reset_for_testing"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "snapshot"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "update_output_tokens"
     },
     {
       "module": "tokenpak.proxy.intelligence",
@@ -10632,6 +10796,90 @@
       "name": "decompress_chunk"
     },
     {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "COMPLETION_IDLE_SECONDS"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "CellReadiness"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "HistorySession"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "KMAX"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "MIN_CELL_SESSIONS"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "MIN_SCORED_POINTS"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "PRIOR_VERSION"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "build_calibrated_forecast"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "cell_readiness"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "read_history"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "walk_forward_coverage"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_CLOSE"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_OPEN_PREFIX"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_VERSION"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "contains_marker"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "decorate_response_body"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "is_injection_enabled"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "maybe_decorate_response"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "scrub_request_body"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "strip_markers"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "wrap_marker"
+    },
+    {
       "module": "tokenpak.proxy.shadow_hook",
       "name": "DEFAULT_LEDGER_PATH"
     },
@@ -11162,6 +11410,10 @@
     {
       "module": "tokenpak.proxy.stats_api",
       "name": "get_stats_storage"
+    },
+    {
+      "module": "tokenpak.proxy.streaming",
+      "name": "IncrementalUsageTracker"
     },
     {
       "module": "tokenpak.proxy.streaming",

@@ -6,7 +6,7 @@ Level 3).
 Exposes:
     * :class:`PlatformOrigin` — dataclass returned by extractors.
     * :func:`_openclaw_extract` — Path C reader that resolves the active
-      OpenClaw session from ``~/.openclaw/sessions/active.json``.
+      OpenClaw session from its user-owned state file.
 """
 
 from tokenpak.services.routing_service.platform_bridge import (

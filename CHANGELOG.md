@@ -6,6 +6,293 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-08-26
+
+This backward-compatible minor release adds facts-only request timing and
+live in-flight visibility, plus an optional client-return session-economics
+decoration. It also corrects forecast calibration, downstream-disconnect
+accounting, and release-gate schema capture.
+
+### Added
+
+- The proxy records each request's UTC start time, time to first upstream
+  byte, and stream duration in additive nullable monitor columns. Cleartext
+  SSE responses also expose their latest provider-reported output-token count
+  while the request is active. An auth-gated, read-only `GET /inflight`
+  endpoint reports these facts and any projection already computed at
+  admission; it does not calculate an ETA or mutate accounting state.
+- An opt-in, default-off session-economics decoration can append the existing
+  one-line rendering to the client copy of an eligible non-streaming response.
+  A versioned marker is removed from echoed assistant history before replay,
+  while provider bytes and accounting inputs continue to use undecorated
+  content.
+
+### Fixed
+
+- Session-forecast calibration now validates that coverage targets match the
+  statistic actually measured, includes per-turn cost shape in readiness
+  cache keys, and reads ledger fingerprints and scoring corpora from one
+  consistent transaction.
+- Downstream `BrokenPipeError` and `ConnectionResetError` outcomes are recorded
+  as client disconnects instead of synthetic HTTP 502 or provider failures.
+  Genuine upstream and internal errors retain their existing failure path.
+- The release-gate SQLite schema generator now materializes clean telemetry,
+  Spend Guard, and proxy monitor stores in an isolated temporary directory.
+  Snapshot generation no longer reads ambient user databases, and the monitor
+  schema is included in drift detection.
+- The legacy stats snapshot now writes to TokenPak's product-owned vault state
+  directory instead of a retired private vault layout.
+- Public API snapshot generation now excludes two optional third-party aliases
+  in both installed-extra and dependency-absent environments, preventing
+  environment-dependent phantom exports without changing TokenPak's API.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.21.0"
+```
+
+No manual configuration migration is required. Existing proxy monitor stores
+gain nullable timing columns through the additive migration. The optional
+client-return decoration remains disabled unless explicitly enabled.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.20.0"
+```
+
+The release introduces no destructive state migration. Existing readers
+remain compatible with the additive nullable monitor columns.
+
+### Compatibility
+
+- The public API snapshot contains 4,697 symbols: 18 additive exports and zero
+  removals relative to v1.20.0. The additions comprise the in-flight endpoint
+  builder, six in-flight registry functions, ten session-economics decoration
+  exports, and `IncrementalUsageTracker`.
+- Live mid-stream output usage is available for cleartext SSE. Compressed SSE
+  retains its existing persisted end-of-stream usage path but does not expose
+  a live incremental count.
+- No existing public symbol is removed or reclassified. No breaking changes or
+  deprecations are introduced.
+
+## [1.20.0] — 2026-08-17
+
+This backward-compatible minor release adds a deterministic session trip
+computer to the default read surfaces, layers a calibrated
+remaining-consumption forecast on top of it, and refreshes the model pricing
+catalog for the current Claude model generation.
+
+### Added
+
+- A deterministic session trip computer renders on every default read
+  surface: a one-line and full-block status rendering, a dashboard section
+  and snapshot field, and a read-only tool shared by both supported agent
+  clients. All surfaces are thin adapters over one validated contract and one
+  shared renderer, and the proxy selects a default session automatically
+  when none is supplied. A restart-proof regression suite verifies the new
+  surfaces change no provider bytes and no accounting inputs across a full
+  process restart.
+- A calibrated remaining-consumption forecast layers onto the trip computer:
+  a dependency-free split-conformal quantile engine over finished local
+  sessions produces a central 50% remaining-token range, a one-sided 90%
+  ceiling, an expected-turn range, measured walk-forward coverage with drift
+  awareness, and a guard-aligned block probability. Cold cells render an
+  honest learning state instead of a number; stale or unknown rates leave
+  USD unavailable while token ranges stay intact.
+
+### Fixed
+
+- The model pricing catalog now prices the current Claude model
+  generation — Fable 5, Opus 5, and Sonnet 5 — with matching context
+  windows, and corrects a Haiku pricing row that had been seeded as a
+  byte-identical copy of an older model's rates. A new catalog-integrity
+  test suite makes this class of staleness CI-detectable going forward
+  without hardcoding a model-name enumeration: every model the proxy serves
+  by default must resolve to explicit priced data with a known context
+  window, and every served model must carry positive pricing.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.20.0"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.3"
+```
+
+The release introduces no destructive state migration. Artifact-level
+upgrade and rollback verification is part of the release gate.
+
+### Compatibility
+
+- The public API snapshot contains 4,679 symbols: 14 additive session
+  trip-computer exports (a new `tokenpak.proxy.session_forecast_calibration`
+  module plus three additions on existing modules) and zero removals
+  relative to v1.19.3.
+- No existing public symbol is removed or reclassified. No breaking changes
+  are introduced.
+
+## [1.19.3] — 2026-08-17
+
+This backward-compatible patch repairs the release gate itself and supersedes
+v1.19.2, whose tag never produced published artifacts.
+
+### Fixed
+
+- The public-API snapshot's CrewAI example import-error sentinel is restored to
+  the value a clean build environment produces. The v1.19.2 preparation
+  regenerated the snapshot in an environment carrying a stale locally installed
+  integration package, so the release gate's snapshot check failed at the tag
+  build and no v1.19.2 artifact was published. The snapshot again matches a
+  clean environment deterministically; the symbol count remains 4,665 with no
+  additions or removals relative to the v1.19.2 candidate.
+
+### Notes
+
+- v1.19.2 was tagged but never published: the release gate stopped the build
+  before any distribution, GitHub Release, or index upload existed. Its
+  changes (Python 3.10 launcher compatibility and release-to-site sequencing)
+  ship in this release.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.3"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.1"
+```
+
+(v1.19.2 has no published artifact to roll back to.)
+
+## [1.19.2] — 2026-08-16
+
+This backward-compatible patch keeps companion launches working on Python 3.10
+and makes post-release site synchronization follow the completed GitHub Release
+instead of racing package publication.
+
+### Fixed
+
+- Companion MCP configuration and fallback-hook launches now build their child
+  interpreter command from the exact running Python executable. The `-P`
+  safe-path flag is used only on Python 3.11 and newer, so supported Python 3.10
+  installations no longer fail on an unavailable interpreter option.
+- Successful release runs now notify the site only after the GitHub Release is
+  complete, include the released tag and commit metadata, and keep the existing
+  scheduled/manual synchronization fallback when cross-repository credentials
+  are unavailable.
+- Release metadata now records the two interpreter-prefix helper exports added
+  by the launcher compatibility repair. The public API snapshot contains 4,665
+  symbols, with two additive helpers and zero removals relative to v1.19.1.
+- Release validation now carries pinned build frontend and backend versions in
+  the frozen development environment, keeping offline artifact receipts
+  independent of unrecorded host tooling.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.2"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.1"
+```
+
+This release introduces no destructive state or schema migration.
+
+## [1.19.1] — 2026-08-15
+
+This patch release fixes interactive Codex clients (0.147 and newer) stalling
+at startup when routed through the local proxy with a subscription sign-in.
+
+### Fixed
+
+- The proxy's `/v1/models` endpoint now forwards subscription-authenticated
+  model-catalog requests to the subscription backend with the caller's own
+  credential, instead of returning an empty catalog. Newer interactive Codex
+  clients require a non-empty model list from their configured provider before
+  the session proceeds; against the previous empty reply they parked at the
+  model-availability step and silently re-polled. Verified end to end: an
+  interactive 0.147.0 client against the fixed proxy lists the full catalog
+  and starts normally, and non-interactive `exec` runs (which were never
+  affected) continue to work unchanged.
+- Credential routing for catalog requests is strict: requests carrying
+  Anthropic headers keep their existing route and reply, API-key clients still
+  list from the platform endpoint, and no credential is ever forwarded to a
+  backend of a different provider. Regression tests pin each of these paths at
+  both the routing and handler layers.
+
+## [1.19.0] — 2026-08-12
+
+This backward-compatible minor release adds a versioned session-economics
+contract and a deterministic runway view while preserving unknown usage and
+pricing facts instead of inventing certainty.
+
+### Added
+
+- The immutable `session-economics/1` contract exposes session facts, measured
+  values, estimates, provenance, forecasts, guard state, and runway through 29
+  additive Python symbols. Value states distinguish measured, estimated,
+  unavailable, and error results; existing public symbols are unchanged.
+- The proxy exposes `/v1/messages/session-economics`, a deterministic local
+  view of session runway that does not call a model provider. Context soft and
+  hard limits, request or dollar budgets, and rolling caps are evaluated
+  conservatively; the binding constraint is reported explicitly.
+- Provider usage ledgers retain the source and quality of token-usage facts
+  supplied by supported providers. Missing usage remains unknown rather than
+  being coerced to zero.
+
+### Fixed
+
+- Re-ingesting an already wrapped Pak envelope preserves a single stable
+  envelope instead of nesting another wrapper around it.
+- Proxy monitor writers now keep their database association and lifecycle
+  stable across concurrent requests and shutdown flushing.
+- Proxy test fixtures use isolated ephemeral ports, preventing unrelated test
+  processes from colliding on fixed listeners.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.0"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.5"
+```
+
+The release introduces no destructive state migration. Artifact-level upgrade
+and rollback verification is part of the release gate.
+
+### Compatibility
+
+- The public API snapshot contains 4,663 symbols: 29 additive
+  session-economics exports and zero removals relative to v1.18.5.
+- Existing proxy request and response routes remain compatible. The new
+  endpoint and Python contract are additive, and unknown or insufficient facts
+  produce explicit learning, unavailable, or error states instead of fabricated
+  numeric values.
+
 ## [1.18.5] — 2026-08-08
 
 This compatible patch reduces companion recall overhead and locks the
