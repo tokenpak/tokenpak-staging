@@ -276,6 +276,9 @@ class _SessionState(TypedDict):
     cache_read_proxy: int
     cache_read_unknown: int
     ingest_entries: int
+    injected_tokens: int
+    injection_hits: int
+    injected_source_names: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +638,9 @@ def _new_session() -> _SessionState:
         "cache_read_proxy": 0,
         "cache_read_unknown": 0,
         "ingest_entries": 0,
+        "injected_tokens": 0,
+        "injection_hits": 0,
+        "injected_source_names": [],
     }
 
 
@@ -845,38 +851,53 @@ def _read_injection_receipt(result: object) -> tuple[int, str]:
 
     Returns ``(0, "")`` when the stage is absent or was skipped — a measured
     zero, not a default.
+
+    Fail-open at the function boundary, not just at the call site: a
+    malformed or adversarial ``result`` (a non-dict ``details`` — the
+    "valid non-object JSON" shape, e.g. ``details`` deserialized as a list
+    or scalar instead of an object — a raising attribute, wrong-shaped
+    stages) yields the same measured-zero default a non-injecting request
+    reports, never a raised exception. Telemetry must never break a request.
     """
-    stages = getattr(result, "stages", None) or []
-    for stage in stages:
-        if getattr(stage, "name", "") != _VAULT_STAGE_NAME:
-            continue
-        if getattr(stage, "skipped", False):
-            return 0, ""
-        details = getattr(stage, "details", None) or {}
-        tokens = details.get("injected_tokens", 0)
-        sources = details.get("injected_sources", "")
-        try:
-            tokens = int(tokens)
-        except (TypeError, ValueError):
-            tokens = 0
-        if isinstance(sources, (list, tuple)):
-            sources = ",".join(str(s) for s in sources if s)
-        elif not isinstance(sources, str):
-            sources = str(sources) if sources else ""
-        return tokens, sources
-    return 0, ""
+    try:
+        stages = getattr(result, "stages", None) or []
+        for stage in stages:
+            if getattr(stage, "name", "") != _VAULT_STAGE_NAME:
+                continue
+            if getattr(stage, "skipped", False):
+                return 0, ""
+            details = getattr(stage, "details", None)
+            if not isinstance(details, dict):
+                return 0, ""
+            tokens = details.get("injected_tokens", 0)
+            sources = details.get("injected_sources", "")
+            try:
+                tokens = int(tokens)
+            except (TypeError, ValueError):
+                tokens = 0
+            if isinstance(sources, (list, tuple)):
+                sources = ",".join(str(s) for s in sources if s)
+            elif not isinstance(sources, str):
+                sources = str(sources) if sources else ""
+            return tokens, sources
+        return 0, ""
+    except Exception:
+        return 0, ""
 
 
 #: Upper bound on distinct source names retained on the session for display.
 _MAX_SESSION_SOURCES = 20
 
 
-def _record_injection_in_session(injected_tokens: int, injected_sources: str = "") -> None:
-    """Accumulate injection totals onto the live session.
+def _record_injection_in_session(
+    session: dict[str, object], injected_tokens: int, injected_sources: str = ""
+) -> None:
+    """Accumulate injection totals onto ``ProxyServer.session`` — the dict that
+    backs request accounting and ``GET /stats``, which is what ``tokenpak
+    status`` actually reads (via the ``session`` key of the ``/stats`` payload).
 
-    ``tokenpak status`` reads ``injected_tokens`` and ``injection_hits`` from the
-    session dict. Neither had a writer anywhere in the tree, so both were phantom
-    reads that always returned their defaults.
+    Neither ``injected_tokens`` nor ``injection_hits`` had a writer anywhere in
+    the tree, so both were phantom reads that always returned their defaults.
 
     ``injection_hits`` counts requests that actually injected, so the rendered
     "N tokens across M requests" describes injecting requests rather than all
@@ -885,26 +906,28 @@ def _record_injection_in_session(injected_tokens: int, injected_sources: str = "
     Distinct source names are retained (bounded by ``_MAX_SESSION_SOURCES``) so
     the receipt can name what was added, not merely how much. Insertion order is
     preserved and the cap drops the oldest — an unbounded set here would grow
-    with session length.
+    with session length. Updates always rebind ``session["injected_source_names"]``
+    to a freshly built list rather than mutating one in place, so a concurrent
+    ``session.copy()`` (``ProxyServer.stats()`` takes a shallow copy under the
+    session lock) never observes a list being appended to after it was copied.
 
-    Best-effort: telemetry must never affect a request.
+    Caller must hold the session lock (``ProxyServer._session_lock``) — this
+    function does no locking of its own, matching every other session-counter
+    update at the call site. Best-effort: telemetry must never affect a request.
     """
     if injected_tokens <= 0:
         return
     try:
-        from tokenpak.core.runtime.proxy import SESSION as _session
-
-        _session["injected_tokens"] = int(_session.get("injected_tokens", 0)) + injected_tokens
-        _session["injection_hits"] = int(_session.get("injection_hits", 0)) + 1
+        session["injected_tokens"] = int(session.get("injected_tokens", 0)) + injected_tokens
+        session["injection_hits"] = int(session.get("injection_hits", 0)) + 1
 
         if injected_sources:
-            seen = _session.get("injected_source_names")
-            if not isinstance(seen, list):
-                seen = []
+            seen = session.get("injected_source_names")
+            updated = list(seen) if isinstance(seen, list) else []
             for name in (s.strip() for s in injected_sources.split(",")):
-                if name and name not in seen:
-                    seen.append(name)
-            _session["injected_source_names"] = seen[-_MAX_SESSION_SOURCES:]
+                if name and name not in updated:
+                    updated.append(name)
+            session["injected_source_names"] = updated[-_MAX_SESSION_SOURCES:]
     except Exception:
         pass  # fail-open: never break a request over telemetry
 
@@ -1870,9 +1893,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # computes these and they were previously dropped here, which left
                     # `tokenpak status` reporting "0 across 0 requests" forever while
                     # injection was working. Reported values must come from the stage
-                    # that did the work, never from a default.
+                    # that did the work, never from a default. The session write
+                    # happens later, under `ps._session_lock`, alongside every other
+                    # per-request counter update — not here.
                     _injected_tokens, _injected_sources = _read_injection_receipt(_result)
-                    _record_injection_in_session(_injected_tokens, _injected_sources)
                 except Exception:
                     pass  # fail-open: vault injection failure must never break a request
             else:
@@ -2713,6 +2737,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         ps.session["cache_read_client"] += cache_read_tokens
                     else:
                         ps.session["cache_read_proxy"] += cache_read_tokens
+                    # Vault-injection receipt onto the *real* session `tokenpak
+                    # status` reads (via GET /stats), not the compatibility
+                    # global — see _record_injection_in_session.
+                    _record_injection_in_session(ps.session, _injected_tokens, _injected_sources)
 
                 # Persist to monitor.db so `tokenpak status`, dashboards, and
                 # cross-session reporting see this request. Async write queue
