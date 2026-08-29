@@ -96,6 +96,14 @@ class TestEstimateTokens(unittest.TestCase):
         # Should fall back to len(body) // 4
         self.assertEqual(result, len(body) // 4)
 
+    def test_non_ascii_content_uses_parsed_character_count(self):
+        """Regression: recognized JSON uses chars/4, not raw UTF-8 bytes/4."""
+        body = json.dumps(
+            {"messages": [{"role": "user", "content": "é" * 8}]}, ensure_ascii=False
+        ).encode()
+        self.assertEqual(_estimate_tokens(body), 2)
+        self.assertNotEqual(_estimate_tokens(body), len(body) // 4)
+
     def test_empty_body(self):
         result = _estimate_tokens(b"")
         self.assertEqual(result, 0)

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from tokenpak.vault import indexer as indexer_module
 from tokenpak.vault.blocks import BlockStore
 from tokenpak.vault.indexer import VaultIndexer
 from tokenpak.vault.symbols import SymbolTable
@@ -9,6 +10,42 @@ from tokenpak.vault.symbols import SymbolTable
 
 def _make_indexer() -> VaultIndexer:
     return VaultIndexer(block_store=BlockStore(":memory:"), symbol_table=SymbolTable())
+
+
+@pytest.mark.quick
+def test_sync_stats_uses_vault_product_state_directory(tmp_path: Path, monkeypatch):
+    state_dir = tmp_path / "vault" / ".tokenpak"
+    entries_dir = state_dir / "entries"
+    state_dir.mkdir(parents=True)
+
+    class Monitor:
+        def get_stats(self, hours: int = 24) -> dict[str, object]:
+            return {"requests": 1}
+
+        def get_by_model(self) -> dict[str, dict[str, object]]:
+            return {}
+
+    from tokenpak.core.runtime import proxy as runtime_proxy
+
+    monkeypatch.setattr(indexer_module, "INGEST_ENTRIES_DIR", entries_dir)
+    monkeypatch.setattr(runtime_proxy, "MONITOR", Monitor(), raising=False)
+    monkeypatch.setattr(
+        runtime_proxy,
+        "SESSION",
+        {
+            "start_time": 0.0,
+            "requests": 1,
+            "protected_tokens": 0,
+            "injected_tokens": 0,
+            "injection_hits": 0,
+        },
+        raising=False,
+    )
+
+    indexer_module.sync_to_vault()
+
+    assert (state_dir / "tokenpak-stats.json").is_file()
+    assert not (tmp_path / "vault" / "System" / "tokenpak-stats.json").exists()
 
 
 @pytest.mark.quick

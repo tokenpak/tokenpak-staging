@@ -1114,6 +1114,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/inflight":
+            from .inflight_endpoint import build_response as _inflight_build_response
+
+            self._send_json(_inflight_build_response())
+            return
         if path == "/stats":
             self._send_json(ps.stats())
             return
@@ -1411,6 +1416,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err_body)
                 return
+        if body:
+            # Scrub any previously-injected session-economics marker before
+            # this body is treated as provider-bound. A byte-identical
+            # no-op whenever the marker is absent (see module docstring).
+            from tokenpak.proxy.session_forecast_injection import scrub_request_body
+
+            _body_before_scrub = body
+            body = scrub_request_body(body)
+            if body is not _body_before_scrub and self.headers.get("Content-Length") is not None:
+                self.headers.replace_header("Content-Length", str(len(body)))
         _original_body = body
         _retry_policy = UpstreamRetryPolicy.from_env(
             body=body,
@@ -2121,6 +2136,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
             output_tokens = 0
             provider_usage_object: Mapping[str, object] | None = None
+
+            # Facts-only in-flight registration: started_at reuses the
+            # existing t0 anchor; ttfb/stream-duration/live output-tokens
+            # are filled in below as the request actually progresses. Gated
+            # the same as every other telemetry side effect in this handler.
+            _ttfb_ms: int | None = None
+            _stream_duration_ms: int | None = None
+            _inflight_tracker = None
+            if should_log and is_model_request:
+                from .inflight_registry import register as _inflight_register
+
+                _inflight_register(
+                    _req_id, model=model, started_at=t0, admission_ticket=_sg_admission_ticket
+                )
+
             if is_streaming:
                 # ── Streaming (SSE) path ──────────────────────────────────
                 # Use pool.stream() so the connection is kept alive after SSE ends.
@@ -2200,9 +2230,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.end_headers()
 
                                 sse_content_encoding = resp.headers.get("content-encoding", "")
+                                _stream_first_byte_time: float | None = None
+                                if should_log and is_model_request and not sse_content_encoding:
+                                    from .streaming import IncrementalUsageTracker
+
+                                    # Incremental (mid-stream) parsing only covers
+                                    # cleartext SSE — see IncrementalUsageTracker's
+                                    # docstring for why a gzip-encoded stream can't
+                                    # be tracked chunk-by-chunk. The persisted,
+                                    # end-of-stream count below is unaffected.
+                                    _inflight_tracker = IncrementalUsageTracker()
                                 for chunk in resp.iter_raw():
                                     if not chunk:
                                         continue
+                                    if _stream_first_byte_time is None:
+                                        _stream_first_byte_time = time.time()
+                                        _ttfb_ms = int((_stream_first_byte_time - t0) * 1000)
+                                        if should_log and is_model_request:
+                                            from .inflight_registry import (
+                                                mark_ttfb as _inflight_ttfb,
+                                            )
+
+                                            _inflight_ttfb(_req_id)
                                     try:
                                         self.wfile.write(chunk)
                                         self.wfile.flush()
@@ -2210,6 +2259,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         break
                                     if should_log and is_model_request:
                                         sse_buffer += chunk
+                                        if _inflight_tracker is not None:
+                                            _live_output_tokens = _inflight_tracker.feed(chunk)
+                                            from .inflight_registry import (
+                                                update_output_tokens as _inflight_update,
+                                            )
+
+                                            _inflight_update(_req_id, _live_output_tokens)
+                                if _stream_first_byte_time is not None:
+                                    _stream_duration_ms = int(
+                                        (time.time() - _stream_first_byte_time) * 1000
+                                    )
                     except _retry_policy.retryable_exceptions as _stream_exc:
                         # Once we've committed to writing to the client, can't retry —
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
@@ -2354,7 +2414,36 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("X-Request-ID", _req_id)
                 self.end_headers()
 
-                self.wfile.write(resp_body)
+                # Optional, default-off client-return decoration: a SEPARATE
+                # copy for the client write only. resp_body itself is never
+                # reassigned here, so every accounting/metrics read below
+                # continues to observe the original, undecorated bytes.
+                client_resp_body = resp_body
+                if is_model_request and not is_streaming and not _is_upstream_error:
+                    try:
+                        from tokenpak.proxy.request_pipeline import (
+                            _resolve_session_id as _rsi_inject,
+                        )
+                        from tokenpak.proxy.session_forecast_injection import (
+                            maybe_decorate_response,
+                        )
+
+                        client_resp_body = maybe_decorate_response(
+                            resp_body,
+                            # Explicit-only resolution ("" model arg means no
+                            # last-resort model-name fallback): decoration
+                            # never guesses a shared pseudo-session across
+                            # unrelated clients that both omit a session id.
+                            session_id=_rsi_inject(self.headers, ""),
+                            db_path=getattr(ps.monitor, "db_path", None)
+                            if getattr(ps, "monitor", None)
+                            else None,
+                            model_hint=model,
+                        )
+                    except Exception:
+                        client_resp_body = resp_body  # fail-open
+
+                self.wfile.write(client_resp_body)
                 self.wfile.flush()
 
                 if should_log and is_model_request:
@@ -2497,6 +2586,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         pass
                     _sg_admission_ticket = None
 
+                # Tear down the facts-only in-flight registration — this
+                # request is no longer "in flight" once its outcome is known.
+                try:
+                    from .inflight_registry import finish as _inflight_finish
+
+                    _inflight_finish(_req_id)
+                except Exception:
+                    pass
+
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
                 # otherwise the proxy touched the body and owns the markers.
@@ -2620,6 +2718,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             pricing_source=_cost_observed["pricing_source"],
                             stream_mode="sse" if is_streaming else "json",
                             event_transform_applied=_event_transform_applied,
+                            started_at=datetime.fromtimestamp(t0, tz=timezone.utc).isoformat(),
+                            ttfb_ms=_ttfb_ms,
+                            stream_duration_ms=_stream_duration_ms,
                         )
                     except Exception:
                         pass  # DB errors must never break the request
@@ -2777,16 +2878,37 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
+            # A raw socket error here means the downstream client disappeared
+            # while we were writing its response. No HTTP 502 was delivered,
+            # and the provider request did not fail. Record that transport
+            # outcome separately, then leave the generic proxy-error path
+            # untouched for genuine upstream/internal failures.
+            if _is_client_disconnect_error(exc):
+                latency_ms = int((time.time() - t0) * 1000)
+                try:
+                    log_request(
+                        request_id=_req_id,
+                        client_ip=self.client_address[0] if self.client_address else "",
+                        method=method,
+                        endpoint=parsed.path,
+                        request_body_size=content_length,
+                        response_status=0,
+                        latency_ms=latency_ms,
+                        model=model,
+                        extra={
+                            "outcome": "client_disconnect",
+                            "client_disconnected": True,
+                            "disconnect_type": type(exc).__name__,
+                        },
+                    )
+                except Exception:
+                    pass  # logging must never break the proxy
+                return
+
             # ── Circuit breaker: record failure ───────────────────────────
-            # ...unless OUR client's socket died (BrokenPipeError /
-            # ConnectionResetError writing to self.wfile). That says nothing
-            # about provider health — counting it opened the breaker for a
-            # healthy provider whenever CLIs were killed mid-response.
-            if (
-                _cb_registry is not None
-                and _cb_provider is not None
-                and not _is_client_disconnect_error(exc)
-            ):
+            # Raw downstream disconnects returned above. Every exception that
+            # reaches this point is still an upstream or internal failure.
+            if _cb_registry is not None and _cb_provider is not None:
                 _cb_registry.record_failure(_cb_provider)
 
             with ps._session_lock:
@@ -2963,15 +3085,32 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         finally:
-            # Release the outbound concurrency slot no matter how we exit.
-            if _sem_acquired:
+            # Registration is facts-only and finish() is idempotent. Keep the
+            # normal-path finish above for prompt disappearance, while this
+            # safety net covers upstream exceptions and client disconnects.
+            try:
                 try:
-                    _upstream_sem.release()
-                    _upstream_inflight_delta(_sem_provider, -1, _session_key)
-                except ValueError:
-                    # BoundedSemaphore raises if released more times than acquired;
-                    # swallow to keep the handler fail-safe.
-                    pass
+                    from .inflight_registry import finish as _inflight_finish
+
+                    _inflight_finish(_req_id)
+                except Exception:
+                    logger.warning(
+                        "in-flight registry cleanup failed for request %s",
+                        _req_id,
+                        exc_info=True,
+                    )
+                    raise
+            finally:
+                # Release the outbound concurrency slot no matter how we exit,
+                # including when registry cleanup raises above.
+                if _sem_acquired:
+                    try:
+                        _upstream_sem.release()
+                        _upstream_inflight_delta(_sem_provider, -1, _session_key)
+                    except ValueError:
+                        # BoundedSemaphore raises if released more times than acquired;
+                        # swallow to keep the handler fail-safe.
+                        pass
 
     def _handle_count_tokens(self) -> None:
         """Handle POST /v1/messages/count_tokens — compute token count locally.
@@ -3127,7 +3266,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def _handle_session_economics(self) -> None:
         """Serve deterministic completed-session economics without upstream I/O."""
         from tokenpak._paths import monitor_db
-        from tokenpak.proxy.forecast_endpoint import _build_session_economics_response
+        from tokenpak.proxy.forecast_endpoint import (
+            _build_session_economics_response,
+            resolve_default_session_id,
+        )
         from tokenpak.proxy.request_pipeline import _resolve_session_id
 
         def _send_err(
@@ -3177,11 +3319,38 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
         session_id = header_session or body_session
 
+        # Optional frozen evaluation time. This is a deterministic-replay
+        # surface: it changes only the clock the payload is evaluated at
+        # (as_of, idle, freshness), never what the ledger contains. The
+        # non-self-metering regression suite depends on it to prove that
+        # reads across a process restart are value-identical.
+        now_field = payload.get("now")
+        frozen_now: datetime | None = None
+        if now_field is not None:
+            if not isinstance(now_field, str):
+                _send_err("now must be an ISO-8601 timestamp string when provided")
+                return
+            try:
+                frozen_now = datetime.fromisoformat(now_field.replace("Z", "+00:00"))
+            except ValueError:
+                _send_err("now must be an ISO-8601 timestamp string when provided")
+                return
+            if frozen_now.tzinfo is None:
+                _send_err("now must include a timezone")
+                return
+
+        db_path = monitor_db(mode="read")
+        selection_note = ""
+        if not session_id:
+            # Proxy-owned default: latest completed non-empty ledger session.
+            session_id, selection_note = resolve_default_session_id(db_path)
+
         try:
             economics = _build_session_economics_response(
                 session_id,
-                monitor_db(mode="read"),
+                db_path,
                 model_hint=model_hint,
+                now=frozen_now,
             )
             response_body = economics.to_json().encode()
         except Exception:
@@ -3197,6 +3366,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(response_body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        if selection_note:
+            # Provenance for the proxy-owned default-session selection rides
+            # a header so the JSON body stays exactly the canonical contract.
+            self.send_header("X-TokenPak-Session-Selection", selection_note)
         self.end_headers()
         self.wfile.write(response_body)
 
