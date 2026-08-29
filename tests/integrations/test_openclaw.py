@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from tests.proxy._proxy_subprocess import free_port
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -396,7 +398,7 @@ class TestRateLimitHandling:
 
     def test_rate_limit_backoff_wait_time_increases(self):
         """RateLimitBackoff wait time grows with each attempt."""
-        # WS-D path restoration — TSR-04. The handlers tree relocated
+        # Path restoration — the handlers tree relocated
         # from tokenpak.handlers/ to tokenpak.proxy.handlers/ in commit
         # 837514caff (2026-04-20). The backwards-compat shim was removed
         # in the subsequent 17-module consolidation refactor
@@ -412,7 +414,7 @@ class TestRateLimitHandling:
 
     def test_rate_limit_backoff_respects_max_wait(self):
         """RateLimitBackoff never exceeds max_wait."""
-        # WS-D path restoration — TSR-04. The handlers tree relocated
+        # Path restoration — the handlers tree relocated
         # from tokenpak.handlers/ to tokenpak.proxy.handlers/ in commit
         # 837514caff (2026-04-20). The backwards-compat shim was removed
         # in the subsequent 17-module consolidation refactor
@@ -426,7 +428,7 @@ class TestRateLimitHandling:
 
     def test_rate_limit_backoff_uses_retry_after(self):
         """Retry-After header value is respected when provided."""
-        # WS-D path restoration — TSR-04. The handlers tree relocated
+        # Path restoration — the handlers tree relocated
         # from tokenpak.handlers/ to tokenpak.proxy.handlers/ in commit
         # 837514caff (2026-04-20). The backwards-compat shim was removed
         # in the subsequent 17-module consolidation refactor
@@ -568,7 +570,7 @@ class TestMultiAgent:
 
         # run_startup_checks returns (bool, list[str])
         # Passing an unused port to avoid conflicts
-        ok, warnings = run_startup_checks(port=19999)
+        ok, warnings = run_startup_checks(port=free_port())
         # Should return a tuple (may warn about port or deps)
         assert isinstance(ok, bool)
         assert isinstance(warnings, list)
