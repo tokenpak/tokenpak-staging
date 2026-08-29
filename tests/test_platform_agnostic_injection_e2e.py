@@ -156,8 +156,13 @@ def injection_switch_on():
 
 
 @pytest.fixture
-def vault_with_content(monkeypatch):
-    """Stub retrieval only. Adapter, json-inject application, and server stay real."""
+def vault_with_content():
+    """Stub retrieval only. Adapter, json-inject application, and server stay real.
+
+    Set through ``vault_bridge.set_vault_index_override`` — the module's own
+    explicit substitution seam — rather than monkeypatched onto
+    ``get_vault_index`` itself.
+    """
     import tokenpak.proxy.vault_bridge as vb
 
     class _Idx:
@@ -170,18 +175,24 @@ def vault_with_content(monkeypatch):
         def search(self, *a, **kw):
             return []
 
-    monkeypatch.setattr(vb, "get_vault_index", lambda *a, **kw: _Idx(), raising=False)
-    return _Idx
+    vb.set_vault_index_override(_Idx())
+    try:
+        yield _Idx
+    finally:
+        vb.set_vault_index_override(None)
 
 
 @pytest.fixture
-def vault_raises(monkeypatch):
+def vault_raises():
     """Stub retrieval to fail inside ``compile_injection``.
 
     That call is not wrapped in a try/except anywhere between it and the
     ``except Exception: pass`` around the json_inject call site in
     ``_proxy_to_inner`` — so the fail-open guarantee for this route rests
     entirely on that one wrapper. This fixture exercises exactly that seam.
+
+    Set through ``vault_bridge.set_vault_index_override`` — see
+    ``vault_with_content`` above.
     """
     import tokenpak.proxy.vault_bridge as vb
 
@@ -194,42 +205,35 @@ def vault_raises(monkeypatch):
         def search(self, *a, **kw):
             raise RuntimeError("synthetic vault failure")
 
-    monkeypatch.setattr(vb, "get_vault_index", lambda *a, **kw: _ExplodingIdx(), raising=False)
-    return _ExplodingIdx
+    vb.set_vault_index_override(_ExplodingIdx())
+    try:
+        yield _ExplodingIdx
+    finally:
+        vb.set_vault_index_override(None)
 
 
 @pytest.fixture
-def intercepted_localhost(monkeypatch):
+def intercepted_hosts():
     """Make the mock upstream look like a provider worth intercepting.
 
-    See ``tests/test_injection_ground_truth_e2e.py`` for the full rationale —
-    ``server.py`` binds ``INTERCEPT_HOSTS`` by value at import time, so both
-    bindings must be patched.
+    ``_proxy_to_inner``'s ``should_log`` gate reads only ``server.py``'s own
+    ``INTERCEPT_HOSTS`` binding (verified against the live call path: the
+    ``ProviderRouter.route()`` result that would consult ``router.py``'s copy
+    carries a ``should_intercept`` field server.py never reads, and
+    ``fallback.INTERCEPT_HOSTS`` is not imported anywhere outside its own
+    module). So the only override this suite needs is passed straight to
+    ``ProxyServer``'s ``intercept_hosts=`` constructor seam below — no
+    monkeypatching of any module's ``INTERCEPT_HOSTS`` binding required.
     """
-    from tokenpak.proxy import router, server
+    from tokenpak.proxy import router
 
-    patched = set(router.INTERCEPT_HOSTS) | {"127.0.0.1"}
-
-    monkeypatch.setattr(server, "INTERCEPT_HOSTS", patched, raising=False)
-    monkeypatch.setattr(router, "INTERCEPT_HOSTS", patched, raising=False)
-    try:
-        from tokenpak.proxy import fallback
-
-        monkeypatch.setattr(
-            fallback,
-            "INTERCEPT_HOSTS",
-            set(fallback.INTERCEPT_HOSTS) | {"127.0.0.1"},
-            raising=False,
-        )
-    except Exception:
-        pass
-    return patched
+    return set(router.INTERCEPT_HOSTS) | {"127.0.0.1"}
 
 
 @pytest.fixture
-def proxy(upstream, intercepted_localhost):
+def proxy(upstream, intercepted_hosts):
     upstream_url, _ = upstream
-    server = ProxyServer(host="127.0.0.1", port=free_port())
+    server = ProxyServer(host="127.0.0.1", port=free_port(), intercept_hosts=intercepted_hosts)
     server.start(blocking=False)
     _wait_for_port(server.port)
     yield server, upstream_url

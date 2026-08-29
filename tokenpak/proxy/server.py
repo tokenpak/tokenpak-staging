@@ -1475,10 +1475,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         ps = self._ps
         parsed = urlparse(target_url)
 
-        # Pass the handler module's public collection explicitly. Tests and
-        # embedders may replace ``server.INTERCEPT_HOSTS`` with an isolated set;
-        # hostname matching itself remains exact inside ``should_intercept``.
-        should_log = should_intercept(target_url, INTERCEPT_HOSTS)
+        # Pass the handler module's public collection explicitly, unless this
+        # instance was constructed with its own override (`intercept_hosts=`)
+        # — the supported seam for callers that need to intercept hosts the
+        # global registry does not know about. Hostname matching itself
+        # remains exact inside ``should_intercept``.
+        should_log = should_intercept(
+            target_url, ps._intercept_hosts if ps._intercept_hosts is not None else INTERCEPT_HOSTS
+        )
         is_model_request = any(
             endpoint in target_url
             for endpoint in (
@@ -4389,6 +4393,14 @@ class ProxyServer:
         Called for each intercepted request before forwarding.
         Signature: (body: bytes, model: str, trace: PipelineTrace | None)
                     -> (body, sent_tokens, raw_tokens, protected_tokens)
+    intercept_hosts : set of str, optional
+        Override for the module-level ``INTERCEPT_HOSTS`` used to gate
+        ``should_log`` in ``_proxy_to_inner``. Defaults to ``None``, which
+        preserves the real global set. This is the injection seam for
+        callers (tests, isolated embedding contexts) that need this
+        instance to intercept hosts the global registry does not know
+        about — pass the set explicitly rather than monkeypatching the
+        module attribute.
     """
 
     def __init__(
@@ -4398,8 +4410,10 @@ class ProxyServer:
         compilation_mode: str | None = None,
         request_hook: RequestHook | None = None,
         shutdown_timeout: float | None = None,
+        intercept_hosts: set[str] | None = None,
     ) -> None:
         self.host = host
+        self._intercept_hosts = intercept_hosts
         self.port = port or int(os.environ.get("TOKENPAK_PORT", "8766"))
         from tokenpak.proxy.config import env_or_profile as _env_or_profile
 

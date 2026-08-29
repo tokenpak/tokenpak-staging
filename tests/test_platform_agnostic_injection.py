@@ -58,20 +58,21 @@ def _vault_injection_enabled():
 
 
 @pytest.fixture
-def fake_inject(monkeypatch, _vault_injection_enabled):
+def fake_inject(_vault_injection_enabled):
     """Stand in for vault retrieval; the vault itself is not under test here.
 
     The shipped master switch is deliberately OFF. These tests exercise the
     route wiring beneath that gate, so ``_vault_injection_enabled`` opts in
     through the real env-var contract rather than weakening the production
     default or overwriting the resolved attribute in place.
+
+    Passed to ``stage_vault_injection`` via its ``inject_fn`` parameter
+    seam rather than monkeypatched onto the ``vault_bridge`` module.
     """
-    import tokenpak.proxy.vault_bridge as vb
 
     def _fake(body, adapter=None, request=None):
         return INJECTED, 412, ["decisions/auth.md", "notes/api.md"], "CONTEXT"
 
-    monkeypatch.setattr(vb, "_inject_vault_context_with_text", _fake)
     return _fake
 
 
@@ -89,7 +90,9 @@ def _req(body=ORIGINAL):
 
 def test_json_inject_applies_the_body_in_stage(fake_inject):
     """json_inject mutates the request itself; it does not defer to byte_restore."""
-    req, stage = stage_vault_injection(_req(), {"vault_injection": "json_inject"})
+    req, stage = stage_vault_injection(
+        _req(), {"vault_injection": "json_inject"}, inject_fn=fake_inject
+    )
 
     assert not stage.skipped
     assert req.body == INJECTED
@@ -104,7 +107,9 @@ def test_byte_splice_does_not_apply_the_body(fake_inject):
     route: the platform-agnostic change must not alter how that route is
     handled.
     """
-    req, stage = stage_vault_injection(_req(), {"vault_injection": "byte_splice"})
+    req, stage = stage_vault_injection(
+        _req(), {"vault_injection": "byte_splice"}, inject_fn=fake_inject
+    )
 
     assert not stage.skipped
     assert req.body == ORIGINAL, "byte_splice must not mutate the body in-stage"
@@ -115,7 +120,10 @@ def test_byte_splice_does_not_apply_the_body(fake_inject):
     "policy", [{"vault_injection": "disabled"}, {}], ids=["explicit", "absent"]
 )
 def test_disabled_skips_with_a_reason(policy, fake_inject):
-    _req_out, stage = stage_vault_injection(_req(), policy)
+    # inject_fn is never reached on this path (the stage returns before it
+    # would be called) — passed anyway for parity with the other two tests
+    # sharing this fixture.
+    _req_out, stage = stage_vault_injection(_req(), policy, inject_fn=fake_inject)
     assert stage.skipped
     assert stage.skip_reason == "disabled_or_empty"
 
