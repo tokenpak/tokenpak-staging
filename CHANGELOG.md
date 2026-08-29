@@ -6,22 +6,510 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
+## [1.21.0] — 2026-08-26
 
-- **`tokenpak pak create` now writes the canonical Pak schema (`schema_version: 2`).**
-  Created Pak files carry the canonical contract fields (`pak_type`, `source`, `status`,
-  `authority`, `confidence`, `retention`, `privacy`, `relationships`) plus the existing
-  file-form fields (embedded anchor content, `objective`, `continuation_notes`, checksum).
-  The subtype is now the canonical `recall` — previously `create` stamped the deprecated
-  `context` alias, which readers already resolve to `recall`. Field renames within the file
-  form: per-anchor `sha256` → `source_hash` (with new `anchor_id` / `snippet_available`),
-  top-level `ttl` → `ttl_hint`, and `scope.source_root` → top-level `source_root` (`scope`
-  is now the canonical `user`/`project`/`topic` record). The checksum construction is
-  unchanged (sha256 over the sorted-key JSON body, excluding `checksum`/`pak_id`);
-  checksum *values* differ from what v1 would have produced because the body changed.
+This backward-compatible minor release adds facts-only request timing and
+live in-flight visibility, plus an optional client-return session-economics
+decoration. It also corrects forecast calibration, downstream-disconnect
+accounting, and release-gate schema capture.
 
 ### Added
 
+- The proxy records each request's UTC start time, time to first upstream
+  byte, and stream duration in additive nullable monitor columns. Cleartext
+  SSE responses also expose their latest provider-reported output-token count
+  while the request is active. An auth-gated, read-only `GET /inflight`
+  endpoint reports these facts and any projection already computed at
+  admission; it does not calculate an ETA or mutate accounting state.
+- An opt-in, default-off session-economics decoration can append the existing
+  one-line rendering to the client copy of an eligible non-streaming response.
+  A versioned marker is removed from echoed assistant history before replay,
+  while provider bytes and accounting inputs continue to use undecorated
+  content.
+
+### Fixed
+
+- Session-forecast calibration now validates that coverage targets match the
+  statistic actually measured, includes per-turn cost shape in readiness
+  cache keys, and reads ledger fingerprints and scoring corpora from one
+  consistent transaction.
+- Downstream `BrokenPipeError` and `ConnectionResetError` outcomes are recorded
+  as client disconnects instead of synthetic HTTP 502 or provider failures.
+  Genuine upstream and internal errors retain their existing failure path.
+- The release-gate SQLite schema generator now materializes clean telemetry,
+  Spend Guard, and proxy monitor stores in an isolated temporary directory.
+  Snapshot generation no longer reads ambient user databases, and the monitor
+  schema is included in drift detection.
+- The legacy stats snapshot now writes to TokenPak's product-owned vault state
+  directory instead of a retired private vault layout.
+- Public API snapshot generation now excludes two optional third-party aliases
+  in both installed-extra and dependency-absent environments, preventing
+  environment-dependent phantom exports without changing TokenPak's API.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.21.0"
+```
+
+No manual configuration migration is required. Existing proxy monitor stores
+gain nullable timing columns through the additive migration. The optional
+client-return decoration remains disabled unless explicitly enabled.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.20.0"
+```
+
+The release introduces no destructive state migration. Existing readers
+remain compatible with the additive nullable monitor columns.
+
+### Compatibility
+
+- The public API snapshot contains 4,697 symbols: 18 additive exports and zero
+  removals relative to v1.20.0. The additions comprise the in-flight endpoint
+  builder, six in-flight registry functions, ten session-economics decoration
+  exports, and `IncrementalUsageTracker`.
+- Live mid-stream output usage is available for cleartext SSE. Compressed SSE
+  retains its existing persisted end-of-stream usage path but does not expose
+  a live incremental count.
+- No existing public symbol is removed or reclassified. No breaking changes or
+  deprecations are introduced.
+
+## [1.20.0] — 2026-08-17
+
+This backward-compatible minor release adds a deterministic session trip
+computer to the default read surfaces, layers a calibrated
+remaining-consumption forecast on top of it, and refreshes the model pricing
+catalog for the current Claude model generation.
+
+### Added
+
+- A deterministic session trip computer renders on every default read
+  surface: a one-line and full-block status rendering, a dashboard section
+  and snapshot field, and a read-only tool shared by both supported agent
+  clients. All surfaces are thin adapters over one validated contract and one
+  shared renderer, and the proxy selects a default session automatically
+  when none is supplied. A restart-proof regression suite verifies the new
+  surfaces change no provider bytes and no accounting inputs across a full
+  process restart.
+- A calibrated remaining-consumption forecast layers onto the trip computer:
+  a dependency-free split-conformal quantile engine over finished local
+  sessions produces a central 50% remaining-token range, a one-sided 90%
+  ceiling, an expected-turn range, measured walk-forward coverage with drift
+  awareness, and a guard-aligned block probability. Cold cells render an
+  honest learning state instead of a number; stale or unknown rates leave
+  USD unavailable while token ranges stay intact.
+
+### Fixed
+
+- The model pricing catalog now prices the current Claude model
+  generation — Fable 5, Opus 5, and Sonnet 5 — with matching context
+  windows, and corrects a Haiku pricing row that had been seeded as a
+  byte-identical copy of an older model's rates. A new catalog-integrity
+  test suite makes this class of staleness CI-detectable going forward
+  without hardcoding a model-name enumeration: every model the proxy serves
+  by default must resolve to explicit priced data with a known context
+  window, and every served model must carry positive pricing.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.20.0"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.3"
+```
+
+The release introduces no destructive state migration. Artifact-level
+upgrade and rollback verification is part of the release gate.
+
+### Compatibility
+
+- The public API snapshot contains 4,679 symbols: 14 additive session
+  trip-computer exports (a new `tokenpak.proxy.session_forecast_calibration`
+  module plus three additions on existing modules) and zero removals
+  relative to v1.19.3.
+- No existing public symbol is removed or reclassified. No breaking changes
+  are introduced.
+
+## [1.19.3] — 2026-08-17
+
+This backward-compatible patch repairs the release gate itself and supersedes
+v1.19.2, whose tag never produced published artifacts.
+
+### Fixed
+
+- The public-API snapshot's CrewAI example import-error sentinel is restored to
+  the value a clean build environment produces. The v1.19.2 preparation
+  regenerated the snapshot in an environment carrying a stale locally installed
+  integration package, so the release gate's snapshot check failed at the tag
+  build and no v1.19.2 artifact was published. The snapshot again matches a
+  clean environment deterministically; the symbol count remains 4,665 with no
+  additions or removals relative to the v1.19.2 candidate.
+
+### Notes
+
+- v1.19.2 was tagged but never published: the release gate stopped the build
+  before any distribution, GitHub Release, or index upload existed. Its
+  changes (Python 3.10 launcher compatibility and release-to-site sequencing)
+  ship in this release.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.3"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.1"
+```
+
+(v1.19.2 has no published artifact to roll back to.)
+
+## [1.19.2] — 2026-08-16
+
+This backward-compatible patch keeps companion launches working on Python 3.10
+and makes post-release site synchronization follow the completed GitHub Release
+instead of racing package publication.
+
+### Fixed
+
+- Companion MCP configuration and fallback-hook launches now build their child
+  interpreter command from the exact running Python executable. The `-P`
+  safe-path flag is used only on Python 3.11 and newer, so supported Python 3.10
+  installations no longer fail on an unavailable interpreter option.
+- Successful release runs now notify the site only after the GitHub Release is
+  complete, include the released tag and commit metadata, and keep the existing
+  scheduled/manual synchronization fallback when cross-repository credentials
+  are unavailable.
+- Release metadata now records the two interpreter-prefix helper exports added
+  by the launcher compatibility repair. The public API snapshot contains 4,665
+  symbols, with two additive helpers and zero removals relative to v1.19.1.
+- Release validation now carries pinned build frontend and backend versions in
+  the frozen development environment, keeping offline artifact receipts
+  independent of unrecorded host tooling.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.2"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.1"
+```
+
+This release introduces no destructive state or schema migration.
+
+## [1.19.1] — 2026-08-15
+
+This patch release fixes interactive Codex clients (0.147 and newer) stalling
+at startup when routed through the local proxy with a subscription sign-in.
+
+### Fixed
+
+- The proxy's `/v1/models` endpoint now forwards subscription-authenticated
+  model-catalog requests to the subscription backend with the caller's own
+  credential, instead of returning an empty catalog. Newer interactive Codex
+  clients require a non-empty model list from their configured provider before
+  the session proceeds; against the previous empty reply they parked at the
+  model-availability step and silently re-polled. Verified end to end: an
+  interactive 0.147.0 client against the fixed proxy lists the full catalog
+  and starts normally, and non-interactive `exec` runs (which were never
+  affected) continue to work unchanged.
+- Credential routing for catalog requests is strict: requests carrying
+  Anthropic headers keep their existing route and reply, API-key clients still
+  list from the platform endpoint, and no credential is ever forwarded to a
+  backend of a different provider. Regression tests pin each of these paths at
+  both the routing and handler layers.
+
+## [1.19.0] — 2026-08-12
+
+This backward-compatible minor release adds a versioned session-economics
+contract and a deterministic runway view while preserving unknown usage and
+pricing facts instead of inventing certainty.
+
+### Added
+
+- The immutable `session-economics/1` contract exposes session facts, measured
+  values, estimates, provenance, forecasts, guard state, and runway through 29
+  additive Python symbols. Value states distinguish measured, estimated,
+  unavailable, and error results; existing public symbols are unchanged.
+- The proxy exposes `/v1/messages/session-economics`, a deterministic local
+  view of session runway that does not call a model provider. Context soft and
+  hard limits, request or dollar budgets, and rolling caps are evaluated
+  conservatively; the binding constraint is reported explicitly.
+- Provider usage ledgers retain the source and quality of token-usage facts
+  supplied by supported providers. Missing usage remains unknown rather than
+  being coerced to zero.
+
+### Fixed
+
+- Re-ingesting an already wrapped Pak envelope preserves a single stable
+  envelope instead of nesting another wrapper around it.
+- Proxy monitor writers now keep their database association and lifecycle
+  stable across concurrent requests and shutdown flushing.
+- Proxy test fixtures use isolated ephemeral ports, preventing unrelated test
+  processes from colliding on fixed listeners.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.19.0"
+```
+
+No configuration migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.5"
+```
+
+The release introduces no destructive state migration. Artifact-level upgrade
+and rollback verification is part of the release gate.
+
+### Compatibility
+
+- The public API snapshot contains 4,663 symbols: 29 additive
+  session-economics exports and zero removals relative to v1.18.5.
+- Existing proxy request and response routes remain compatible. The new
+  endpoint and Python contract are additive, and unknown or insufficient facts
+  produce explicit learning, unavailable, or error states instead of fabricated
+  numeric values.
+
+## [1.18.5] — 2026-08-08
+
+This compatible patch reduces companion recall overhead and locks the
+stability of companion-injected surfaces.
+
+### Changed
+- Companion prior-work recall can batch multiple sessions in one call:
+  `load_pak` (and its legacy alias `load_capsule`) accepts `session_ids`
+  (up to 10) and `include_journal`, returning per-session journal digests
+  and Pak content together. Single-session and listing behavior is
+  unchanged.
+- Companion guidance surfaces (system prompt, agent setup document, tool
+  descriptions) now steer retrieval-before-answering, preferring native
+  memory surfaces ahead of Pak retrieval.
+- The pre-send hook emits one deterministic hint (25 tokens or fewer) when
+  a prompt references prior work and the local journal or Pak store holds
+  content. An initialized-empty store never hints. The journal store
+  maintains a zero-byte `journal.db.nonempty` marker for this check and
+  backfills it when opening a store created before this release.
+
+### Added
+- Conformance tests locking companion-injected surfaces: byte-stability
+  across renders and profiles, and replace-not-accumulate envelope
+  behavior across sequential turns.
+
+### Compatibility
+- No public API symbols added, removed, or changed (snapshot verified:
+  4634 symbols, version field only). The new MCP tool parameters are
+  optional; existing calls behave identically. Proxy request and response
+  bodies remain byte-preserved.
+
+## [1.18.4] — 2026-08-08
+
+This compatible patch adds machine-readable output to `savings`, stamps a
+request-correlation header on every proxy response, closes a release-pipeline
+ordering gap and a CI flake source, extends the interpreter safe-path guard to
+the Codex registration, refreshes the companion MCP documentation, and retires
+historical internal-reference debt from code comments.
+
+### Added
+- `tokenpak savings --json` emits a machine-readable savings document,
+  matching the JSON support `recommendations` already had. The empty state is
+  a well-formed document with exit 0; human-readable output is unchanged.
+- The proxy now sets an `X-TokenPak-Request-ID` header on every response —
+  non-streaming, streaming (set before the first chunk), and proxy-generated
+  errors. On forwarded requests it carries the same correlation value as the
+  existing `X-Request-ID` echo (client-supplied value honored, otherwise a
+  generated opaque id). Response bodies remain byte-preserved.
+
+### Fixed
+- The Codex MCP server registration now spawns the interpreter in safe-path
+  mode (`-P`, applied on Python 3.11+ where the flag exists) so a `tokenpak/`
+  directory in the working directory cannot shadow the installed package —
+  the same guard the Claude Code MCP config and hook spawns already apply.
+  Existing registrations are untouched; re-register to pick up the guard.
+
+### Changed
+- Release workflow: the GitHub Release is now created only after the package
+  publish succeeds (or is skipped for rc/alpha/beta tags), closing the window
+  where a public Release could exist before artifacts were on the index.
+- The install-shape rehearsal matrix now excludes timing-sensitive benchmark
+  assertions (the same marker quarantine every other test workflow applies);
+  benchmarks keep their dedicated nightly workflow.
+- Companion MCP setup documentation refreshed to current behavior: tool
+  registry, lean profile advertising, config shapes, and the Codex
+  registration example including the version-gated safe-path flag.
+- Historical internal tracking references in comments and docstrings replaced
+  with descriptive text across 89 files (verified behavior-neutral).
+
+### Upgrade
+- `pip install --upgrade tokenpak`. No schema, config, or state migrations.
+
+### Rollback
+- `pip install tokenpak==1.18.3`. No state cleanup required.
+
+### Compatibility
+- No importable API symbols added or removed (snapshot-verified: 4634 symbols
+  unchanged). The new CLI flag and response header are additive surfaces;
+  existing invocations and clients are unaffected.
+
+## [1.18.3] — 2026-08-07
+
+This compatible patch reduces the token overhead the companion itself adds to
+agent sessions and makes the session label robust to host-side control-byte
+sanitization.
+
+### Changed
+
+- **The `lean` companion profile now advertises only core MCP tools.**
+  Advertised tool schemas are re-sent to the model with every request, so
+  under `TOKENPAK_COMPANION_PROFILE=lean` the MCP server's `tools/list`
+  response includes only the recall, compression, and journal tools
+  (`load_pak`, `prune_context`, `journal_read`, `journal_write`,
+  `vault_search`, `vault_retrieve`). Accounting and diagnostic tools
+  (`estimate_tokens`, `check_budget`, `session_info`) and the deprecated
+  `load_capsule` alias remain fully callable — dispatch is not filtered —
+  but their schemas no longer ride every request; hooks cover cost
+  estimation and budget enforcement out-of-band in all profiles. The
+  `balanced` (default) and `verbose` profiles are unchanged. Two verbose
+  tool descriptions were also shortened.
+
+- **Companion guidance no longer directs agents to spend model turns on
+  accounting.** Cost estimation and budget enforcement happen automatically in
+  the pre-send hook, and session summaries in the stop hook, so the generated
+  Codex `AGENTS.md` section, the Claude launcher system-prompt fragment, and
+  the `estimate_tokens` / `check_budget` MCP tool descriptions now say to
+  reserve explicit tool calls for genuine decisions instead of recommending
+  them before reads and multi-step tasks. Each avoided call saves a full
+  model round-trip that would re-send the whole conversation. The Codex
+  `AGENTS.md` managed section also shrinks to roughly a third of its former
+  size while keeping the complete tool inventory and behavioral rules.
+- **`estimate_tokens` MCP results are compacted.** The tool now returns
+  `tokens`, `chars`, and a short estimator disclosure instead of echoing the
+  full HTTP payload, because tool results persist in the conversation and are
+  re-billed as input on every subsequent turn. The heuristic-fallback
+  disclosure remains (as `chars/4-approx` plus a brief install hint), and the
+  `/tpk/v1/tokens/estimate` HTTP response is unchanged.
+- **Release-workflow and leak-gate hardening.** The delta leak gate consults
+  the canonical pattern-register set, the private-path scan exempts only the
+  exact documented vault-index default segment, and the release workflow
+  quotes its step-output sink and guards its checksum globs.
+
+### Fixed
+
+- **The companion session label is plain text.** The styled label embedded
+  terminal escape bytes in a value rendered by the host CLI; a host update
+  began sanitizing control bytes in that surface, displaying the sequences as
+  literal text. A session name is data rendered by another program — styling
+  now stays on the companion's own terminal streams.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.3"
+```
+
+No data migration is required.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.2"
+```
+
+### Compatibility
+
+- No breaking change. The Python public-symbol set gains one additive
+  companion helper (`active_tools`); no symbol is removed or changed. HTTP
+  contracts, TIP wire formats, and storage schemas are unchanged.
+- Configurations not opting into the `lean` companion profile see no
+  behavioral change.
+
+## [1.18.2] — 2026-08-05
+
+This compatible patch restores configured custom-provider routing, corrects
+compression-configuration claims, adds conservative changed-surface CI, and
+hardens local persistence and telemetry shutdown behavior.
+
+### Fixed
+
+- **Configured custom providers load and route through their selected upstream.**
+  TokenPak reads the canonical configuration source, routes by normalized
+  scheme, hostname, and effective port, keeps distinct ports independent,
+  avoids duplicated `/v1` path segments, and preserves fixed endpoint query
+  fields without allowing request overrides. Unsafe userinfo, fragments, and
+  credential query parameters are rejected. A configured `api_key_env` is
+  resolved only for the outbound request and injected using the selected wire
+  format when the client supplied no upstream credential; client credentials
+  are never overwritten or logged. Configured-versus-registered counts remain
+  visible in startup and doctor output.
+- **Compression flags now describe the behavior that ships.**
+  `TOKENPAK_COMPACT`, `compression.enabled`, and the compact threshold remain
+  accepted compatibility settings, but the built-in default HTTP proxy does not
+  call the legacy body-compaction helper. CLI and documentation surfaces no
+  longer claim that toggling those settings changes default-HTTP request bytes.
+- **Companion pre-send persistence no longer waits on SQLite writes.** Journal
+  and cost updates are queued as one atomic, replayable local intent and drained
+  outside the prompt path. Budget checks reconcile pending intents with the
+  committed database, and interrupted or lock-deferred drains replay without
+  duplicating journal entries or regressing the latest estimate.
+- **Monitor and telemetry SQLite lifecycle handling is deterministic.** Schema
+  setup is transactional and tolerant only of already-applied additive changes;
+  legacy cost rows are preserved while missing columns are added in place;
+  transient writer locks are retried, queued rows retain their target database,
+  shutdown drains are bounded, and failed rows are counted instead of silently
+  reported as persisted.
+
+### Changed
+
+- **CI now classifies changed surfaces conservatively.** An always-running trust
+  baseline, risk-selected jobs, and an always-evaluated result check fail closed
+  for unknown, shared-core, packaging, workflow, large, or multi-surface changes.
+  Every third-party action reference across the repository workflows is pinned
+  to a full peeled commit SHA, and the pin checker now rejects mutable tags and
+  branches. Direct GitHub release downloads must declare and verify a literal
+  SHA-256 before extraction or installation. The release rehearsal also
+  declares the preflight dependency for jobs that consume its tag output.
+  Existing required staging checks remain in force while parity is established.
+- `tokenpak doctor --json` adds a `custom_providers` diagnostic with additive
+  `configured`, `registered`, and `error` fields.
+
+### Added
+
+*Addendum recorded 2026-08-07: the following shipped in 1.18.2 but was
+omitted from its changelog at cut time.*
+
+- **`tokenpak pak create` writes the canonical Pak schema (`schema_version: 2`).**
+  Created Pak files carry the canonical contract fields (`pak_type`, `source`, `status`,
+  `authority`, `confidence`, `retention`, `privacy`, `relationships`) plus the existing
+  file-form fields (embedded anchor content, `objective`, `continuation_notes`, checksum).
+  The subtype is the canonical `recall` — previously `create` stamped the deprecated
+  `context` alias, which readers already resolve to `recall`. Field renames within the file
+  form: per-anchor `sha256` → `source_hash` (with new `anchor_id` / `snippet_available`),
+  top-level `ttl` → `ttl_hint`, and `scope.source_root` → top-level `source_root` (`scope`
+  is the canonical `user`/`project`/`topic` record). The checksum construction is
+  unchanged (sha256 over the sorted-key JSON body, excluding `checksum`/`pak_id`);
+  checksum *values* differ from what v1 would have produced because the body changed.
 - **`tokenpak pak migrate <pak-file> [-o OUT]`** — upgrades a legacy (`schema_version: 1`)
   Pak file to the canonical schema in place (or to `-o`). The declared checksum is verified
   before migration, the `pak_id` is preserved, anchor content is unchanged, and the checksum
@@ -29,6 +517,46 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Legacy `schema_version: 1` Pak files remain fully readable: `pak inspect`, `pak import`
   (checksum verification included), and `pak export` all keep working on them unchanged;
   `inspect` and `import` print a hint pointing at `pak migrate`.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.2"
+```
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.18.1"
+```
+
+### Compatibility
+
+- No breaking change or operator-run data migration is required.
+- Python public symbols, TIP wire formats, and public storage schemas are
+  unchanged. Private local Companion, monitor, and telemetry databases receive
+  additive, idempotent plumbing upgrades automatically. The doctor JSON
+  addition is backward-compatible.
+
+### Known limitations
+
+- Default-HTTP body compaction remains unwired. Integrations that explicitly
+  call the legacy compact helper can still use its compatibility settings.
+- Risk-selected CI is additive in this release; it does not replace the existing
+  required staging contexts until separate parity evidence supports migration.
+
+## [1.18.1] — 2026-08-03
+
+This hotfix restores the documented Codex approval path when the Spend Guard
+holds a request before provider send.
+
+### Fixed
+
+- **Codex Spend Guard approvals now resolve safely.** TokenPak recognizes Codex
+  `session-id` and `thread-id` headers, reads strict yes/no intent and leading
+  `[TIP: allow=once]` directives from OpenAI Responses input, and keeps pending
+  requests and anti-loop state isolated per session. Requests without a stable
+  identity remain blocked without creating a global approval row.
 
 ## [1.18.0] — 2026-08-03
 

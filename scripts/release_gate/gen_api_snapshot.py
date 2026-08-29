@@ -79,7 +79,9 @@ def _assert_source_provenance(package: object) -> None:
 # non-deterministic ("phantom" add/remove noise). Exclude them explicitly so the
 # snapshot deterministically reflects the TokenPak-owned released surface.
 _THIRD_PARTY_REEXPORTS: set[tuple[str, str]] = {
+    ("tokenpak.sdk.local.openai_compat", "OpenAI"),
     ("tokenpak.vault.retrieval.vector_local", "faiss"),
+    ("tokenpak.vault.retrieval.vector_local", "np"),
     ("tokenpak.proxy.server_extra.websocket_proxy", "WebSocketServerProtocol"),
 }
 

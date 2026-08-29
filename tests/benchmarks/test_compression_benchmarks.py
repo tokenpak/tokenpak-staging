@@ -13,7 +13,6 @@ Usage:
     pytest tests/benchmarks/test_compression_benchmarks.py -v -s  # print table
 
 Generated: 2026-03-24
-Author: Cali (TPK-BENCH-01)
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ from tokenpak.compression.pipeline import CompressionPipeline  # noqa: E402
 # Constants
 # ---------------------------------------------------------------------------
 BASELINE_PATH = Path(__file__).parent / "baseline.json"
-REGRESSION_THRESHOLD = 1.50  # TSR-06: 50% slower → fail. Bumped from 1.20.
+REGRESSION_THRESHOLD = 1.50  # 50% slower → fail. Bumped from 1.20.
 # Root cause: post-hermetic-fix baselines are sub-10ms;
 # at that scale a 20% threshold is 1–2ms — well inside
 # the Python-GC + OS-scheduling jitter floor of shared
@@ -66,8 +65,8 @@ MIN_LATENCY_FLOOR_MS = 25.0  # bumped from 5.0 after observing 20ms medians on s
 # tolerating measurement noise on the most jitter-prone
 # parametrizations. NOT a coverage relaxation for the
 # case the test is designed to detect.
-WARMUP_RUNS = 5  # TSR-06: bumped from 2 — better cache warmup for stable measurement.
-MEASURE_RUNS = 21  # TSR-06: bumped from 5 — median of 21 is meaningfully more stable
+WARMUP_RUNS = 5  # bumped from 2 — better cache warmup for stable measurement.
+MEASURE_RUNS = 21  # bumped from 5 — median of 21 is meaningfully more stable
 # than median of 5 on noisy small-millisecond measurements.
 
 PAYLOAD_SIZES = [100, 500, 1_000, 5_000, 10_000]
@@ -181,8 +180,8 @@ def _run_benchmark(
     Run compression MEASURE_RUNS times (after WARMUP_RUNS) and return
     (median_ms, compression_ratio, savings_pct).
 
-    TSR-06 hermetic instruction-table fix
-    ─────────────────────────────────────
+    Hermetic instruction-table fix
+    ──────────────────────────────
     Pre-fix the benchmark constructed `CompressionPipeline(**mode_kwargs)` with
     no `instruction_table_path`, which defaults to `~/.tokenpak/instruction_table.json`.
     On any host where users had been running the proxy (any populated table — 3+ MB

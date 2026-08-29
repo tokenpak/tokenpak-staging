@@ -128,6 +128,34 @@ def test_h6_surfaces_firstparty_regression_in_sidecar():
     assert "tokenpak.proxy.gone" in out
 
 
+@pytest.mark.parametrize(
+    ("module", "name"),
+    [
+        ("tokenpak.sdk.local.openai_compat", "OpenAI"),
+        ("tokenpak.vault.retrieval.vector_local", "np"),
+    ],
+)
+def test_h6_excludes_optional_thirdparty_placeholders(module, name):
+    """Optional dependency aliases are not TokenPak-owned public symbols.
+
+    When an optional dependency is absent these modules assign the alias to
+    ``None``.  ``None`` has no third-party ``__module__`` marker, so the
+    general ownership filter cannot distinguish it from package-owned data.
+    Keep the exact module/name pairs in the closed re-export exclusion set.
+    """
+    assert (module, name) in gas._THIRD_PARTY_REEXPORTS
+
+
+def test_h6_thirdparty_placeholder_exclusions_are_exact():
+    """The optional-alias repair must not broaden into a module-wide mask."""
+    assert ("tokenpak.sdk.local.openai_compat", "TokenPakOpenAICompat") not in (
+        gas._THIRD_PARTY_REEXPORTS
+    )
+    assert ("tokenpak.vault.retrieval.vector_local", "LocalVectorRetriever") not in (
+        gas._THIRD_PARTY_REEXPORTS
+    )
+
+
 # ── H5: benchmark report is labeled synthetic and host-fingerprint-free ───────
 def test_h5_synthetic_banner_is_honest():
     banner = gbr.SYNTHETIC_BANNER.lower()

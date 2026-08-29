@@ -1,10 +1,10 @@
 """
 TokenPak Proxy Server — Modular Architecture
 
-HTTP proxy server for LLM API traffic. Routes requests through the
-tokenpak pipeline (vault injection, cost tracking, compression) based
-on per-route policy (Claude Code byte-preserved, OpenClaw full pipeline,
-SDK sanitized).
+HTTP proxy server for LLM API traffic. Routes requests through per-route
+handling while keeping Claude Code request bodies byte-preserved. The built-in
+default HTTP path does not invoke the legacy ``compact_request_body`` helper;
+that helper runs only when an integration calls it explicitly.
 
 This is the canonical modular proxy server. The monolith at repo root
 (proxy.py) is being incrementally decomposed into this module tree.
@@ -12,8 +12,8 @@ This is the canonical modular proxy server. The monolith at repo root
 Env vars (all optional):
     TOKENPAK_PORT          (default 8766)
     TOKENPAK_MODE          (default hybrid) — strict|hybrid|aggressive
-    TOKENPAK_COMPACT       (default 1) — master on/off switch
-    TOKENPAK_COMPACT_THRESHOLD_TOKENS (default 1500 in the balanced profile)
+    TOKENPAK_COMPACT       — compatibility-only; no default-HTTP consumer
+    TOKENPAK_COMPACT_THRESHOLD_TOKENS — explicit compact-helper threshold
     TOKENPAK_DB            (default .tokenpak/monitor.db)
     NOTIFY_SOCKET          systemd sd_notify socket path (set by systemd, not TokenPak)
 
@@ -75,6 +75,7 @@ __all__ = (
 
 import gzip
 import json
+import logging
 import os
 import signal
 import socket
@@ -91,7 +92,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Any, TypedDict, cast
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
@@ -141,10 +142,10 @@ from .proxy_auth import (
     strip_proxy_auth_for_upstream as _strip_proxy_auth_for_upstream,
 )
 from .route_policy import get_policy
-from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost
+from .router import INTERCEPT_HOSTS, ProviderRouter, estimate_cost, should_intercept
 from .startup import format_startup_report, run_startup_checks
 from .stats import CompressionStats
-from .streaming import _extract_sse_stop_reason, extract_sse_tokens
+from .streaming import _extract_sse_stop_reason, _extract_sse_usage, extract_sse_tokens
 from .upstream_retry import (
     UpstreamRetryPolicy,
     UpstreamTruncatedJSONError,
@@ -154,14 +155,108 @@ from .upstream_retry import (
     response_has_truncated_json,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from tokenpak.proxy.admission import AgentConcurrencyGate
+    from tokenpak.proxy.custom_providers import CustomProvider
+
+
+_UPSTREAM_CREDENTIAL_HEADERS = frozenset(
+    {
+        "api-key",
+        "anthropic-api-key",
+        "authorization",
+        "openai-api-key",
+        "x-api-key",
+        "x-goog-api-key",
+    }
+)
+_UPSTREAM_CREDENTIAL_QUERY_KEYS = frozenset(
+    {"access_token", "api_key", "apikey", "authorization", "key", "token"}
+)
+
+
+def _has_upstream_credential(headers: Mapping[str, str], target_url: str) -> bool:
+    """Return whether a client credential is already bound for upstream."""
+    if any(
+        str(name).lower() in _UPSTREAM_CREDENTIAL_HEADERS and bool(str(value).strip())
+        for name, value in headers.items()
+    ):
+        return True
+    try:
+        return any(
+            key.lower().replace("-", "_") in _UPSTREAM_CREDENTIAL_QUERY_KEYS and bool(value)
+            for key, value in parse_qsl(urlparse(target_url).query, keep_blank_values=True)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _set_upstream_credential_header(
+    headers: dict[str, str],
+    name: str,
+    value: str,
+) -> None:
+    """Set one credential header without leaving case-variant duplicates."""
+    for existing in tuple(headers):
+        if existing.lower() in _UPSTREAM_CREDENTIAL_HEADERS:
+            headers.pop(existing, None)
+    headers[name] = value
+
+
+def _inject_custom_provider_credential(
+    headers: dict[str, str],
+    target_url: str,
+    provider: "CustomProvider | None",
+) -> bool:
+    """Resolve and inject one configured custom-provider credential.
+
+    Secrets are resolved for this request only, never copied into a route
+    result, server field, log, or telemetry record. A non-empty client
+    credential always wins.
+    """
+    if provider is None or not provider.api_key_env:
+        return False
+    if _has_upstream_credential(headers, target_url):
+        return False
+    secret = provider.api_key
+    if not secret:
+        return False
+
+    if provider.format in {"openai-chat", "openai-responses"}:
+        _set_upstream_credential_header(headers, "Authorization", f"Bearer {secret}")
+    elif provider.format == "anthropic-messages":
+        _set_upstream_credential_header(headers, "x-api-key", secret)
+    elif provider.format == "google-generative-ai":
+        _set_upstream_credential_header(headers, "x-goog-api-key", secret)
+    else:  # loader/build registration should make this unreachable
+        return False
+    return True
 
 
 class _CodexCredentialsCache(TypedDict):
     mtime: float
     access_token: str
     account_id: str
+
+
+class _ProviderUsageObservation(TypedDict):
+    reasoning_tokens: int | None
+    visible_output_tokens: int | None
+    total_billable_tokens: int | None
+    reasoning_effort: str
+    reasoning_usage_source: str
+    provider_usage_ref: str
+    provider_input_tokens: int | None
+    provider_input_tokens_include_cache: bool | None
+    provider_output_tokens: int | None
+    provider_cache_read_tokens: int | None
+    provider_cache_creation_tokens: int | None
+    provider_usage_source: str
+    provider_usage_confidence: str
+    reasoning_effort_source: str
+    reasoning_effort_raw: str
 
 
 class _SessionState(TypedDict):
@@ -181,6 +276,9 @@ class _SessionState(TypedDict):
     cache_read_proxy: int
     cache_read_unknown: int
     ingest_entries: int
+    injected_tokens: int
+    injection_hits: int
+    injected_source_names: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +475,7 @@ def _load_codex_credentials() -> tuple[str, str]:
 
 # ---------------------------------------------------------------------------
 # Systemd integration — read sd_notify socket path from environment
-# Transferred from monolith (TPK-CONSOLIDATION-A2a, lines 7577/7601)
+# Transferred from monolith (lines 7577/7601)
 # ---------------------------------------------------------------------------
 _SD_NOTIFY_SOCKET: str = os.environ.get("NOTIFY_SOCKET", "")
 
@@ -540,6 +638,9 @@ def _new_session() -> _SessionState:
         "cache_read_proxy": 0,
         "cache_read_unknown": 0,
         "ingest_entries": 0,
+        "injected_tokens": 0,
+        "injection_hits": 0,
+        "injected_source_names": [],
     }
 
 
@@ -750,38 +851,53 @@ def _read_injection_receipt(result: object) -> tuple[int, str]:
 
     Returns ``(0, "")`` when the stage is absent or was skipped — a measured
     zero, not a default.
+
+    Fail-open at the function boundary, not just at the call site: a
+    malformed or adversarial ``result`` (a non-dict ``details`` — the
+    "valid non-object JSON" shape, e.g. ``details`` deserialized as a list
+    or scalar instead of an object — a raising attribute, wrong-shaped
+    stages) yields the same measured-zero default a non-injecting request
+    reports, never a raised exception. Telemetry must never break a request.
     """
-    stages = getattr(result, "stages", None) or []
-    for stage in stages:
-        if getattr(stage, "name", "") != _VAULT_STAGE_NAME:
-            continue
-        if getattr(stage, "skipped", False):
-            return 0, ""
-        details = getattr(stage, "details", None) or {}
-        tokens = details.get("injected_tokens", 0)
-        sources = details.get("injected_sources", "")
-        try:
-            tokens = int(tokens)
-        except (TypeError, ValueError):
-            tokens = 0
-        if isinstance(sources, (list, tuple)):
-            sources = ",".join(str(s) for s in sources if s)
-        elif not isinstance(sources, str):
-            sources = str(sources) if sources else ""
-        return tokens, sources
-    return 0, ""
+    try:
+        stages = getattr(result, "stages", None) or []
+        for stage in stages:
+            if getattr(stage, "name", "") != _VAULT_STAGE_NAME:
+                continue
+            if getattr(stage, "skipped", False):
+                return 0, ""
+            details = getattr(stage, "details", None)
+            if not isinstance(details, dict):
+                return 0, ""
+            tokens = details.get("injected_tokens", 0)
+            sources = details.get("injected_sources", "")
+            try:
+                tokens = int(tokens)
+            except (TypeError, ValueError):
+                tokens = 0
+            if isinstance(sources, (list, tuple)):
+                sources = ",".join(str(s) for s in sources if s)
+            elif not isinstance(sources, str):
+                sources = str(sources) if sources else ""
+            return tokens, sources
+        return 0, ""
+    except Exception:
+        return 0, ""
 
 
 #: Upper bound on distinct source names retained on the session for display.
 _MAX_SESSION_SOURCES = 20
 
 
-def _record_injection_in_session(injected_tokens: int, injected_sources: str = "") -> None:
-    """Accumulate injection totals onto the live session.
+def _record_injection_in_session(
+    session: dict[str, object], injected_tokens: int, injected_sources: str = ""
+) -> None:
+    """Accumulate injection totals onto ``ProxyServer.session`` — the dict that
+    backs request accounting and ``GET /stats``, which is what ``tokenpak
+    status`` actually reads (via the ``session`` key of the ``/stats`` payload).
 
-    ``tokenpak status`` reads ``injected_tokens`` and ``injection_hits`` from the
-    session dict. Neither had a writer anywhere in the tree, so both were phantom
-    reads that always returned their defaults.
+    Neither ``injected_tokens`` nor ``injection_hits`` had a writer anywhere in
+    the tree, so both were phantom reads that always returned their defaults.
 
     ``injection_hits`` counts requests that actually injected, so the rendered
     "N tokens across M requests" describes injecting requests rather than all
@@ -790,26 +906,28 @@ def _record_injection_in_session(injected_tokens: int, injected_sources: str = "
     Distinct source names are retained (bounded by ``_MAX_SESSION_SOURCES``) so
     the receipt can name what was added, not merely how much. Insertion order is
     preserved and the cap drops the oldest — an unbounded set here would grow
-    with session length.
+    with session length. Updates always rebind ``session["injected_source_names"]``
+    to a freshly built list rather than mutating one in place, so a concurrent
+    ``session.copy()`` (``ProxyServer.stats()`` takes a shallow copy under the
+    session lock) never observes a list being appended to after it was copied.
 
-    Best-effort: telemetry must never affect a request.
+    Caller must hold the session lock (``ProxyServer._session_lock``) — this
+    function does no locking of its own, matching every other session-counter
+    update at the call site. Best-effort: telemetry must never affect a request.
     """
     if injected_tokens <= 0:
         return
     try:
-        from tokenpak.core.runtime.proxy import SESSION as _session
-
-        _session["injected_tokens"] = int(_session.get("injected_tokens", 0)) + injected_tokens
-        _session["injection_hits"] = int(_session.get("injection_hits", 0)) + 1
+        session["injected_tokens"] = int(session.get("injected_tokens", 0)) + injected_tokens
+        session["injection_hits"] = int(session.get("injection_hits", 0)) + 1
 
         if injected_sources:
-            seen = _session.get("injected_source_names")
-            if not isinstance(seen, list):
-                seen = []
+            seen = session.get("injected_source_names")
+            updated = list(seen) if isinstance(seen, list) else []
             for name in (s.strip() for s in injected_sources.split(",")):
-                if name and name not in seen:
-                    seen.append(name)
-            _session["injected_source_names"] = seen[-_MAX_SESSION_SOURCES:]
+                if name and name not in updated:
+                    updated.append(name)
+            session["injected_source_names"] = updated[-_MAX_SESSION_SOURCES:]
     except Exception:
         pass  # fail-open: never break a request over telemetry
 
@@ -834,6 +952,38 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:  # silence access log
         pass
+
+    # ------------------------------------------------------------------
+    # Response correlation header (X-TokenPak-Request-ID)
+    # ------------------------------------------------------------------
+
+    def handle_one_request(self) -> None:
+        # Reset the correlation id at request ingress so every request on a
+        # keep-alive connection gets its own value (the handler instance is
+        # reused across requests on the same connection).
+        self._tokenpak_request_id: str | None = None
+        super().handle_one_request()
+
+    def _response_request_id(self) -> str:
+        """Return the correlation id stamped on this request's response.
+
+        The forwarding path adopts its existing per-request id (see
+        ``_proxy_to_inner``); every other path lazily mints an opaque
+        uuid4 hex on first use.
+        """
+        rid = getattr(self, "_tokenpak_request_id", None)
+        if not rid:
+            rid = uuid.uuid4().hex
+            self._tokenpak_request_id = rid
+        return rid
+
+    def end_headers(self) -> None:
+        # Stamp the correlation header on every response the proxy returns.
+        # Headers are buffered until this flush, so the header always rides
+        # ahead of any body bytes — including the first chunk of a streaming
+        # (SSE) response. Response bodies are never touched.
+        self.send_header("X-TokenPak-Request-ID", self._response_request_id())
+        super().end_headers()
 
     # ------------------------------------------------------------------
     # Proxy-level auth gate (P0-06 / A6)
@@ -1071,6 +1221,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if path == "/inflight":
+            from .inflight_endpoint import build_response as _inflight_build_response
+
+            self._send_json(_inflight_build_response())
+            return
         if path == "/stats":
             self._send_json(ps.stats())
             return
@@ -1147,15 +1302,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/v1/models"):
             route = ps.router.route(path, dict(self.headers))
-            if route.auth_type == "oauth":
-                # The OpenAI /v1/models endpoint requires API-platform scope,
-                # which a Codex subscription OAuth session does not carry.
-                # Native Codex already has a bundled model catalog, so report
-                # that this upstream source contributed no additional models
-                # instead of forwarding the bearer to an incompatible API-key
-                # endpoint and surfacing a misleading 403.
+            if route.auth_type == "oauth" and route.provider != "openai-codex":
+                # A subscription OAuth bearer cannot list API-platform
+                # models, and this request matched no subscription catalog
+                # route. Report that this upstream source contributed no
+                # additional models instead of forwarding the bearer to an
+                # incompatible endpoint and surfacing a misleading 403.
                 self._send_json({"models": []})
                 return
+            # Codex subscription sessions reach here with the router's
+            # catalog rewrite (the ChatGPT backend model catalog) and the
+            # caller's own credential. Newer Codex clients require a
+            # non-empty catalog from their configured provider before the
+            # interactive UI proceeds, so an empty stub would park them at
+            # startup; the forwarded catalog keeps schema and model set
+            # current without the proxy maintaining its own copy.
             self._proxy_to(route.full_url, "GET")
             return
         if path.startswith("http"):
@@ -1226,6 +1387,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self.wfile.write(_resp)
         elif self.path.split("?")[0] == "/v1/messages/count_tokens":
             self._handle_count_tokens()
+        elif self.path.split("?")[0] == "/v1/messages/session-economics":
+            self._handle_session_economics()
         elif self.path.split("?")[0] == "/v1/messages/forecast":
             self._handle_cost_forecast()
         elif self.path.startswith("/v1/messages/"):
@@ -1305,12 +1468,26 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         t0 = time.time()
         # Request ID: honour X-Request-ID from client, else generate UUID
         _req_id = _new_request_id(dict(self.headers))
+        # Adopt the forwarding request id as this request's response
+        # correlation id so X-TokenPak-Request-ID carries the same value
+        # as the X-Request-ID echoed on forwarded responses.
+        self._tokenpak_request_id = _req_id
         ps = self._ps
         parsed = urlparse(target_url)
 
-        should_log = any(h in target_url for h in INTERCEPT_HOSTS)
+        # Pass the handler module's public collection explicitly. Tests and
+        # embedders may replace ``server.INTERCEPT_HOSTS`` with an isolated set;
+        # hostname matching itself remains exact inside ``should_intercept``.
+        should_log = should_intercept(target_url, INTERCEPT_HOSTS)
         is_model_request = any(
-            endpoint in target_url for endpoint in ("/messages", "/chat/completions", "/responses")
+            endpoint in target_url
+            for endpoint in (
+                "/messages",
+                "/chat/completions",
+                "/responses",
+                ":generateContent",
+                ":streamGenerateContent",
+            )
         )
 
         content_length = int(self.headers.get("Content-Length", 0))
@@ -1346,6 +1523,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err_body)
                 return
+        if body:
+            # Scrub any previously-injected session-economics marker before
+            # this body is treated as provider-bound. A byte-identical
+            # no-op whenever the marker is absent (see module docstring).
+            from tokenpak.proxy.session_forecast_injection import scrub_request_body
+
+            _body_before_scrub = body
+            body = scrub_request_body(body)
+            if body is not _body_before_scrub and self.headers.get("Content-Length") is not None:
+                self.headers.replace_header("Content-Length", str(len(body)))
         _original_body = body
         _retry_policy = UpstreamRetryPolicy.from_env(
             body=body,
@@ -1367,6 +1554,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Provider stop_reason observed on the response path (read-only parse of
         # a response copy; forwarded bytes are never modified). '' = not observed.
         stop_reason = ""
+        # Usage parsing follows the router's provider identity, independently
+        # of transport URL inference used by credentials and circuit breakers.
+        _usage_parser_provider = "unknown"
 
         trace: PipelineTrace | None = None
         if should_log and is_model_request:
@@ -1593,6 +1783,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             try:
                 route = ps.router.route(target_url, dict(self.headers), body)
                 model = route.model
+                _usage_parser_provider = route.provider or "unknown"
             except Exception:
                 pass
             input_tokens = _estimate_tokens_from_body(body)
@@ -1702,9 +1893,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # computes these and they were previously dropped here, which left
                     # `tokenpak status` reporting "0 across 0 requests" forever while
                     # injection was working. Reported values must come from the stage
-                    # that did the work, never from a default.
+                    # that did the work, never from a default. The session write
+                    # happens later, under `ps._session_lock`, alongside every other
+                    # per-request counter update — not here.
                     _injected_tokens, _injected_sources = _read_injection_receipt(_result)
-                    _record_injection_in_session(_injected_tokens, _injected_sources)
                 except Exception:
                     pass  # fail-open: vault injection failure must never break a request
             else:
@@ -1933,7 +2125,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         else:
             incoming_headers = dict(self.headers)
             client_has_auth = any(
-                name.lower() in {"authorization", "x-api-key"} for name in incoming_headers
+                name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in incoming_headers
             )
             fwd_headers = forward_headers(
                 incoming_headers,
@@ -1958,28 +2150,48 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if _client_auth:
             _strip_proxy_auth_for_upstream(fwd_headers, _client_auth)
 
+        # A custom route owns its configured credential source. Resolve only
+        # the env-var value for this request and never fall through to the
+        # generic credential router, which could select an unrelated provider
+        # secret. Client-supplied upstream credentials remain authoritative.
+        _custom_provider = None
+        try:
+            _credential_route = ps.router.route(target_url, dict(self.headers), body)
+            _usage_parser_provider = _credential_route.provider or "unknown"
+            _custom_provider = ps._custom_provider_credentials.get(_credential_route.provider)
+        except Exception:
+            _custom_provider = None
+        _is_custom_route = _custom_provider is not None
+        _inject_custom_provider_credential(
+            fwd_headers,
+            target_url,
+            _custom_provider,
+        )
+
         # ── Router-based credential injection (feature-flagged) ──────
         # When TOKENPAK_CREDS_ROUTER_ENABLED=1, select a credential via
         # the creds router and inject it. On any failure this is a
         # no-op; the legacy Codex-auth path below then runs unchanged.
         _router_injected = False
-        try:
-            _router_injected = _creds_router_inject(fwd_headers, target_url, dict(self.headers))
-        except Exception:
-            _router_injected = False  # fail-open
+        if not _is_custom_route:
+            try:
+                _router_injected = _creds_router_inject(
+                    fwd_headers,
+                    target_url,
+                    dict(self.headers),
+                )
+            except Exception:
+                _router_injected = False  # fail-open
 
         # ── Codex OAuth credential injection (legacy default path) ───
         # Legacy compatibility: inject Codex OAuth only when the client did
         # not already supply credentials. Native Codex owns and forwards its
         # authenticated session; TokenPak must not replace or persist it.
         _upstream_provider = provider_from_url(target_url)
-        _client_supplied_upstream_auth = any(
-            header_name.lower() in {"authorization", "x-api-key"}
-            and bool(str(header_value).strip())
-            for header_name, header_value in fwd_headers.items()
-        )
+        _client_supplied_upstream_auth = _has_upstream_credential(fwd_headers, target_url)
         if (
-            not _router_injected
+            not _is_custom_route
+            and not _router_injected
             and not _client_supplied_upstream_auth
             and _upstream_provider == "openai"
             and (
@@ -2085,8 +2297,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _cb_success = False  # track whether request succeeded for circuit breaker
             _final_upstream_status: int | None = None
             resp_body = b""
+            _event_transform_applied = False
 
             output_tokens = 0
+            provider_usage_object: Mapping[str, object] | None = None
+
+            # Facts-only in-flight registration: started_at reuses the
+            # existing t0 anchor; ttfb/stream-duration/live output-tokens
+            # are filled in below as the request actually progresses. Gated
+            # the same as every other telemetry side effect in this handler.
+            _ttfb_ms: int | None = None
+            _stream_duration_ms: int | None = None
+            _inflight_tracker = None
+            if should_log and is_model_request:
+                from .inflight_registry import register as _inflight_register
+
+                _inflight_register(
+                    _req_id, model=model, started_at=t0, admission_ticket=_sg_admission_ticket
+                )
+
             if is_streaming:
                 # ── Streaming (SSE) path ──────────────────────────────────
                 # Use pool.stream() so the connection is kept alive after SSE ends.
@@ -2125,6 +2354,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 _norm_err_body = normalize_upstream_error(
                                     resp.status_code, _raw_err, provider_from_url(target_url)
                                 )
+                                _event_transform_applied = True
                                 _stream_wrote_to_client = True
                                 _client_headers_sent = True
                                 self.send_response(resp.status_code)
@@ -2165,9 +2395,28 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 self.end_headers()
 
                                 sse_content_encoding = resp.headers.get("content-encoding", "")
+                                _stream_first_byte_time: float | None = None
+                                if should_log and is_model_request and not sse_content_encoding:
+                                    from .streaming import IncrementalUsageTracker
+
+                                    # Incremental (mid-stream) parsing only covers
+                                    # cleartext SSE — see IncrementalUsageTracker's
+                                    # docstring for why a gzip-encoded stream can't
+                                    # be tracked chunk-by-chunk. The persisted,
+                                    # end-of-stream count below is unaffected.
+                                    _inflight_tracker = IncrementalUsageTracker()
                                 for chunk in resp.iter_raw():
                                     if not chunk:
                                         continue
+                                    if _stream_first_byte_time is None:
+                                        _stream_first_byte_time = time.time()
+                                        _ttfb_ms = int((_stream_first_byte_time - t0) * 1000)
+                                        if should_log and is_model_request:
+                                            from .inflight_registry import (
+                                                mark_ttfb as _inflight_ttfb,
+                                            )
+
+                                            _inflight_ttfb(_req_id)
                                     try:
                                         self.wfile.write(chunk)
                                         self.wfile.flush()
@@ -2175,6 +2424,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                         break
                                     if should_log and is_model_request:
                                         sse_buffer += chunk
+                                        if _inflight_tracker is not None:
+                                            _live_output_tokens = _inflight_tracker.feed(chunk)
+                                            from .inflight_registry import (
+                                                update_output_tokens as _inflight_update,
+                                            )
+
+                                            _inflight_update(_req_id, _live_output_tokens)
+                                if _stream_first_byte_time is not None:
+                                    _stream_duration_ms = int(
+                                        (time.time() - _stream_first_byte_time) * 1000
+                                    )
                     except _retry_policy.retryable_exceptions as _stream_exc:
                         # Once we've committed to writing to the client, can't retry —
                         # the CLI's SSE parser would see a truncated-then-restarted stream.
@@ -2206,6 +2466,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         except Exception:
                             sse_observation_buffer = b""
                     sse_usage = extract_sse_tokens(sse_observation_buffer)
+                    provider_usage_object = _extract_sse_usage(sse_observation_buffer)
                     # stop_reason from message_delta (read-only on the buffered
                     # copy - forwarded stream bytes already went out unmodified).
                     stop_reason = _extract_sse_stop_reason(sse_observation_buffer)
@@ -2288,6 +2549,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     resp_body = normalize_upstream_error(
                         resp.status_code, resp_body, provider_from_url(target_url)
                     )
+                    _event_transform_applied = True
 
                 _client_headers_sent = True
                 self.send_response(resp.status_code)
@@ -2317,7 +2579,36 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("X-Request-ID", _req_id)
                 self.end_headers()
 
-                self.wfile.write(resp_body)
+                # Optional, default-off client-return decoration: a SEPARATE
+                # copy for the client write only. resp_body itself is never
+                # reassigned here, so every accounting/metrics read below
+                # continues to observe the original, undecorated bytes.
+                client_resp_body = resp_body
+                if is_model_request and not is_streaming and not _is_upstream_error:
+                    try:
+                        from tokenpak.proxy.request_pipeline import (
+                            _resolve_session_id as _rsi_inject,
+                        )
+                        from tokenpak.proxy.session_forecast_injection import (
+                            maybe_decorate_response,
+                        )
+
+                        client_resp_body = maybe_decorate_response(
+                            resp_body,
+                            # Explicit-only resolution ("" model arg means no
+                            # last-resort model-name fallback): decoration
+                            # never guesses a shared pseudo-session across
+                            # unrelated clients that both omit a session id.
+                            session_id=_rsi_inject(self.headers, ""),
+                            db_path=getattr(ps.monitor, "db_path", None)
+                            if getattr(ps, "monitor", None)
+                            else None,
+                            model_hint=model,
+                        )
+                    except Exception:
+                        client_resp_body = resp_body  # fail-open
+
+                self.wfile.write(client_resp_body)
                 self.wfile.flush()
 
                 if should_log and is_model_request:
@@ -2328,16 +2619,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     output_tokens = _extract_response_tokens(body_for_metrics)
+                    provider_usage_object = _extract_response_usage(body_for_metrics)
                     # stop_reason from the response JSON copy (read-only -
                     # the client already received the original bytes above).
                     stop_reason = _extract_response_stop_reason(body_for_metrics)
                     try:
-                        usage = json.loads(body_for_metrics).get("usage", {})
-                        cache_read_tokens = usage.get("cache_read_input_tokens", 0)
-                        cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
+                        observed_cache_read, observed_cache_creation = _provider_cache_observation(
+                            provider_usage_object
+                        )
+                        if observed_cache_read is not None:
+                            cache_read_tokens = observed_cache_read
+                        if observed_cache_creation is not None:
+                            cache_creation_tokens = observed_cache_creation
                         # Per-TTL prompt-cache attribution (additive, read-only).
-                        _cc_obj = usage.get("cache_creation")
-                        if isinstance(_cc_obj, dict):
+                        _cc_obj = (
+                            provider_usage_object.get("cache_creation")
+                            if provider_usage_object is not None
+                            else None
+                        )
+                        if isinstance(_cc_obj, Mapping):
                             cache_creation_1h_tokens = int(
                                 _cc_obj.get("ephemeral_1h_input_tokens") or 0
                             )
@@ -2393,12 +2693,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # logging must never break the proxy
 
-            if should_log and is_model_request and input_tokens > 0:
+            if should_log and is_model_request:
+                _provider_usage = _safe_provider_usage_observation(
+                    _usage_parser_provider,
+                    provider_usage_object,
+                    body,
+                )
+                _cost_observed = _cost_observation(
+                    provider=_usage_parser_provider,
+                    model=model,
+                    status_code=_resp_status,
+                    usage=_provider_usage,
+                    fallback_input_tokens=sent_input_tokens,
+                    fallback_output_tokens=output_tokens,
+                    fallback_cache_read_tokens=cache_read_tokens,
+                    fallback_cache_creation_tokens=cache_creation_tokens,
+                )
                 if _resp_status != 200:
                     # Non-200 responses generate no tokens; log cost=0 to avoid
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
                     cost = 0.0
-                    cost_without = 0.0
+                    cost_saved = 0.0
                     # Record 429 in the rate-limit circuit breaker so repeated
                     # rate-limit bursts trip the circuit and stop upstream hammering.
                     if _resp_status == 429 and _cb_provider:
@@ -2406,16 +2721,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 else:
                     cost = estimate_cost(
                         model,
-                        sent_input_tokens,
-                        output_tokens,
-                        cache_read_tokens,
-                        cache_creation_tokens,
+                        _cost_observed["input_tokens"],
+                        _cost_observed["output_tokens"],
+                        _cost_observed["cache_read_tokens"],
+                        _cost_observed["cache_creation_tokens"],
                     )
-                    cost_without = estimate_cost(
-                        model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+                    cost_saved = _local_rate_estimated_cost_saved(
+                        model=model,
+                        input_tokens=input_tokens,
+                        sent_input_tokens=sent_input_tokens,
+                        output_tokens=output_tokens,
+                        cache_read_tokens=cache_read_tokens,
+                        cache_creation_tokens=cache_creation_tokens,
                     )
                 saved = max(0, input_tokens - sent_input_tokens)
-                cost_saved = max(0.0, cost_without - cost)
 
                 # Settle the spend-guard in-flight admission now that this
                 # request's actual cost is known (the monitor row below makes
@@ -2431,6 +2750,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
                     _sg_admission_ticket = None
+
+                # Tear down the facts-only in-flight registration — this
+                # request is no longer "in flight" once its outcome is known.
+                try:
+                    from .inflight_registry import finish as _inflight_finish
+
+                    _inflight_finish(_req_id)
+                except Exception:
+                    pass
 
                 # Cache attribution: who placed the cache_control markers that
                 # produced these cache_read_tokens. Byte-preserved → client did;
@@ -2452,6 +2780,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         ps.session["cache_read_client"] += cache_read_tokens
                     else:
                         ps.session["cache_read_proxy"] += cache_read_tokens
+                    # Vault-injection receipt onto the *real* session `tokenpak
+                    # status` reads (via GET /stats), not the compatibility
+                    # global — see _record_injection_in_session.
+                    _record_injection_in_session(ps.session, _injected_tokens, _injected_sources)
 
                 # Persist to monitor.db so `tokenpak status`, dashboards, and
                 # cross-session reporting see this request. Async write queue
@@ -2532,6 +2864,32 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             cycle_id=_mon_cycle_id,
                             attribution_source=_mon_attribution_source,
                             stop_reason=stop_reason,
+                            reasoning_tokens=_provider_usage["reasoning_tokens"],
+                            visible_output_tokens=_provider_usage["visible_output_tokens"],
+                            total_billable_tokens=_provider_usage["total_billable_tokens"],
+                            reasoning_effort=_provider_usage["reasoning_effort"],
+                            reasoning_usage_source=_provider_usage["reasoning_usage_source"],
+                            provider_usage_ref=_provider_usage["provider_usage_ref"],
+                            provider_usage_provider=_usage_parser_provider,
+                            provider_input_tokens=_provider_usage["provider_input_tokens"],
+                            provider_output_tokens=_provider_usage["provider_output_tokens"],
+                            provider_cache_read_tokens=_provider_usage[
+                                "provider_cache_read_tokens"
+                            ],
+                            provider_cache_creation_tokens=_provider_usage[
+                                "provider_cache_creation_tokens"
+                            ],
+                            provider_usage_source=_provider_usage["provider_usage_source"],
+                            provider_usage_confidence=_provider_usage["provider_usage_confidence"],
+                            reasoning_effort_source=_provider_usage["reasoning_effort_source"],
+                            reasoning_effort_raw=_provider_usage["reasoning_effort_raw"],
+                            cost_basis=_cost_observed["cost_basis"],
+                            pricing_source=_cost_observed["pricing_source"],
+                            stream_mode="sse" if is_streaming else "json",
+                            event_transform_applied=_event_transform_applied,
+                            started_at=datetime.fromtimestamp(t0, tz=timezone.utc).isoformat(),
+                            ttfb_ms=_ttfb_ms,
+                            stream_duration_ms=_stream_duration_ms,
                         )
                     except Exception:
                         pass  # DB errors must never break the request
@@ -2689,16 +3047,37 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _cb_registry.record_failure(_cb_provider)
 
         except Exception as exc:
+            # A raw socket error here means the downstream client disappeared
+            # while we were writing its response. No HTTP 502 was delivered,
+            # and the provider request did not fail. Record that transport
+            # outcome separately, then leave the generic proxy-error path
+            # untouched for genuine upstream/internal failures.
+            if _is_client_disconnect_error(exc):
+                latency_ms = int((time.time() - t0) * 1000)
+                try:
+                    log_request(
+                        request_id=_req_id,
+                        client_ip=self.client_address[0] if self.client_address else "",
+                        method=method,
+                        endpoint=parsed.path,
+                        request_body_size=content_length,
+                        response_status=0,
+                        latency_ms=latency_ms,
+                        model=model,
+                        extra={
+                            "outcome": "client_disconnect",
+                            "client_disconnected": True,
+                            "disconnect_type": type(exc).__name__,
+                        },
+                    )
+                except Exception:
+                    pass  # logging must never break the proxy
+                return
+
             # ── Circuit breaker: record failure ───────────────────────────
-            # ...unless OUR client's socket died (BrokenPipeError /
-            # ConnectionResetError writing to self.wfile). That says nothing
-            # about provider health — counting it opened the breaker for a
-            # healthy provider whenever CLIs were killed mid-response.
-            if (
-                _cb_registry is not None
-                and _cb_provider is not None
-                and not _is_client_disconnect_error(exc)
-            ):
+            # Raw downstream disconnects returned above. Every exception that
+            # reaches this point is still an upstream or internal failure.
+            if _cb_registry is not None and _cb_provider is not None:
                 _cb_registry.record_failure(_cb_provider)
 
             with ps._session_lock:
@@ -2875,15 +3254,32 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         finally:
-            # Release the outbound concurrency slot no matter how we exit.
-            if _sem_acquired:
+            # Registration is facts-only and finish() is idempotent. Keep the
+            # normal-path finish above for prompt disappearance, while this
+            # safety net covers upstream exceptions and client disconnects.
+            try:
                 try:
-                    _upstream_sem.release()
-                    _upstream_inflight_delta(_sem_provider, -1, _session_key)
-                except ValueError:
-                    # BoundedSemaphore raises if released more times than acquired;
-                    # swallow to keep the handler fail-safe.
-                    pass
+                    from .inflight_registry import finish as _inflight_finish
+
+                    _inflight_finish(_req_id)
+                except Exception:
+                    logger.warning(
+                        "in-flight registry cleanup failed for request %s",
+                        _req_id,
+                        exc_info=True,
+                    )
+                    raise
+            finally:
+                # Release the outbound concurrency slot no matter how we exit,
+                # including when registry cleanup raises above.
+                if _sem_acquired:
+                    try:
+                        _upstream_sem.release()
+                        _upstream_inflight_delta(_sem_provider, -1, _session_key)
+                    except ValueError:
+                        # BoundedSemaphore raises if released more times than acquired;
+                        # swallow to keep the handler fail-safe.
+                        pass
 
     def _handle_count_tokens(self) -> None:
         """Handle POST /v1/messages/count_tokens — compute token count locally.
@@ -3035,6 +3431,116 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(resp_body)
+
+    def _handle_session_economics(self) -> None:
+        """Serve deterministic completed-session economics without upstream I/O."""
+        from tokenpak._paths import monitor_db
+        from tokenpak.proxy.forecast_endpoint import (
+            _build_session_economics_response,
+            resolve_default_session_id,
+        )
+        from tokenpak.proxy.request_pipeline import _resolve_session_id
+
+        def _send_err(
+            message: str,
+            *,
+            status: int = 400,
+            error_type: str = "invalid_request_error",
+        ) -> None:
+            body = json.dumps(
+                {"error": {"type": error_type, "message": message}},
+                separators=(",", ":"),
+            ).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            _send_err("Content-Length must be an integer")
+            return
+        raw_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            _send_err("Request body is not valid JSON")
+            return
+        if not isinstance(payload, dict):
+            _send_err("Request body must be a JSON object")
+            return
+
+        body_session = payload.get("session_id", "")
+        if not isinstance(body_session, str):
+            _send_err("session_id must be a string when provided")
+            return
+        model_hint = payload.get("model", "")
+        if not isinstance(model_hint, str):
+            _send_err("model must be a string when provided")
+            return
+
+        header_session = _resolve_session_id(self.headers, "").strip()
+        body_session = body_session.strip()
+        if header_session and body_session and header_session != body_session:
+            _send_err("session_id conflicts with the stable session header")
+            return
+        session_id = header_session or body_session
+
+        # Optional frozen evaluation time. This is a deterministic-replay
+        # surface: it changes only the clock the payload is evaluated at
+        # (as_of, idle, freshness), never what the ledger contains. The
+        # non-self-metering regression suite depends on it to prove that
+        # reads across a process restart are value-identical.
+        now_field = payload.get("now")
+        frozen_now: datetime | None = None
+        if now_field is not None:
+            if not isinstance(now_field, str):
+                _send_err("now must be an ISO-8601 timestamp string when provided")
+                return
+            try:
+                frozen_now = datetime.fromisoformat(now_field.replace("Z", "+00:00"))
+            except ValueError:
+                _send_err("now must be an ISO-8601 timestamp string when provided")
+                return
+            if frozen_now.tzinfo is None:
+                _send_err("now must include a timezone")
+                return
+
+        db_path = monitor_db(mode="read")
+        selection_note = ""
+        if not session_id:
+            # Proxy-owned default: latest completed non-empty ledger session.
+            session_id, selection_note = resolve_default_session_id(db_path)
+
+        try:
+            economics = _build_session_economics_response(
+                session_id,
+                db_path,
+                model_hint=model_hint,
+                now=frozen_now,
+            )
+            response_body = economics.to_json().encode()
+        except Exception:
+            logger.exception("session-economics local ledger evaluation failed")
+            _send_err(
+                "Session economics could not be computed from the local ledger",
+                status=500,
+                error_type="api_error",
+            )
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response_body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        if selection_note:
+            # Provenance for the proxy-owned default-session selection rides
+            # a header so the JSON body stays exactly the canonical contract.
+            self.send_header("X-TokenPak-Session-Selection", selection_note)
+        self.end_headers()
+        self.wfile.write(response_body)
 
     def _handle_claude_code_backend(self, body: bytes) -> None:
         """Route request through Claude Code CLI (subscription billing).
@@ -3375,10 +3881,20 @@ def _estimate_tokens_from_body(body: bytes) -> int:
         data = json.loads(body)
         messages = data.get("messages")
         if not isinstance(messages, list):
-            messages = data.get("input", [])
+            messages = data.get("input")
+        if not isinstance(messages, list):
+            messages = data.get("contents")
+        if isinstance(messages, str):
+            messages = [{"content": messages}]
+        if not isinstance(messages, list):
+            return len(body) // 4
         total = 0
         for msg in messages:
+            if not isinstance(msg, Mapping):
+                continue
             content = msg.get("content", "")
+            if not content:
+                content = msg.get("parts", [])
             if isinstance(content, str):
                 total += len(content) // 4
             elif isinstance(content, list):
@@ -3432,18 +3948,333 @@ def _decode_request_entity(body: bytes, content_encoding: str) -> tuple[bytes, b
     return decoded, True
 
 
-def _extract_response_tokens(body: bytes) -> int:
+def _extract_response_usage(body: bytes) -> dict[str, object] | None:
+    """Read a provider usage object from a response copy.
+
+    Supports Anthropic/OpenAI's top-level ``usage``, Gemini's
+    ``usageMetadata``, and the nested object used by Responses completion
+    events. The supplied bytes are observation-only and are never rewritten.
+    """
     try:
         data = json.loads(body)
-        usage = data.get("usage", {})
-        value = (
-            usage.get("output_tokens")
-            or usage.get("completion_tokens")
-            or usage.get("total_tokens", 0)
-        )
-        return value if isinstance(value, int) else 0
-    except Exception:
+        if not isinstance(data, Mapping):
+            return None
+        candidates: list[object] = [data.get("usage"), data.get("usageMetadata")]
+        response = data.get("response")
+        if isinstance(response, Mapping):
+            candidates.extend((response.get("usage"), response.get("usageMetadata")))
+        for candidate in candidates:
+            if isinstance(candidate, Mapping):
+                return {str(key): value for key, value in candidate.items()}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def _mapping_int(data: Mapping[str, object], *names: str) -> int | None:
+    for name in names:
+        value = data.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
+def _extract_response_tokens(body: bytes) -> int:
+    usage = _extract_response_usage(body)
+    if usage is None:
         return 0
+    value = _mapping_int(
+        usage,
+        "output_tokens",
+        "completion_tokens",
+        "candidatesTokenCount",
+        "candidates_token_count",
+    )
+    return value if value is not None else 0
+
+
+def _extract_request_reasoning_effort(body: bytes) -> tuple[str, str]:
+    """Return normalized and raw request-observed reasoning effort.
+
+    The governed reasoning-usage schema currently admits only
+    low/medium/high. Newer client values remain available in the raw field so
+    the schema can be reconciled explicitly instead of silently discarding or
+    widening the normalized contract.
+    """
+    try:
+        data = json.loads(body)
+        if not isinstance(data, Mapping):
+            return "", ""
+        value = data.get("reasoning_effort")
+        reasoning = data.get("reasoning")
+        if not isinstance(value, str) and isinstance(reasoning, Mapping):
+            value = reasoning.get("effort")
+        if not isinstance(value, str):
+            return "", ""
+        raw = value.strip()
+        return (raw if raw in {"low", "medium", "high"} else "", raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "", ""
+
+
+def _provider_cache_observation(
+    usage: Mapping[str, object] | None,
+) -> tuple[int | None, int | None]:
+    if usage is None:
+        return None, None
+
+    cache_read = _mapping_int(
+        usage,
+        "cache_read_input_tokens",
+        "cachedContentTokenCount",
+        "cached_content_token_count",
+    )
+    if cache_read is None:
+        details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
+        if isinstance(details, Mapping):
+            cache_read = _mapping_int(details, "cached_tokens")
+    return cache_read, _mapping_int(usage, "cache_creation_input_tokens")
+
+
+def _provider_usage_observation(
+    provider: str,
+    usage: Mapping[str, object] | None,
+    request_body: bytes,
+) -> _ProviderUsageObservation:
+    """Normalize one provider usage observation with explicit provenance."""
+    from tokenpak.services.providers._registry import (
+        get_input_tokens_include_cache,
+        get_usage_parser,
+    )
+
+    record = get_usage_parser(provider)(usage)
+    raw_source = record.get("usage_source")
+    source = (
+        raw_source
+        if isinstance(raw_source, str)
+        and raw_source in {"provider_usage_object", "estimated", "unavailable"}
+        else "unavailable"
+    )
+    confidence = "high" if source == "provider_usage_object" else "unknown"
+
+    raw_provider_effort = record.get("reasoning_effort")
+    provider_effort = (
+        raw_provider_effort
+        if isinstance(raw_provider_effort, str) and raw_provider_effort in {"low", "medium", "high"}
+        else None
+    )
+    provider_effort_raw = usage.get("reasoning_effort") if usage is not None else None
+    if isinstance(provider_effort_raw, str):
+        provider_effort_raw = provider_effort_raw.strip()
+    else:
+        provider_effort_raw = None
+    request_effort, request_effort_raw = _extract_request_reasoning_effort(request_body)
+    if isinstance(provider_effort, str) and provider_effort:
+        effort = provider_effort
+        effort_source = "provider_usage_object"
+        effort_raw = (
+            provider_effort_raw
+            if isinstance(provider_effort_raw, str) and provider_effort_raw
+            else provider_effort
+        )
+    elif request_effort:
+        effort = request_effort
+        effort_source = "request_body"
+        effort_raw = request_effort_raw
+    elif isinstance(provider_effort_raw, str) and provider_effort_raw:
+        effort = ""
+        effort_source = "provider_usage_object_unrecognized"
+        effort_raw = provider_effort_raw
+    elif request_effort_raw:
+        effort = ""
+        effort_source = "request_body_unrecognized"
+        effort_raw = request_effort_raw
+    else:
+        effort = ""
+        effort_source = ""
+        effort_raw = ""
+
+    cache_read, cache_creation = _provider_cache_observation(usage)
+
+    def optional_int(name: str) -> int | None:
+        value = record.get(name)
+        return (
+            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        )
+
+    usage_ref = record.get("provider_usage_ref")
+    input_tokens_include_cache = get_input_tokens_include_cache(provider)
+    return {
+        "reasoning_tokens": optional_int("reasoning_tokens"),
+        "visible_output_tokens": optional_int("visible_output_tokens"),
+        "total_billable_tokens": optional_int("total_billable_tokens"),
+        "reasoning_effort": effort,
+        "reasoning_usage_source": source,
+        "provider_usage_ref": usage_ref if isinstance(usage_ref, str) else "",
+        "provider_input_tokens": optional_int("input_tokens"),
+        "provider_input_tokens_include_cache": (
+            input_tokens_include_cache if isinstance(input_tokens_include_cache, bool) else None
+        ),
+        "provider_output_tokens": optional_int("total_output_tokens"),
+        "provider_cache_read_tokens": cache_read,
+        "provider_cache_creation_tokens": cache_creation,
+        "provider_usage_source": source,
+        "provider_usage_confidence": confidence,
+        "reasoning_effort_source": effort_source,
+        "reasoning_effort_raw": effort_raw,
+    }
+
+
+def _safe_provider_usage_observation(
+    provider: str,
+    usage: Mapping[str, object] | None,
+    request_body: bytes,
+) -> _ProviderUsageObservation:
+    """Return an observation while containing third-party parser failures."""
+    try:
+        return _provider_usage_observation(provider, usage, request_body)
+    except Exception as exc:
+        logger.warning(
+            "provider usage parser failed; usage marked unavailable",
+            extra={"provider": provider, "error_type": type(exc).__name__},
+        )
+        return _provider_usage_observation("unknown", None, request_body)
+
+
+class _CostObservation(TypedDict):
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    cost_basis: str
+    pricing_source: str
+
+
+def _cost_observation(
+    *,
+    provider: str,
+    model: str,
+    status_code: int,
+    usage: _ProviderUsageObservation,
+    fallback_input_tokens: int,
+    fallback_output_tokens: int,
+    fallback_cache_read_tokens: int,
+    fallback_cache_creation_tokens: int,
+) -> _CostObservation:
+    """Choose priced token counts and label every inference boundary."""
+    from tokenpak.services.providers._registry import get_cost_policy
+
+    provider_input = usage["provider_input_tokens"]
+    input_includes_cache = usage["provider_input_tokens_include_cache"]
+    provider_output = usage["provider_output_tokens"]
+    provider_cache_read = usage["provider_cache_read_tokens"]
+    provider_cache_creation = usage["provider_cache_creation_tokens"]
+
+    provider_counts_observed = usage["provider_usage_source"] == "provider_usage_object"
+    use_provider_input = (
+        provider_counts_observed and provider_input is not None and input_includes_cache is not None
+    )
+    cache_read = (
+        provider_cache_read if provider_cache_read is not None else fallback_cache_read_tokens
+    )
+    cache_creation = (
+        provider_cache_creation
+        if provider_cache_creation is not None
+        else fallback_cache_creation_tokens
+    )
+    if use_provider_input:
+        priced_input = provider_input
+        if input_includes_cache is False:
+            priced_input += cache_read + cache_creation
+    else:
+        priced_input = fallback_input_tokens
+    priced_output = (
+        provider_output
+        if provider_counts_observed and provider_output is not None
+        else fallback_output_tokens
+    )
+
+    cost_policy = get_cost_policy(provider)
+    if status_code != 200:
+        cost_basis = "non_success_cost_unmeasured"
+        pricing_source = "unknown"
+    elif cost_policy == "subscription_billed_unknown":
+        # Subscription entitlement does not expose a per-request billed USD
+        # amount. Keep the API-equivalent estimate out of exact-spend claims.
+        cost_basis = "subscription_billed_cost_unknown"
+        pricing_source = "unknown"
+    elif cost_policy == "route_unknown":
+        cost_basis = "route_cost_unknown"
+        pricing_source = "unknown"
+    else:
+        observed_parts = sum(
+            value is not None
+            for value in (
+                provider_input
+                if provider_counts_observed and input_includes_cache is not None
+                else None,
+                provider_output if provider_counts_observed else None,
+                provider_cache_read,
+                provider_cache_creation,
+            )
+        )
+        cost_basis = (
+            "provider_usage_rate_estimate"
+            if use_provider_input and provider_output is not None
+            else "mixed_usage_rate_estimate"
+            if observed_parts
+            else "local_usage_rate_estimate"
+        )
+        try:
+            from tokenpak.models import get_pricing
+
+            pricing = get_pricing(model)
+            raw_source = pricing.source if pricing is not None else "unknown"
+            pricing_source = (
+                raw_source if raw_source in {"seed", "discovered", "inferred"} else "unknown"
+            )
+        except Exception as exc:
+            logger.warning(
+                "pricing provenance lookup failed; source marked unknown",
+                extra={"model": model, "error_type": type(exc).__name__},
+            )
+            pricing_source = "unknown"
+
+    return {
+        "input_tokens": max(0, priced_input),
+        "output_tokens": max(0, priced_output),
+        "cache_read_tokens": max(0, cache_read),
+        "cache_creation_tokens": max(0, cache_creation),
+        "cost_basis": cost_basis,
+        "pricing_source": pricing_source,
+    }
+
+
+def _local_rate_estimated_cost_saved(
+    *,
+    model: str,
+    input_tokens: int,
+    sent_input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+) -> float:
+    """Return like-for-like local-estimator savings without mixing tokenizers."""
+    cost_without = estimate_cost(
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+    )
+    cost_with = estimate_cost(
+        model,
+        sent_input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+    )
+    return max(0.0, cost_without - cost_with)
 
 
 def _extract_response_stop_reason(body: bytes) -> str:
@@ -3612,7 +4443,23 @@ class ProxyServer:
         except Exception:  # pragma: no cover — import failure gracefully degrades
             pass
 
-        self.router = ProviderRouter()
+        from tokenpak.proxy.config import (
+            CUSTOM_PROVIDER_CONFIGURED_COUNT,
+            CUSTOM_PROVIDER_HOSTS,
+            CUSTOM_PROVIDER_REGISTERED_COUNT,
+            CUSTOM_PROVIDER_ROUTES,
+            REGISTERED_CUSTOM_PROVIDERS,
+        )
+
+        self.router = ProviderRouter(
+            custom_urls=dict(CUSTOM_PROVIDER_ROUTES),
+            custom_hosts=dict(CUSTOM_PROVIDER_HOSTS),
+        )
+        self.custom_provider_configured_count = CUSTOM_PROVIDER_CONFIGURED_COUNT
+        self.custom_provider_registered_count = CUSTOM_PROVIDER_REGISTERED_COUNT
+        self._custom_provider_credentials = {
+            f"custom-{provider.name}": provider for provider in REGISTERED_CUSTOM_PROVIDERS
+        }
         self.trace_storage = TraceStorage(max_traces=50)
         self.session_filter = SessionFilter()
         self.session: _SessionState = _new_session()
@@ -3783,6 +4630,9 @@ class ProxyServer:
             for startup_message in (
                 f"TokenPak proxy listening on {self.host}:{self.port} [{self.compilation_mode}]",
                 "  ✓ Zero-config mode enabled (auto-detecting upstream from request headers)",
+                "  ✓ Custom providers: "
+                f"{self.custom_provider_registered_count}/"
+                f"{self.custom_provider_configured_count} registered",
             ):
                 try:
                     print(startup_message)
@@ -4023,7 +4873,13 @@ class ProxyServer:
         # cannot skip the monitor drain — recorded request rows are the
         # critical data.
         if self.monitor is not None:
-            self.monitor.flush(timeout=5.0)
+            if not self.monitor.flush(timeout=5.0):
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "monitor write queue did not fully drain before shutdown "
+                    "flush timeout; some request rows may still be pending"
+                )
 
         # Delegate to the compression_stats recorder (writes to ~/.tokenpak/compression_events.jsonl)
         self.compression_stats.flush_shutdown_record(shutdown_record)
@@ -4340,6 +5196,35 @@ def _write_proxy_pid_file() -> Path:
     return pid_path
 
 
+def _format_proxy_startup_banner(
+    *,
+    host: str,
+    port: int,
+    profile: str,
+    mode: str,
+    mode_description: str,
+    provider_display: str,
+    custom_configured: int,
+    custom_registered: int,
+    pid: int,
+    pid_path: Path,
+) -> str:
+    """Build the startup banner from the same registered-provider truth."""
+    return f"""
+╔══════════════════════════════════════════════════════════════════╗
+║  TokenPak Proxy  v{_tokenpak_version}
+╠══════════════════════════════════════════════════════════════════╣
+║  Listening:  http://{host}:{port}
+║  Profile:    {profile}
+║  Mode:       {mode} — {mode_description}
+║  Providers:  {provider_display}
+║  Custom:     {custom_registered}/{custom_configured} registered
+║  PID:        {pid}
+║  PID file:   {pid_path}
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+
 def main() -> None:
     """
     Entry point for ``python -m tokenpak.proxy.server``.
@@ -4421,21 +5306,27 @@ def main() -> None:
     # proxy writes its own pid instead of clobbering the default home.
     _pid_path = _write_proxy_pid_file()
 
+    from tokenpak.proxy.config import (
+        CUSTOM_PROVIDER_CONFIGURED_COUNT as _custom_configured,
+    )
+    from tokenpak.proxy.config import (
+        CUSTOM_PROVIDER_REGISTERED_COUNT as _custom_registered,
+    )
     from tokenpak.proxy.config import PROVIDER_DISPLAY as _provider_display
 
     print(
-        f"""
-╔══════════════════════════════════════════════════════════════════╗
-║  TokenPak Proxy  v{_tokenpak_version}
-╠══════════════════════════════════════════════════════════════════╣
-║  Listening:  http://{host}:{port}
-║  Profile:    {profile}
-║  Mode:       {mode} — {_mode_desc.get(mode, "?")}
-║  Providers:  {_provider_display}
-║  PID:        {os.getpid()}
-║  PID file:   {_pid_path}
-╚══════════════════════════════════════════════════════════════════╝
-""",
+        _format_proxy_startup_banner(
+            host=host,
+            port=port,
+            profile=profile,
+            mode=mode,
+            mode_description=_mode_desc.get(mode, "?"),
+            provider_display=_provider_display,
+            custom_configured=_custom_configured,
+            custom_registered=_custom_registered,
+            pid=os.getpid(),
+            pid_path=_pid_path,
+        ),
         flush=True,
     )
 

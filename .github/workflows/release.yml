@@ -1,13 +1,14 @@
 name: Release TokenPak
 
 on:
-  # Manual-dispatch entry point for pre-tag preflight runs against any branch
-  # (typically `main` immediately before pushing a tag). The dispatch uses the
-  # same test → build → dist-purity assert → checksum job graph as a real tag
-  # push; only the publish-to-PyPI job is skipped (see the publish job's `if:`).
+  # Manual-dispatch entry point for branch-ref preflight runs. A branch dispatch
+  # runs the test, chaos, release-gate snapshot, and leak-scan jobs. Tag-only
+  # build, publish, GitHub Release, and site-sync jobs skip, so a green branch
+  # run is not evidence for those surfaces. Never dispatch this workflow at a
+  # tag ref; real releases are triggered only by a tag push.
   # Use:
   #   gh workflow run "Release TokenPak" --ref main
-  # Then verify the run is green before `git push <tag>`.
+  # Then verify only the branch-safe jobs above before `git push <tag>`.
   workflow_dispatch:
   push:
     tags:
@@ -73,10 +74,10 @@ jobs:
         shape: [slim, dev, full]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -139,10 +140,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -170,7 +171,7 @@ jobs:
 
       - name: Upload chaos release-readiness artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-readiness-${{ steps.artifact_ref.outputs.safe_ref }}-test-chaos
           path: |
@@ -185,11 +186,10 @@ jobs:
     env:
       # Skip first-run RBAC admin bootstrap during snapshot introspection so the
       # ephemeral admin password is never emitted into (public) CI logs.
-      # See REIPO-SNAPGEN-LOG-HYGIENE-01.
       TOKENPAK_SNAPSHOT_GEN: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install (all extras for canonical snapshot reproduction)
@@ -238,10 +238,10 @@ jobs:
     name: Public-leak scan (full shipped tree)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -290,7 +290,7 @@ jobs:
     # tag with no tag-push event and no second human gate. Parity with publish.
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Tag-source ancestry validation: refuse to build a release from a v-tag
       # that is not reachable from origin/main. The job-level `if` restricts to
@@ -310,7 +310,7 @@ jobs:
           fi
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -364,51 +364,67 @@ jobs:
         run: |
           # SHA256SUMS lives at repo root, NEVER inside dist/.
           # See dist-purity contract on the build job.
-          ( cd dist && sha256sum *.whl *.tar.gz ) > SHA256SUMS
+          ( cd dist && sha256sum -- *.whl *.tar.gz ) > SHA256SUMS
           cat SHA256SUMS
 
       - name: Upload dist artifact (wheels + sdist only)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist
           path: dist/
 
       - name: Upload checksums artifact (SHA256SUMS only)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: checksums
           path: SHA256SUMS
 
   # ─────────────────────────────────────────────────────────────────────
-  # Step 3: Create GitHub Release with artifacts
+  # Step 4: Create GitHub Release with artifacts
+  # (Defined here but sequenced AFTER the publish job below: a public
+  # Release must never exist before the package is actually on PyPI.)
   # ─────────────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, publish]
     # Std 12 §3.3 dispatch guard (parity with build/publish): only a real
     # tag-push event may create the GitHub Release. A dispatch-at-tag is
     # rejected by `github.event_name == 'push'`, so it cannot spoof or overwrite
     # a Release for an already-promoted tag.
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    #
+    # Ordering guard: the Release is created only after the publish job has
+    # succeeded — or was skipped for rc/alpha/beta tags, which never publish.
+    # A failed or rejected publish leaves no public Release pointing at
+    # artifacts that do not exist on the index. `!cancelled()` (a status
+    # function) is required so this condition is still evaluated when the
+    # publish job was skipped; the explicit result checks then decide.
+    if: >-
+      ${{ !cancelled()
+          && github.event_name == 'push'
+          && startsWith(github.ref, 'refs/tags/v')
+          && needs.build.result == 'success'
+          && (needs.publish.result == 'success'
+              || (needs.publish.result == 'skipped'
+                  && (contains(github.ref, 'rc') || contains(github.ref, 'alpha') || contains(github.ref, 'beta')))) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download dist artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: dist
           path: dist/
 
       - name: Download checksums artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: checksums
           path: .
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         id: notes
@@ -461,13 +477,45 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Notify the public site only after the package and GitHub Release exist.
+  # Manual and daily site-sync fallbacks remain available when no token is set.
+  site-sync:
+    name: Notify site of published release
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch release-synced event to site
+        env:
+          GH_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::SITE_REPO_TOKEN is not configured; site release sync will use its manual or daily fallback."
+            exit 0
+          fi
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            repos/tokenpak/site/dispatches \
+            -f event_type=release-synced \
+            -f "client_payload[tag_name]=${RELEASE_TAG}" \
+            -f "client_payload[release_sha]=${RELEASE_SHA}"
+
   # ─────────────────────────────────────────────────────────────────────
-  # Step 4: Publish to PyPI (optional, requires OIDC setup)
+  # Step 3: Publish to PyPI (optional, requires OIDC setup)
+  # (Environment-gated; runs BEFORE the GitHub Release is created so the
+  # approval wait cannot open a Release-without-artifacts window.)
   # ─────────────────────────────────────────────────────────────────────
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: release
+    needs: build
     # Std 30 §8 hard guard + non-prerelease only: never publish on rehearsal-*
     # tags, branch pushes, PRs, or rc/alpha/beta tags. Combined into a single
     # condition — GitHub Actions rejects duplicate `if:` per job. (Run
@@ -479,7 +527,7 @@ jobs:
       id-token: write  # Required for Trusted Publisher (OIDC)
     steps:
       - name: Download dist artifact only
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: dist
           path: dist/
@@ -509,4 +557,4 @@ jobs:
           ls -la dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1 (v1.14.0)
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (v1.14.0)

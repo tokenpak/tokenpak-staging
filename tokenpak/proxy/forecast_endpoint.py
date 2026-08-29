@@ -1,8 +1,12 @@
 """
-tokenpak.proxy.forecast_endpoint — POST /v1/messages/forecast implementation.
+Local request-forecast and session-economics endpoint builders.
 
-Estimates cost, token counts, and cache hit likelihood for a request body
-identical to /v1/messages WITHOUT forwarding to the upstream API.
+Estimates cost, token counts, and cache hit likelihood for one request body
+identical to /v1/messages WITHOUT forwarding to the upstream API.  This is a
+request forecast, not the versioned remaining-session economics contract; both
+surfaces intentionally coexist without relabeling or nesting one inside the
+other. ``POST /v1/messages/session-economics`` reads only completed local
+ledger rows and never forwards a provider request.
 
 AC2-compliant response shape:
   {
@@ -24,7 +28,13 @@ import json
 import sqlite3
 import threading
 from collections import deque
+from datetime import datetime
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any, Union
+
+if _TYPE_CHECKING:
+    from tokenpak.core.contracts.session_economics import RateProvenance, SessionEconomics
+    from tokenpak.proxy.spend_guard.policy import SpendGuardConfig
 
 # ---------------------------------------------------------------------------
 # Rolling latency buffer (shared with server.py via import)
@@ -248,3 +258,82 @@ def build_forecast_response(
             "cache_creates_estimate": cache_creates_estimate,
         },
     }
+
+
+def resolve_default_session_id(db_path: Union[str, object, None]) -> tuple[str, str]:
+    """Resolve the proxy-owned default session for the economics endpoint.
+
+    Selection order is fixed by the surface contract: an explicit id and the
+    caller's active-session marker are resolved by the caller; when neither
+    exists, the proxy — and only the proxy — falls back to the most recent
+    session that has at least one completed, non-empty ledger row. Surfaces
+    must never issue rival SQLite queries for this.
+
+    Returns ``(session_id, reason)``. An empty ``session_id`` means there is
+    no defaultable session; ``reason`` then says why, and the caller passes
+    the empty identity through so the payload reports an explicit
+    no-data/unavailable state instead of inventing one.
+    """
+    if db_path is None:
+        return "", "monitor ledger is not configured"
+    path = str(db_path)
+    try:
+        conn = sqlite3.connect(path, timeout=5.0)
+        try:
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'requests'"
+            ).fetchone()
+            if table is None:
+                return "", "monitor ledger has no requests table"
+            row = conn.execute(
+                "SELECT session_id FROM requests "
+                "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+                "AND status_code BETWEEN 200 AND 599 "
+                "ORDER BY timestamp DESC, id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return "", f"monitor ledger read failed: {type(exc).__name__}"
+    if row is None or not str(row[0]).strip():
+        return "", "no completed session rows exist yet"
+    return str(row[0]).strip(), "latest completed ledger session"
+
+
+def _build_session_economics_response(
+    session_id: str,
+    db_path: Union[str, object],
+    *,
+    model_hint: str = "",
+    now: datetime | None = None,
+    spend_guard_config: SpendGuardConfig | None = None,
+    rate_provenance: RateProvenance | None = None,
+    rolling_usage: object = None,
+) -> SessionEconomics:
+    """Build the versioned deterministic session-economics value object.
+
+    ``None`` for ``rolling_usage`` means live canonical resolution.  Tests
+    may pass a mapping to replay a frozen rolling-cap snapshot without any
+    clock, process, or provider dependency.
+    """
+    from tokenpak.proxy.session_forecast import _build_session_economics
+
+    monitor_db_path = None if db_path is None else str(db_path)
+    if rolling_usage is None:
+        return _build_session_economics(
+            session_id,
+            monitor_db_path=monitor_db_path,
+            model_hint=model_hint,
+            now=now,
+            spend_guard_config=spend_guard_config,
+            rate_provenance=rate_provenance,
+        )
+    return _build_session_economics(
+        session_id,
+        monitor_db_path=monitor_db_path,
+        model_hint=model_hint,
+        now=now,
+        spend_guard_config=spend_guard_config,
+        rate_provenance=rate_provenance,
+        rolling_usage=rolling_usage,
+    )

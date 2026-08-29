@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# WS-A residual import guard — TSR-01-followup.
+# Residual import guard (slim-install surface).
 # Despite the file's own claim that opentelemetry is mocked, the actual
 # import chain through `tokenpak.telemetry.otel_exporter` does
 # `import opentelemetry.trace` etc. unconditionally on the production
@@ -167,6 +167,11 @@ class TestOtelEnabled(unittest.TestCase):
         with patch.dict(sys.modules, fake_modules):
             with patch.dict(os.environ, {"TOKENPAK_OTEL_ENDPOINT": "http://localhost:4318"}):
                 mod = importlib.import_module("tokenpak.telemetry.otel_exporter")
+                # The exporter imports the SDK lazily in _init().  Initialise it
+                # while the fake module hierarchy is still installed; doing so
+                # after this context exits would create real OTLP worker threads
+                # and retry localhost:4318 after pytest has already succeeded.
+                mod._init()
 
         return mod, mock_tracer, mock_span, mock_counter, mock_histogram
 
