@@ -1924,7 +1924,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 # compressed like any other context and is counted by the token
                 # accounting the hook returns. Injecting afterwards would ship it
                 # uncompressed and leave the counts describing the wrong body.
+                #
+                # Receipt extraction reuses `_read_injection_receipt` (same helper
+                # the byte-preserved branch above uses) so both paths sanitize the
+                # stage's `details` identically. The session write happens later,
+                # under `ps._session_lock`, alongside every other per-request
+                # counter update — not here, matching the byte-preserved branch
+                # above exactly (it does not call `_record_injection_in_session`
+                # inline either).
                 try:
+                    from tokenpak.proxy.adapters.utils import _detect_adapter
+                    from tokenpak.proxy.pipeline import PipelineResult as _PLResultJ
                     from tokenpak.proxy.pipeline import stage_vault_injection
                     from tokenpak.proxy.request import ProxyRequest as _PReqJ
                     from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsiJ
@@ -1937,16 +1947,25 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         source_platform=_source_platform,
                         session_id=_rsiJ(self.headers, model),
                     )
-                    # json_inject mode applies the mutated body in-stage.
-                    _prj, _vstage = stage_vault_injection(_prj, _policy)
-                    if not _vstage.skipped:
-                        body = _prj.body
-                        _injected_tokens = int(_vstage.details.get("injected_tokens", 0) or 0)
-                        _srcs = _vstage.details.get("injected_sources", "")
-                        if isinstance(_srcs, (list, tuple)):
-                            _srcs = ",".join(str(s) for s in _srcs if s)
-                        _injected_sources = _srcs if isinstance(_srcs, str) else ""
-                        _record_injection_in_session(_injected_tokens, _injected_sources)
+                    # The vault stage's own adapter default (`adapter=None`) falls
+                    # back to detection against a blank path/headers pair inside
+                    # `_inject_vault_context_with_text`, which always resolves to
+                    # the passthrough format adapter — whose `inject_system_context`
+                    # is a hard no-op. That default is harmless on the
+                    # byte-preserved branch above (it only reads `injection_text`;
+                    # the byte-splice stage does the actual embedding), but
+                    # json_inject applies this adapter's return value directly as
+                    # the new body. Detect against the real request so a format
+                    # adapter that actually implements injection gets picked.
+                    _adapter = _detect_adapter(target_url, dict(self.headers), body)
+                    # json_inject mode applies the mutated body in-stage; a no-op
+                    # when the stage skips (disabled route, master switch off,
+                    # empty body) since `request.body` is left untouched then.
+                    _prj, _vstage = stage_vault_injection(_prj, _policy, adapter=_adapter)
+                    body = _prj.body
+                    _injected_tokens, _injected_sources = _read_injection_receipt(
+                        _PLResultJ(request=_prj, stages=[_vstage])
+                    )
                 except Exception:
                     pass  # fail-open: vault injection failure must never break a request
 
