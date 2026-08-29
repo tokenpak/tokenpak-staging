@@ -321,6 +321,14 @@ class TestEstimateTokensFromBody:
         result = _estimate_tokens_from_body(b"not json at all")
         assert isinstance(result, int)
 
+    def test_non_ascii_content_uses_parsed_character_count(self):
+        """Regression: recognized JSON uses chars/4, not raw UTF-8 bytes/4."""
+        body = json.dumps(
+            {"messages": [{"role": "user", "content": "é" * 8}]}, ensure_ascii=False
+        ).encode()
+        assert _estimate_tokens_from_body(body) == 2
+        assert _estimate_tokens_from_body(body) != len(body) // 4
+
     def test_larger_content_more_tokens(self):
         small = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
         large = json.dumps({"messages": [{"role": "user", "content": "x" * 1000}]}).encode()

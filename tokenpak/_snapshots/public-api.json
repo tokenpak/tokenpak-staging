@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-16T16:06:28Z",
-  "package_version": "1.19.2",
+  "generated_at": "2026-08-27T00:13:43Z",
+  "package_version": "1.21.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -4606,6 +4606,14 @@
     {
       "module": "tokenpak.core.contracts.session_economics",
       "name": "ValueState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics_renderer",
+      "name": "render_block"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics_renderer",
+      "name": "render_line"
     },
     {
       "module": "tokenpak.core.cooldown",
@@ -9516,6 +9524,10 @@
       "name": "estimate_ttfb_ms"
     },
     {
+      "module": "tokenpak.proxy.forecast_endpoint",
+      "name": "resolve_default_session_id"
+    },
+    {
       "module": "tokenpak.proxy.handlers",
       "name": "rate_limit"
     },
@@ -9550,6 +9562,34 @@
     {
       "module": "tokenpak.proxy.headers",
       "name": "sanitize_headers"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_endpoint",
+      "name": "build_response"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "finish"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "mark_ttfb"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "register"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "reset_for_testing"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "snapshot"
+    },
+    {
+      "module": "tokenpak.proxy.inflight_registry",
+      "name": "update_output_tokens"
     },
     {
       "module": "tokenpak.proxy.intelligence",
@@ -10756,6 +10796,90 @@
       "name": "decompress_chunk"
     },
     {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "COMPLETION_IDLE_SECONDS"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "CellReadiness"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "HistorySession"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "KMAX"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "MIN_CELL_SESSIONS"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "MIN_SCORED_POINTS"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "PRIOR_VERSION"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "build_calibrated_forecast"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "cell_readiness"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "read_history"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_calibration",
+      "name": "walk_forward_coverage"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_CLOSE"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_OPEN_PREFIX"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "MARKER_VERSION"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "contains_marker"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "decorate_response_body"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "is_injection_enabled"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "maybe_decorate_response"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "scrub_request_body"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "strip_markers"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast_injection",
+      "name": "wrap_marker"
+    },
+    {
       "module": "tokenpak.proxy.shadow_hook",
       "name": "DEFAULT_LEDGER_PATH"
     },
@@ -11286,6 +11410,10 @@
     {
       "module": "tokenpak.proxy.stats_api",
       "name": "get_stats_storage"
+    },
+    {
+      "module": "tokenpak.proxy.streaming",
+      "name": "IncrementalUsageTracker"
     },
     {
       "module": "tokenpak.proxy.streaming",
@@ -12149,7 +12277,7 @@
     },
     {
       "module": "tokenpak.sdk.crewai.examples.basic_usage",
-      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'tokenpak.agent.agentic'>"
+      "name": "<IMPORT_ERROR: ModuleNotFoundError: No module named 'crewai_tokenpak'>"
     },
     {
       "module": "tokenpak.sdk.crewai.handoff",

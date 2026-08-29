@@ -34,8 +34,8 @@ Design contracts:
   :class:`DispatchDecision`.
 
 User-facing terminology is plain ``Worker`` / ``Route`` / ``Station``: this
-module emits route hints like ``route.code_task.v1`` and never the string
-"Fleet Worker".
+module emits route hints like ``route.code_task.v1`` and never internal
+deployment-worker labels.
 """
 
 from __future__ import annotations

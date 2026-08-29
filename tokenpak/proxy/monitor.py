@@ -155,6 +155,9 @@ _REQUEST_INSERT_COLUMNS = (
     "pricing_source",
     "stream_mode",
     "event_transform_applied",
+    "started_at",
+    "ttfb_ms",
+    "stream_duration_ms",
 )
 
 
@@ -537,7 +540,10 @@ class Monitor:
                 pricing_source TEXT DEFAULT '',
                 stream_mode TEXT DEFAULT '',
                 event_transform_applied INTEGER DEFAULT 0,
-                stop_reason TEXT DEFAULT ''
+                stop_reason TEXT DEFAULT '',
+                started_at TEXT DEFAULT NULL,
+                ttfb_ms INTEGER DEFAULT NULL,
+                stream_duration_ms INTEGER DEFAULT NULL
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON requests(timestamp)")
@@ -668,6 +674,18 @@ class Monitor:
                     "ALTER TABLE requests ADD COLUMN attribution_source TEXT DEFAULT ''",
                 ),
                 ("stop_reason", "ALTER TABLE requests ADD COLUMN stop_reason TEXT DEFAULT ''"),
+                (
+                    "started_at",
+                    "ALTER TABLE requests ADD COLUMN started_at TEXT DEFAULT NULL",
+                ),
+                (
+                    "ttfb_ms",
+                    "ALTER TABLE requests ADD COLUMN ttfb_ms INTEGER DEFAULT NULL",
+                ),
+                (
+                    "stream_duration_ms",
+                    "ALTER TABLE requests ADD COLUMN stream_duration_ms INTEGER DEFAULT NULL",
+                ),
             ),
         )
         conn.execute("""
@@ -784,6 +802,9 @@ class Monitor:
         pricing_source: str = "",
         stream_mode: str = "",
         event_transform_applied: bool = False,
+        started_at: str | None = None,
+        ttfb_ms: int | None = None,
+        stream_duration_ms: int | None = None,
     ) -> None:
         # ``session_id`` is the resolved Claude Code / TokenPak session id
         # (``_resolve_session_id``). Empty string when no session header was
@@ -842,6 +863,9 @@ class Monitor:
             pricing_source or "",
             stream_mode or "",
             int(bool(event_transform_applied)),
+            started_at,
+            ttfb_ms,
+            stream_duration_ms,
         )
         _queued = False
         try:

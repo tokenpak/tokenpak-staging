@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Discover OpenClaw agent auth-profiles.
 
-OpenClaw stores one or more named profiles per agent under
-``~/.openclaw/agents/<agent>/agent/auth-profiles.json``. Each profile
-is a credential the agent may route through tokenpak.
+OpenClaw stores one or more named profiles per agent in its user-owned state
+directory. Each profile is a credential the agent may route through TokenPak.
 
 The profile format is documented in ``project_tokenpak_openclaw.md``;
 here we just surface what's present so ``creds list`` shows the full
