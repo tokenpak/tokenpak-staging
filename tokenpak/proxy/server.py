@@ -1475,10 +1475,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         ps = self._ps
         parsed = urlparse(target_url)
 
-        # Pass the handler module's public collection explicitly. Tests and
-        # embedders may replace ``server.INTERCEPT_HOSTS`` with an isolated set;
-        # hostname matching itself remains exact inside ``should_intercept``.
-        should_log = should_intercept(target_url, INTERCEPT_HOSTS)
+        # Pass the handler module's public collection explicitly, unless this
+        # instance was constructed with its own override (`intercept_hosts=`)
+        # — the supported seam for callers that need to intercept hosts the
+        # global registry does not know about. Hostname matching itself
+        # remains exact inside ``should_intercept``.
+        should_log = should_intercept(
+            target_url, ps._intercept_hosts if ps._intercept_hosts is not None else INTERCEPT_HOSTS
+        )
         is_model_request = any(
             endpoint in target_url
             for endpoint in (
@@ -1906,6 +1910,68 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     is_streaming = data.get("stream", False)
                 except Exception:
                     pass
+
+                # Vault injection for json_inject routes (OpenClaw, SDK).
+                #
+                # Route policy has declared "vault_injection": "json_inject" for
+                # these routes all along, and nothing ever performed it: the only
+                # pipeline invocation lives in the byte-preserved branch above, so
+                # automatic context reached one client and silently skipped the
+                # rest. The stage itself already implements this mode.
+                #
+                # Only the vault stage runs here, not process_request(). The other
+                # pipeline stages — header forwarding, auth injection, byte restore
+                # — are already handled on this path by the code below, and running
+                # them again would double-apply them.
+                #
+                # This runs BEFORE the compression hook so injected context is
+                # compressed like any other context and is counted by the token
+                # accounting the hook returns. Injecting afterwards would ship it
+                # uncompressed and leave the counts describing the wrong body.
+                #
+                # Receipt extraction reuses `_read_injection_receipt` (same helper
+                # the byte-preserved branch above uses) so both paths sanitize the
+                # stage's `details` identically. The session write happens later,
+                # under `ps._session_lock`, alongside every other per-request
+                # counter update — not here, matching the byte-preserved branch
+                # above exactly (it does not call `_record_injection_in_session`
+                # inline either).
+                try:
+                    from tokenpak.proxy.adapters.utils import _detect_adapter
+                    from tokenpak.proxy.pipeline import PipelineResult as _PLResultJ
+                    from tokenpak.proxy.pipeline import stage_vault_injection
+                    from tokenpak.proxy.request import ProxyRequest as _PReqJ
+                    from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsiJ
+
+                    _prj = _PReqJ(
+                        method="POST",
+                        url=target_url,
+                        headers=dict(self.headers),
+                        body=body,
+                        source_platform=_source_platform,
+                        session_id=_rsiJ(self.headers, model),
+                    )
+                    # The vault stage's own adapter default (`adapter=None`) falls
+                    # back to detection against a blank path/headers pair inside
+                    # `_inject_vault_context_with_text`, which always resolves to
+                    # the passthrough format adapter — whose `inject_system_context`
+                    # is a hard no-op. That default is harmless on the
+                    # byte-preserved branch above (it only reads `injection_text`;
+                    # the byte-splice stage does the actual embedding), but
+                    # json_inject applies this adapter's return value directly as
+                    # the new body. Detect against the real request so a format
+                    # adapter that actually implements injection gets picked.
+                    _adapter = _detect_adapter(target_url, dict(self.headers), body)
+                    # json_inject mode applies the mutated body in-stage; a no-op
+                    # when the stage skips (disabled route, master switch off,
+                    # empty body) since `request.body` is left untouched then.
+                    _prj, _vstage = stage_vault_injection(_prj, _policy, adapter=_adapter)
+                    body = _prj.body
+                    _injected_tokens, _injected_sources = _read_injection_receipt(
+                        _PLResultJ(request=_prj, stages=[_vstage])
+                    )
+                except Exception:
+                    pass  # fail-open: vault injection failure must never break a request
 
             # Google streaming is signalled by URL, not body: path contains
             # streamGenerateContent or query param ?alt=sse.
@@ -4327,6 +4393,14 @@ class ProxyServer:
         Called for each intercepted request before forwarding.
         Signature: (body: bytes, model: str, trace: PipelineTrace | None)
                     -> (body, sent_tokens, raw_tokens, protected_tokens)
+    intercept_hosts : set of str, optional
+        Override for the module-level ``INTERCEPT_HOSTS`` used to gate
+        ``should_log`` in ``_proxy_to_inner``. Defaults to ``None``, which
+        preserves the real global set. This is the injection seam for
+        callers (tests, isolated embedding contexts) that need this
+        instance to intercept hosts the global registry does not know
+        about — pass the set explicitly rather than monkeypatching the
+        module attribute.
     """
 
     def __init__(
@@ -4336,8 +4410,10 @@ class ProxyServer:
         compilation_mode: str | None = None,
         request_hook: RequestHook | None = None,
         shutdown_timeout: float | None = None,
+        intercept_hosts: set[str] | None = None,
     ) -> None:
         self.host = host
+        self._intercept_hosts = intercept_hosts
         self.port = port or int(os.environ.get("TOKENPAK_PORT", "8766"))
         from tokenpak.proxy.config import env_or_profile as _env_or_profile
 
