@@ -18,7 +18,9 @@ the guard below asserts the *wiring*, not the stage.
 
 from __future__ import annotations
 
+import importlib
 import inspect
+import os
 
 import pytest
 
@@ -31,15 +33,40 @@ INJECTED = b'{"model":"x","messages":[{"role":"user","content":"CONTEXT hi"}]}'
 
 
 @pytest.fixture
-def fake_inject(monkeypatch):
-    """Stand in for vault retrieval; the vault itself is not under test here."""
-    import tokenpak.proxy.config as proxy_config
-    import tokenpak.proxy.vault_bridge as vb
+def _vault_injection_enabled():
+    """Turn the real master switch on through its actual env-var contract.
 
-    # The shipped master switch is deliberately OFF. These tests exercise the
-    # route wiring beneath that gate, so opt in explicitly rather than weakening
-    # the production default.
-    monkeypatch.setattr(proxy_config, "VAULT_INJECTION_ENABLED", True)
+    ``VAULT_INJECTION_ENABLED`` resolves once, at import time, from
+    ``TOKENPAK_VAULT_INJECTION`` (see ``tokenpak.proxy.config``). Setting the
+    env var and reloading the module exercises the same resolution path a
+    real deployment uses, rather than overwriting the already-resolved
+    attribute directly.
+    """
+    import tokenpak.proxy.config as proxy_config
+
+    previous = os.environ.get("TOKENPAK_VAULT_INJECTION")
+    os.environ["TOKENPAK_VAULT_INJECTION"] = "1"
+    importlib.reload(proxy_config)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TOKENPAK_VAULT_INJECTION", None)
+        else:
+            os.environ["TOKENPAK_VAULT_INJECTION"] = previous
+        importlib.reload(proxy_config)
+
+
+@pytest.fixture
+def fake_inject(monkeypatch, _vault_injection_enabled):
+    """Stand in for vault retrieval; the vault itself is not under test here.
+
+    The shipped master switch is deliberately OFF. These tests exercise the
+    route wiring beneath that gate, so ``_vault_injection_enabled`` opts in
+    through the real env-var contract rather than weakening the production
+    default or overwriting the resolved attribute in place.
+    """
+    import tokenpak.proxy.vault_bridge as vb
 
     def _fake(body, adapter=None, request=None):
         return INJECTED, 412, ["decisions/auth.md", "notes/api.md"], "CONTEXT"
@@ -73,8 +100,9 @@ def test_json_inject_applies_the_body_in_stage(fake_inject):
 def test_byte_splice_does_not_apply_the_body(fake_inject):
     """byte_splice defers the mutation to the byte-restore stage.
 
-    Guards the 99.86% of live traffic that rides this path: the platform-agnostic
-    change must not alter how the flagship client is handled.
+    This is the default policy for the byte-preserved (flagship client)
+    route: the platform-agnostic change must not alter how that route is
+    handled.
     """
     req, stage = stage_vault_injection(_req(), {"vault_injection": "byte_splice"})
 
