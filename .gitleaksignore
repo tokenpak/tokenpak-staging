@@ -1,16 +1,6 @@
-# gitleaks history-scan allowlist.
-#
-# Each entry below is a documented false positive: a synthetic test fixture
-# committed to history, not a live credential. gitleaks scans full commit
-# ranges (including superseded revisions), so a fixture that was later fixed
-# forward can still surface from its original, now-unreachable commit.
-#
-# c16e5ec33e5267cdc197a169e61e2564fe24a727:tokenpak/tests/test_security.py:generic-api-key:255
-#   Historical branch commit carrying a synthetic redaction fixture
-#   ("sk-livesecret...") for the redaction-at-sink filter tests, added
-#   unmarked by the introducing commit and marked
-#   `# gitleaks:allow (synthetic test fixture, not a real key)` the
-#   following day by 347ab757588204446ea09fda529e123f7f88ae55. The literal
-#   string is self-describing synthetic and was never a real credential;
-#   this entry is scoped to that single commit only.
+# Historical branch commit c16e5ec33e carries a synthetic redaction test
+# fixture (a self-describing fake key used to test the secret scanner).
+# Its direct child 347ab757 marked the fixture with gitleaks:allow the
+# following day. This entry is scoped to that single commit, file, rule,
+# and line; it allowlists nothing else.
 c16e5ec33e5267cdc197a169e61e2564fe24a727:tokenpak/tests/test_security.py:generic-api-key:255
