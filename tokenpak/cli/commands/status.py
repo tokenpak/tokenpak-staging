@@ -602,6 +602,40 @@ def _fmt_uptime(seconds: float) -> str:
     return f"{minutes}m"
 
 
+#: How many source names to name individually before summarising the rest.
+_MAX_SHOWN_SOURCES = 5
+
+
+def _format_injected_sources(sources: object) -> list[str]:
+    """Render the names of what vault injection added, as indented lines.
+
+    A token count discloses that something was added; only the names let a
+    reader check *what*. The listing is bounded, and when it truncates it says
+    so — a silently shortened list reads as a complete one.
+
+    Returns an empty list when there is nothing to name, so the caller prints
+    nothing rather than an empty heading.
+    """
+    if isinstance(sources, str):
+        names = [s.strip() for s in sources.split(",")]
+    elif isinstance(sources, (list, tuple)):
+        names = [str(s).strip() for s in sources]
+    else:
+        return []
+
+    names = [n for n in names if n]
+    if not names:
+        return []
+
+    shown = names[:_MAX_SHOWN_SOURCES]
+    lines = [f"       from                 {shown[0]}"]
+    lines.extend(f"                            {n}" for n in shown[1:])
+    remaining = len(names) - len(shown)
+    if remaining > 0:
+        lines.append(f"                            (+{remaining} more)")
+    return lines
+
+
 def _fmt_num(n: int) -> str:
     """Compact number: 1234 -> 1.2K, 1234567 -> 1.2M, etc."""
     if n >= 1_000_000_000:
@@ -1209,6 +1243,7 @@ def run(
         errors = session.get("errors", 0)
         injected_tok = session.get("injected_tokens", 0)
         injection_hits = session.get("injection_hits", 0)
+        injected_sources = session.get("injected_source_names", []) or []
         start_time = session.get("start_time", time.time())
         uptime_s = time.time() - start_time
         source_label = "this session"
@@ -1251,6 +1286,7 @@ def run(
         errors = 0
         injected_tok = 0
         injection_hits = 0
+        injected_sources = []
         uptime_s = 0
         if total_hours > 0:
             parts = []
@@ -1394,6 +1430,12 @@ def run(
         print(
             f"     Vault injected         {_fmt_num(injected_tok):>10}   across {injection_hits} requests"
         )
+        # Name the sources. A token count alone says something was added but not
+        # what — and "you can check what was added" is the claim this line has to
+        # carry. The names are what make the injection auditable rather than
+        # merely disclosed.
+        for line in _format_injected_sources(injected_sources):
+            print(line)
 
     tip_attribution = _query_tip_cache_attribution(db_path=db_path, days=days, hours=hours)
     _print_tip_cache_attribution(tip_attribution, compact=False)

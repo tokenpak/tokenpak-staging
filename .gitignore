@@ -60,6 +60,7 @@ docs/_build/
 .tokenpak/
 .tpk/
 *.state.json
+alert_settings.json
 elo_ratings.json
 
 # Build caches

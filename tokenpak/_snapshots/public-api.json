@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-27T00:13:43Z",
-  "package_version": "1.21.0",
+  "generated_at": "2026-08-29T23:56:04Z",
+  "package_version": "1.22.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -11614,6 +11614,10 @@
     {
       "module": "tokenpak.proxy.vault_bridge",
       "name": "inject_vault_context"
+    },
+    {
+      "module": "tokenpak.proxy.vault_bridge",
+      "name": "set_vault_index_override"
     },
     {
       "module": "tokenpak.proxy.websocket",
