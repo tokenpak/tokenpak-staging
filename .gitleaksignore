@@ -6,10 +6,11 @@
 # forward can still surface from its original, now-unreachable commit.
 #
 # c16e5ec33e5267cdc197a169e61e2564fe24a727:tokenpak/tests/test_security.py:generic-api-key:255
-#   Synthetic test fixture ("sk-livesecret...") for the redaction-at-sink
-#   filter tests, added unmarked by the introducing commit and marked
-#   `# gitleaks:allow (synthetic test fixture, not a real key)` the very
-#   next day. The literal string is self-describing synthetic, was never a
-#   real credential, and this specific commit is not reachable from main —
-#   the entry is scoped to that single historical commit only.
+#   Historical branch commit carrying a synthetic redaction fixture
+#   ("sk-livesecret...") for the redaction-at-sink filter tests, added
+#   unmarked by the introducing commit and marked
+#   `# gitleaks:allow (synthetic test fixture, not a real key)` the
+#   following day by 347ab757588204446ea09fda529e123f7f88ae55. The literal
+#   string is self-describing synthetic and was never a real credential;
+#   this entry is scoped to that single commit only.
 c16e5ec33e5267cdc197a169e61e2564fe24a727:tokenpak/tests/test_security.py:generic-api-key:255
