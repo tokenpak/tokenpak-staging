@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as datetime_time
@@ -54,6 +55,10 @@ from tokenpak.core.contracts.session_economics import (
     SessionFacts,
     SessionRef,
     SessionState,
+    TimeForecast,
+    TimeForecastCell,
+    TimeForecastStatus,
+    TimeForecastStreamMode,
     ValueState,
 )
 from tokenpak.proxy.spend_guard._context_window import get_model_max_context
@@ -69,6 +74,7 @@ _SLOPE_RELATIVE_TOLERANCE = 0.05
 _CACHE_TTL_SECONDS = {"5m": 300, "1h": 3600, "mixed": 300}
 _LEDGER_SOURCE = "monitor.db.requests"
 _AUTO_ROLLING_USAGE = object()
+_TIME_FORECAST_ENV_VAR = "TOKENPAK_TIME_FORECAST_BANDS"
 logger = logging.getLogger(__name__)
 
 
@@ -959,6 +965,11 @@ def _empty_payload(
         return NumericValue(state=value_state, reason=reason, unit=unit)
 
     identity = ValueState.OBSERVED if session_id else value_state
+    time_cell = TimeForecastCell(
+        model=_text(model_hint) or "unknown",
+        effort="unknown",
+        stream_mode=TimeForecastStreamMode.UNKNOWN,
+    )
     return SessionEconomics(
         as_of=as_of.isoformat(),
         session=SessionRef(
@@ -994,6 +1005,7 @@ def _empty_payload(
             reason=reason,
         ),
         forecast=_empty_forecast(forecast_status, reason),
+        time_forecast=TimeForecast.unavailable(cell=time_cell),
         advisory=None,
     )
 
@@ -1104,6 +1116,14 @@ def _build_session_economics(
         facts=facts,
         token_burns=token_burns,
     )
+    time_forecast = _time_calibrated_or_fallback(
+        monitor_db_path=monitor_db_path,
+        as_of=as_of,
+        session_id=stable_id,
+        model=model,
+        effort=effort,
+        turns=turns,
+    )
     return SessionEconomics(
         as_of=as_of.isoformat(),
         session=SessionRef(
@@ -1116,6 +1136,7 @@ def _build_session_economics(
         state=state,
         runway=runway,
         forecast=forecast,
+        time_forecast=time_forecast,
         advisory=None,
     )
 
@@ -1195,6 +1216,94 @@ def _calibrated_or_fallback(
             ForecastStatus.LEARNING,
             "learning: calibrated forecast unavailable this evaluation",
         )
+
+
+def _map_stream_mode(raw: object) -> TimeForecastStreamMode:
+    """Translate the monitor.db ledger's ``stream_mode`` string.
+
+    ``server.py`` writes ``"sse"`` for streaming responses and ``"json"``
+    for non-streaming ones. Anything else — absent column, an older row
+    predating this capture, an unrecognized value — is honestly ``unknown``.
+    """
+    text = _text(raw)
+    if text == "sse":
+        return TimeForecastStreamMode.STREAMING
+    if text == "json":
+        return TimeForecastStreamMode.NON_STREAMING
+    return TimeForecastStreamMode.UNKNOWN
+
+
+def _time_forecast_enabled() -> bool:
+    """Default-off activation gate for the time-remaining band mechanism.
+
+    Mirrors ``session_forecast_injection.is_injection_enabled()``'s exact
+    resolution order (env var -> config key -> False). Per the ratified
+    activation gate, ``time_forecast`` MUST serialize as
+    ``status: unavailable`` in every shipped default until a later initiative
+    rules the full activation gate satisfied and explicitly changes this
+    default — this change must not.
+    """
+    env_val = os.environ.get(_TIME_FORECAST_ENV_VAR)
+    if env_val is not None:
+        return env_val not in ("0", "false", "False", "no")
+    try:
+        from tokenpak.core.config import load_config
+
+        data = load_config()
+        cfg = data.get("time_forecast_bands", {})
+        if isinstance(cfg, dict):
+            return bool(cfg.get("enabled", False))
+        return bool(cfg)
+    except Exception:
+        return False
+
+
+def _time_calibrated_or_fallback(
+    *,
+    monitor_db_path: str | None,
+    as_of: datetime,
+    session_id: str,
+    model: str,
+    effort: str,
+    turns: Sequence[_Turn],
+) -> TimeForecast:
+    """Calibrated wall-clock remaining-time band with a guaranteed honest fallback.
+
+    Disabled by default (``_time_forecast_enabled()``): this always returns
+    the inert ``unavailable`` value in that case, regardless of how much
+    session or corpus history exists — see the function's own docstring for
+    why that is a hard requirement, not merely today's default.
+    """
+    latest = turns[-1].row if turns else None
+    stream_mode = (
+        _map_stream_mode(latest.stream_mode)
+        if latest is not None
+        else TimeForecastStreamMode.UNKNOWN
+    )
+    cell = TimeForecastCell(model=model, effort=effort, stream_mode=stream_mode)
+    if not turns or not _time_forecast_enabled():
+        return TimeForecast.unavailable(cell=cell)
+    try:
+        from tokenpak.proxy.time_forecast_calibration import build_calibrated_time_forecast
+
+        elapsed_ms = 0
+        for turn in turns:
+            for value in (turn.row.ttfb_ms, turn.row.stream_duration_ms):
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                    elapsed_ms += int(value)
+        return build_calibrated_time_forecast(
+            monitor_db_path=monitor_db_path,
+            now=as_of,
+            session_id=session_id,
+            model=model,
+            effort=effort,
+            stream_mode=stream_mode,
+            turn_index=len(turns),
+            elapsed_ms=elapsed_ms,
+        )
+    except Exception:
+        logger.exception("calibrated time forecast failed; degrading to unknown")
+        return TimeForecast.inert(TimeForecastStatus.UNKNOWN, cell=cell)
 
 
 __all__: list[str] = []

@@ -74,6 +74,24 @@ LEARNING_PAYLOAD: dict[str, Any] = {
         "predicted_block_probability": {"state": "unavailable", "value": None},
         "reason": "remaining-task forecast is not implemented",
     },
+    "time_forecast": {
+        "status": "unavailable",
+        "basis": "timing-facts-v1",
+        "remaining_time_likely_50_ms": None,
+        "remaining_time_ceiling_90_ms": None,
+        "coverage": {
+            "method": None,
+            "observed": None,
+            "history_n": 0,
+            "drift_state": "unknown",
+        },
+        "gate": {
+            "sedr_014_landed": False,
+            "calibration_evidence_published": False,
+            "inputs_verified_timing_facts_only": False,
+        },
+        "cell": {"model": "claude-sonnet-4-5", "effort": "unknown", "stream_mode": "unknown"},
+    },
     "advisory": None,
 }
 
@@ -140,6 +158,24 @@ NO_DATA_PAYLOAD: dict[str, Any] = {
         "predicted_block_probability": {"state": "unavailable", "value": None},
         "reason": "stable session identity is missing",
     },
+    "time_forecast": {
+        "status": "unavailable",
+        "basis": "timing-facts-v1",
+        "remaining_time_likely_50_ms": None,
+        "remaining_time_ceiling_90_ms": None,
+        "coverage": {
+            "method": None,
+            "observed": None,
+            "history_n": 0,
+            "drift_state": "unknown",
+        },
+        "gate": {
+            "sedr_014_landed": False,
+            "calibration_evidence_published": False,
+            "inputs_verified_timing_facts_only": False,
+        },
+        "cell": {"model": "unknown", "effort": "unknown", "stream_mode": "unknown"},
+    },
     "advisory": None,
 }
 
@@ -180,5 +216,39 @@ def available_payload() -> dict[str, Any]:
             "drift_state": "stable",
         },
         "predicted_block_probability": {"state": "estimated", "value": 0.08, "source": src},
+    }
+    return payload
+
+
+def time_available_payload() -> dict[str, Any]:
+    """LEARNING_PAYLOAD with ``time_forecast`` upgraded to a published,
+    gate-satisfied ``available`` band — fixture-only; no real coverage has
+    been published (`gate.calibration_evidence_published` is a
+    machine-checkable receipt, so this is the only place it may be
+    ``true`` in this test suite)."""
+    payload = copy.deepcopy(LEARNING_PAYLOAD)
+    src = "walk-forward split-conformal empirical quantiles (40 sessions, tokenpak-builtin-prior/1)"
+    payload["time_forecast"] = {
+        "status": "available",
+        "basis": "timing-facts-v1",
+        "remaining_time_likely_50_ms": {
+            "state": "estimated",
+            "low": 90000,
+            "high": 600000,
+            "source": src,
+        },
+        "remaining_time_ceiling_90_ms": {"state": "estimated", "value": 1500000, "source": src},
+        "coverage": {
+            "method": "walk-forward-split-conformal",
+            "observed": 0.52,
+            "history_n": 40,
+            "drift_state": "stable",
+        },
+        "gate": {
+            "sedr_014_landed": True,
+            "calibration_evidence_published": True,
+            "inputs_verified_timing_facts_only": True,
+        },
+        "cell": {"model": "claude-sonnet-4-5", "effort": "high", "stream_mode": "streaming"},
     }
     return payload

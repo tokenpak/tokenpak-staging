@@ -44,6 +44,10 @@ _COLUMNS = (
     "provider_usage_confidence",
     "cost_basis",
     "pricing_source",
+    "started_at",
+    "ttfb_ms",
+    "stream_duration_ms",
+    "stream_mode",
 )
 
 
@@ -75,7 +79,11 @@ def _create_ledger(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
             provider_usage_source TEXT,
             provider_usage_confidence TEXT,
             cost_basis TEXT,
-            pricing_source TEXT
+            pricing_source TEXT,
+            started_at TEXT,
+            ttfb_ms INTEGER,
+            stream_duration_ms INTEGER,
+            stream_mode TEXT
         )"""
     )
     defaults: dict[str, object] = {
@@ -103,6 +111,12 @@ def _create_ledger(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
         "provider_usage_confidence": "high",
         "cost_basis": "provider_usage_rate_estimate",
         "pricing_source": "seed",
+        # These golden-replay cases predate timing-facts capture and don't
+        # exercise time_forecast (default-off regardless) — None is honest.
+        "started_at": None,
+        "ttfb_ms": None,
+        "stream_duration_ms": None,
+        "stream_mode": None,
     }
     placeholders = ",".join("?" for _ in _COLUMNS)
     for overrides in rows:

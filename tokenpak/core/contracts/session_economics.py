@@ -139,6 +139,35 @@ class DriftState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class TimeForecastStatus(str, Enum):
+    """Availability state for the wall-clock remaining-time band.
+
+    Distinct from ``ForecastStatus`` (the token/turn/cost forecast):
+    ``learning`` and ``unavailable`` mean different things for wall-clock
+    time, and ``unknown``/``insufficient_data`` have no token-forecast
+    analog at all — see ``TimeForecast`` for the honest-state rules.
+    """
+
+    UNKNOWN = "unknown"
+    LEARNING = "learning"
+    INSUFFICIENT_DATA = "insufficient_data"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class TimeForecastStreamMode(str, Enum):
+    """Response delivery mode — a first-class cell dimension for timing.
+
+    Streaming and non-streaming responses have structurally different
+    latency shapes (time-to-first-byte vs. full-response wait), so a cell
+    that pooled the two would silently misrepresent both.
+    """
+
+    STREAMING = "streaming"
+    NON_STREAMING = "non_streaming"
+    UNKNOWN = "unknown"
+
+
 def _as_mapping(value: object, path: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise SessionEconomicsContractError(f"{path} must be an object")
@@ -175,6 +204,12 @@ def _number(value: object, path: str) -> Number:
         raise SessionEconomicsContractError(f"{path} must be numeric")
     if not math.isfinite(float(value)) or value < 0:
         raise SessionEconomicsContractError(f"{path} must be finite and non-negative")
+    return value
+
+
+def _bool(value: object, path: str) -> bool:
+    if type(value) is not bool:
+        raise SessionEconomicsContractError(f"{path} must be a boolean")
     return value
 
 
@@ -939,6 +974,260 @@ class Forecast(_FinalValueObject):
 
 
 @dataclass(frozen=True)
+class TimeForecastGate(_FinalValueObject):
+    """Machine-checkable receipt for the time-band activation gate.
+
+    Every field is a plain boolean so a renderer or test can assert, without
+    interpretation, that ``status: available`` never appears unless all
+    three are true. ``calibration_evidence_published`` in particular must be
+    false on every path this packet ships — it flips only once a downstream
+    initiative publishes a measured per-cell coverage table.
+    """
+
+    sedr_014_landed: bool
+    calibration_evidence_published: bool
+    inputs_verified_timing_facts_only: bool
+
+    def __post_init__(self) -> None:
+        for name in (
+            "sedr_014_landed",
+            "calibration_evidence_published",
+            "inputs_verified_timing_facts_only",
+        ):
+            _bool(getattr(self, name), f"time_forecast.gate.{name}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sedr_014_landed": self.sedr_014_landed,
+            "calibration_evidence_published": self.calibration_evidence_published,
+            "inputs_verified_timing_facts_only": self.inputs_verified_timing_facts_only,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any] | None) -> "TimeForecastGate":
+        data = _as_mapping(raw, "time_forecast.gate")
+        return cls(
+            sedr_014_landed=_bool(
+                data.get("sedr_014_landed"), "time_forecast.gate.sedr_014_landed"
+            ),
+            calibration_evidence_published=_bool(
+                data.get("calibration_evidence_published"),
+                "time_forecast.gate.calibration_evidence_published",
+            ),
+            inputs_verified_timing_facts_only=_bool(
+                data.get("inputs_verified_timing_facts_only"),
+                "time_forecast.gate.inputs_verified_timing_facts_only",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class TimeForecastCell(_FinalValueObject):
+    """The (model, effort, stream_mode) calibration cell key, for display."""
+
+    model: str
+    effort: str = "unknown"
+    stream_mode: TimeForecastStreamMode = TimeForecastStreamMode.UNKNOWN
+
+    def __post_init__(self) -> None:
+        _non_blank_string(self.model, "time_forecast.cell.model")
+        _non_blank_string(self.effort, "time_forecast.cell.effort")
+        _require_enum(self.stream_mode, TimeForecastStreamMode, "time_forecast.cell.stream_mode")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "effort": self.effort,
+            "stream_mode": self.stream_mode.value,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any] | None) -> "TimeForecastCell":
+        data = _as_mapping(raw, "time_forecast.cell")
+        return cls(
+            model=_input_string(data.get("model", _MISSING), "time_forecast.cell.model"),
+            effort=_input_string(
+                data.get("effort", _MISSING), "time_forecast.cell.effort", default="unknown"
+            ),
+            stream_mode=_enum(
+                TimeForecastStreamMode,
+                data.get("stream_mode", TimeForecastStreamMode.UNKNOWN.value),
+                "time_forecast.cell.stream_mode",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class TimeForecast(_FinalValueObject):
+    """Calibrated wall-clock remaining-time band — 50% range / 90% ceiling only.
+
+    Never a bare point estimate: the only numeric surfaces are a 50% central
+    range and a 90% ceiling, both milliseconds, both null unless the status
+    says otherwise. ``status`` in {unknown, insufficient_data, unavailable}
+    means the two numeric fields MUST be Python ``None`` (JSON ``null``);
+    {learning, available} means they MUST be populated, estimated values.
+    """
+
+    status: TimeForecastStatus
+    basis: str
+    remaining_time_likely_50_ms: IntervalEstimate | None
+    remaining_time_ceiling_90_ms: NumericValue | None
+    coverage: Coverage
+    gate: TimeForecastGate
+    cell: TimeForecastCell
+
+    _NUMERIC_NULL_STATUSES = frozenset(
+        {
+            TimeForecastStatus.UNKNOWN,
+            TimeForecastStatus.INSUFFICIENT_DATA,
+            TimeForecastStatus.UNAVAILABLE,
+        }
+    )
+
+    def __post_init__(self) -> None:
+        _require_enum(self.status, TimeForecastStatus, "time_forecast.status")
+        basis = _string(self.basis, "time_forecast.basis")
+        if basis != "timing-facts-v1":
+            raise SessionEconomicsContractError("time_forecast.basis must be 'timing-facts-v1'")
+        _require_value_object(self.coverage, Coverage, "time_forecast.coverage")
+        _require_value_object(self.gate, TimeForecastGate, "time_forecast.gate")
+        _require_value_object(self.cell, TimeForecastCell, "time_forecast.cell")
+
+        if self.remaining_time_likely_50_ms is not None:
+            _require_value_object(
+                self.remaining_time_likely_50_ms,
+                IntervalEstimate,
+                "time_forecast.remaining_time_likely_50_ms",
+            )
+            _require_unit(
+                self.remaining_time_likely_50_ms.unit,
+                "ms",
+                "time_forecast.remaining_time_likely_50_ms",
+            )
+        if self.remaining_time_ceiling_90_ms is not None:
+            _require_value_object(
+                self.remaining_time_ceiling_90_ms,
+                NumericValue,
+                "time_forecast.remaining_time_ceiling_90_ms",
+            )
+            _require_unit(
+                self.remaining_time_ceiling_90_ms.unit,
+                "ms",
+                "time_forecast.remaining_time_ceiling_90_ms",
+            )
+
+        if self.status in self._NUMERIC_NULL_STATUSES:
+            if self.remaining_time_likely_50_ms is not None or (
+                self.remaining_time_ceiling_90_ms is not None
+            ):
+                raise SessionEconomicsContractError(
+                    f"{self.status.value} time_forecast cannot carry numeric remaining-time values"
+                )
+        else:
+            if (
+                self.remaining_time_likely_50_ms is None
+                or self.remaining_time_ceiling_90_ms is None
+            ):
+                raise SessionEconomicsContractError(
+                    f"{self.status.value} time_forecast requires remaining-time range and ceiling"
+                )
+            if self.remaining_time_likely_50_ms.state is not ValueState.ESTIMATED:
+                raise SessionEconomicsContractError(
+                    "populated time_forecast range must be estimated"
+                )
+            if self.remaining_time_ceiling_90_ms.state is not ValueState.ESTIMATED:
+                raise SessionEconomicsContractError(
+                    "populated time_forecast ceiling must be estimated"
+                )
+            assert self.remaining_time_likely_50_ms.high is not None
+            assert self.remaining_time_ceiling_90_ms.value is not None
+            if self.remaining_time_ceiling_90_ms.value < self.remaining_time_likely_50_ms.high:
+                raise SessionEconomicsContractError(
+                    "time_forecast 90% ceiling must not be below the likely-50 high"
+                )
+
+        if self.status is TimeForecastStatus.AVAILABLE:
+            if not (
+                self.gate.sedr_014_landed
+                and self.gate.calibration_evidence_published
+                and self.gate.inputs_verified_timing_facts_only
+            ):
+                raise SessionEconomicsContractError(
+                    "available time_forecast requires all gate receipts to be true"
+                )
+            if (
+                not self.coverage.method
+                or self.coverage.observed is None
+                or self.coverage.history_n <= 0
+            ):
+                raise SessionEconomicsContractError(
+                    "available time_forecast requires observed coverage and positive history"
+                )
+
+    @classmethod
+    def inert(cls, status: "TimeForecastStatus", *, cell: "TimeForecastCell") -> "TimeForecast":
+        """A numeric-null value at any of the non-computing statuses.
+
+        ``status`` must be one of {unknown, insufficient_data, unavailable} —
+        the three statuses that never carry a band.
+        """
+        return cls(
+            status=status,
+            basis="timing-facts-v1",
+            remaining_time_likely_50_ms=None,
+            remaining_time_ceiling_90_ms=None,
+            coverage=Coverage(),
+            gate=TimeForecastGate(False, False, False),
+            cell=cell,
+        )
+
+    @classmethod
+    def unavailable(cls, *, cell: "TimeForecastCell") -> "TimeForecast":
+        """The default, inert value: no timing signal, nothing to report."""
+        return cls.inert(TimeForecastStatus.UNAVAILABLE, cell=cell)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "basis": self.basis,
+            "remaining_time_likely_50_ms": (
+                self.remaining_time_likely_50_ms.to_dict()
+                if self.remaining_time_likely_50_ms is not None
+                else None
+            ),
+            "remaining_time_ceiling_90_ms": (
+                self.remaining_time_ceiling_90_ms.to_dict()
+                if self.remaining_time_ceiling_90_ms is not None
+                else None
+            ),
+            "coverage": self.coverage.to_dict(),
+            "gate": self.gate.to_dict(),
+            "cell": self.cell.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any] | None) -> "TimeForecast":
+        data = _as_mapping(raw, "time_forecast")
+        interval_raw = data.get("remaining_time_likely_50_ms")
+        numeric_raw = data.get("remaining_time_ceiling_90_ms")
+        return cls(
+            status=_enum(TimeForecastStatus, data.get("status"), "time_forecast.status"),
+            basis=_input_string(
+                data.get("basis", _MISSING), "time_forecast.basis", default="timing-facts-v1"
+            ),
+            remaining_time_likely_50_ms=(
+                IntervalEstimate.from_dict(interval_raw) if interval_raw is not None else None
+            ),
+            remaining_time_ceiling_90_ms=(
+                NumericValue.from_dict(numeric_raw) if numeric_raw is not None else None
+            ),
+            coverage=Coverage.from_dict(data.get("coverage")),
+            gate=TimeForecastGate.from_dict(data.get("gate")),
+            cell=TimeForecastCell.from_dict(data.get("cell")),
+        )
+
+
+@dataclass(frozen=True)
 class SessionEconomics(_FinalValueObject):
     """Immutable shared session-economics payload."""
 
@@ -948,6 +1237,7 @@ class SessionEconomics(_FinalValueObject):
     state: SessionState
     runway: Runway
     forecast: Forecast
+    time_forecast: TimeForecast
     advisory: None = None
     schema_version: str = SCHEMA_VERSION
 
@@ -958,6 +1248,7 @@ class SessionEconomics(_FinalValueObject):
             ("state", SessionState),
             ("runway", Runway),
             ("forecast", Forecast),
+            ("time_forecast", TimeForecast),
         ):
             _require_value_object(
                 getattr(self, name),
@@ -1005,6 +1296,7 @@ class SessionEconomics(_FinalValueObject):
             "state": self.state.to_dict(),
             "runway": self.runway.to_dict(),
             "forecast": self.forecast.to_dict(),
+            "time_forecast": self.time_forecast.to_dict(),
             "advisory": None,
         }
 
@@ -1036,6 +1328,7 @@ class SessionEconomics(_FinalValueObject):
             state=SessionState.from_dict(data.get("state")),
             runway=Runway.from_dict(data.get("runway")),
             forecast=Forecast.from_dict(data.get("forecast")),
+            time_forecast=TimeForecast.from_dict(data.get("time_forecast")),
             advisory=None,
         )
 
@@ -1072,6 +1365,11 @@ __all__ = [
     "SessionFacts",
     "SessionRef",
     "SessionState",
+    "TimeForecast",
+    "TimeForecastCell",
+    "TimeForecastGate",
+    "TimeForecastStatus",
+    "TimeForecastStreamMode",
     "UnsupportedSessionEconomicsVersion",
     "ValueState",
 ]

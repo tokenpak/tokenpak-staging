@@ -145,6 +145,10 @@ def test_restart_equality_and_default_surface_exclusion(upstream, monkeypatch):
         parsed = json.loads(econ_before)
         assert parsed["session"]["id"] == _SESSION
         assert parsed["schema_version"] == "session-economics/1"
+        # Time-band forecast ships default-off: no config/env in this subprocess
+        # enables it, so every surface must see the inert unavailable state.
+        assert parsed["time_forecast"]["status"] == "unavailable"
+        assert parsed["time_forecast"]["remaining_time_likely_50_ms"] is None
 
         # ================= restart on the SAME home/database =================
         proxy.restart()
@@ -224,6 +228,7 @@ def test_empty_ledger_default_selection_is_explicitly_absent(upstream):
         # never invented zeros.
         assert parsed["session"]["id"] is None
         assert parsed["session"]["identity_state"] in {"no_data", "unavailable"}
+        assert parsed["time_forecast"]["status"] == "unavailable"
         assert headers.get("X-TokenPak-Session-Selection") == (
             "no completed session rows exist yet"
         )

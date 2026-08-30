@@ -29,6 +29,11 @@ from tokenpak.core.contracts.session_economics import (
     SessionFacts,
     SessionRef,
     SessionState,
+    TimeForecast,
+    TimeForecastCell,
+    TimeForecastGate,
+    TimeForecastStatus,
+    TimeForecastStreamMode,
     UnsupportedSessionEconomicsVersion,
     ValueState,
 )
@@ -109,6 +114,27 @@ class _IntegerSubclass(int):
     pass
 
 
+def _available_time_forecast() -> TimeForecast:
+    return TimeForecast(
+        status=TimeForecastStatus.AVAILABLE,
+        basis="timing-facts-v1",
+        remaining_time_likely_50_ms=_interval(90_000, 600_000, unit="ms"),
+        remaining_time_ceiling_90_ms=NumericValue.estimated(
+            1_500_000, source="published-time-prior", unit="ms"
+        ),
+        coverage=Coverage(
+            method="walk-forward-split-conformal",
+            observed=0.52,
+            history_n=40,
+            drift_state=DriftState.STABLE,
+        ),
+        gate=TimeForecastGate(True, True, True),
+        cell=TimeForecastCell(
+            model="provider/model", effort="high", stream_mode=TimeForecastStreamMode.STREAMING
+        ),
+    )
+
+
 def _available_contract() -> SessionEconomics:
     return SessionEconomics(
         as_of="2026-08-09T23:00:00Z",
@@ -176,6 +202,7 @@ def _available_contract() -> SessionEconomics:
                 0.2, source="held-out-replay", unit="probability"
             ),
         ),
+        time_forecast=_available_time_forecast(),
     )
 
 
@@ -511,6 +538,36 @@ def test_missing_advisory_is_rejected() -> None:
     del payload["advisory"]
     with pytest.raises(SessionEconomicsContractError, match="explicit advisory: null"):
         SessionEconomics.from_dict(payload)
+
+
+def test_time_forecast_round_trips_without_state_loss() -> None:
+    original = _available_contract()
+    restored = SessionEconomics.from_json(original.to_json())
+
+    assert restored.time_forecast == original.time_forecast
+    assert restored.to_dict()["time_forecast"] == original.to_dict()["time_forecast"]
+    assert restored.time_forecast.status is TimeForecastStatus.AVAILABLE
+
+
+def test_missing_time_forecast_is_rejected() -> None:
+    payload = _available_contract().to_dict()
+    del payload["time_forecast"]
+    with pytest.raises(SessionEconomicsContractError, match="time_forecast"):
+        SessionEconomics.from_dict(payload)
+
+
+def test_unavailable_time_forecast_round_trips() -> None:
+    contract = replace(
+        _available_contract(),
+        time_forecast=TimeForecast.unavailable(
+            cell=TimeForecastCell(model="unknown", effort="unknown")
+        ),
+    )
+    restored = SessionEconomics.from_json(contract.to_json())
+
+    assert restored.time_forecast.status is TimeForecastStatus.UNAVAILABLE
+    assert restored.time_forecast.remaining_time_likely_50_ms is None
+    assert restored.time_forecast.remaining_time_ceiling_90_ms is None
 
 
 def test_missing_session_identity_remains_explicit() -> None:

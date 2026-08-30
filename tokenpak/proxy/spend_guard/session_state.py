@@ -49,6 +49,10 @@ _SESSION_LEDGER_COLUMNS = (
     "provider_usage_confidence",
     "cost_basis",
     "pricing_source",
+    "started_at",
+    "ttfb_ms",
+    "stream_duration_ms",
+    "stream_mode",
 )
 
 
@@ -84,6 +88,10 @@ class _SessionLedgerRow:
     provider_usage_confidence: object
     cost_basis: object
     pricing_source: object
+    started_at: object
+    ttfb_ms: object
+    stream_duration_ms: object
+    stream_mode: object
 
 
 @dataclass(frozen=True)
