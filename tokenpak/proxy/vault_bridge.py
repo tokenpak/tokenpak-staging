@@ -1047,6 +1047,13 @@ def _bm25_tokenize_query(query: str) -> list[str]:
 _VAULT_INDEX: _VaultIndexBackend | None = None
 _VAULT_INDEX_LOCK = threading.Lock()
 
+# Explicit substitution seam for get_vault_index(). Callers that need to
+# replace vault retrieval (test doubles, isolated embedding contexts) call
+# set_vault_index_override() directly instead of assigning into this
+# module's namespace. Distinct from _VAULT_INDEX above, which is the real
+# lazily-initialized singleton.
+_VAULT_INDEX_OVERRIDE: _VaultIndexBackend | None = None
+
 _TERM_RESOLVER: TermResolver | None = None
 _CAPSULE_BUILDER: CapsuleBuilder | None = None
 _SINGLETONS_INITIALIZED = False
@@ -1172,8 +1179,22 @@ def _init_singletons() -> None:
         _SINGLETONS_INITIALIZED = True
 
 
+def set_vault_index_override(index: _VaultIndexBackend | None) -> None:
+    """Substitute the vault index ``get_vault_index()`` returns.
+
+    This is the supported injection point for replacing vault retrieval
+    without monkeypatching module globals — pass a test double (or a real
+    alternate backend) explicitly. Passing ``None`` clears the override and
+    resumes the normal lazily-initialized singleton.
+    """
+    global _VAULT_INDEX_OVERRIDE
+    _VAULT_INDEX_OVERRIDE = index
+
+
 def get_vault_index() -> _VaultIndexBackend:
     """Return the global VaultIndex, initialising on first call."""
+    if _VAULT_INDEX_OVERRIDE is not None:
+        return _VAULT_INDEX_OVERRIDE
     if not _SINGLETONS_INITIALIZED:
         _init_singletons()
     if _VAULT_INDEX is None:

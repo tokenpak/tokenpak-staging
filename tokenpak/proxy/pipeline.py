@@ -94,6 +94,7 @@ def stage_vault_injection(
     policy: Dict[str, Any],
     *,
     adapter: Any = None,
+    inject_fn: Callable[..., Tuple[bytes, int, List[str], str]] | None = None,
 ) -> Tuple[ProxyRequest, StageResult]:
     """Inject vault context into the request body.
 
@@ -101,6 +102,15 @@ def stage_vault_injection(
     the injection text — the actual byte splicing happens later in
     ``stage_byte_restore``.  For ``json_inject`` mode (OpenClaw/SDK),
     the injection is applied directly via ``inject_vault_context()``.
+
+    Args:
+        inject_fn: Override for the retrieval+injection callable, matching
+            ``vault_bridge._inject_vault_context_with_text``'s signature
+            ``(body_bytes, adapter=None, *, request=None) -> (body,
+            injected_tokens, injected_sources, injection_text)``. Defaults
+            to the real implementation. This is the injection seam for
+            tests that need a double here — pass it explicitly rather than
+            monkeypatching the ``vault_bridge`` module attribute.
 
     Returns:
         (request, result) — result.details["injection_text"] is set
@@ -127,14 +137,15 @@ def stage_vault_injection(
         result.skip_reason = "disabled_by_config"
         return request, result
 
-    try:
-        from tokenpak.proxy.vault_bridge import _inject_vault_context_with_text
-    except ImportError:
-        result.skipped = True
-        result.skip_reason = "vault_bridge_unavailable"
-        return request, result
+    if inject_fn is None:
+        try:
+            from tokenpak.proxy.vault_bridge import _inject_vault_context_with_text as inject_fn
+        except ImportError:
+            result.skipped = True
+            result.skip_reason = "vault_bridge_unavailable"
+            return request, result
 
-    body, injected_tokens, injected_sources, injection_text = _inject_vault_context_with_text(
+    body, injected_tokens, injected_sources, injection_text = inject_fn(
         request.body,
         adapter=adapter,
         request=request,

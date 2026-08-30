@@ -276,6 +276,9 @@ class _SessionState(TypedDict):
     cache_read_proxy: int
     cache_read_unknown: int
     ingest_entries: int
+    injected_tokens: int
+    injection_hits: int
+    injected_source_names: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +638,9 @@ def _new_session() -> _SessionState:
         "cache_read_proxy": 0,
         "cache_read_unknown": 0,
         "ingest_entries": 0,
+        "injected_tokens": 0,
+        "injection_hits": 0,
+        "injected_source_names": [],
     }
 
 
@@ -823,6 +829,107 @@ class _ThreadedHTTPServer(HTTPServer):
                 gate.release()
             if managed:
                 self.proxy_server._admission.release()
+
+
+# ---------------------------------------------------------------------------
+# Vault-injection receipt
+# ---------------------------------------------------------------------------
+
+#: Name of the pipeline stage that performs vault injection.
+_VAULT_STAGE_NAME = "vault_injection"
+
+
+def _read_injection_receipt(result: object) -> tuple[int, str]:
+    """Extract ``(injected_tokens, injected_sources)`` from a pipeline result.
+
+    The vault stage records both onto ``StageResult.details``. Nothing consumed
+    them, so the monitor row and the live session both reported zero while
+    injection was working correctly on every eligible request.
+
+    ``injected_sources`` is stored as a comma-separated string because that is
+    the column type the monitor already declares (``injected_sources TEXT``).
+
+    Returns ``(0, "")`` when the stage is absent or was skipped — a measured
+    zero, not a default.
+
+    Fail-open at the function boundary, not just at the call site: a
+    malformed or adversarial ``result`` (a non-dict ``details`` — the
+    "valid non-object JSON" shape, e.g. ``details`` deserialized as a list
+    or scalar instead of an object — a raising attribute, wrong-shaped
+    stages) yields the same measured-zero default a non-injecting request
+    reports, never a raised exception. Telemetry must never break a request.
+    """
+    try:
+        stages = getattr(result, "stages", None) or []
+        for stage in stages:
+            if getattr(stage, "name", "") != _VAULT_STAGE_NAME:
+                continue
+            if getattr(stage, "skipped", False):
+                return 0, ""
+            details = getattr(stage, "details", None)
+            if not isinstance(details, dict):
+                return 0, ""
+            tokens = details.get("injected_tokens", 0)
+            sources = details.get("injected_sources", "")
+            try:
+                tokens = int(tokens)
+            except (TypeError, ValueError):
+                tokens = 0
+            if isinstance(sources, (list, tuple)):
+                sources = ",".join(str(s) for s in sources if s)
+            elif not isinstance(sources, str):
+                sources = str(sources) if sources else ""
+            return tokens, sources
+        return 0, ""
+    except Exception:
+        return 0, ""
+
+
+#: Upper bound on distinct source names retained on the session for display.
+_MAX_SESSION_SOURCES = 20
+
+
+def _record_injection_in_session(
+    session: dict[str, object], injected_tokens: int, injected_sources: str = ""
+) -> None:
+    """Accumulate injection totals onto ``ProxyServer.session`` — the dict that
+    backs request accounting and ``GET /stats``, which is what ``tokenpak
+    status`` actually reads (via the ``session`` key of the ``/stats`` payload).
+
+    Neither ``injected_tokens`` nor ``injection_hits`` had a writer anywhere in
+    the tree, so both were phantom reads that always returned their defaults.
+
+    ``injection_hits`` counts requests that actually injected, so the rendered
+    "N tokens across M requests" describes injecting requests rather than all
+    traffic.
+
+    Distinct source names are retained (bounded by ``_MAX_SESSION_SOURCES``) so
+    the receipt can name what was added, not merely how much. Insertion order is
+    preserved and the cap drops the oldest — an unbounded set here would grow
+    with session length. Updates always rebind ``session["injected_source_names"]``
+    to a freshly built list rather than mutating one in place, so a concurrent
+    ``session.copy()`` (``ProxyServer.stats()`` takes a shallow copy under the
+    session lock) never observes a list being appended to after it was copied.
+
+    Caller must hold the session lock (``ProxyServer._session_lock``) — this
+    function does no locking of its own, matching every other session-counter
+    update at the call site. Best-effort: telemetry must never affect a request.
+    """
+    if injected_tokens <= 0:
+        return
+    try:
+        session["injected_tokens"] = int(session.get("injected_tokens", 0)) + injected_tokens
+        session["injection_hits"] = int(session.get("injection_hits", 0)) + 1
+
+        if injected_sources:
+            seen = session.get("injected_source_names")
+            updated = list(seen) if isinstance(seen, list) else []
+            for name in (s.strip() for s in injected_sources.split(",")):
+                if name and name not in updated:
+                    updated.append(name)
+            session["injected_source_names"] = updated[-_MAX_SESSION_SOURCES:]
+    except Exception:
+        pass  # fail-open: never break a request over telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -1368,10 +1475,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         ps = self._ps
         parsed = urlparse(target_url)
 
-        # Pass the handler module's public collection explicitly. Tests and
-        # embedders may replace ``server.INTERCEPT_HOSTS`` with an isolated set;
-        # hostname matching itself remains exact inside ``should_intercept``.
-        should_log = should_intercept(target_url, INTERCEPT_HOSTS)
+        # Pass the handler module's public collection explicitly, unless this
+        # instance was constructed with its own override (`intercept_hosts=`)
+        # — the supported seam for callers that need to intercept hosts the
+        # global registry does not know about. Hostname matching itself
+        # remains exact inside ``should_intercept``.
+        should_log = should_intercept(
+            target_url, ps._intercept_hosts if ps._intercept_hosts is not None else INTERCEPT_HOSTS
+        )
         is_model_request = any(
             endpoint in target_url
             for endpoint in (
@@ -1754,6 +1865,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass  # fail-open: never break a request over telemetry
 
+            # Vault-injection receipt for this request. Defaults stand for every
+            # path that does not inject (non-byte-preserved routes, and the
+            # fail-open path below) so the recorded value is always the measured
+            # one — zero because nothing was injected, never zero by omission.
+            _injected_tokens = 0
+            _injected_sources = ""
+
             if _is_byte_preserved:
                 # Byte-preserved path (Claude Code): detect streaming from raw
                 # bytes only — never json.loads/json.dumps the body.
@@ -1775,6 +1893,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                     _result = _pipeline_run(_pr, _policy, route=_route, client_has_auth=True)
                     body = _result.request.body
+                    # Carry the vault-injection receipt off the pipeline. The stage
+                    # computes these and they were previously dropped here, which left
+                    # `tokenpak status` reporting "0 across 0 requests" forever while
+                    # injection was working. Reported values must come from the stage
+                    # that did the work, never from a default. The session write
+                    # happens later, under `ps._session_lock`, alongside every other
+                    # per-request counter update — not here.
+                    _injected_tokens, _injected_sources = _read_injection_receipt(_result)
                 except Exception:
                     pass  # fail-open: vault injection failure must never break a request
             else:
@@ -1784,6 +1910,68 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     is_streaming = data.get("stream", False)
                 except Exception:
                     pass
+
+                # Vault injection for json_inject routes (OpenClaw, SDK).
+                #
+                # Route policy has declared "vault_injection": "json_inject" for
+                # these routes all along, and nothing ever performed it: the only
+                # pipeline invocation lives in the byte-preserved branch above, so
+                # automatic context reached one client and silently skipped the
+                # rest. The stage itself already implements this mode.
+                #
+                # Only the vault stage runs here, not process_request(). The other
+                # pipeline stages — header forwarding, auth injection, byte restore
+                # — are already handled on this path by the code below, and running
+                # them again would double-apply them.
+                #
+                # This runs BEFORE the compression hook so injected context is
+                # compressed like any other context and is counted by the token
+                # accounting the hook returns. Injecting afterwards would ship it
+                # uncompressed and leave the counts describing the wrong body.
+                #
+                # Receipt extraction reuses `_read_injection_receipt` (same helper
+                # the byte-preserved branch above uses) so both paths sanitize the
+                # stage's `details` identically. The session write happens later,
+                # under `ps._session_lock`, alongside every other per-request
+                # counter update — not here, matching the byte-preserved branch
+                # above exactly (it does not call `_record_injection_in_session`
+                # inline either).
+                try:
+                    from tokenpak.proxy.adapters.utils import _detect_adapter
+                    from tokenpak.proxy.pipeline import PipelineResult as _PLResultJ
+                    from tokenpak.proxy.pipeline import stage_vault_injection
+                    from tokenpak.proxy.request import ProxyRequest as _PReqJ
+                    from tokenpak.proxy.request_pipeline import _resolve_session_id as _rsiJ
+
+                    _prj = _PReqJ(
+                        method="POST",
+                        url=target_url,
+                        headers=dict(self.headers),
+                        body=body,
+                        source_platform=_source_platform,
+                        session_id=_rsiJ(self.headers, model),
+                    )
+                    # The vault stage's own adapter default (`adapter=None`) falls
+                    # back to detection against a blank path/headers pair inside
+                    # `_inject_vault_context_with_text`, which always resolves to
+                    # the passthrough format adapter — whose `inject_system_context`
+                    # is a hard no-op. That default is harmless on the
+                    # byte-preserved branch above (it only reads `injection_text`;
+                    # the byte-splice stage does the actual embedding), but
+                    # json_inject applies this adapter's return value directly as
+                    # the new body. Detect against the real request so a format
+                    # adapter that actually implements injection gets picked.
+                    _adapter = _detect_adapter(target_url, dict(self.headers), body)
+                    # json_inject mode applies the mutated body in-stage; a no-op
+                    # when the stage skips (disabled route, master switch off,
+                    # empty body) since `request.body` is left untouched then.
+                    _prj, _vstage = stage_vault_injection(_prj, _policy, adapter=_adapter)
+                    body = _prj.body
+                    _injected_tokens, _injected_sources = _read_injection_receipt(
+                        _PLResultJ(request=_prj, stages=[_vstage])
+                    )
+                except Exception:
+                    pass  # fail-open: vault injection failure must never break a request
 
             # Google streaming is signalled by URL, not body: path contains
             # streamGenerateContent or query param ?alt=sse.
@@ -2615,6 +2803,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         ps.session["cache_read_client"] += cache_read_tokens
                     else:
                         ps.session["cache_read_proxy"] += cache_read_tokens
+                    # Vault-injection receipt onto the *real* session `tokenpak
+                    # status` reads (via GET /stats), not the compatibility
+                    # global — see _record_injection_in_session.
+                    _record_injection_in_session(ps.session, _injected_tokens, _injected_sources)
 
                 # Persist to monitor.db so `tokenpak status`, dashboards, and
                 # cross-session reporting see this request. Async write queue
@@ -2670,8 +2862,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             compilation_mode=ps.compilation_mode,
                             protected_tokens=protected_tokens,
                             compressed_tokens=max(0, input_tokens - sent_input_tokens),
-                            injected_tokens=0,
-                            injected_sources="",
+                            injected_tokens=_injected_tokens,
+                            injected_sources=_injected_sources,
                             cache_read_tokens=cache_read_tokens,
                             cache_creation_tokens=cache_creation_tokens,
                             cache_creation_ephemeral_1h_tokens=cache_creation_1h_tokens,
@@ -4201,6 +4393,14 @@ class ProxyServer:
         Called for each intercepted request before forwarding.
         Signature: (body: bytes, model: str, trace: PipelineTrace | None)
                     -> (body, sent_tokens, raw_tokens, protected_tokens)
+    intercept_hosts : set of str, optional
+        Override for the module-level ``INTERCEPT_HOSTS`` used to gate
+        ``should_log`` in ``_proxy_to_inner``. Defaults to ``None``, which
+        preserves the real global set. This is the injection seam for
+        callers (tests, isolated embedding contexts) that need this
+        instance to intercept hosts the global registry does not know
+        about — pass the set explicitly rather than monkeypatching the
+        module attribute.
     """
 
     def __init__(
@@ -4210,8 +4410,10 @@ class ProxyServer:
         compilation_mode: str | None = None,
         request_hook: RequestHook | None = None,
         shutdown_timeout: float | None = None,
+        intercept_hosts: set[str] | None = None,
     ) -> None:
         self.host = host
+        self._intercept_hosts = intercept_hosts
         self.port = port or int(os.environ.get("TOKENPAK_PORT", "8766"))
         from tokenpak.proxy.config import env_or_profile as _env_or_profile
 
