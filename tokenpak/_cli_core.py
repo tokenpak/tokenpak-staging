@@ -5925,6 +5925,8 @@ def _mark_update_skipped(latest: str) -> None:
         skipped_version=latest,
         skipped_at=now,
     )
+
+
 def _fetch_latest_pypi_version(timeout: float = 5.0) -> str:
     """Delegate to the privacy-bounded core PyPI metadata primitive."""
     from tokenpak.core._update_check import fetch_latest_pypi_version
