@@ -32,6 +32,7 @@ import pytest
 
 pytestmark = pytest.mark.needs_proxy
 
+from tests.proxy._proxy_subprocess import free_port
 from tokenpak.proxy.server import ProxyServer
 
 # The string retrieval will "find". If injection works, the provider sees it.
@@ -104,8 +105,8 @@ def injection_switch_on(monkeypatch):
 
     PR647 adds `VAULT_INJECTION_ENABLED`, default OFF, guarding the top of
     `stage_vault_injection`. Without this fixture, once that lands the stage
-    returns at the guard and the strict xfail below can NEVER xpass again —
-    silently reverting this suite to the exact defect it was written to fix.
+    returns at the guard and the provider-bound assertion can never exercise
+    the injection path this suite is meant to prove.
 
     `raising=False` so the suite works on trees where the flag does not exist yet.
     """
@@ -157,9 +158,6 @@ def injection_stage_spy(monkeypatch):
     return calls
 
 
-PROXY_PORT = 18873
-
-
 @pytest.fixture
 def intercepted_localhost(monkeypatch):
     """Make the mock upstream look like a provider worth intercepting.
@@ -201,15 +199,15 @@ def intercepted_localhost(monkeypatch):
 @pytest.fixture
 def proxy(upstream, intercepted_localhost):
     upstream_url, _ = upstream
-    server = ProxyServer(host="127.0.0.1", port=PROXY_PORT)
+    server = ProxyServer(host="127.0.0.1", port=free_port())
     server.start(blocking=False)
-    _wait_for_port(PROXY_PORT)
+    _wait_for_port(server.port)
     yield server, upstream_url
     server.stop()
     time.sleep(0.2)
 
 
-def _send(body: dict, upstream_url: str) -> None:
+def _send(body: dict, upstream_url: str, proxy_port: int) -> None:
     """Send in absolute-URI proxy form so the target is the mock upstream."""
     req = urllib.request.Request(
         f"{upstream_url}/v1/messages",
@@ -230,7 +228,7 @@ def _send(body: dict, upstream_url: str) -> None:
     )
     # Route it through the proxy rather than straight to the mock.
     opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{PROXY_PORT}"})
+        urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{proxy_port}"})
     )
     try:
         opener.open(req, timeout=10).read()
@@ -251,9 +249,8 @@ def _eligible_request() -> dict:
             return body  # fail-open: no system array found
 
     Without it the splice target does not exist, so the body comes back unchanged
-    however correct injection becomes — and the xfail below could never xpass.
-    A permanently-red xfail masking a *working* feature is the exact outcome
-    `strict=True` was chosen to prevent.
+    however correct injection becomes, producing a false failure against a
+    request shape the byte-splice path cannot modify.
 
     Real Claude Code requests always carry a system array, so this is also the
     representative payload for the route the session header forces.
@@ -271,10 +268,10 @@ def _eligible_request() -> dict:
 
 def test_the_harness_records_what_upstream_receives(proxy, upstream):
     """Guard the instrument itself before trusting anything it reports."""
-    _, upstream_url = proxy
+    server, upstream_url = proxy
     _, recorder = upstream
 
-    _send(_eligible_request(), upstream_url)
+    _send(_eligible_request(), upstream_url, server.port)
 
     assert recorder.received_bodies, (
         "the mock upstream recorded nothing — the request never arrived, so any "
@@ -292,9 +289,9 @@ def test_the_request_actually_reaches_the_injection_stage(
     suite had that flaw — it patched a rebound copy of INTERCEPT_HOSTS, so
     `should_log` stayed False and the pipeline never ran.
     """
-    _, upstream_url = proxy
+    server, upstream_url = proxy
 
-    _send(_eligible_request(), upstream_url)
+    _send(_eligible_request(), upstream_url, server.port)
 
     assert injection_stage_spy, (
         "stage_vault_injection was never invoked — the request did not reach the "
@@ -302,39 +299,14 @@ def test_the_request_actually_reaches_the_injection_stage(
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN P0: vault injection does not modify the request. On THIS route "
-        "(byte_splice) the minimal repair set is TWO defects, verified by running "
-        "every combination:\n"
-        "  (2) inject_vault_context returns a 3-tuple while the pipeline only "
-        "      populates injection_text from a 4-tuple, so byte-restore short-circuits;\n"
-        "  (3) pipeline.py does getattr(vault_bridge, 'extract_query_signal'), but "
-        "      that name is a FUNCTION-LOCAL import there, so hasattr is False; the "
-        "      AttributeError is swallowed by a catch-all and the query signal is ''.\n"
-        "Repairing {2,3} alone makes this XPASS.\n"
-        "\n"
-        "A THIRD defect is real but does NOT gate this route: adapter starvation "
-        "(_detect_adapter called with empty path/headers → PassthroughAdapter). On "
-        "byte_splice the adapter's mutated body is discarded (pipeline.py:134-139 "
-        "keeps only injection_text), so it gates json_inject, not this test. Earlier "
-        "versions of this reason claimed all three were required — they were wrong."
-    ),
-    strict=True,
-)
 def test_vault_content_reaches_the_provider(
     proxy, upstream, vault_with_content, injection_stage_spy
 ):
-    """The claim, asserted where it is either true or false.
-
-    Marked xfail(strict) deliberately: it documents the defect as executable
-    evidence rather than prose, and it will fail loudly the moment the fix lands
-    and the marker starts arriving — at which point the marker is removed.
-    """
-    _, upstream_url = proxy
+    """Retrieved vault content reaches the provider on the byte-splice route."""
+    server, upstream_url = proxy
     _, recorder = upstream
 
-    _send(_eligible_request(), upstream_url)
+    _send(_eligible_request(), upstream_url, server.port)
 
     assert recorder.received_bodies, "nothing reached the upstream"
     assert injection_stage_spy, "the injection stage never ran — result would be meaningless"
@@ -355,10 +327,10 @@ def test_request_still_reaches_upstream_intact_when_vault_has_content(
     This is the invariant that must hold both before and after the P0 fix, so it
     is not marked xfail.
     """
-    _, upstream_url = proxy
+    server, upstream_url = proxy
     _, recorder = upstream
 
-    _send(_eligible_request(), upstream_url)
+    _send(_eligible_request(), upstream_url, server.port)
 
     assert recorder.received_bodies, "nothing reached the upstream"
     sent = b"".join(recorder.received_bodies).decode("utf-8", "replace")

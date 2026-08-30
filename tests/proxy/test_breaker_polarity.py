@@ -16,8 +16,8 @@ These tests pin the corrected accounting:
   transport errors are not
 - end-to-end (threaded server + local stub upstream): a 503 that
   exhausts retries records a breaker failure, a 200 records a success,
-  and a client that hangs up mid-response records NEITHER a provider
-  failure nor a success
+  and a client that hangs up mid-response records a distinct downstream
+  disconnect instead of a provider result, session error, or synthetic 502
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ import pytest
 
 pytestmark = pytest.mark.needs_proxy
 
+from tests.proxy._proxy_subprocess import free_port
+from tokenpak.proxy import inflight_registry
 from tokenpak.proxy import server as proxy_server_module
 from tokenpak.proxy.circuit_breaker import get_circuit_breaker_registry
 from tokenpak.proxy.server import (
@@ -83,8 +85,6 @@ class TestClientDisconnectClassification:
 # End-to-end tests — threaded server + stub upstream
 # ---------------------------------------------------------------------------
 
-PROXY_PORT = 18971
-
 # Mutable stub behavior, set per-test.
 _stub_state = {"status": 200, "delay": 0.0, "body": b'{"ok": true}'}
 
@@ -121,12 +121,12 @@ def stub_upstream():
 
 @pytest.fixture(scope="module")
 def proxy():
-    server = ProxyServer(host="127.0.0.1", port=PROXY_PORT)
+    server = ProxyServer(host="127.0.0.1", port=free_port())
     server.start(blocking=False)
     deadline = time.time() + 8
     while time.time() < deadline:
         try:
-            s = socket.create_connection(("127.0.0.1", PROXY_PORT), timeout=0.5)
+            s = socket.create_connection(("127.0.0.1", server.port), timeout=0.5)
             s.close()
             break
         except OSError:
@@ -166,8 +166,27 @@ def breaker_spy(monkeypatch, stub_upstream):
     registry._breakers.pop("127.0.0.1", None)
 
 
-def _proxy_request(stub_port: int, body: bytes) -> tuple:
-    conn = http.client.HTTPConnection("127.0.0.1", PROXY_PORT, timeout=20)
+@pytest.fixture()
+def request_log_spy(monkeypatch):
+    """Capture the handler's terminal request-log event without writing logs."""
+    calls = []
+    terminal_recorded = threading.Event()
+
+    def spy_log_request(**kwargs):
+        calls.append(kwargs)
+        extra = kwargs.get("extra", {})
+        if extra.get("outcome") == "client_disconnect" or extra.get("error") in {
+            "BrokenPipeError",
+            "ConnectionResetError",
+        }:
+            terminal_recorded.set()
+
+    monkeypatch.setattr(proxy_server_module, "log_request", spy_log_request)
+    return calls, terminal_recorded
+
+
+def _proxy_request(proxy_port: int, stub_port: int, body: bytes) -> tuple:
+    conn = http.client.HTTPConnection("127.0.0.1", proxy_port, timeout=20)
     conn.request(
         "POST",
         f"http://127.0.0.1:{stub_port}/v1/messages",
@@ -198,7 +217,7 @@ class TestBreakerPolarityEndToEnd:
         self, proxy, stub_upstream, breaker_spy
     ):
         _stub_state.update(status=503, delay=0.0, body=b'{"error": "overloaded"}')
-        status, _ = _proxy_request(stub_upstream, _REQ_BODY)
+        status, _ = _proxy_request(proxy.port, stub_upstream, _REQ_BODY)
 
         assert status == 503
         assert "127.0.0.1" in breaker_spy["failure"], (
@@ -210,15 +229,16 @@ class TestBreakerPolarityEndToEnd:
 
     def test_upstream_200_records_provider_success(self, proxy, stub_upstream, breaker_spy):
         _stub_state.update(status=200, delay=0.0, body=b'{"ok": true}')
-        status, _ = _proxy_request(stub_upstream, _REQ_BODY)
+        status, _ = _proxy_request(proxy.port, stub_upstream, _REQ_BODY)
 
         assert status == 200
         assert "127.0.0.1" in breaker_spy["success"]
         assert "127.0.0.1" not in breaker_spy["failure"]
 
     def test_client_disconnect_mid_response_is_not_a_provider_failure(
-        self, proxy, stub_upstream, breaker_spy
+        self, proxy, stub_upstream, breaker_spy, request_log_spy
     ):
+        inflight_registry.reset_for_testing()
         # Big response + delayed stub: the client sends the request, then
         # RST-closes its socket before the proxy writes the response back —
         # the proxy's wfile.write raises BrokenPipe/ConnectionReset.
@@ -227,8 +247,10 @@ class TestBreakerPolarityEndToEnd:
         )
         ps = proxy
         errors_before = ps.session["errors"]
+        compression_errors_before = ps.compression_stats.get_stats()["requests_errors"]
+        request_log_calls, terminal_recorded = request_log_spy
 
-        s = socket.create_connection(("127.0.0.1", PROXY_PORT), timeout=10)
+        s = socket.create_connection(("127.0.0.1", proxy.port), timeout=10)
         raw = (
             f"POST http://127.0.0.1:{stub_upstream}/v1/messages HTTP/1.1\r\n"
             f"Host: 127.0.0.1:{stub_upstream}\r\n"
@@ -243,19 +265,37 @@ class TestBreakerPolarityEndToEnd:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         s.close()
 
-        # Wait for the handler to hit its error path.
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            if ps.session["errors"] > errors_before:
-                break
-            time.sleep(0.05)
-        assert ps.session["errors"] > errors_before, (
-            "handler never reached its error path — test setup issue"
+        assert terminal_recorded.wait(timeout=15), "handler never recorded a terminal outcome"
+
+        disconnect_records = [
+            call
+            for call in request_log_calls
+            if call.get("extra", {}).get("outcome") == "client_disconnect"
+        ]
+        assert len(disconnect_records) == 1
+        disconnect_record = disconnect_records[0]
+        assert disconnect_record["response_status"] == 0
+        assert disconnect_record["extra"]["client_disconnected"] is True
+        assert disconnect_record["extra"]["disconnect_type"] in {
+            "BrokenPipeError",
+            "ConnectionResetError",
+        }
+        assert not any(
+            call.get("response_status") == 502
+            and call.get("extra", {}).get("error") in {"BrokenPipeError", "ConnectionResetError"}
+            for call in request_log_calls
         )
+
+        assert ps.session["errors"] == errors_before
+        assert ps.compression_stats.get_stats()["requests_errors"] == compression_errors_before
 
         assert "127.0.0.1" not in breaker_spy["failure"], (
             "a client hanging up mid-response must not count as a provider failure"
         )
         assert "127.0.0.1" not in breaker_spy["success"]
+        deadline = time.time() + 2
+        while inflight_registry.snapshot() and time.time() < deadline:
+            time.sleep(0.01)
+        assert inflight_registry.snapshot() == []
         # Reset stub for any later test.
         _stub_state.update(status=200, delay=0.0, body=b'{"ok": true}')

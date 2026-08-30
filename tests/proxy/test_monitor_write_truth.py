@@ -52,6 +52,14 @@ def _row_count(db_path, table="requests"):
         conn.close()
 
 
+def _journal_mode(db_path):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        conn.close()
+
+
 def _insert_request(
     db_path,
     *,
@@ -116,6 +124,9 @@ class _FlakyConnection:
     def commit(self):
         return self._real.commit()
 
+    def rollback(self):
+        return self._real.rollback()
+
     def close(self):
         return self._real.close()
 
@@ -135,35 +146,7 @@ def test_write_row_retries_transient_lock_then_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(monitor_module, "_get_db_connection", lambda p: flaky)
     monkeypatch.setattr(monitor_module, "_DB_WRITE_RETRY_BACKOFF_S", 0.001)
 
-    params = (
-        datetime.now().isoformat(),
-        "claude-sonnet-4-6",
-        "chat",
-        1,
-        1,
-        0.0,
-        1,
-        200,
-        "test",
-        "",
-        0,
-        0,
-        0,
-        "",
-        0,
-        0,
-        0,
-        "proxy",
-        "",
-        0,
-        0,
-        None,
-        "",
-        "",
-        "",
-        "",
-        "",
-    )
+    params = _request_insert_params()
     before = monitor_module.get_dropped_row_count()
     monitor_module._write_row(str(db), params)
 
@@ -179,10 +162,14 @@ def test_write_row_raises_after_retries_exhausted(tmp_path, monkeypatch):
 
     class _AlwaysLocked:
         attempts = 0
+        rollbacks = 0
 
         def execute(self, *a, **k):
             self.attempts += 1
             raise sqlite3.OperationalError("database is locked")
+
+        def rollback(self):
+            self.rollbacks += 1
 
     locked = _AlwaysLocked()
     monkeypatch.setattr(monitor_module, "_get_db_connection", lambda p: locked)
@@ -262,6 +249,11 @@ def test_writer_routes_interleaved_rows_to_each_monitor_database(tmp_path):
     second_db = tmp_path / "second.db"
     first = Monitor(db_path=str(first_db))
     second = Monitor(db_path=str(second_db))
+    # WAL is a schema/startup invariant, not deferred work in the background
+    # durability boundary. A lazy transition here previously stalled the
+    # writer beyond flush's bound under concurrent executor I/O.
+    assert _journal_mode(first_db) == "wal"
+    assert _journal_mode(second_db) == "wal"
 
     # Construct both monitors before enqueueing.  The first row opens the
     # cached writer connection for first_db; the second row must switch that
@@ -283,6 +275,45 @@ def test_new_monitor_restarts_worker_after_stop(tmp_path):
     _log_minimal(mon2)
     assert mon2.flush(timeout=10.0) is True
     assert _row_count(db) == 1
+
+
+def test_timed_out_stop_cannot_revive_previous_writer_generation(tmp_path, monkeypatch):
+    """A replacement writer must not clear a timed-out predecessor's stop signal."""
+    old = Monitor(db_path=str(tmp_path / "old.db"))
+    entered_write = threading.Event()
+    release_write = threading.Event()
+    replacement_written = threading.Event()
+
+    def _controlled_write(db_path, _params):
+        if str(db_path).endswith("old.db"):
+            entered_write.set()
+            assert release_write.wait(timeout=5.0)
+            return
+        replacement_written.set()
+
+    monkeypatch.setattr(monitor_module, "_write_row", _controlled_write)
+    _log_minimal(old, endpoint="old-generation")
+    assert entered_write.wait(timeout=2.0)
+    old_thread = monitor_module._DB_BACKGROUND_THREAD
+    old_stop_event = monitor_module._DB_BACKGROUND_STOP
+
+    assert old.stop(timeout=0.02) is False
+    assert old_thread is not None and old_thread.is_alive()
+    assert old_stop_event.is_set()
+
+    replacement = Monitor(db_path=str(tmp_path / "replacement.db"))
+    assert monitor_module._DB_BACKGROUND_STOP is not old_stop_event
+    assert not monitor_module._DB_BACKGROUND_STOP.is_set()
+
+    release_write.set()
+    old_thread.join(timeout=2.0)
+    assert not old_thread.is_alive()
+
+    _log_minimal(replacement, endpoint="replacement-generation")
+    assert replacement_written.wait(timeout=2.0)
+    assert replacement.flush(timeout=5.0) is True
+    assert _row_count(tmp_path / "old.db") == 0
+    assert _row_count(tmp_path / "replacement.db") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +404,59 @@ def test_apply_schema_migration_raises_on_other_operational_errors():
         )
 
 
+def test_monitor_schema_failure_rolls_back_and_releases_lock(tmp_path, monkeypatch):
+    """A failed ancillary migration cannot commit a partial Monitor schema."""
+    from tokenpak.proxy import db as proxy_db
+
+    db = tmp_path / "monitor.db"
+
+    def _locked(_conn):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(proxy_db, "ensure_schema", _locked)
+
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        Monitor(db_path=str(db))
+
+    # Reopening with a zero wait proves the failed constructor released its
+    # write lock. The enclosing BEGIN IMMEDIATE must also have rolled back all
+    # earlier CREATE/ALTER statements instead of publishing a partial schema.
+    conn = sqlite3.connect(str(db), timeout=0.0)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    finally:
+        conn.close()
+    assert "requests" not in tables
+
+
+def test_monitor_unexpected_schema_failure_is_not_downgraded(tmp_path, monkeypatch):
+    """Unexpected ancillary-schema failures also abort the full transaction."""
+    from tokenpak.proxy import db as proxy_db
+
+    db = tmp_path / "monitor.db"
+
+    def _unexpected(_conn):
+        raise RuntimeError("synthetic schema implementation failure")
+
+    monkeypatch.setattr(proxy_db, "ensure_schema", _unexpected)
+
+    with pytest.raises(RuntimeError, match="synthetic schema implementation failure"):
+        Monitor(db_path=str(db))
+
+    conn = sqlite3.connect(str(db), timeout=0.0)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+    finally:
+        conn.close()
+    assert "requests" not in tables
+
+
 # ---------------------------------------------------------------------------
 # B6 — budget alert dedupe (unique key + INSERT OR IGNORE)
 # ---------------------------------------------------------------------------
@@ -404,6 +488,34 @@ def test_budget_alert_single_row_under_concurrent_triggers(tmp_path):
 
     # A later same-day trigger is also deduped.
     mon._check_budget_alert(current_cost=100.0, _daily_limit=10.0, _threshold_pct=80.0)
+    assert _row_count(db, "budget_alerts") == 1
+
+
+def test_budget_alert_single_row_across_monitor_instances(tmp_path):
+    db = tmp_path / "monitor.db"
+    monitors = [Monitor(db_path=str(db)), Monitor(db_path=str(db))]
+    barrier = threading.Barrier(len(monitors))
+    errors = []
+
+    def _fire(mon):
+        try:
+            barrier.wait(timeout=5)
+            mon._check_budget_alert(
+                current_cost=100.0,
+                _daily_limit=10.0,
+                _threshold_pct=80.0,
+            )
+        except Exception as exc:  # pragma: no cover - failure diagnostics
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_fire, args=(mon,)) for mon in monitors]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
     assert _row_count(db, "budget_alerts") == 1
 
 
@@ -665,35 +777,36 @@ def _create_requests_table_for_insert(db_path):
 
 
 def _request_insert_params(*, stop_reason=""):
-    return (
-        datetime.now().isoformat(),
-        "claude-sonnet-4-6",
-        "chat",
-        10,
-        5,
-        0.0,
-        1,
-        200,
-        "test",
-        "",
-        0,
-        0,
-        0,
-        "",
-        0,
-        0,
-        0,
-        "proxy",
-        "",
-        0,
-        0,
-        None,
-        "",
-        "",
-        "",
-        "",
-        stop_reason,
+    values = dict.fromkeys(monitor_module._REQUEST_INSERT_COLUMNS)
+    values.update(
+        timestamp=datetime.now().isoformat(),
+        model="claude-sonnet-4-6",
+        request_type="chat",
+        input_tokens=10,
+        output_tokens=5,
+        estimated_cost=0.0,
+        latency_ms=1,
+        status_code=200,
+        endpoint="test",
+        compilation_mode="",
+        protected_tokens=0,
+        compressed_tokens=0,
+        injected_tokens=0,
+        injected_sources="",
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        would_have_saved=0,
+        cache_origin="proxy",
+        user_id="",
+        cache_creation_ephemeral_1h_tokens=0,
+        cache_creation_ephemeral_5m_tokens=0,
+        session_id="",
+        agent_id="",
+        cycle_id="",
+        attribution_source="",
+        stop_reason=stop_reason,
     )
+    return tuple(values[name] for name in monitor_module._REQUEST_INSERT_COLUMNS)
 
 
 def test_log_persists_stop_reason(tmp_path):

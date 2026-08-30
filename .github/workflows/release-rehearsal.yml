@@ -66,10 +66,10 @@ jobs:
         shape: [slim, dev, full]
         python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -94,9 +94,17 @@ jobs:
           esac
           # IMPORTANT: PIPESTATUS[0] captures pytest's exit code, not tee's
           # (tee always exits 0). $? after a pipe would swallow test failures.
+          #
+          # Quarantine runner-sensitive perf/SLA tests (needs_fast_host) from
+          # this install-shape matrix: wall-clock latency assertions flake on
+          # shared hosted runners regardless of threshold. This mirrors the
+          # marker quarantine already applied by every other test workflow;
+          # the benchmarks keep their signal-bearing run in the dedicated
+          # Performance Benchmarks workflow. Parens are required so the
+          # exclusion distributes over the OR'd shape markers.
           set +e
           pytest tests/ \
-            -m "$MARKERS" \
+            -m "($MARKERS) and not needs_fast_host" \
             --continue-on-collection-errors \
             --tb=short -q \
             2>&1 | tee pytest-output.log
@@ -127,11 +135,10 @@ jobs:
     env:
       # Skip first-run RBAC admin bootstrap during snapshot introspection so the
       # ephemeral admin password is never emitted into (public) CI logs.
-      # See REIPO-SNAPGEN-LOG-HYGIENE-01.
       TOKENPAK_SNAPSHOT_GEN: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Install (all extras for canonical snapshot reproduction)
@@ -162,8 +169,8 @@ jobs:
     needs: preflight
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Build sdist + wheel for scanning
@@ -175,11 +182,11 @@ jobs:
 
   build-artifacts:
     name: Build sdist + wheel + sdist purity (R9)
-    needs: [install-shape-matrix, release-gate-snapshots, leak-scan]
+    needs: [preflight, install-shape-matrix, release-gate-snapshots, leak-scan]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Install build
@@ -199,7 +206,7 @@ jobs:
           fi
           echo "✅  sdist + wheel purity: no _internal/ paths"
       - name: Upload artifacts (rehearsal — never published)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: rehearsal-dist-${{ needs.preflight.outputs.rehearsal_tag }}
           path: dist/
@@ -210,7 +217,7 @@ jobs:
     # 'refs/tags/rehearsal-*'`) lives on the production release.yml publish
     # step; here we explicitly fail if anyone tries to publish a rehearsal tag.
     name: Publish guard (rehearsal MUST NOT publish)
-    needs: build-artifacts
+    needs: [preflight, build-artifacts]
     runs-on: ubuntu-latest
     steps:
       - name: Refuse to publish rehearsal tag

@@ -50,7 +50,7 @@ try:
 except ImportError:
     _lic = None
 
-    def upgrade_cta_line() -> str:  # type: ignore[misc]
+    def upgrade_cta_line() -> str:
         return ""
 
 
@@ -66,7 +66,7 @@ def _estimate_session_savings(
 
 
 # ---------------------------------------------------------------------------
-# Meme lines — 28 curated by Kevin, random pick per invocation
+# Meme lines — 28 curated entries, random pick per invocation
 # ---------------------------------------------------------------------------
 
 TAGLINES = [
@@ -170,6 +170,104 @@ def _fetch(url: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _session_economics_enabled() -> bool:
+    """Whether default human surfaces render the session-economics display.
+
+    ``status.session_economics.enabled`` defaults to true; ``false``
+    suppresses only the default human status/dashboard display. Explicit
+    reads (``status --json`` and the companion tool) stay available so the
+    toggle never hides data from a caller who asked for it.
+    """
+    try:
+        from tokenpak.core import config_loader
+
+        return bool(
+            config_loader.get(
+                "status.session_economics.enabled",
+                True,
+                env_var="TOKENPAK_STATUS_SESSION_ECONOMICS",
+                cast=bool,
+            )
+        )
+    except Exception:
+        return True
+
+
+def _fetch_session_economics(proxy_base: str) -> tuple[Optional[Any], str]:
+    """Fetch and validate the session-economics contract from the local proxy.
+
+    Thin adapter: session selection happens inside the proxy (explicit id →
+    active marker → latest completed ledger session), and the payload is
+    validated with ``SessionEconomics.from_dict()`` before any projection.
+    Returns ``(economics, reason)`` — ``None`` economics with a reason when
+    the surface is honestly unavailable (proxy down, invalid payload).
+    """
+    url = f"{proxy_base}/v1/messages/session-economics"
+    req = urllib.request.Request(
+        url,
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            payload = json.loads(r.read())
+    except Exception:
+        return None, "proxy not reachable"
+    if not isinstance(payload, dict):
+        return None, "proxy returned a non-object payload"
+    try:
+        from tokenpak.core.contracts.session_economics import SessionEconomics
+
+        return SessionEconomics.from_dict(payload), ""
+    except Exception as exc:
+        return None, f"payload failed contract validation: {exc}"
+
+
+def _print_session_economics_line(proxy_base: str) -> None:
+    """Default one-line surface (gated by the config toggle)."""
+    if not _session_economics_enabled():
+        return
+    economics, reason = _fetch_session_economics(proxy_base)
+    print()
+    if economics is None:
+        print(f"  📟 session economics: unavailable ({reason})")
+        return
+    from tokenpak.core.contracts.session_economics_renderer import render_line
+
+    print(f"  📟 {render_line(economics)}")
+
+
+def _print_session_economics_block(proxy_base: str) -> None:
+    """Full block surface (gated by the config toggle)."""
+    if not _session_economics_enabled():
+        return
+    economics, reason = _fetch_session_economics(proxy_base)
+    print()
+    if economics is None:
+        print("📟  Session economics")
+        print(f"    unavailable ({reason})")
+        return
+    from tokenpak.core.contracts.session_economics_renderer import render_block
+
+    block_lines = render_block(economics).splitlines()
+    print(f"📟  {block_lines[0]}")
+    for line in block_lines[1:]:
+        print(f"  {line}")
+
+
+def _session_economics_json(proxy_base: str) -> Dict[str, Any]:
+    """Machine-readable form: the canonical contract dict, or honest absence.
+
+    Always produced — the config toggle suppresses only default human
+    display, never an explicit ``--json`` read.
+    """
+    economics, reason = _fetch_session_economics(proxy_base)
+    if economics is None:
+        return {"unavailable": True, "reason": reason}
+    return economics.to_dict()
+
+
 def _get_db_path() -> str:
     """Resolve the monitor DB path via the canonical resolver.
 
@@ -228,7 +326,7 @@ def _get_version() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fleet savings calculation (inline — TPK-SAVINGS-001 not yet available)
+# Fleet savings calculation (inline — no shared savings helper available yet)
 # ---------------------------------------------------------------------------
 
 
@@ -502,6 +600,40 @@ def _fmt_uptime(seconds: float) -> str:
     if hours > 0:
         return f"{hours}h {minutes:02d}m"
     return f"{minutes}m"
+
+
+#: How many source names to name individually before summarising the rest.
+_MAX_SHOWN_SOURCES = 5
+
+
+def _format_injected_sources(sources: object) -> list[str]:
+    """Render the names of what vault injection added, as indented lines.
+
+    A token count discloses that something was added; only the names let a
+    reader check *what*. The listing is bounded, and when it truncates it says
+    so — a silently shortened list reads as a complete one.
+
+    Returns an empty list when there is nothing to name, so the caller prints
+    nothing rather than an empty heading.
+    """
+    if isinstance(sources, str):
+        names = [s.strip() for s in sources.split(",")]
+    elif isinstance(sources, (list, tuple)):
+        names = [str(s).strip() for s in sources]
+    else:
+        return []
+
+    names = [n for n in names if n]
+    if not names:
+        return []
+
+    shown = names[:_MAX_SHOWN_SOURCES]
+    lines = [f"       from                 {shown[0]}"]
+    lines.extend(f"                            {n}" for n in shown[1:])
+    remaining = len(names) - len(shown)
+    if remaining > 0:
+        lines.append(f"                            (+{remaining} more)")
+    return lines
 
 
 def _fmt_num(n: int) -> str:
@@ -1111,6 +1243,7 @@ def run(
         errors = session.get("errors", 0)
         injected_tok = session.get("injected_tokens", 0)
         injection_hits = session.get("injection_hits", 0)
+        injected_sources = session.get("injected_source_names", []) or []
         start_time = session.get("start_time", time.time())
         uptime_s = time.time() - start_time
         source_label = "this session"
@@ -1126,6 +1259,7 @@ def run(
             print(f"\n  TOKENPAK {version}")
             print(SEP)
             _print_runtime_and_routing(proxy_base, uptime_s=0.0, errors=0, requests=0)
+            _print_session_economics_line(proxy_base)
             print()
             if savings_all.get("error") == "db_not_found":
                 print("  📊 Measured savings")
@@ -1152,6 +1286,7 @@ def run(
         errors = 0
         injected_tok = 0
         injection_hits = 0
+        injected_sources = []
         uptime_s = 0
         if total_hours > 0:
             parts = []
@@ -1202,7 +1337,7 @@ def run(
     )
 
     # --- Companion (prompt-side) savings ---
-    # Tokens avoided before the wire via prune_context / load_capsule / etc.
+    # Tokens avoided before the wire via prune_context / load_pak / etc.
     # Lives in the companion's journal.db — separate plane from the proxy.
     companion_tokens_avoided = 0
     companion_usd = 0.0
@@ -1255,6 +1390,7 @@ def run(
     print(SEP)
 
     _print_runtime_and_routing(proxy_base, uptime_s=uptime_s, errors=errors, requests=total_reqs)
+    _print_session_economics_line(proxy_base)
 
     # --- 3. VALUE CREATED (measured) ---
     # Split honestly: prompt-side (companion, pre-wire) vs wire-side (proxy).
@@ -1294,6 +1430,12 @@ def run(
         print(
             f"     Vault injected         {_fmt_num(injected_tok):>10}   across {injection_hits} requests"
         )
+        # Name the sources. A token count alone says something was added but not
+        # what — and "you can check what was added" is the claim this line has to
+        # carry. The names are what make the injection auditable rather than
+        # merely disclosed.
+        for line in _format_injected_sources(injected_sources):
+            print(line)
 
     tip_attribution = _query_tip_cache_attribution(db_path=db_path, days=days, hours=hours)
     _print_tip_cache_attribution(tip_attribution, compact=False)
@@ -1644,6 +1786,7 @@ def _run_json(
             "all_time": savings_all if not savings_all.get("error") else None,
         },
         "tip_cache": tip_cache,
+        "session_economics": _session_economics_json(proxy_base),
         "meme_lines": MEME_LINES,
     }
     print(json.dumps(output, indent=2, default=str))
@@ -1835,6 +1978,8 @@ def run_full(
                 detail = ev.get("detail", "")
                 recovered = "✅" if ev.get("recovered") else "❌"
                 print(f"  {recovered} [{ts}] {etype}: {detail[:70]}")
+
+    _print_session_economics_block(proxy_base)
 
     print(SEP_LEGACY)
     if is_degraded is True:

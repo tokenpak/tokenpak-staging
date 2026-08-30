@@ -30,6 +30,7 @@ temporary tree.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import re
 import subprocess
@@ -158,6 +159,40 @@ def _load_release_leak_scanner():
     return module
 
 
+_PATTERN_REGISTER_FALLBACK = frozenset(
+    {
+        "scripts/release_gate/check_release_leaks.py",
+        "scripts/release_gate/public_safety_scan.py",
+    }
+)
+
+
+def _pattern_register_files():
+    """Exact paths of the pattern-register scripts, from the canonical set.
+
+    The structural scanner owns ``_PATTERN_REGISTER_FILES``; consult it so
+    the two registers cannot drift.  A frozen fallback keeps the leak gate
+    itself functional if that module cannot be loaded.
+    """
+    module_name = "_tokenpak_public_safety_scan"
+    module = sys.modules.get(module_name)
+    if module is None:
+        path = HERE.parent / "release_gate" / "public_safety_scan.py"
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if spec is None or spec.loader is None:
+                return _PATTERN_REGISTER_FALLBACK
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+        except (ImportError, OSError, SyntaxError):
+            return _PATTERN_REGISTER_FALLBACK
+    files = getattr(module, "_PATTERN_REGISTER_FILES", None)
+    if not files:
+        return _PATTERN_REGISTER_FALLBACK
+    return frozenset(files) | _PATTERN_REGISTER_FALLBACK
+
+
 def _changed_files(root: Path, base: str):
     try:
         out = subprocess.check_output(
@@ -185,15 +220,17 @@ def gate_leak(root: Path, base=None, changed=None) -> GateResult:
             )
     try:
         scanner = _load_release_leak_scanner()
+        register_files = _pattern_register_files()
         files = []
         for rel in changed:
             if rel.startswith(("tests/", "scripts/release_check/")):
                 continue
-            # The canonical scanner necessarily contains its own forbidden-
-            # pattern register.  Scanning that implementation as authored
-            # public content would self-flag every registered pattern; the
-            # identity workflow applies the same exact-path exclusion.
-            if rel == "scripts/release_gate/check_release_leaks.py":
+            # The pattern-register scripts necessarily contain their own
+            # forbidden-pattern vocabulary.  Scanning those implementations
+            # as authored public content would self-flag every registered
+            # pattern; the identity workflow applies the same exact-path
+            # exclusions.
+            if rel in register_files:
                 continue
             path = root / rel
             if not path.is_file():
@@ -275,6 +312,19 @@ def load_literal_baseline() -> set:
     return allowed
 
 
+def _tree_has_tokenpak_literal(tree: ast.AST) -> bool:
+    """Return whether parsed Python contains a legacy-home literal value."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant):
+            continue
+        value = node.value
+        if isinstance(value, str) and ".tokenpak" in value:
+            return True
+        if isinstance(value, bytes) and b".tokenpak" in value:
+            return True
+    return False
+
+
 def gate_tokenpak_literal(root: Path, allowed=None) -> GateResult:
     if allowed is None:
         allowed = load_literal_baseline()
@@ -282,6 +332,8 @@ def gate_tokenpak_literal(root: Path, allowed=None) -> GateResult:
     if not pkg.is_dir():
         return GateResult("tokenpak-literal", True, ["no tokenpak/ package tree; skipped"])
     offenders = []
+    unreadable = []
+    parse_failures = []
     for fp in sorted(pkg.rglob("*.py")):
         rel = fp.relative_to(root).as_posix()
         if rel.startswith("tokenpak/tests/"):  # tests are not product code
@@ -289,12 +341,23 @@ def gate_tokenpak_literal(root: Path, allowed=None) -> GateResult:
         if rel in allowed:
             continue
         text = _read(fp)
-        if text and ".tokenpak" in text:
+        if text is None:
+            unreadable.append(rel)
+            continue
+        try:
+            tree = ast.parse(text, filename=rel)
+        except SyntaxError as exc:
+            location = f":{exc.lineno}" if exc.lineno is not None else ""
+            parse_failures.append(f"{rel}{location}: {exc.msg}")
+            continue
+        if _tree_has_tokenpak_literal(tree):
             offenders.append(rel)
-    ok = not offenders
-    msgs = [f"NEW .tokenpak literal outside the legacy baseline: {r}" for r in offenders] or [
-        "no .tokenpak regressions outside the frozen legacy baseline"
-    ]
+    ok = not (offenders or unreadable or parse_failures)
+    msgs = [f"NEW .tokenpak literal outside the legacy baseline: {r}" for r in offenders]
+    msgs.extend(f"cannot read scanned Python source: {r}" for r in unreadable)
+    msgs.extend(f"cannot parse scanned Python source: {r}" for r in parse_failures)
+    if not msgs:
+        msgs = ["no .tokenpak regressions outside the frozen legacy baseline"]
     return GateResult("tokenpak-literal", ok, msgs)
 
 

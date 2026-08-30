@@ -35,7 +35,10 @@ Disable by unsetting or setting `TOKENPAK_STATS_FOOTER=0`.
 
 ### Will TokenPak break if a provider changes their API?
 
-The proxy is a transparent passthrough — it only reads/modifies the request body for compression, then forwards everything else as-is (headers, auth, paths). Provider API changes in response format won't break it. If a new request format is introduced, the worst case is that compression is skipped and the request passes through unmodified.
+The proxy applies provider-specific routing, header, credential, validation,
+and optional request-hook policies. Adapters fail open where their contract
+allows it, but a provider protocol change can still require an adapter update.
+Claude Code request bodies retain their byte-preserved route policy.
 
 ### Does TokenPak send my data anywhere?
 
@@ -188,28 +191,11 @@ legacy helper. Use `tokenpak compress` for explicit local compaction.
 
 ### Compression seems to be changing my prompt
 
-Check which recipe is firing:
-
-```bash
-tokenpak trace --last
-# Shows: recipe: python-strip-comments, stages: [...]
-```
-
-If you're seeing unwanted changes, you can disable specific recipes:
-
-```bash
-tokenpak recipe remove python-strip-comments
-```
-
-Or disable compression for specific request patterns:
-
-```json
-{
- "compression": {
- "exclude_patterns": [".*system.*", ".*code-review.*"]
- }
-}
-```
+Capture the exact bytes before and after the calling integration's request
+hook, then disable or retune that explicit hook. The default HTTP path does not
+call `compact_request_body`, and `TOKENPAK_COMPACT=0` does not disable other
+request transformations such as an explicitly enabled Pak builder or schema
+normalizer.
 
 ---
 
@@ -281,7 +267,7 @@ tokenpak prune --older-than 30d
 ```bash
 # Rebuild from scratch
 rm -f ~/.tokenpak/registry.db
-tokenpak index ~/vault
+tokenpak index ./knowledge-base
 ```
 
 ---

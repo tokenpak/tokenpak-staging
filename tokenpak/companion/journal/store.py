@@ -61,11 +61,40 @@ class JournalStore:
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._connect()
-        # Canonical schema lives in companion._sqlite — shared with the
-        # pre-send hook so there is exactly one DDL for these tables.
-        _db.ensure_journal_schema(conn)
-        conn.commit()
-        conn.close()
+        try:
+            # Canonical schema lives in companion._sqlite — shared with the
+            # pre-send hook so there is exactly one DDL for these tables.
+            with _db._write_transaction(conn):
+                _db.ensure_journal_schema(conn)
+            # Upgrade path: a store populated before the marker existed must
+            # backfill it here, or the pre-send hook would treat it as empty
+            # until the next entry lands.
+            has_rows = bool(conn.execute("SELECT EXISTS(SELECT 1 FROM entries)").fetchone()[0])
+        finally:
+            conn.close()
+        if has_rows:
+            self._touch_nonempty_marker()
+        # The prompt hook persists one atomic write-ahead intent instead of
+        # blocking on two SQLite commits.  A canonical journal reader is a
+        # safe materialisation boundary if the detached worker has not already
+        # drained those intents.  Custom test/store filenames remain isolated.
+        # This flush is unconditional on open — it must run for empty stores
+        # too, and it stays out of _touch_nonempty_marker so add_entry does
+        # not flush per write.
+        if self._db_path.name == "journal.db":
+            _db.flush_pre_send_events(self._db_path.parent)
+
+    def _touch_nonempty_marker(self) -> None:
+        """Advisory zero-byte marker the pre-send hook reads in pure bash.
+
+        Failure to write it only suppresses the recall hint.
+        """
+        marker = Path(f"{self._db_path}.nonempty")
+        if not marker.exists():
+            try:
+                marker.touch()
+            except OSError:
+                pass
 
     def _connect(self) -> sqlite3.Connection:
         """Open the journal DB via the shared companion connection factory
@@ -77,6 +106,20 @@ class JournalStore:
         if self._write_conn is None:
             self._write_conn = self._connect()
         return self._write_conn
+
+    @staticmethod
+    def _rollback_cached_writer(conn: sqlite3.Connection) -> None:
+        """Clear a failed write's pending transaction on the cached writer.
+
+        This connection is cached for the store's lifetime. A failed commit
+        leaves its statement(s) staged on that still-open transaction; without
+        a rollback they would silently resurface and merge into a later,
+        unrelated write's commit.
+        """
+        try:
+            conn.rollback()
+        except sqlite3.OperationalError:
+            pass  # best-effort; the next write still gets a clean statement
 
     def start_session(
         self,
@@ -93,30 +136,38 @@ class JournalStore:
         """
         with self._write_lock:
             conn = self._writer()
-            conn.execute(
-                """INSERT OR IGNORE INTO sessions
-                   (session_id, started_at, project_dir, model)
-                   VALUES (?, ?, ?, ?)""",
-                (session_id, time.time(), project_dir, model),
-            )
-            conn.execute(
-                """UPDATE sessions
-                   SET project_dir = COALESCE(NULLIF(?, ''), project_dir),
-                       model = COALESCE(NULLIF(?, ''), model)
-                   WHERE session_id = ?""",
-                (project_dir, model, session_id),
-            )
-            conn.commit()
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO sessions
+                       (session_id, started_at, project_dir, model)
+                       VALUES (?, ?, ?, ?)""",
+                    (session_id, time.time(), project_dir, model),
+                )
+                conn.execute(
+                    """UPDATE sessions
+                       SET project_dir = COALESCE(NULLIF(?, ''), project_dir),
+                           model = COALESCE(NULLIF(?, ''), model)
+                       WHERE session_id = ?""",
+                    (project_dir, model, session_id),
+                )
+                conn.commit()
+            except Exception:
+                self._rollback_cached_writer(conn)
+                raise
 
     def end_session(self, session_id: str) -> None:
         """Record session end and update totals."""
         with self._write_lock:
             conn = self._writer()
-            conn.execute(
-                "UPDATE sessions SET ended_at = ? WHERE session_id = ?",
-                (time.time(), session_id),
-            )
-            conn.commit()
+            try:
+                conn.execute(
+                    "UPDATE sessions SET ended_at = ? WHERE session_id = ?",
+                    (time.time(), session_id),
+                )
+                conn.commit()
+            except Exception:
+                self._rollback_cached_writer(conn)
+                raise
 
     def add_entry(
         self,
@@ -136,20 +187,28 @@ class JournalStore:
         metadata_json = json.dumps(metadata or {}, default=str)
         with self._write_lock:
             conn = self._writer()
-            conn.execute(
-                """INSERT OR IGNORE INTO entries
-                   (session_id, timestamp, entry_type, content, metadata_json, content_hash)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    session_id,
-                    time.time(),
-                    entry_type,
-                    content,
-                    metadata_json,
-                    _db.entry_content_hash(entry_type, content, metadata_json),
-                ),
-            )
-            conn.commit()
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO entries
+                       (session_id, timestamp, entry_type, content, metadata_json, content_hash)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        session_id,
+                        time.time(),
+                        entry_type,
+                        content,
+                        metadata_json,
+                        _db.entry_content_hash(entry_type, content, metadata_json),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                self._rollback_cached_writer(conn)
+                raise
+        # First-entry marker: lets the pure-bash pre-send hook distinguish an
+        # initialized-empty store from one holding recallable content without
+        # parsing SQLite.
+        self._touch_nonempty_marker()
 
     def get_session(self, session_id: str) -> Optional[SessionRecord]:
         """Retrieve a session record."""

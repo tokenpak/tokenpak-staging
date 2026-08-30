@@ -16,7 +16,7 @@ import os
 import socket
 import sys
 import time
-from collections.abc import Sized
+from collections.abc import Iterator, Sized
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from importlib.metadata import EntryPoint
@@ -2128,7 +2128,7 @@ def cmd_stats(args: CommandArgs) -> None:
         avg_ratio = file_stats["avg_ratio"]
         uptime_s = None
 
-    avg_latency = file_stats["avg_latency_ms"]
+    avg_latency = _as_float(file_stats.get("avg_latency_ms"))
 
     # A compression ratio or latency of exactly 0 is not something the pipeline
     # can produce — it means the rolling window holds no observations. Printing
@@ -2619,7 +2619,7 @@ def cmd_explain(args: CommandArgs) -> None:
         print("\nTip: Set with TOKENPAK_PROFILE=<name> or use `tokenpak explain --profile <name>`")
 
 
-def cmd_preview(args: CommandArgs):
+def cmd_preview(args: CommandArgs) -> int | None:
     """Preview compression result for input text (dry-run)."""
     import sys
     from pathlib import Path
@@ -2736,7 +2736,7 @@ def cmd_preview(args: CommandArgs):
         print(json.dumps(result.to_json(), indent=2))
         if result.state is not PreviewState.MEASURED:
             sys.exit(_state_exit[result.state])
-        return
+        return None
 
     if result.state is not PreviewState.MEASURED:
         # No fabricated fallback: say what happened and exit non-zero.
@@ -2816,6 +2816,8 @@ def cmd_preview(args: CommandArgs):
             print(f"    Tokenizer      {prov.tokenizer}")
             print(f"    Stages run     {', '.join(prov.stages_run) or '(none)'}")
             print(f"    TokenPak       v{prov.tokenpak_version}")
+
+    return None
 
 
 def cmd_dashboard(args: CommandArgs) -> int | None:
@@ -4517,7 +4519,7 @@ def _cmd_status_legacy(args: CommandArgs) -> None:
         session_value = stats.get("session") if stats else None
         s = session_value if isinstance(session_value, dict) else None
 
-        def _number(container: dict[str, Any] | None, key: str) -> int | float | None:
+        def _number(container: Mapping[str, object] | None, key: str) -> int | float | None:
             value = container.get(key) if container is not None else None
             return (
                 value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
@@ -4801,6 +4803,7 @@ def cmd_savings(args: CommandArgs) -> None:
     mode = resolve_mode(args)
     fmt = OutputFormatter("Savings", mode=mode, minimal=getattr(args, "minimal", False))
     days = getattr(args, "days", 30)
+    as_json = getattr(args, "as_json", False)
 
     # Try monitor.db first (proxy's live data source)
     monitor_data = _monitor_db_savings(days=days)
@@ -4817,7 +4820,7 @@ def cmd_savings(args: CommandArgs) -> None:
         estimated_without = actual + savings_amount
         savings_pct = (savings_amount / estimated_without * 100) if estimated_without > 0 else 0
 
-        if mode == OutputMode.RAW:
+        if mode == OutputMode.RAW or as_json:
             print(
                 json.dumps(
                     {
@@ -4857,7 +4860,7 @@ def cmd_savings(args: CommandArgs) -> None:
 
     report = get_savings_report(days=days)
 
-    if mode == OutputMode.RAW:
+    if mode == OutputMode.RAW or as_json:
         print(fmt.raw({"section": "savings", "days": days, **report.__dict__}))
         return
 
@@ -5158,6 +5161,12 @@ def _build_usage_parser(sub: Subparsers) -> None:
 def _build_savings_parser(sub: Subparsers) -> None:
     p_savings = sub.add_parser("savings", help="Show savings summary")
     p_savings.add_argument("--days", type=int, default=30, help="Rolling window in days")
+    p_savings.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit machine-readable JSON output",
+    )
     p_savings.set_defaults(func=cmd_savings)
 
 
@@ -5545,17 +5554,18 @@ def _maybe_write_env_stub(*, force: bool) -> None:
 
 def cmd_config(args: CommandArgs) -> None:
     """Config management: show, init, edit."""
-    from tokenpak.core.config_loader import CONFIG_PATH, generate_default_yaml, get_all
+    from tokenpak.core.config_loader import config_read_path, generate_default_yaml, get_all
 
     subcmd = getattr(args, "config_cmd", "show")
+    config_path = config_read_path()
 
     if subcmd == "show":
         cfg = get_all()
         if args.json:
             print(json.dumps(cfg, indent=2))
         else:
-            print(f"Config: {CONFIG_PATH}")
-            print(f"Exists: {'yes' if CONFIG_PATH.exists() else 'no'}")
+            print(f"Config: {config_path}")
+            print(f"Exists: {'yes' if config_path.exists() else 'no'}")
             print()
             # Group by section
             sections: dict[str, list[tuple[str, object]]] = {}
@@ -5574,20 +5584,20 @@ def cmd_config(args: CommandArgs) -> None:
                 print()
 
     elif subcmd == "init":
-        if CONFIG_PATH.exists() and not getattr(args, "force", False):
-            print(f"Config already exists: {CONFIG_PATH}")
+        if config_path.exists() and not getattr(args, "force", False):
+            print(f"Config already exists: {config_path}")
             print("Use --force to overwrite.")
             if getattr(args, "with_env_stub", False):
                 _maybe_write_env_stub(force=getattr(args, "force", False))
             return
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(generate_default_yaml())
-        print(f"Created: {CONFIG_PATH}")
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(generate_default_yaml())
+        print(f"Created: {config_path}")
         if getattr(args, "with_env_stub", False):
             _maybe_write_env_stub(force=getattr(args, "force", False))
 
     elif subcmd == "path":
-        print(str(CONFIG_PATH))
+        print(str(config_path))
 
 
 def cmd_version(args: CommandArgs) -> None:
@@ -5698,14 +5708,14 @@ _MACHINE_OUTPUT_ATTRS = (
 _MACHINE_OUTPUT_FORMATS = frozenset({"csv", "json", "jsonl", "markdown", "raw"})
 
 
-def _machine_output_requested(args) -> bool:
+def _machine_output_requested(args: CommandArgs) -> bool:
     """Recognize argparse destinations used for machine-readable output."""
     if any(bool(getattr(args, attr, False)) for attr in _MACHINE_OUTPUT_ATTRS):
         return True
     return str(getattr(args, "format", "")).lower() in _MACHINE_OUTPUT_FORMATS
 
 
-def _update_nudge_suppressed(args) -> bool:
+def _update_nudge_suppressed(args: CommandArgs) -> bool:
     """Suppress automatic checks for machine, launcher, and long-running flows."""
     if _machine_output_requested(args):
         return True
@@ -5724,7 +5734,7 @@ def _update_nudge_opted_out() -> bool:
     )
 
 
-def _update_cache_path() -> "Path":
+def _update_cache_path() -> Path:
     """Path to the cached update-check result under the resolved TokenPak home."""
     from tokenpak import _paths
 
@@ -5751,7 +5761,8 @@ def _lock_update_cache_fd(fd: int, platform_name: Optional[str] = None) -> None:
             os.write(fd, b"\0")
             os.fsync(fd)
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        msvcrt_api = cast(Any, msvcrt)
+        msvcrt_api.locking(fd, msvcrt_api.LK_LOCK, 1)
         return
 
     import fcntl
@@ -5766,7 +5777,8 @@ def _unlock_update_cache_fd(fd: int, platform_name: Optional[str] = None) -> Non
         import msvcrt
 
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        msvcrt_api = cast(Any, msvcrt)
+        msvcrt_api.locking(fd, msvcrt_api.LK_UNLCK, 1)
         return
 
     import fcntl
@@ -5775,7 +5787,7 @@ def _unlock_update_cache_fd(fd: int, platform_name: Optional[str] = None) -> Non
 
 
 @contextmanager
-def _update_cache_lock():
+def _update_cache_lock() -> Iterator[Path]:
     """Serialize cache probes and read-modify-write updates across processes."""
     path = _update_cache_path()
     _ensure_update_cache_parent(path)
@@ -5796,12 +5808,11 @@ def _update_cache_lock():
             os.close(fd)
 
 
-def _read_update_cache_state(path: Optional[Path] = None) -> dict:
+def _read_update_cache_state(path: Optional[Path] = None) -> JsonObject:
     """Return the complete update-check cache, or an empty mapping on failure."""
     try:
         cache_path = _update_cache_path() if path is None else path
-        data = json.loads(cache_path.read_text())
-        return data if isinstance(data, dict) else {}
+        return _json_object(json.loads(cache_path.read_text()))
     except Exception:
         return {}
 
@@ -5813,10 +5824,8 @@ def _read_update_cache() -> Tuple[float, Optional[str]]:
     ``(0.0, None)`` on any failure (no cache yet, unreadable, malformed).
     """
     data = _read_update_cache_state()
-    try:
-        return float(data.get("checked_at", 0.0)), data.get("latest")
-    except (TypeError, ValueError):
-        return 0.0, None
+    latest = data.get("latest")
+    return _as_float(data.get("checked_at")), latest if isinstance(latest, str) else None
 
 
 def _write_update_cache_unlocked(
@@ -5824,13 +5833,13 @@ def _write_update_cache_unlocked(
     latest: Optional[str],
     *,
     checked_at: Optional[float] = None,
-    skipped_version=_KEEP_SKIPPED_VERSION,
+    skipped_version: object = _KEEP_SKIPPED_VERSION,
     skipped_at: Optional[float] = None,
-    automatic_checks=_KEEP_AUTOMATIC_CHECKS,
+    automatic_checks: object = _KEEP_AUTOMATIC_CHECKS,
 ) -> None:
     """Persist cache state while the caller holds ``_update_cache_lock``."""
     previous = _read_update_cache_state(path)
-    payload = {
+    payload: JsonObject = {
         "checked_at": float(time.time() if checked_at is None else checked_at),
         "latest": latest,
     }
@@ -5865,9 +5874,9 @@ def _write_update_cache(
     latest: Optional[str],
     *,
     checked_at: Optional[float] = None,
-    skipped_version=_KEEP_SKIPPED_VERSION,
+    skipped_version: object = _KEEP_SKIPPED_VERSION,
     skipped_at: Optional[float] = None,
-    automatic_checks=_KEEP_AUTOMATIC_CHECKS,
+    automatic_checks: object = _KEEP_AUTOMATIC_CHECKS,
 ) -> None:
     """Atomically persist update state without breaking the invoking command."""
     try:
@@ -5895,10 +5904,11 @@ def _set_automatic_update_checks(enabled: bool) -> bool:
     try:
         with _update_cache_lock() as path:
             state = _read_update_cache_state(path)
+            latest_value = state.get("latest")
             _write_update_cache_unlocked(
                 path,
-                state.get("latest"),
-                checked_at=float(state.get("checked_at", 0.0) or 0.0),
+                latest_value if isinstance(latest_value, str) else None,
+                checked_at=_as_float(state.get("checked_at")),
                 automatic_checks=bool(enabled),
             )
         return True
@@ -5915,8 +5925,6 @@ def _mark_update_skipped(latest: str) -> None:
         skipped_version=latest,
         skipped_at=now,
     )
-
-
 def _fetch_latest_pypi_version(timeout: float = 5.0) -> str:
     """Delegate to the privacy-bounded core PyPI metadata primitive."""
     from tokenpak.core._update_check import fetch_latest_pypi_version
@@ -5924,7 +5932,9 @@ def _fetch_latest_pypi_version(timeout: float = 5.0) -> str:
     return fetch_latest_pypi_version(timeout=timeout)
 
 
-def _latest_for_update_nudge(now: Optional[float] = None) -> Tuple[Optional[str], dict]:
+def _latest_for_update_nudge(
+    now: Optional[float] = None,
+) -> Tuple[Optional[str], JsonObject]:
     """Return cached/fresh PyPI state with one automatic attempt per 24 hours."""
     now = time.time() if now is None else now
     try:
@@ -5936,11 +5946,9 @@ def _latest_for_update_nudge(now: Optional[float] = None) -> Tuple[Optional[str]
             # another process has completed the disable operation.
             if state.get("automatic_checks") is not True:
                 return None, state
-            try:
-                checked_at = float(state.get("checked_at", 0.0))
-            except (TypeError, ValueError):
-                checked_at = 0.0
-            latest = state.get("latest")
+            checked_at = _as_float(state.get("checked_at"))
+            latest_value = state.get("latest")
+            latest = latest_value if isinstance(latest_value, str) else None
             age = now - checked_at
             if checked_at > 0 and 0 <= age < _UPDATE_NUDGE_TTL_SECONDS:
                 return latest, state
@@ -6114,7 +6122,7 @@ def _pip_upgrade_tokenpak(verbose: bool = True) -> Tuple[bool, str, str]:
     return False, "pip", (result.stderr or result.stdout or "")[:400]
 
 
-def cmd_update(args: CommandArgs) -> None:
+def cmd_update(args: CommandArgs) -> int | None:
     """Update TokenPak proxy and CLI to latest."""
     import subprocess as _sp
 
@@ -6177,16 +6185,16 @@ def cmd_update(args: CommandArgs) -> None:
         if _PV(current_ver) == _PV(latest):
             print("  ✓ Already up to date!")
             if not force:
-                return
+                return None
         elif _PV(current_ver) > _PV(latest):
             print(f"  → Local version is newer than PyPI ({current_ver} > {latest})")
             if not force:
-                return
+                return None
         else:
             print(f"  → Upgrade available: {current_ver} → {latest}")
 
     if check_only:
-        return
+        return None
 
     if dry_run:
         print("\nWould run: pip install --upgrade tokenpak")
@@ -6195,7 +6203,7 @@ def cmd_update(args: CommandArgs) -> None:
             "externally-managed / PEP 668 environments)"
         )
         print("Would restart proxy if running.")
-        return
+        return None
 
     # Check if proxy is running first
     proxy_info = _get_proxy_version()
@@ -6259,6 +6267,7 @@ def cmd_update(args: CommandArgs) -> None:
         print(f"  ⚠ Could not update lock file: {e}")
 
     print("\n✓ Update complete.")
+    return None
 
 
 def cmd_uninstall(args: CommandArgs) -> int:
@@ -6346,7 +6355,7 @@ def cmd_config_sync(args: CommandArgs) -> None:
         print(f"  ✗ Unknown source: {source}. Use --source=git or --source=url")
 
 
-def cmd_config_validate(args: CommandArgs):
+def cmd_config_validate(args: CommandArgs) -> int | None:
     """Validate config against schema.
 
     With --config FILE: validates a proxy config file (JSON/YAML) against JSON Schema.
@@ -6367,7 +6376,7 @@ def cmd_config_validate(args: CommandArgs):
         rc = _schema_validate(config_file)
         if rc != 0:
             sys.exit(rc)
-        return
+        return None
 
     # --- TokenPak meta config validation (legacy) ---
     required_meta_fields = ["configVersion", "tokenpakVersion", "lastUpdated", "configHash"]
@@ -6470,6 +6479,7 @@ def cmd_config_validate(args: CommandArgs):
     # Errors are failures and must be visible to callers. Warnings are not.
     if errors:
         return EXIT_FAILURE
+    return None
 
 
 def cmd_config_pull(args: CommandArgs) -> None:
@@ -6493,7 +6503,9 @@ def cmd_config_migrate(args: CommandArgs) -> None:
     except ImportError:
         _has_yaml = False
 
-    from tokenpak.core.config_loader import CONFIG_PATH
+    from tokenpak.core.config_loader import config_read_path
+
+    config_path = config_read_path()
 
     # config.json is a read-compatibility format and may sit in either home;
     # resolve it rather than assuming the legacy one.
@@ -6508,7 +6520,7 @@ def cmd_config_migrate(args: CommandArgs) -> None:
 
     print("TokenPak Config Migration")
     print(f"  Source : {json_path}")
-    print(f"  Target : {CONFIG_PATH}")
+    print(f"  Target : {config_path}")
     print()
 
     if not json_path.exists():
@@ -6535,9 +6547,9 @@ def cmd_config_migrate(args: CommandArgs) -> None:
     }
 
     # Load existing config.yaml
-    if CONFIG_PATH.exists() and _has_yaml:
+    if config_path.exists() and _has_yaml:
         try:
-            with open(CONFIG_PATH) as f:
+            with open(config_path) as f:
                 yaml_cfg = _yaml.safe_load(f) or {}
         except Exception:
             yaml_cfg = {}
@@ -6577,8 +6589,8 @@ def cmd_config_migrate(args: CommandArgs) -> None:
 
     # Write updated config.yaml
     if _has_yaml:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w") as f:
             _yaml.dump(yaml_cfg, f, default_flow_style=False, allow_unicode=True)
         print("✓ config.yaml updated")
     else:

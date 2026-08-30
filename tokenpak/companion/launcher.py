@@ -39,6 +39,7 @@ from typing import Any, TextIO
 
 from .._formatting.colors import Color
 from . import _style
+from ._python_spawn import python_spawn_prefix
 from .config import CompanionConfig
 
 # ---------------------------------------------------------------------------
@@ -146,20 +147,25 @@ def _launcher_mode_banner(
 
 # System prompt fragment injected via --append-system-prompt-file
 _SYSTEM_PROMPT = """\
-## tokenpak companion
+## TokenPak companion
 
-A tokenpak companion is active in this session. You have these MCP tools:
+A TokenPak companion is active in this session. You have these MCP tools:
 
-- **estimate_tokens** — Estimate token count for text or a file. Call before including large content.
-- **check_budget** — Query remaining cost budget for this session and today.
-- **load_capsule** — Load a memory capsule from a prior session (omit session_id to list available).
-- **prune_context** — Compress verbose tool output to reduce token count.
-- **journal_read** — Read session journal entries (omit session_id to list sessions).
-- **journal_write** — Save an important decision, milestone, or note for future sessions.
-- **session_info** — Get companion status and configuration.
+- **estimate_tokens** — Estimate token count for text or a file. Reserve for a go/no-go decision on very large content.
+- **check_budget** — Report the remaining TokenPak cost budget for this session and today.
+- **load_pak** — Batch prior-session Paks and optional journals; omit IDs to list available. Legacy alias: load_capsule.
+- **prune_context** — Compress verbose tool output with TokenPak to reduce token count.
+- **journal_read** — Read TokenPak session-journal entries (omit session_id to list sessions).
+- **journal_write** — Save an important decision, milestone, or note to the TokenPak journal for future sessions.
+- **session_info** — Get TokenPak companion status and configuration.
 
-The companion automatically estimates cost and journals each prompt via hooks.
-You only need to call tools explicitly when optimizing context or managing budget.
+For prior work, retrieve before answering. Prefer available native memory;
+otherwise batch journal/Paks. Persist each fact once.
+
+The TokenPak companion estimates cost, enforces the budget, and journals each
+prompt automatically via hooks — do not call tools for routine accounting;
+every tool call re-sends the conversation. Compressed context it injects is
+wrapped in `[PAK ...]` envelopes.
 """
 
 
@@ -306,32 +312,18 @@ def main(args: list[str] | None = None) -> int:
 
 
 _SESSION_PREFIX = "\U0001f4e6"  # 📦
-# Colors for the branded session label, derived from the single palette
-# definition in ``_formatting.colors`` — never write a brand escape inline
-# here, or the label and the rest of the CLI can drift apart. A solid fill is
-# painted across the whole label so it reads as one chip regardless of the
-# user's terminal background; the trailing reset clears it.
-_LBL_BG_BLACK = Color.CHROME_BG
-_LBL_TEAL = Color.TEAL  # "Pak"
-_LBL_WHITE = Color.PAPER  # "📦 Token"
-_LBL_GRAY = Color.LIGHT_GRAY  # "Claude Companion"
-_LBL_RESET = Color.RESET
-# Default session label shown in the chat-header. Real ESC bytes here — they
-# pass through ``os.execvpe`` to ``--name`` as raw argv bytes. The
-# ``SessionStart`` hook re-emits this exact string after a session is
-# re-created; it reads it from the run dir rather than keeping its own copy,
-# so this stays the only definition.
-_DEFAULT_SESSION_LABEL = (
-    f"{_LBL_BG_BLACK}"
-    f"{_LBL_WHITE} {_SESSION_PREFIX} Token"
-    f"{_LBL_TEAL}Pak"
-    f"{_LBL_GRAY} Claude Companion "
-    f"{_LBL_RESET}"
-)
-# Progressively shorter fallbacks for narrow terminals, widest first.
-_SHORT_SESSION_LABEL = (
-    f"{_LBL_BG_BLACK}{_LBL_WHITE}{_SESSION_PREFIX} Token{_LBL_TEAL}Pak{_LBL_RESET}"
-)
+# Session labels are PLAIN TEXT by design. The label travels as argv data
+# (``--name``) and is rendered by the host CLI, which owns that surface and
+# sanitizes control bytes in it — a 2026-08 host update began displaying
+# embedded SGR sequences as literal ``[38;2;…m`` text in the chat header.
+# Styling belongs only on streams this process writes to a TTY itself (the
+# stderr banner above), never inside data handed to another program to
+# display. The ``SessionStart`` hook re-emits this exact string after a
+# session is re-created; it reads it from the run dir rather than keeping
+# its own copy, so this stays the only definition.
+_DEFAULT_SESSION_LABEL = f"{_SESSION_PREFIX} TokenPak Claude Companion"
+# Shorter fallback for narrow terminals.
+_SHORT_SESSION_LABEL = f"{_SESSION_PREFIX} TokenPak"
 # Columns the host CLI spends on its own chrome around the label (padding
 # plus the minimum rule on either side). Measured against the rendered
 # header, with headroom: below this the header wraps and every row after it
@@ -405,10 +397,10 @@ def _resolve_session_name(args: list[str]) -> tuple[list[str], str | None]:
             args[i] = f"--name={label}"
             return args, label
     # No name flag found — inject the branded label when it fits.
-    label = _session_label_for_width()
-    if label is not None:
-        args.extend(["--name", label])
-    return args, label
+    default_label = _session_label_for_width()
+    if default_label is not None:
+        args.extend(["--name", default_label])
+    return args, default_label
 
 
 def _prefix_session_name(args: list[str]) -> list[str]:
@@ -418,16 +410,16 @@ def _prefix_session_name(args: list[str]) -> list[str]:
 
 def _write_mcp_config(config: CompanionConfig) -> str:
     """Write the MCP server configuration to fixed run_dir."""
+    python_prefix = python_spawn_prefix()
     mcp_data = {
         "mcpServers": {
             "tokenpak-companion": {
                 "type": "stdio",
-                "command": sys.executable,
-                # -P keeps the launch directory off sys.path so a ``tokenpak``
-                # dir/symlink in the cwd can't shadow the installed package
-                # (which would resolve it as a namespace package and drop
-                # ``__version__``, crashing the server on import).
-                "args": ["-P", "-m", "tokenpak.companion.mcp.server"],
+                "command": python_prefix[0],
+                # -P on Python 3.11+ keeps the launch directory off sys.path
+                # so a ``tokenpak`` dir/symlink in the cwd can't shadow the
+                # installed package. Python 3.10 does not recognize the flag.
+                "args": [*python_prefix[1:], "-m", "tokenpak.companion.mcp.server"],
             }
         }
     }
@@ -440,9 +432,9 @@ def _write_session_title(config: CompanionConfig, label: str | None) -> str:
     """Write the ``SessionStart`` payload the label hook prints.
 
     Generating this from the Python constant is what keeps the shell hook
-    from carrying a second, hand-copied set of escapes. When no label fits
-    the terminal, the file is removed so the hook emits nothing and the host
-    keeps its own default.
+    from carrying a second, hand-copied copy of the label. When no label
+    fits the terminal, the file is removed so the hook emits nothing and the
+    host keeps its own default.
     """
     path = config.run_dir / "session_title.json"
     if label is None:
@@ -457,8 +449,8 @@ def _write_session_title(config: CompanionConfig, label: str | None) -> str:
             "sessionTitle": label,
         }
     }
-    # ensure_ascii keeps the ESC bytes as \u001b escapes, which is the only
-    # form valid inside a JSON string.
+    # ensure_ascii keeps any non-ASCII byte in a user-supplied --name value
+    # in escaped form, which is always valid inside a JSON string.
     path.write_text(json.dumps(payload, ensure_ascii=True))
     return str(path)
 
@@ -526,7 +518,9 @@ def _write_settings(config: CompanionConfig) -> str:
     if hook_sh.is_file():
         hook_cmd = f"bash {hook_sh}"
     elif hook_py.is_file():
-        hook_cmd = f"python3 {hook_py}"
+        # Use the same interpreter that is running the launcher. Safe-path
+        # mode is included only when that interpreter supports it (3.11+).
+        hook_cmd = shlex.join([*python_spawn_prefix(), str(hook_py)])
     else:
         hook_cmd = None
 
@@ -626,7 +620,7 @@ def _write_settings(config: CompanionConfig) -> str:
 
 
 def _write_system_prompt(config: CompanionConfig) -> str:
-    """Write the companion system prompt fragment."""
+    """Write the prompt fragment, adding style guidance only for lean."""
     path = config.run_dir / "companion-prompt.md"
     path.write_text(_SYSTEM_PROMPT + _style.directive(config.style))
     return str(path)

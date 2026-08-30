@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tokenpak.proxy import config as proxy_config  # noqa: E402
 from tokenpak.proxy.pipeline import process_request  # noqa: E402
 from tokenpak.proxy.request import ROUTE_CLAUDE_CODE, ProxyRequest  # noqa: E402
 from tokenpak.proxy.route_policy import get_policy  # noqa: E402
@@ -144,6 +145,9 @@ def _validate_passthrough_result(result: Any, body: bytes, headers: dict[str, st
     ]
     if [stage.name for stage in result.stages] != expected_stages:
         raise RuntimeError("Claude Code passthrough did not execute the expected stage sequence")
+    vault_stage = next(stage for stage in result.stages if stage.name == "vault_injection")
+    if vault_stage.skipped or "injection_text" not in vault_stage.details:
+        raise RuntimeError("Claude Code passthrough did not exercise vault injection")
 
 
 def _time_batch(fn: Callable[[], Any], iterations: int) -> float:
@@ -198,9 +202,13 @@ def run_benchmark(
     normalized_round_p50s: list[float] = []
 
     offline_vault_bridge = types.ModuleType("tokenpak.proxy.vault_bridge")
-    offline_vault_bridge.inject_vault_context = _no_vault_result  # type: ignore[attr-defined]
+    offline_vault_bridge._inject_vault_context_with_text = _no_vault_result  # type: ignore[attr-defined]
 
     with (
+        # The scenario deliberately benchmarks the injection-capable route.
+        # Enable that path only inside this process-local context; production
+        # remains default-off and the patch is restored before returning.
+        mock.patch.object(proxy_config, "VAULT_INJECTION_ENABLED", True),
         mock.patch.dict(sys.modules, {"tokenpak.proxy.vault_bridge": offline_vault_bridge}),
         mock.patch.object(
             socket,

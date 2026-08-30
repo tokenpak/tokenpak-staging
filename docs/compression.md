@@ -231,6 +231,12 @@ Stages: dedup (0 removed) → segmentize (14 blocks) → directives (applied)
 
 ## Performance
 
+| Optimization | Speedup |
+|---|---|
+| LRU token count cache | 25x faster repeated counting |
+| Pre-compiled regex | 30% faster processing |
+| Batch SQLite WAL writes | 60% faster telemetry |
+
 Only explicit callers incur compression work. Benchmark the full calling
 integration with representative inputs; default HTTP proxy latency does not
 include a `compact_request_body` call.

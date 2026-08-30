@@ -25,7 +25,7 @@ profile, `.env`, or CI environment.  Values are read once at launch via
 | `TOKENPAK_COMPANION_ENABLED` | `1` | Master switch. Set `0` to disable companion without removing the launcher. |
 | `TOKENPAK_COMPANION_BUDGET` | `0` (unlimited) | Daily budget in USD. Set to e.g. `5.00` to cap daily spend. `0` = no cap. |
 | `TOKENPAK_COMPANION_PROFILE` | `balanced` | Preset profile: `lean`, `balanced`, or `verbose`. Controls prune threshold and cost display. |
-| `TOKENPAK_COMPANION_STYLE` | `lean` | Response style: `lean` or `standard`. `lean` asks for dense technical markdown to cut output tokens; `standard` leaves the host's native style untouched. Independent of `PROFILE`. |
+| `TOKENPAK_COMPANION_STYLE` | `standard` | Response style: `lean` or `standard`. `standard` preserves the host's native style; set `lean` to explicitly opt into dense technical markdown that can cut output tokens. Independent of `PROFILE`. |
 | `TOKENPAK_COMPANION_JOURNAL_DIR` | `~/.tokenpak/companion` | Directory for journal database, budget database, and capsule storage. |
 | `TOKENPAK_COMPANION_HOOKS` | `1` | Enable/disable the `UserPromptSubmit` hook pipeline (token estimation, cost journaling, budget gate). |
 | `TOKENPAK_COMPANION_MCP` | `1` | Enable/disable the MCP server. When disabled, no MCP tools are injected. |
@@ -47,6 +47,9 @@ profile, `.env`, or CI environment.  Values are read once at launch via
 export TOKENPAK_COMPANION_BUDGET=5.00
 export TOKENPAK_COMPANION_PROFILE=lean
 tokenpak claude
+
+# Explicitly opt into dense technical markdown
+TOKENPAK_COMPANION_STYLE=lean tokenpak claude
 
 # Custom journal directory (e.g. project-scoped storage)
 export TOKENPAK_COMPANION_JOURNAL_DIR=/my/project/.tokenpak
@@ -146,6 +149,17 @@ Notes:
 
 ## Memory sources — bring your own knowledge base
 
+### Choose one recall store
+
+| Situation | Preferred store |
+|---|---|
+| The host already retains session or project memory | Native memory |
+| Cross-tool handoff or a host without native memory | Journal / Pak |
+
+Before answering about prior work, retrieve it. Batch related Pak IDs with
+`include_journal` when journal context is needed. Persist each fact in one
+store only; do not duplicate the same briefing across native memory and a Pak.
+
 The companion can surface lessons from your own Markdown notes, not just its
 built-in memory schema. Any folder of `.md` / `.markdown` files works (scanned
 recursively) — no special directory layout is required.
@@ -191,14 +205,23 @@ never fatal.
 
 ## MCP Tools Reference
 
-When the companion is active, Claude Code gains nine MCP tools served by
+When the companion is active, Claude Code gains the MCP tools below, served by
 `tokenpak.companion.mcp.server`.  The server runs as a stdio MCP process.
+
+Tool schemas are re-sent to the model with every request. Under
+`TOKENPAK_COMPANION_PROFILE=lean` the server advertises only the core tools
+(`load_pak`, `prune_context`, `journal_read`, `journal_write`, `vault_search`,
+`vault_retrieve`); accounting and diagnostic tools stay callable if a client
+invokes them, but their schemas no longer ride every request. Hooks cover
+cost estimation and budget enforcement out-of-band in all profiles.
 
 | Tool | Description |
 |---|---|
-| `estimate_tokens` | Estimate token count for inline text or a file path. Call before including large content to decide if it's worth the cost. |
-| `check_budget` | Return remaining cost budget for this session and today. Call before starting expensive multi-step tasks. |
-| `load_capsule` | Load a memory capsule from a prior session. Omit `session_id` to list the 10 most recent available capsules. |
+| `estimate_tokens` | Estimate token count for inline text or a file path. Cost tracking is automatic via hooks — reserved for go/no-go decisions on very large content, not routine bookkeeping. |
+| `session_economics` | Read the deterministic session trip-computer: spent tokens/cost, burn, binding runway, guard state, and forecast availability. Read-only facts and explicit unknowns — no recommendations. |
+| `check_budget` | Return remaining cost budget for this session and today. The pre-send hook enforces the budget automatically; agents call this only on explicit user request. |
+| `load_pak` | Load one or more Paks from prior sessions. Use `session_ids` with `include_journal` to retrieve related context together; omit IDs to list available Paks. |
+| `load_capsule` | Deprecated legacy alias of `load_pak` — same behavior and parameters. Kept so existing configs and hooks continue to work. |
 | `prune_context` | Compress verbose text (large tool outputs, error logs) by keeping the beginning and end and eliding the middle. Default target: 2,000 tokens. |
 | `journal_read` | Read journal entries for the current or a named session. Omit `session_id` to list recent sessions with stats. |
 | `journal_write` | Save a note, decision, or milestone to the current session journal for recall in future sessions. |
@@ -216,9 +239,13 @@ over indexed vault blocks. They are not structured Pak or MultiPak recall.
 { "text": "...", "file_path": "..." }   // one of text or file_path
 ```
 
-**`load_capsule`**
+**`load_pak`** (legacy alias: `load_capsule`)
 ```json
-{ "session_id": "abc123" }   // omit to list available capsules
+{ "session_id": "abc123" }   // omit to list available Paks
+```
+
+```json
+{ "session_ids": ["abc123", "def456"], "include_journal": true }
 ```
 
 **`prune_context`**
@@ -316,16 +343,16 @@ Capsules are stored as Markdown files in:
 
 Override with `TOKENPAK_COMPANION_JOURNAL_DIR`.
 
-### Listing capsules
+### Listing Paks
 
 ```
-> load_capsule    # omit session_id → lists 10 most recent
+> load_pak    # omit session_id → lists 10 most recent
 ```
 
 ### Loading a capsule
 
 ```
-> load_capsule with session_id "2026-04-14-abc123"
+> load_pak with session_id "2026-04-14-abc123"
 ```
 
 The capsule is returned as a Markdown block with sections:
@@ -354,9 +381,10 @@ journal directory (`~/.tokenpak/companion/` by default, overridable with
 | `codex/sessions/<id>/` | Per-session Codex home — the isolation boundary for `tokenpak codex` | Tens of MB per session | **Yes** — see caps below |
 | `codex/workspaces/` | Per-workspace Codex state | Moderate | Yes, with its session |
 | `journal.db` | Session and entry history | A few MB | **No** — see below |
+| `journal.db.nonempty` | First-entry marker read by the pre-send hook's recall hint (an initialized-empty journal never hints) | Zero bytes | No |
 | `recall.db` | Recall index | Small | No |
 | `budget.db` | Spend and budget history | Small | No |
-| `capsules/` | Session capsules (Markdown) | ~2–10 KB each | No |
+| `capsules/` | Session Paks (Markdown; legacy dir name) | ~2–10 KB each | No |
 | `run/` | Generated launch config — MCP, settings, prompt fragment | Fixed, rewritten each launch | Overwritten |
 
 ### Codex session-home retention
@@ -378,7 +406,7 @@ writes a receipt, so an interrupted sweep never half-deletes a home.
 ### What is deliberately not auto-pruned
 
 `journal.db` and `capsules/` are the substrate for `journal_read`,
-`load_capsule`, and cross-session recall — they are memory, not cache. Deleting
+`load_pak`, and cross-session recall — they are memory, not cache. Deleting
 them reclaims very little space and permanently removes the history those
 features read. They are left under your control rather than swept.
 
@@ -438,7 +466,7 @@ To clear the daily counter, delete the budget database:
 rm ~/.tokenpak/companion/budget.db
 ```
 
-### `load_capsule` returns no capsules
+### `load_pak` returns no Paks
 
 Capsules are built from the session transcript.  If the transcript file was
 not written (e.g. non-interactive `--print` mode), no capsule is created.

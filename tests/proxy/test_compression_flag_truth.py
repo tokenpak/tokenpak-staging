@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import ast
+import http.client
 from pathlib import Path
+
+import pytest
+
+from tests.proxy._proxy_subprocess import ProxyProc
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,9 +34,7 @@ def _loaded_name_paths(target: str) -> set[str]:
             continue
         tree = ast.parse(source)
         if any(
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Load)
-            and node.id == target
+            isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == target
             for node in ast.walk(tree)
         ):
             paths.add(path.relative_to(ROOT).as_posix())
@@ -53,19 +56,16 @@ def test_default_http_modules_do_not_call_legacy_compactor() -> None:
             for alias in node.names
         }
         called = {
-            node.func.id
-            if isinstance(node.func, ast.Name)
-            else node.func.attr
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
             for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, (ast.Name, ast.Attribute))
+            if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))
         }
         assert "compact_request_body" not in imported
         assert "compact_request_body" not in called
 
 
 def test_enable_compaction_has_only_compatibility_export_locations() -> None:
-    """The legacy master flag must not gain a behavioral consumer silently."""
+    """The legacy flag must not gain a behavioral consumer silently."""
     containing_paths = {
         path.relative_to(ROOT).as_posix()
         for path in _package_sources()
@@ -80,9 +80,52 @@ def test_enable_compaction_has_only_compatibility_export_locations() -> None:
 
 def test_threshold_is_loaded_only_by_the_explicit_helper() -> None:
     """The threshold may tune an explicit helper but must not activate HTTP."""
-    assert _loaded_name_paths("COMPACT_THRESHOLD_TOKENS") == {
-        "tokenpak/compression/pipeline.py"
-    }
+    assert _loaded_name_paths("COMPACT_THRESHOLD_TOKENS") == {"tokenpak/compression/pipeline.py"}
+
+
+@pytest.mark.needs_proxy
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("legacy_flag", ["0", "1"])
+def test_default_http_body_is_byte_identical_for_legacy_flag_values(
+    stub_upstream, legacy_flag: str
+) -> None:
+    """A real default HTTP exchange forwards the original request bytes."""
+    history = b"alpha beta gamma delta " * 700
+    payload = (
+        b'{\n  "model" : "claude-sonnet-4-5",\n  "max_tokens" : 32,\n'
+        b'  "messages" : [{"role":"user","content":"'
+        + history
+        + b'"},{"role":"user","content":"keep this turn exact"}]\n}'
+    )
+    assert len(payload) > 10_000
+
+    proxy = ProxyProc(
+        f"http://127.0.0.1:{stub_upstream.server_port}",
+        extra_env={
+            "TOKENPAK_COMPACT": legacy_flag,
+            "TOKENPAK_COMPACT_THRESHOLD_TOKENS": "1",
+            "TOKENPAK_CAPSULE_BUILDER": "0",
+            "TOKENPAK_VAULT_INJECTION": "0",
+        },
+    )
+    try:
+        proxy.wait_ready()
+        conn = http.client.HTTPConnection("127.0.0.1", proxy.port, timeout=60)
+        try:
+            conn.putrequest("POST", "/v1/messages")
+            conn.putheader("Content-Type", "application/json")
+            conn.putheader("x-api-key", "test-key")
+            conn.putheader("Content-Length", str(len(payload)))
+            conn.endheaders(payload)
+            response = conn.getresponse()
+            response.read()
+        finally:
+            conn.close()
+
+        assert response.status == 200
+        assert stub_upstream.last_request_body == payload
+    finally:
+        proxy.cleanup()
 
 
 def test_public_and_setup_surfaces_state_the_compatibility_boundary() -> None:
@@ -109,7 +152,7 @@ def test_public_and_setup_surfaces_state_the_compatibility_boundary() -> None:
         ),
         "tokenpak/proxy/server.py": (
             "compatibility-only; no default-http consumer",
-            "explicit compact helper threshold",
+            "explicit compact-helper threshold",
         ),
         "tokenpak/_cli_core.py": (
             "does not toggle default http body compaction",
@@ -117,8 +160,6 @@ def test_public_and_setup_surfaces_state_the_compatibility_boundary() -> None:
         ),
     }
     for relative_path, phrases in required_phrases.items():
-        surface = " ".join(
-            (ROOT / relative_path).read_text(encoding="utf-8").lower().split()
-        )
+        surface = " ".join((ROOT / relative_path).read_text(encoding="utf-8").lower().split())
         for phrase in phrases:
             assert phrase in surface, f"{relative_path} is missing truth marker: {phrase}"

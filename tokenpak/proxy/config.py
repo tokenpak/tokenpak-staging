@@ -360,9 +360,9 @@ BUDGET_ALERT_THRESHOLD_PCT = float(os.environ.get("TOKENPAK_BUDGET_ALERT_PCT", "
 # mutation_audit TTL — prune rows older than this many days
 MUTATION_AUDIT_TTL_DAYS: int = int(os.environ.get("TOKENPAK_MUTATION_AUDIT_TTL_DAYS", "30"))
 VAULT_SYNC_INTERVAL = 60
-# Legacy compatibility surface.  ``compression.enabled`` / ``TOKENPAK_COMPACT``
+# Legacy compatibility surface. ``compression.enabled`` / ``TOKENPAK_COMPACT``
 # are still loaded and exported, but the default HTTP proxy path does not read
-# this value and does not invoke ``compact_request_body``.  Keep the setting so
+# this value and does not invoke ``compact_request_body``. Keep the setting so
 # existing configuration continues to parse without implying runtime control.
 ENABLE_COMPACTION = _cfg("compression.enabled", True, "TOKENPAK_COMPACT", bool)
 COMPACT_MAX_CHARS = _cfg("compression.max_chars", 120, "TOKENPAK_COMPACT_MAX_CHARS", int)
@@ -657,6 +657,24 @@ VALIDATION_GATE_SOFT: bool = _cfg(
 VAULT_INDEX_PATH = _cfg(
     "vault.index_path", str(Path.home() / "vault" / ".tokenpak"), "TOKENPAK_VAULT_INDEX", str
 )
+#: Master switch for vault context injection. **Default OFF.**
+#:
+#: Injection is the mechanism that admits retrieved vault content into a request
+#: before it reaches the provider. It is currently non-functional (adapter
+#: resolution starves, so the body is returned unchanged), and repairing it is
+#: therefore an *activation* of an unexercised path, not a bug fix.
+#:
+#: Two controls that protect every other request path do NOT yet cover injected
+#: content: the outbound DLP secret scan and the spend guard both evaluate the
+#: body *before* injection runs. Until they evaluate the body that is actually
+#: sent, enabling this would ship vault content to providers unscanned and
+#: untracked against cost caps.
+#:
+#: Turning this on is a governance decision, not a configuration preference.
+VAULT_INJECTION_ENABLED: bool = _cfg(
+    "features.vault_injection", False, "TOKENPAK_VAULT_INJECTION", bool
+)
+
 INJECT_BUDGET = _cfg("vault.inject_budget", 4000, "TOKENPAK_INJECT_BUDGET", int)
 INJECT_TOP_K = _cfg("vault.inject_top_k", 5, "TOKENPAK_INJECT_TOP_K", int)
 INJECT_MIN_SCORE = _cfg("vault.inject_min_score", 2.0, "TOKENPAK_INJECT_MIN_SCORE", float)
@@ -813,32 +831,49 @@ UPSTREAM_ROUTES = _build_upstream_routes()
 # ---------------------------------------------------------------------------
 from tokenpak.proxy.custom_providers import (
     build_custom_adapters,
+    count_configured_providers,
     get_provider_display_list,
     load_custom_providers,
 )
 
 CUSTOM_PROVIDERS = load_custom_providers()
+_custom_adapters = build_custom_adapters(CUSTOM_PROVIDERS, ADAPTER_REGISTRY)
+_registered_formats = {adapter.source_format for adapter in _custom_adapters}
+REGISTERED_CUSTOM_PROVIDERS = [
+    provider for provider in CUSTOM_PROVIDERS if f"custom-{provider.name}" in _registered_formats
+]
+CUSTOM_PROVIDER_CONFIGURED_COUNT = count_configured_providers()
+CUSTOM_PROVIDER_REGISTERED_COUNT = len(REGISTERED_CUSTOM_PROVIDERS)
+CUSTOM_PROVIDER_ROUTES = {
+    adapter.source_format: adapter.get_default_upstream() for adapter in _custom_adapters
+}
+CUSTOM_PROVIDER_HOSTS = {
+    # The historical constant name is retained for compatibility, but keys are
+    # now full normalized endpoints. ProviderRouter derives exact
+    # scheme/host/effective-port identity and still accepts legacy bare-host
+    # constructor input from embedders.
+    provider.endpoint: f"custom-{provider.name}"
+    for provider in REGISTERED_CUSTOM_PROVIDERS
+}
 
-if CUSTOM_PROVIDERS:
-    # Register adapter instances (modifies ADAPTER_REGISTRY in-place)
-    _custom_adapters = build_custom_adapters(CUSTOM_PROVIDERS, ADAPTER_REGISTRY)
-
+if REGISTERED_CUSTOM_PROVIDERS:
     # Add custom provider hostnames to the router intercept list
     from tokenpak.proxy.router import INTERCEPT_HOSTS as _INTERCEPT_HOSTS
 
-    for _cp in CUSTOM_PROVIDERS:
+    for _cp in REGISTERED_CUSTOM_PROVIDERS:
         _INTERCEPT_HOSTS.add(_cp.hostname)
 
-    # Add upstream routes for custom adapters
-    for _cp in CUSTOM_PROVIDERS:
-        _route_key = f"custom-{_cp.name}"
-        UPSTREAM_ROUTES[_route_key] = _cp.endpoint
+    # Use the upstream selected by each successfully registered adapter.
+    UPSTREAM_ROUTES.update(CUSTOM_PROVIDER_ROUTES)
 
-    _custom_names = ", ".join(cp.name for cp in CUSTOM_PROVIDERS)
-    _logging.getLogger("tokenpak.proxy.config").info("Custom providers: %s", _custom_names)
+_logging.getLogger("tokenpak.proxy.config").info(
+    "Custom providers: %d registered / %d configured",
+    CUSTOM_PROVIDER_REGISTERED_COUNT,
+    CUSTOM_PROVIDER_CONFIGURED_COUNT,
+)
 
 # Build the display string for startup banners
-PROVIDER_DISPLAY = get_provider_display_list(ADAPTER_REGISTRY, CUSTOM_PROVIDERS)
+PROVIDER_DISPLAY = get_provider_display_list(ADAPTER_REGISTRY, REGISTERED_CUSTOM_PROVIDERS)
 
 
 # ---------------------------------------------------------------------------
@@ -873,6 +908,11 @@ class ProxyConfig:
         self.enable_capsule_builder: bool = ENABLE_CAPSULE_BUILDER
         self.adapter_registry = ADAPTER_REGISTRY
         self.custom_providers = CUSTOM_PROVIDERS
+        self.registered_custom_providers = REGISTERED_CUSTOM_PROVIDERS
+        self.custom_provider_configured_count: int = CUSTOM_PROVIDER_CONFIGURED_COUNT
+        self.custom_provider_registered_count: int = CUSTOM_PROVIDER_REGISTERED_COUNT
+        self.custom_provider_routes: Dict[str, str] = CUSTOM_PROVIDER_ROUTES
+        self.custom_provider_hosts: Dict[str, str] = CUSTOM_PROVIDER_HOSTS
         self.provider_display: str = PROVIDER_DISPLAY
 
     def __repr__(self) -> str:

@@ -2,8 +2,9 @@
 """Output-style directive: resolution, rendering, and managed-section safety.
 
 The directive is written once in ``tokenpak.companion._style`` and rendered
-into two hosts.  These tests pin the shared-source property, the opt-out, and
-the AGENTS.md section-boundary behavior the merge and uninstall paths depend on.
+into two hosts.  These tests pin the shared-source property, explicit opt-in,
+and the AGENTS.md section-boundary behavior the merge and uninstall paths
+depend on.
 """
 
 from __future__ import annotations
@@ -32,9 +33,9 @@ SECTION_MAX_BYTES = 6 * 1024
 # ---------------------------------------------------------------------------
 
 
-def test_style_defaults_to_lean_when_unset(monkeypatch) -> None:
+def test_style_defaults_to_standard_when_unset(monkeypatch) -> None:
     monkeypatch.delenv("TOKENPAK_COMPANION_STYLE", raising=False)
-    assert _style.resolve() == _style.LEAN
+    assert _style.resolve() == _style.STANDARD
 
 
 @pytest.mark.parametrize(
@@ -78,8 +79,9 @@ def test_config_reads_style_from_environment(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_prompt(tmp_path: Path, style: str) -> str:
-    cfg = CompanionConfig(journal_dir=tmp_path / "journal", style=style)
+def _write_prompt(tmp_path: Path, style: str | None = None) -> str:
+    kwargs = {} if style is None else {"style": style}
+    cfg = CompanionConfig(journal_dir=tmp_path / "journal", **kwargs)
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     with patch.object(type(cfg), "run_dir", new_callable=lambda: property(lambda self: run_dir)):
@@ -93,6 +95,13 @@ def test_claude_and_codex_render_identical_directive_text(tmp_path) -> None:
     body = _style.directive("lean")
     assert body in prompt
     assert body in codex
+
+
+def test_unchanged_launches_omit_directive(tmp_path, monkeypatch) -> None:
+    """Both hosts preserve native style unless lean is explicitly selected."""
+    monkeypatch.delenv("TOKENPAK_COMPANION_STYLE", raising=False)
+    assert HEADING not in Path(_write_prompt(tmp_path)).read_text()
+    assert HEADING not in agents_md.generate_agents_md()
 
 
 def test_claude_prompt_omits_directive_under_standard(tmp_path) -> None:
@@ -111,7 +120,8 @@ def test_mcp_tool_names_survive_every_style(tmp_path, style) -> None:
     for tool in (
         "estimate_tokens",
         "check_budget",
-        "load_capsule",
+        "load_pak",
+        "load_capsule",  # documented legacy alias
         "prune_context",
         "journal_read",
         "journal_write",
@@ -147,7 +157,7 @@ _BEFORE = "# House rules\n\nKeep the tree green.\n"
 _AFTER = "# Local overrides\n\nPrefer ripgrep.\n"
 
 
-def test_style_heading_does_not_split_the_managed_section(tmp_path) -> None:
+def test_style_heading_does_not_split_the_managed_section(tmp_path, monkeypatch) -> None:
     """``## Output style`` is a subsection, not a section boundary.
 
     ``_merge_agents`` ends the managed section at the next top-level ``# ``
@@ -155,6 +165,7 @@ def test_style_heading_does_not_split_the_managed_section(tmp_path) -> None:
     the section, where reinstall duplicates it and uninstall leaves it behind.
     """
     path = tmp_path / "AGENTS.md"
+    monkeypatch.setenv("TOKENPAK_COMPANION_STYLE", "lean")
 
     # A first install appends the section at the end, so give it a following
     # top-level heading before reinstalling — that is the replace path where a
@@ -184,10 +195,11 @@ def test_install_preserves_user_content_on_both_sides(tmp_path) -> None:
     assert "Prefer ripgrep." in content
 
 
-def test_reinstall_is_idempotent(tmp_path) -> None:
+def test_reinstall_is_idempotent(tmp_path, monkeypatch) -> None:
     """Repeated launches must not stack duplicate style blocks."""
     path = tmp_path / "AGENTS.md"
     path.write_text(_BEFORE)
+    monkeypatch.setenv("TOKENPAK_COMPANION_STYLE", "lean")
 
     agents_md._install_agents_md(target=str(tmp_path))
     first = path.read_text()
@@ -216,9 +228,10 @@ def test_switching_style_off_removes_the_block_on_reinstall(tmp_path, monkeypatc
     assert "Keep the tree green." in content
 
 
-def test_uninstall_removes_the_style_block_with_the_section(tmp_path) -> None:
+def test_uninstall_removes_the_style_block_with_the_section(tmp_path, monkeypatch) -> None:
     path = tmp_path / "AGENTS.md"
     path.write_text(_BEFORE + "\n" + _AFTER)
+    monkeypatch.setenv("TOKENPAK_COMPANION_STYLE", "lean")
     agents_md._install_agents_md(target=str(tmp_path))
 
     removed, _ = clean_agents_md(path)

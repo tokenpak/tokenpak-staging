@@ -94,6 +94,7 @@ def stage_vault_injection(
     policy: Dict[str, Any],
     *,
     adapter: Any = None,
+    inject_fn: Callable[..., Tuple[bytes, int, List[str], str]] | None = None,
 ) -> Tuple[ProxyRequest, StageResult]:
     """Inject vault context into the request body.
 
@@ -102,6 +103,15 @@ def stage_vault_injection(
     ``stage_byte_restore``.  For ``json_inject`` mode (OpenClaw/SDK),
     the injection is applied directly via ``inject_vault_context()``.
 
+    Args:
+        inject_fn: Override for the retrieval+injection callable, matching
+            ``vault_bridge._inject_vault_context_with_text``'s signature
+            ``(body_bytes, adapter=None, *, request=None) -> (body,
+            injected_tokens, injected_sources, injection_text)``. Defaults
+            to the real implementation. This is the injection seam for
+            tests that need a double here — pass it explicitly rather than
+            monkeypatching the ``vault_bridge`` module attribute.
+
     Returns:
         (request, result) — result.details["injection_text"] is set
         when vault content was found (used by byte_restore stage).
@@ -109,27 +119,37 @@ def stage_vault_injection(
     result = StageResult(name="vault_injection")
     injection_mode = policy.get("vault_injection", "disabled")
 
+    # Resolve the route-specific fact before the global default. A route that
+    # never requested injection (or has no body to inject into) must not be
+    # reported as operator-disabled merely because the master switch is OFF.
     if injection_mode == "disabled" or not request.body:
         result.skipped = True
         result.skip_reason = "disabled_or_empty"
         return request, result
 
-    try:
-        from tokenpak.proxy.vault_bridge import inject_vault_context
-    except ImportError:
+    # Master switch, independent of per-route policy. Read through the module
+    # rather than imported by value so it can be flipped in tests and at runtime
+    # without a restart-ordering dependency.
+    from tokenpak.proxy import config as _cfg_mod
+
+    if not getattr(_cfg_mod, "VAULT_INJECTION_ENABLED", False):
         result.skipped = True
-        result.skip_reason = "vault_bridge_unavailable"
+        result.skip_reason = "disabled_by_config"
         return request, result
 
-    # vault_bridge returns (body, tokens, sources) — 3 values.
-    # The monolith version returns 4 (+ raw_injection_text).
-    # Handle both during the migration.
-    ret = inject_vault_context(request.body, adapter=adapter, request=request)
-    if len(ret) == 4:
-        body, injected_tokens, injected_sources, injection_text = ret
-    else:
-        body, injected_tokens, injected_sources = ret
-        injection_text = ""
+    if inject_fn is None:
+        try:
+            from tokenpak.proxy.vault_bridge import _inject_vault_context_with_text as inject_fn
+        except ImportError:
+            result.skipped = True
+            result.skip_reason = "vault_bridge_unavailable"
+            return request, result
+
+    body, injected_tokens, injected_sources, injection_text = inject_fn(
+        request.body,
+        adapter=adapter,
+        request=request,
+    )
 
     if injection_mode == "byte_splice":
         # Don't apply the JSON-mutated body — save the text for byte splicing
@@ -434,11 +454,10 @@ def stage_byte_restore(
     # Check query length relevance gate
     query_signal = ""
     try:
-        from tokenpak.proxy import vault_bridge
+        from tokenpak.proxy.adapters.utils import extract_query_signal
 
-        extract_query_signal = getattr(vault_bridge, "extract_query_signal")
         query_signal = extract_query_signal(original_body, adapter=adapter)
-    except (ImportError, Exception):
+    except Exception:
         pass
 
     if len(query_signal) < min_query_len:

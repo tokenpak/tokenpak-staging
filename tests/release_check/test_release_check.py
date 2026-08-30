@@ -12,6 +12,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _MOD = Path(__file__).resolve().parents[2] / "scripts" / "release_check" / "release_check.py"
 _spec = importlib.util.spec_from_file_location("release_check_under_test", _MOD)
 rc = importlib.util.module_from_spec(_spec)
@@ -106,6 +108,29 @@ def test_leak_gate_scans_extensionless_public_files(tmp_path):
     assert not result.ok
 
 
+def test_leak_gate_skips_pattern_register_scripts(tmp_path):
+    # Register-bearing scanner scripts at their canonical relpaths are
+    # self-referential and must be skipped; identical content at any other
+    # path must still be scanned.
+    reg = tmp_path / "scripts" / "release_gate"
+    reg.mkdir(parents=True)
+    body = "PATTERN = 'Tracked in TSR-7'\n"
+    (reg / "public_safety_scan.py").write_text(body, encoding="utf-8")
+    (reg / "check_release_leaks.py").write_text(body, encoding="utf-8")
+    result = rc.gate_leak(
+        tmp_path,
+        changed=[
+            "scripts/release_gate/public_safety_scan.py",
+            "scripts/release_gate/check_release_leaks.py",
+        ],
+    )
+    assert result.ok, result.messages
+
+    (reg / "other_module.py").write_text(body, encoding="utf-8")
+    result = rc.gate_leak(tmp_path, changed=["scripts/release_gate/other_module.py"])
+    assert not result.ok
+
+
 def test_leak_gate_fails_when_changed_file_is_unavailable(tmp_path):
     result = rc.gate_leak(tmp_path, changed=["docs/missing.md"])
     assert not result.ok
@@ -177,6 +202,44 @@ def test_tokenpak_literal_fail_on_new_offender(tmp_path):
     (pkg / "newmod.py").write_text('p = "~/.tokenpak/new.db"\n', encoding="utf-8")
     r = rc.gate_tokenpak_literal(tmp_path, allowed=set())
     assert not r.ok
+
+
+def test_tokenpak_literal_ignores_identifiers_attributes_and_comments(tmp_path):
+    pkg = tmp_path / "tokenpak"
+    pkg.mkdir()
+    (pkg / "preview.py").write_text(
+        "value = self.tokenpak_version\n# legacy text: ~/.tokenpak/config.yaml\n",
+        encoding="utf-8",
+    )
+    r = rc.gate_tokenpak_literal(tmp_path, allowed=set())
+    assert r.ok, r.messages
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'path = "~/.tokenpak/config.yaml"\n',
+        'path = b"~/.tokenpak/config.yaml"\n',
+        'path = f"{root}/.tokenpak/config.yaml"\n',
+    ],
+    ids=["string", "bytes", "f-string"],
+)
+def test_tokenpak_literal_fails_on_python_literal_values(tmp_path, source):
+    pkg = tmp_path / "tokenpak"
+    pkg.mkdir()
+    (pkg / "newmod.py").write_text(source, encoding="utf-8")
+    r = rc.gate_tokenpak_literal(tmp_path, allowed=set())
+    assert not r.ok
+    assert r.messages == ["NEW .tokenpak literal outside the legacy baseline: tokenpak/newmod.py"]
+
+
+def test_tokenpak_literal_fails_closed_on_unparseable_python(tmp_path):
+    pkg = tmp_path / "tokenpak"
+    pkg.mkdir()
+    (pkg / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+    r = rc.gate_tokenpak_literal(tmp_path, allowed=set())
+    assert not r.ok
+    assert r.messages[0].startswith("cannot parse scanned Python source: tokenpak/broken.py:1:")
 
 
 # --- orchestrator exit code --------------------------------------------------

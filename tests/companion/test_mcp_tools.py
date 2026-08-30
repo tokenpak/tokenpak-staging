@@ -28,6 +28,7 @@ from tokenpak.companion.mcp.tools import (
     _handle_load_capsule,
     _handle_prune_context,
     _handle_session_info,
+    active_tools,
 )
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,8 @@ def fake_proxy(monkeypatch):
                 "tokens": max(1, chars // 4),
                 "chars": chars,
                 "chars_per_token": 4.0,
+                "estimator": "chars-per-4-heuristic",
+                "note": "approximate — install tokenpak[tokens] for exact counts",
             }
         if path == "/tpk/v1/compress":
             text = str(body.get("text", ""))
@@ -135,7 +138,9 @@ def test_tools_registry_has_expected_entries():
     names = {t.name for t in TOOLS}
     assert names == {
         "estimate_tokens",
+        "session_economics",
         "check_budget",
+        "load_pak",
         "load_capsule",
         "prune_context",
         "journal_read",
@@ -151,6 +156,52 @@ def test_all_tools_have_handler_callable():
         assert callable(t.handler), f"{t.name} handler is not callable"
 
 
+def test_load_capsule_is_deprecated_alias_of_load_pak():
+    """The legacy name must dispatch to the same handler as the canonical one,
+    with identical input schema, so existing configs keep working."""
+    by_name = {t.name: t for t in TOOLS}
+    pak, legacy = by_name["load_pak"], by_name["load_capsule"]
+    assert pak.handler is legacy.handler
+    assert pak.input_schema == legacy.input_schema
+    assert "eprecated" in legacy.description and "load_pak" in legacy.description
+
+
+def test_active_tools_lean_advertises_core_only():
+    """Lean drops accounting/diagnostic tools and the deprecated alias from
+    the advertised list; recall, compression, and journal tools survive."""
+    lean = {t.name for t in active_tools("lean")}
+    assert lean == {t.name for t in TOOLS if t.core}
+    assert {"estimate_tokens", "check_budget", "session_info", "load_capsule"}.isdisjoint(lean)
+    assert {"load_pak", "prune_context", "journal_read", "journal_write"} <= lean
+
+
+def test_active_tools_other_profiles_advertise_full_registry():
+    for profile in ("balanced", "verbose", "", "unknown"):
+        assert active_tools(profile) == list(TOOLS)
+
+
+def test_server_tools_list_respects_profile(tmp_path, monkeypatch):
+    """The server's tools/list must advertise the profile-filtered set while
+    dispatch remains unfiltered (a lean session can still call any tool)."""
+    from tokenpak.companion.mcp import server as mcp_server
+
+    sent: list[dict] = []
+    monkeypatch.setattr(mcp_server, "_send", lambda msg: sent.append(msg))
+
+    lean_state = CompanionState(config=CompanionConfig(journal_dir=tmp_path, profile="lean"))
+    mcp_server._handle_tools_list(7, lean_state)
+    assert {t["name"] for t in sent[0]["result"]["tools"]} == {t.name for t in TOOLS if t.core}
+
+    full_state = CompanionState(config=CompanionConfig(journal_dir=tmp_path, profile="balanced"))
+    mcp_server._handle_tools_list(8, full_state)
+    assert {t["name"] for t in sent[1]["result"]["tools"]} == {t.name for t in TOOLS}
+
+    # Dispatch is not profile-gated: a non-core tool still resolves and runs.
+    mcp_server._handle_tools_call(9, {"name": "check_budget", "arguments": {}}, lean_state)
+    assert sent[2]["id"] == 9
+    assert "error" not in sent[2]
+
+
 # ---------------------------------------------------------------------------
 # estimate_tokens
 # ---------------------------------------------------------------------------
@@ -161,7 +212,36 @@ def test_estimate_tokens_inline_text(tmp_path):
     result = json.loads(_handle_estimate_tokens(state, {"text": "hello world"}))
     assert result["tokens"] > 0
     assert result["chars"] == len("hello world")
-    assert "chars_per_token" in result
+
+
+def test_estimate_tokens_result_is_compacted(tmp_path):
+    """Tool results persist in conversation context — verbose proxy metadata
+    must be compacted before it reaches the model, while the estimator
+    disclosure survives in short form."""
+    state = _make_state(tmp_path)
+    result = json.loads(_handle_estimate_tokens(state, {"text": "hello world"}))
+    assert "chars_per_token" not in result
+    assert result["estimator"] == "chars/4-approx"
+    assert result["note"] == "install tokenpak[tokens] for tokenizer counts"
+
+
+def test_estimate_tokens_tokenizer_estimator_passes_through(tmp_path, monkeypatch):
+    """A real tokenizer name is passed through unchanged, with no install note."""
+
+    def fake_post(path, body=None, params=None):
+        return 200, {
+            "tokens": 3,
+            "chars": 11,
+            "chars_per_token": 3.67,
+            "estimator": "tiktoken:cl100k_base",
+        }
+
+    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_post", fake_post)
+    state = _make_state(tmp_path)
+    result = json.loads(_handle_estimate_tokens(state, {"text": "hello world"}))
+    assert result["estimator"] == "tiktoken:cl100k_base"
+    assert "note" not in result
+    assert "chars_per_token" not in result
 
 
 def test_estimate_tokens_uses_tiktoken(tmp_path):
@@ -280,6 +360,25 @@ def test_prune_context_elision_marker_present(tmp_path):
     assert "elided" in result["pruned_text"]
 
 
+def test_prune_context_reduction_wrapped_in_pak_envelope(tmp_path):
+    """Actual reductions carry the Pak envelope so re-injected content is
+    attributable to TokenPak."""
+    text = "word " * 2200
+    state = _make_state(tmp_path)
+    result = json.loads(_handle_prune_context(state, {"text": text, "max_tokens": 100}))
+    assert result["reduction_pct"] > 0
+    assert result["pruned_text"].startswith("[PAK id=")
+    assert result["pruned_text"].rstrip().endswith("[/PAK]")
+
+
+def test_prune_context_no_reduction_not_enveloped(tmp_path):
+    """Zero-reduction passthrough stays byte-identical — no envelope."""
+    text = "short text"
+    state = _make_state(tmp_path)
+    result = json.loads(_handle_prune_context(state, {"text": text, "max_tokens": 2000}))
+    assert result["pruned_text"] == text
+
+
 # ---------------------------------------------------------------------------
 # load_capsule
 # ---------------------------------------------------------------------------
@@ -318,6 +417,54 @@ def test_load_capsule_missing_session_returns_error(tmp_path):
     state = _make_state(tmp_path)
     result = json.loads(_handle_load_capsule(state, {"session_id": "no-such-session"}))
     assert "error" in result
+
+
+def test_load_pak_legacy_single_session_result_is_byte_stable(tmp_path, monkeypatch):
+    expected = "## Session Capsule: legacy\nDecisions: unchanged"
+
+    def fake_get(path, params=None):
+        assert path == "/tpk/v1/capsules/legacy"
+        return 200, {"content": expected}
+
+    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_get", fake_get)
+    assert _handle_load_capsule(_make_state(tmp_path), {"session_id": "legacy"}) == expected
+
+
+def test_load_pak_batches_paks_and_journals_in_one_result(tmp_path, monkeypatch):
+    def fake_get(path, params=None):
+        target = path.rsplit("/", 1)[-1]
+        if "/journal/" in path:
+            return 200, {"session_id": target, "entries": [{"content": f"note-{target}"}]}
+        return 200, {"content": f"pak-{target}"}
+
+    monkeypatch.setattr("tokenpak.companion.mcp.tools._proxy_get", fake_get)
+    result = _handle_load_capsule(
+        _make_state(tmp_path, session_id="caller"),
+        {"session_ids": ["a", "b", "c"], "include_journal": True},
+    )
+    for target in ("a", "b", "c"):
+        assert f"[Journal: {target}]" in result
+        assert f"note-{target}" in result
+        assert f"[Pak: {target}]" in result
+        assert f"pak-{target}" in result
+
+
+def test_load_pak_batch_rejects_invalid_or_oversized_ids(tmp_path):
+    state = _make_state(tmp_path)
+    invalid = json.loads(_handle_load_capsule(state, {"session_ids": "not-an-array"}))
+    non_string = json.loads(_handle_load_capsule(state, {"session_ids": ["valid", 7]}))
+    empty = json.loads(_handle_load_capsule(state, {"session_ids": ["valid", " "]}))
+    oversized = json.loads(
+        _handle_load_capsule(state, {"session_ids": [str(index) for index in range(11)]})
+    )
+    invalid_journal = json.loads(
+        _handle_load_capsule(state, {"session_ids": ["valid"], "include_journal": "true"})
+    )
+    assert "array" in invalid["error"]
+    assert "non-empty strings" in non_string["error"]
+    assert "non-empty strings" in empty["error"]
+    assert "at most 10" in oversized["error"]
+    assert "boolean" in invalid_journal["error"]
 
 
 # ---------------------------------------------------------------------------

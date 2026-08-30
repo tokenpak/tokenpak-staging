@@ -154,6 +154,34 @@ def settle_pending_spend(ticket: Optional[str]) -> bool:
         return _INFLIGHT.pop(ticket, None) is not None
 
 
+def get_admitted_projection(ticket: Optional[str]) -> Optional[dict]:
+    """Read-only lookup of the projected spend already admitted for ``ticket``.
+
+    Returns the same ``(agent_id, cost_usd, tokens_total, cache_read_tokens,
+    admitted_at)`` fields recorded by :func:`admit_pending_spend`, as a dict —
+    no recomputation, no estimator math. Used by the read-only in-flight
+    surface to attach an already-computed projection to a request; returns
+    ``None`` for an unknown/settled/expired ticket rather than raising.
+    """
+    if not ticket:
+        return None
+    now = time.time()
+    with _INFLIGHT_LOCK:
+        entry = _INFLIGHT.get(ticket)
+    if entry is None:
+        return None
+    agent_id, cost_usd, tokens_total, cache_read_tokens, admitted_at = entry
+    if admitted_at < now - _INFLIGHT_TTL_SEC:
+        return None
+    return {
+        "agent_id": agent_id,
+        "projected_cost_usd": cost_usd,
+        "projected_tokens_total": tokens_total,
+        "projected_cache_read_tokens": cache_read_tokens,
+        "admitted_at": admitted_at,
+    }
+
+
 def _pending_spend_totals(agent_id: str) -> RollingUsage:
     """Sum non-expired in-flight spend for ``agent_id`` and the fleet.
 

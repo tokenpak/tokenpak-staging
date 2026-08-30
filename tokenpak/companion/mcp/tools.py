@@ -87,12 +87,20 @@ class CompanionState:
 
 @dataclass
 class ToolDef:
-    """MCP tool definition."""
+    """MCP tool definition.
+
+    ``core`` marks tools advertised under the ``lean`` companion profile.
+    Tool schemas are re-sent to the model with every request, so the lean
+    profile advertises only the tools whose value justifies that recurring
+    cost; hooks and the CLI cover the rest out-of-band. Dispatch is never
+    filtered — a call to an unadvertised tool still works.
+    """
 
     name: str
     description: str
     input_schema: dict[str, Any]
     handler: Callable[[CompanionState, dict[str, Any]], str]
+    core: bool = True
 
 
 def _handle_estimate_tokens(state: CompanionState, args: dict[str, Any]) -> str:
@@ -112,7 +120,19 @@ def _handle_estimate_tokens(state: CompanionState, args: dict[str, Any]) -> str:
         return json.dumps({"error": "proxy_unreachable", "detail": resp.get("detail", "")})
     if status >= 400:
         return json.dumps(resp)
-    return json.dumps(resp)
+    # Tool results persist in the conversation and are re-sent as input on
+    # every later turn, so return only the fields an agent acts on. The
+    # estimator disclosure stays (a heuristic count must not read as a
+    # tokenizer count) but in compact form; the full response remains
+    # available on the HTTP endpoint itself.
+    compact: dict[str, Any] = {k: resp[k] for k in ("tokens", "chars") if k in resp}
+    estimator = resp.get("estimator")
+    if estimator == "chars-per-4-heuristic":
+        compact["estimator"] = "chars/4-approx"
+        compact["note"] = "install tokenpak[tokens] for tokenizer counts"
+    elif estimator:
+        compact["estimator"] = estimator
+    return json.dumps(compact)
 
 
 def _handle_estimate_tokens_legacy_unused(state: CompanionState, args: dict[str, Any]) -> str:
@@ -151,6 +171,37 @@ def _handle_estimate_tokens_legacy_unused(state: CompanionState, args: dict[str,
     )
 
 
+def _handle_session_economics(state: CompanionState, args: dict[str, Any]) -> str:
+    """Read-only deterministic trip-computer state via the proxy endpoint.
+
+    Session selection: an explicit ``session_id`` argument wins; otherwise
+    the state's bound session (refreshed from the active-session marker
+    before each dispatch) is used; otherwise an empty id lets the proxy
+    fall back to the latest completed ledger session. The response is
+    validated against the shared contract before being returned, and the
+    returned string is the canonical contract JSON — identical values to
+    the status and dashboard surfaces by construction. This tool never
+    calls a provider and never writes anything.
+    """
+    session_id = str(args.get("session_id", "") or "").strip()
+    if not session_id:
+        session_id = state.session_id or current_session_id()
+    body: dict[str, Any] = {}
+    if session_id:
+        body["session_id"] = session_id
+    status, resp = _proxy_post("/v1/messages/session-economics", body)
+    if status == 0:
+        return json.dumps({"error": "proxy_unreachable", "detail": resp.get("detail", "")})
+    if status >= 400:
+        return json.dumps(resp)
+    try:
+        from tokenpak.core.contracts.session_economics import SessionEconomics
+
+        return SessionEconomics.from_dict(resp).to_json()
+    except Exception as exc:
+        return json.dumps({"error": "invalid_session_economics_payload", "detail": str(exc)})
+
+
 def _handle_check_budget(state: CompanionState, args: dict[str, Any]) -> str:
     """Check remaining budget via proxy /tpk/v1/budget."""
     status, body = _proxy_get("/tpk/v1/budget")
@@ -183,32 +234,88 @@ def _handle_check_budget(state: CompanionState, args: dict[str, Any]) -> str:
 def _handle_load_capsule(state: CompanionState, args: dict[str, Any]) -> str:
     """Load / list memory capsules via proxy /tpk/v1/capsules*."""
     session_id = str(args.get("session_id", "")).strip()
-    if not session_id:
-        status, body = _proxy_get("/tpk/v1/capsules", {"limit": 10})
+    raw_session_ids = args.get("session_ids")
+    raw_include_journal = args.get("include_journal", False)
+    if not isinstance(raw_include_journal, bool):
+        return json.dumps({"error": "include_journal must be a boolean"})
+    include_journal = raw_include_journal
+
+    # Preserve the legacy single-session and list responses byte-for-byte.
+    if raw_session_ids is None and not include_journal:
+        if not session_id:
+            status, body = _proxy_get("/tpk/v1/capsules", {"limit": 10})
+            if status == 0:
+                return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
+            if status >= 400:
+                return json.dumps(body)
+            return json.dumps(body, indent=2)
+
+        # Carry the CALLER's session_id so the proxy can attribute the
+        # load_capsule savings event to the right session journal.
+        params = {}
+        if state.session_id:
+            params["caller_session_id"] = state.session_id
+        status, body = _proxy_get(
+            f"/tpk/v1/capsules/{_url_parse.quote(session_id, safe='')}",
+            params,
+        )
         if status == 0:
             return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
         if status >= 400:
             return json.dumps(body)
-        return json.dumps(body, indent=2)
-
-    # Carry the CALLER's session_id so the proxy can attribute the
-    # load_capsule savings event to the right session journal.
-    params = {}
-    if state.session_id:
-        params["caller_session_id"] = state.session_id
-    status, body = _proxy_get(
-        f"/tpk/v1/capsules/{_url_parse.quote(session_id, safe='')}",
-        params,
-    )
-    if status == 0:
-        return json.dumps({"error": "proxy_unreachable", "detail": body.get("detail", "")})
-    if status >= 400:
+        # Preserve the old behavior of returning the capsule CONTENT as a bare
+        # string when a specific session was requested.
+        if isinstance(body, dict) and "content" in body:
+            return body["content"]
         return json.dumps(body)
-    # Preserve the old behavior of returning the capsule CONTENT as a bare
-    # string when a specific session was requested.
-    if isinstance(body, dict) and "content" in body:
-        return body["content"]
-    return json.dumps(body)
+
+    if raw_session_ids is not None and not isinstance(raw_session_ids, list):
+        return json.dumps({"error": "session_ids must be an array of strings"})
+    if raw_session_ids is not None and not all(
+        isinstance(value, str) and value.strip() for value in raw_session_ids
+    ):
+        return json.dumps({"error": "session_ids must contain non-empty strings"})
+    if raw_session_ids is not None and len(raw_session_ids) > 10:
+        return json.dumps({"error": "session_ids supports at most 10 sessions"})
+
+    requested_ids = [session_id] if session_id else []
+    for value in raw_session_ids or []:
+        candidate = value.strip()
+        if candidate and candidate not in requested_ids:
+            requested_ids.append(candidate)
+    if not requested_ids:
+        return json.dumps({"error": "provide session_id or session_ids for batched retrieval"})
+    if len(requested_ids) > 10:
+        return json.dumps({"error": "session_ids supports at most 10 sessions"})
+
+    sections: list[str] = []
+    if include_journal:
+        for target in requested_ids:
+            status, body = _proxy_get(
+                f"/tpk/v1/journal/{_url_parse.quote(target, safe='')}",
+                {"limit": 20},
+            )
+            if status == 0:
+                body = {"error": "proxy_unreachable", "detail": body.get("detail", "")}
+            sections.append(
+                f"[Journal: {target}]\n"
+                + json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+            )
+
+    caller_params = {"caller_session_id": state.session_id} if state.session_id else {}
+    for target in requested_ids:
+        status, body = _proxy_get(
+            f"/tpk/v1/capsules/{_url_parse.quote(target, safe='')}",
+            caller_params,
+        )
+        if status == 0:
+            body = {"error": "proxy_unreachable", "detail": body.get("detail", "")}
+        if status < 400 and isinstance(body, dict) and "content" in body:
+            content = str(body["content"])
+        else:
+            content = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        sections.append(f"[Pak: {target}]\n{content}")
+    return "\n\n".join(sections)
 
 
 def _handle_prune_context(state: CompanionState, args: dict[str, Any]) -> str:
@@ -227,6 +334,13 @@ def _handle_prune_context(state: CompanionState, args: dict[str, Any]) -> str:
         return json.dumps({"error": "proxy_unreachable", "detail": resp.get("detail", "")})
     if status >= 400:
         return json.dumps(resp)
+    # Wrap actual reductions in the Pak envelope so compressed content that
+    # re-enters model context is attributable to TokenPak.
+    if isinstance(resp, dict) and resp.get("pruned_text") and resp.get("reduction_pct", 0) > 0:
+        from ..capsules.builder import _wrap_capsule
+
+        resp = dict(resp)
+        resp["pruned_text"] = _wrap_capsule(text, resp["pruned_text"])
     return json.dumps(resp)
 
 
@@ -456,7 +570,7 @@ def _handle_vault_retrieve(state: CompanionState, args: dict[str, Any]) -> str:
 TOOLS: list[ToolDef] = [
     ToolDef(
         name="estimate_tokens",
-        description="Estimate token count for text or a file. Use before reading large files or including verbose context to decide if it's worth the cost.",
+        description="Estimate token count for text or a file. Cost tracking is automatic via hooks — reserve this for a go/no-go decision on very large content, not routine bookkeeping.",
         input_schema={
             "type": "object",
             "properties": {
@@ -468,16 +582,33 @@ TOOLS: list[ToolDef] = [
             },
         },
         handler=_handle_estimate_tokens,
+        core=False,
+    ),
+    ToolDef(
+        name="session_economics",
+        description="Read the deterministic session trip-computer: spent tokens/cost, burn, binding runway, guard state, and forecast availability. Read-only; facts and explicit unknowns only — no recommendations.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session to read (omit for the active/most recent session)",
+                },
+            },
+        },
+        handler=_handle_session_economics,
+        core=False,
     ),
     ToolDef(
         name="check_budget",
-        description="Check remaining cost budget for this session and today. Call before starting expensive multi-step tasks.",
+        description="Report the remaining TokenPak cost budget for this session and today. The pre-send hook enforces the budget automatically — call this only when the user asks about budget.",
         input_schema={"type": "object", "properties": {}},
         handler=_handle_check_budget,
+        core=False,
     ),
     ToolDef(
-        name="load_capsule",
-        description="Load a memory capsule from a prior session. Call when resuming work or when the user references past sessions. Omit session_id to list available capsules.",
+        name="load_pak",
+        description="Load prior work from one or more Paks. Pass session_ids and include_journal to retrieve what you need together; omit IDs to list available Paks.",
         input_schema={
             "type": "object",
             "properties": {
@@ -485,13 +616,50 @@ TOOLS: list[ToolDef] = [
                     "type": "string",
                     "description": "Session ID to load (omit to list available)",
                 },
+                "session_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 10,
+                    "description": "Session IDs to load together",
+                },
+                "include_journal": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include each requested session's journal digest",
+                },
             },
         },
         handler=_handle_load_capsule,
     ),
     ToolDef(
+        name="load_capsule",
+        description="Deprecated legacy alias of load_pak (capsule is the pre-rebrand name for a Pak). Prefer load_pak.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to load (omit to list available)",
+                },
+                "session_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 10,
+                    "description": "Session IDs to load together",
+                },
+                "include_journal": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include each requested session's journal digest",
+                },
+            },
+        },
+        handler=_handle_load_capsule,
+        core=False,
+    ),
+    ToolDef(
         name="prune_context",
-        description="Compress verbose text (large tool outputs, error logs) to reduce token usage. Keeps the beginning and end, elides the middle.",
+        description="Compress verbose text (large tool outputs, error logs) with TokenPak to reduce token usage. Keeps the beginning and end, elides the middle.",
         input_schema={
             "type": "object",
             "properties": {
@@ -508,7 +676,7 @@ TOOLS: list[ToolDef] = [
     ),
     ToolDef(
         name="journal_read",
-        description="Read journal entries for this session or a past session. Omit session_id to list recent sessions.",
+        description="Read TokenPak session-journal entries for this session or a past session. Omit session_id to list recent sessions.",
         input_schema={
             "type": "object",
             "properties": {
@@ -531,7 +699,7 @@ TOOLS: list[ToolDef] = [
     ),
     ToolDef(
         name="journal_write",
-        description="Add a note to the current session journal. Use for important decisions, milestones, or context the user might want later.",
+        description="Add a note to the TokenPak session journal. Use for important decisions, milestones, or context the user might want later.",
         input_schema={
             "type": "object",
             "properties": {
@@ -543,18 +711,17 @@ TOOLS: list[ToolDef] = [
     ),
     ToolDef(
         name="session_info",
-        description="Get companion status, session stats, and configuration.",
+        description="Get TokenPak companion status, session stats, and configuration.",
         input_schema={"type": "object", "properties": {}},
         handler=_handle_session_info,
+        core=False,
     ),
     ToolDef(
         name="vault_search",
         description=(
-            "Search the indexed vault by BM25 and return top-K matching blocks "
-            "with relevance scores. Use when the user references project docs, "
-            "code, or knowledge stored in the local vault. The proxy also "
-            "auto-injects vault context, but this tool lets you query "
-            "explicitly (e.g. narrowing to a specific concept)."
+            "Search the indexed vault by BM25; returns top-K matching blocks "
+            "with relevance scores. Use when the user references docs, code, "
+            "or knowledge stored in the local vault."
         ),
         input_schema={
             "type": "object",
@@ -590,3 +757,15 @@ TOOLS: list[ToolDef] = [
         handler=_handle_vault_retrieve,
     ),
 ]
+
+
+def active_tools(profile: str) -> list[ToolDef]:
+    """Tools advertised for a companion profile.
+
+    ``lean`` advertises only core tools; every other profile advertises the
+    full registry. Derived from per-tool ``core`` metadata, never a separate
+    name list, so registry changes cannot drift out of sync.
+    """
+    if profile == "lean":
+        return [t for t in TOOLS if t.core]
+    return list(TOOLS)

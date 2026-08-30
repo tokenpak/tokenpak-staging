@@ -90,7 +90,8 @@ docker run -d \
  -p 127.0.0.1:8766:8766 \
  -e ANTHROPIC_API_KEY="sk-ant-..." \
  -e OPENAI_API_KEY="sk-..." \
- -v tokenpak-data:/home/tokenpak/.tokenpak \
+ -e TOKENPAK_HOME=/app/.tokenpak \
+ -v tokenpak-data:/app/.tokenpak \
  tokenpak/tokenpak:latest
 ```
 
@@ -177,7 +178,7 @@ All env vars override config file values. **Env vars take priority.**
 | `GOOGLE_API_KEY` | — | Google Gemini API key |
 | `TOKENPAK_PORT` | `8766` | Proxy listen port |
 | `TOKENPAK_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces) |
-| `TOKENPAK_MODE` | `hybrid` | Compression mode: `strict`, `hybrid`, `aggressive` |
+| `TOKENPAK_MODE` | `hybrid` | Policy mode for eligible request stages and explicit compaction callers: `strict`, `hybrid`, `aggressive` |
 | `TOKENPAK_PROFILE` | `balanced` | Workflow profile: `safe`, `balanced`, `aggressive`, `agentic`, `transparent` |
 | `TOKENPAK_COMPACT` | `1` | Legacy compatibility value; no default-HTTP effect |
 | `TOKENPAK_COMPACT_THRESHOLD_TOKENS` | `1500` in `balanced` | Threshold for explicit `compact_request_body` callers only |
@@ -318,10 +319,11 @@ services:
  environment:
  - TOKENPAK_MODE=hybrid
  - TOKENPAK_PORT=8766
+ - TOKENPAK_HOME=/app/.tokenpak
  env_file:
  - .env.secrets # ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
  volumes:
- - tokenpak-data:/home/tokenpak/.tokenpak
+ - tokenpak-data:/app/.tokenpak
  healthcheck:
  test: ["CMD", "tokenpak", "status"]
  interval: 30s

@@ -110,7 +110,7 @@ def run_startup_checks(port: int) -> Tuple[bool, List[str]]:
             warnings.append(msg)
 
     # ------------------------------------------------------------------ #
-    # 5. Eager OSS recipe pre-load — TRIX-01 / pmgtm initiative           #
+    # 5. Eager OSS recipe pre-load                                        #
     # Warms the compression recipe engine before the first request arrives #
     # so cold-start latency is not paid by the first user.                 #
     # ------------------------------------------------------------------ #
@@ -148,7 +148,7 @@ def format_startup_report(warnings: List[str], all_ok: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Config validation — transferred from monolith (TPK-CONSOLIDATION-A2a)
+# Config validation — transferred from monolith
 # ---------------------------------------------------------------------------
 import os as _os
 
