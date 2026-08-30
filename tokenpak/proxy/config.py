@@ -173,6 +173,9 @@ def _cfg(
 # ---------------------------------------------------------------------------
 # Named Workflow Profiles — TOKENPAK_PROFILE sets sensible flag bundles
 # Profile is a floor: explicit env vars always win (setdefault semantics)
+#
+# The TOKENPAK_COMPACT_THRESHOLD_TOKENS entries below are retained for callers
+# that explicitly invoke tokenpak.compression.pipeline.compact_request_body.
 # Selecting a profile does not activate body compaction in the default HTTP
 # proxy path.
 # ---------------------------------------------------------------------------

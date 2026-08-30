@@ -1,0 +1,6 @@
+# Historical branch commit c16e5ec33e carries a synthetic redaction test
+# fixture (a self-describing fake key used to test the secret scanner).
+# Its direct child 347ab757 marked the fixture with gitleaks:allow the
+# following day. This entry is scoped to that single commit, file, rule,
+# and line; it allowlists nothing else.
+c16e5ec33e5267cdc197a169e61e2564fe24a727:tokenpak/tests/test_security.py:generic-api-key:255
