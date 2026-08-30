@@ -6,6 +6,69 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.22.0] — 2026-08-29
+
+This backward-compatible minor release completes automatic context injection
+for routes whose policy declares it and fixes the proxy's vault-injection
+receipt accounting. It also refreshes CI toolchain actions and the TypeScript
+SDK's dependency pins.
+
+### Fixed
+
+- Automatic context injection now actually applies on every route whose
+  policy declares it. The call site landed previously but had no real effect
+  once merged onto the current session-accounting shape: it wrote to session
+  accounting with an argument shape the current writer rejects, and it
+  fell back to detecting the request's format adapter from a blank
+  path/headers pair, which always resolved to a no-op passthrough adapter.
+  Both are fixed — the call site now reuses the shared receipt helper the
+  existing byte-preserved path relies on, and the adapter is detected from
+  the real request, so injected content reaches what the provider receives.
+- The proxy's vault-injection receipt (measured injected-token count and
+  source names) is now written to the live per-server session that request
+  accounting and `GET /stats` read, instead of a compatibility global no
+  live request path consults. `tokenpak status` now reflects real injection
+  totals instead of reporting zero across zero requests. Receipt parsing
+  fails open — a malformed pipeline result degrades to a measured zero
+  instead of raising.
+
+### Dependencies
+
+- Bump `actions/setup-python` 6.3.0 → 7.0.0, `actions/setup-node` 6.5.0 →
+  7.0.0, and `pypa/gh-action-pypi-publish` 1.14.0 → 1.14.2 (gate-inventory
+  manifest refreshed for each).
+- Bump the TypeScript SDK's `axios` runtime dependency 1.18.1 → 1.20.0 and
+  its `@types/node` development dependency 26.1.2 → 26.2.0.
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.22.0"
+```
+
+No manual configuration migration is required. If a route's policy already
+declared automatic context injection, upgrading changes that route's runtime
+behavior from a silent no-op to active injection — review request-volume and
+token-accounting expectations for those routes before upgrading.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.21.0"
+```
+
+The release introduces no destructive state migration.
+
+### Compatibility
+
+- The public API snapshot contains 4,698 symbols: one additive export and
+  zero removals relative to v1.21.0. The addition,
+  `tokenpak.proxy.vault_bridge.set_vault_index_override`, is an explicit
+  substitution seam for the vault index that replaces in-place
+  module-attribute monkeypatching in tests.
+- No existing public symbol is removed or reclassified. No breaking changes
+  or deprecations are introduced.
+
 ## [1.21.0] — 2026-08-26
 
 This backward-compatible minor release adds facts-only request timing and
