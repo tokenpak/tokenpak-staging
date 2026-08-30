@@ -220,7 +220,18 @@ class TestCircuitClosesAfterCooldown:
 
     def test_proxy_forwards_after_cooldown(self):
         """After cooldown, the proxy forwards requests again instead of returning 503."""
-        _reset_rl_registry_for_testing(window_sec=60, threshold=3, cooldown_sec=0.05)
+        # cooldown_sec is deliberately generous (not the 0.05s used by the pure
+        # in-memory test above). This test exercises real HTTP round trips
+        # through a live ProxyServer instance, and the gap between the request
+        # that trips the breaker and the very next one includes real socket
+        # I/O, connection setup, and request parsing — overhead that measured
+        # in the tens of milliseconds under coverage instrumentation and can
+        # run higher still on loaded CI runners. A cooldown close to that
+        # overhead makes the "still open" assertion below race the clock
+        # rather than exercise the breaker logic; see the CI repair receipt
+        # for the measured failure this margin fixes.
+        _COOLDOWN_SEC = 2.0
+        _reset_rl_registry_for_testing(window_sec=60, threshold=3, cooldown_sec=_COOLDOWN_SEC)
 
         port = _free_port()
         server = ProxyServer(host="127.0.0.1", port=port)
@@ -240,8 +251,8 @@ class TestCircuitClosesAfterCooldown:
             status, _ = _send_request(port)
             assert status == 503
 
-            # Wait for cooldown
-            time.sleep(0.08)
+            # Wait for cooldown (plus margin) to expire
+            time.sleep(_COOLDOWN_SEC + 0.3)
 
             # After cooldown, proxy should forward again (upstream returns 429 again,
             # but that's the upstream's response — not a circuit-breaker block)
