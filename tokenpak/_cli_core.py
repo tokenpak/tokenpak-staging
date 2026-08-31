@@ -7762,9 +7762,22 @@ def cmd_cost(args: CommandArgs) -> None:
     """Show cost summary for a time period."""
     tracker = _budget_tracker()
     period = "monthly" if args.month else ("weekly" if args.week else "daily")
+    as_json = getattr(args, "as_json", False)
 
     if args.by_model:
         rows = tracker.by_model_summary(period=period)
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "section": "cost",
+                        "period": period,
+                        "by_model": [dict(r) for r in rows],
+                        "total_cost_usd": round(sum(r["cost_usd"] for r in rows), 4),
+                    }
+                )
+            )
+            return
         if not rows:
             print(f"No spend recorded for {period} period.")
             return
@@ -7791,19 +7804,19 @@ def cmd_cost(args: CommandArgs) -> None:
     tracked = tracker.total_spent(period)
     label = {"daily": "Today", "weekly": "This week", "monthly": "This month"}[period]
 
-    print(f"TokenPak Cost Summary — {label}")
     if monitor_total is not None and monitor_total > 0:
-        print(f"  Spent:  ${monitor_total:.4f}")
+        spent_usd, measured = monitor_total, True
     elif tracked > 0:
-        print(f"  Spent:  ${tracked:.4f}")
+        spent_usd, measured = tracked, True
     elif monitor_total is None:
         # No request store at all — nothing has been measured.
-        print("  Spent:  no measurements yet — no request database exists")
+        spent_usd, measured = None, False
     else:
         # The store exists and genuinely records no spend for this period.
-        print("  Spent:  $0.0000  (measured: no requests in this period)")
+        spent_usd, measured = 0.0, True
 
-    # Show live proxy session cost if available
+    # Live proxy session cost, if available.
+    live_session = None
     stats = _proxy_get("/stats")
     if stats:
         session = _json_object(stats.get("session"))
@@ -7811,21 +7824,56 @@ def cmd_cost(args: CommandArgs) -> None:
         proxy_saved = _as_float(session.get("cost_saved"))
         saved_tokens = _as_int(session.get("saved_tokens"))
         if proxy_cost > 0 or saved_tokens > 0:
-            print("\n  Live session (proxy):")
-            print(f"    Cost:          ${proxy_cost:.4f}")
-            if proxy_saved > 0:
-                print(f"    Cost saved:    ${proxy_saved:.4f}")
-            if saved_tokens > 0:
-                print(f"    Tokens saved:  {saved_tokens:,}")
+            live_session = {
+                "cost_usd": proxy_cost,
+                "cost_saved_usd": proxy_saved if proxy_saved > 0 else None,
+                "saved_tokens": saved_tokens if saved_tokens > 0 else None,
+            }
 
-    # Show budget status if configured
+    # Budget status per period, if configured.
+    budget = {}
     for p in ("daily", "monthly"):
         status = tracker.get_status(p)
-        if status:
-            alert_tag = " ⚠️  ALERT" if status.alert_triggered else ""
+        budget[p] = status.to_dict() if status else None
+
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "section": "cost",
+                    "period": period,
+                    "available": measured,
+                    "spent_usd": spent_usd,
+                    "live_session": live_session,
+                    "budget": budget,
+                }
+            )
+        )
+        return
+
+    print(f"TokenPak Cost Summary — {label}")
+    if not measured:
+        print("  Spent:  no measurements yet — no request database exists")
+    elif spent_usd:
+        print(f"  Spent:  ${spent_usd:.4f}")
+    else:
+        print("  Spent:  $0.0000  (measured: no requests in this period)")
+
+    if live_session:
+        print("\n  Live session (proxy):")
+        print(f"    Cost:          ${live_session['cost_usd']:.4f}")
+        if live_session["cost_saved_usd"]:
+            print(f"    Cost saved:    ${live_session['cost_saved_usd']:.4f}")
+        if live_session["saved_tokens"]:
+            print(f"    Tokens saved:  {live_session['saved_tokens']:,}")
+
+    for p in ("daily", "monthly"):
+        status_dict = budget[p]
+        if status_dict:
+            alert_tag = " ⚠️  ALERT" if status_dict["alert_triggered"] else ""
             print(
-                f"  {p.capitalize()} budget: ${status.spent_usd:.4f} / "
-                f"${status.limit_usd:.2f} ({status.percent_used:.1f}%){alert_tag}"
+                f"  {p.capitalize()} budget: ${status_dict['spent_usd']:.4f} / "
+                f"${status_dict['limit_usd']:.2f} ({status_dict['percent_used']:.1f}%){alert_tag}"
             )
 
 
@@ -8287,7 +8335,14 @@ def _build_cost_parser(sub: Subparsers) -> None:
     p_cost.add_argument("--week", action="store_true", help="Show weekly totals")
     p_cost.add_argument("--month", action="store_true", help="Show monthly totals")
     p_cost.add_argument("--by-model", action="store_true", help="Break down by model")
-    p_cost.add_argument("--export-csv", action="store_true", help="Export as CSV")
+    cost_output_group = p_cost.add_mutually_exclusive_group()
+    cost_output_group.add_argument("--export-csv", action="store_true", help="Export as CSV")
+    cost_output_group.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit machine-readable JSON output",
+    )
     p_cost.set_defaults(func=cmd_cost)
 
     # Subcommands for cost
