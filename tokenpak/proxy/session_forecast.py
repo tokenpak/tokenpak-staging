@@ -31,7 +31,10 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as datetime_time
-from typing import Mapping, Sequence
+from typing import TYPE_CHECKING, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from tokenpak.proxy.time_forecast_calibration import PublishedTimeCellEvidence
 
 from tokenpak.core.contracts.session_economics import (
     BindingConstraint,
@@ -1266,6 +1269,7 @@ def _time_calibrated_or_fallback(
     model: str,
     effort: str,
     turns: Sequence[_Turn],
+    published_prior: Mapping[tuple[str, str, str], "PublishedTimeCellEvidence"] | None = None,
 ) -> TimeForecast:
     """Calibrated wall-clock remaining-time band with a guaranteed honest fallback.
 
@@ -1273,6 +1277,11 @@ def _time_calibrated_or_fallback(
     the inert ``unavailable`` value in that case, regardless of how much
     session or corpus history exists — see the function's own docstring for
     why that is a hard requirement, not merely today's default.
+
+    ``published_prior`` forwards unchanged to
+    ``build_calibrated_time_forecast`` (see that function's docstring) — the
+    same minimal, explicit dependency-injection seam, one call deep. The
+    production call site never passes it.
     """
     latest = turns[-1].row if turns else None
     stream_mode = (
@@ -1300,6 +1309,7 @@ def _time_calibrated_or_fallback(
             stream_mode=stream_mode,
             turn_index=len(turns),
             elapsed_ms=elapsed_ms,
+            published_prior=published_prior,
         )
     except Exception:
         logger.exception("calibrated time forecast failed; degrading to unknown")

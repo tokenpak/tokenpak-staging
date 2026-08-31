@@ -570,6 +570,78 @@ def test_unavailable_time_forecast_round_trips() -> None:
     assert restored.time_forecast.remaining_time_ceiling_90_ms is None
 
 
+def _learning_time_forecast(**overrides: object) -> TimeForecast:
+    """A ``learning`` band with genuinely-held preconditions: gate receipts
+    all true, and a positive borrowed-prior history_n — the shape 02-SPEC §4
+    describes ("cell has published calibration history ... below the local
+    full-confidence threshold; borrows a versioned prior")."""
+    fields: dict[str, object] = dict(
+        status=TimeForecastStatus.LEARNING,
+        basis="timing-facts-v1",
+        remaining_time_likely_50_ms=_interval(90_000, 400_000, unit="ms"),
+        remaining_time_ceiling_90_ms=NumericValue.estimated(
+            900_000, source="borrowed-time-prior", unit="ms"
+        ),
+        coverage=Coverage(
+            method="walk-forward-split-conformal",
+            observed=0.5,
+            history_n=12,
+            drift_state=DriftState.UNKNOWN,
+        ),
+        gate=TimeForecastGate(True, True, True),
+        cell=TimeForecastCell(
+            model="provider/model", effort="high", stream_mode=TimeForecastStreamMode.STREAMING
+        ),
+    )
+    fields.update(overrides)
+    return TimeForecast(**fields)  # type: ignore[arg-type]
+
+
+def test_learning_time_forecast_with_genuine_preconditions_is_constructible() -> None:
+    """The honest baseline: gate receipts true, positive history — must NOT
+    raise. Proves the stricter validation below isn't blanket-rejecting
+    `learning`, only the dishonest shape."""
+    forecast = _learning_time_forecast()
+    assert forecast.status is TimeForecastStatus.LEARNING
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [
+        TimeForecastGate(False, False, False),
+        TimeForecastGate(True, False, True),
+        TimeForecastGate(False, True, True),
+        TimeForecastGate(True, True, False),
+    ],
+)
+def test_learning_time_forecast_requires_all_gate_receipts(gate: TimeForecastGate) -> None:
+    """`learning` is `populated` per 02-SPEC §4, same as `available` — the
+    ratified gate makes ANY numeric band admissible only once ALL of (i)-(iv)
+    hold, not just for `available`. Any gate receipt false must be rejected."""
+    with pytest.raises(SessionEconomicsContractError, match="gate receipts"):
+        _learning_time_forecast(gate=gate)
+
+
+def test_learning_time_forecast_requires_positive_history() -> None:
+    with pytest.raises(SessionEconomicsContractError, match="coverage history"):
+        _learning_time_forecast(
+            coverage=Coverage(method="walk-forward-split-conformal", observed=0.5, history_n=0)
+        )
+
+
+def test_dishonest_learning_construction_is_unreachable() -> None:
+    """The exact dishonest shape the round-1 BLOCK verdict flagged: unpublished
+    calibration (all gate receipts false) and zero history, yet a construction
+    attempt at a populated `learning` band. Must raise — a caller in that
+    state must build `insufficient_data`/`unknown`/`unavailable` instead
+    (amendment gate iii)."""
+    with pytest.raises(SessionEconomicsContractError, match="gate receipts"):
+        _learning_time_forecast(
+            gate=TimeForecastGate(False, False, False),
+            coverage=Coverage(),
+        )
+
+
 def test_missing_session_identity_remains_explicit() -> None:
     session = SessionRef(
         id=None,

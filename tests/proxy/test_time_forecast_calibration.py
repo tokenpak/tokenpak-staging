@@ -3,15 +3,22 @@
 
 ``build_calibrated_time_forecast`` is a pure lookup against
 ``_PUBLISHED_TIME_PRIOR`` — it never fits a model live (see the module
-docstring). These tests exercise its branching directly by monkeypatching
-that table, plus the outer default-off gate in ``session_forecast.py`` that
-must short-circuit to ``unavailable`` regardless of what the inner engine
-would otherwise report.
+docstring). These tests exercise its branching by calling it (and its one
+caller, ``session_forecast._time_calibrated_or_fallback``) with a real,
+explicit ``published_prior`` argument — the minimal dependency-injection seam
+both functions expose for exactly this purpose — rather than reaching into
+``time_forecast_calibration`` module state via ``monkeypatch.setattr`` (the
+#633/#634 real-path testing standard). ``monkeypatch.setenv``/``delenv`` are
+still used where they exercise a real, documented external interface (an env
+var, a config file on a real, isolated ``TOKENPAK_HOME``) rather than an
+internal implementation detail.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -54,6 +61,7 @@ def _build(
     effort: str = "high",
     stream_mode: TimeForecastStreamMode = TimeForecastStreamMode.STREAMING,
     session_id: str = "active",
+    published_prior: dict[tuple[str, str, str], tf_cal.PublishedTimeCellEvidence] | None = None,
 ):
     return tf_cal.build_calibrated_time_forecast(
         monitor_db_path="ignored",
@@ -64,6 +72,7 @@ def _build(
         stream_mode=stream_mode,
         turn_index=turn_index,
         elapsed_ms=elapsed_ms,
+        published_prior=published_prior,
     )
 
 
@@ -77,8 +86,8 @@ def test_shipped_published_prior_table_is_empty() -> None:
     assert tf_cal._PUBLISHED_TIME_PRIOR == {}
 
 
-def test_cold_cell_is_insufficient_data_not_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {})
+def test_cold_cell_is_insufficient_data_not_unavailable() -> None:
+    """No injected prior — exercises the real, shipped-empty module table."""
     forecast = _build()
     assert forecast.status is TimeForecastStatus.INSUFFICIENT_DATA
     assert forecast.remaining_time_likely_50_ms is None
@@ -91,37 +100,35 @@ def test_cold_cell_is_insufficient_data_not_unavailable(monkeypatch: pytest.Monk
 
 
 @pytest.mark.parametrize("turn_index,elapsed_ms", [(0, 60_000.0), (1, 0.0), (-1, 60_000.0)])
-def test_no_elapsed_signal_yet_is_unknown(
-    monkeypatch: pytest.MonkeyPatch, turn_index: int, elapsed_ms: float
-) -> None:
+def test_no_elapsed_signal_yet_is_unknown(turn_index: int, elapsed_ms: float) -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {key: _evidence(full_confidence=True)})
-    forecast = _build(turn_index=turn_index, elapsed_ms=elapsed_ms)
+    forecast = _build(
+        turn_index=turn_index,
+        elapsed_ms=elapsed_ms,
+        published_prior={key: _evidence(full_confidence=True)},
+    )
     assert forecast.status is TimeForecastStatus.UNKNOWN
     assert forecast.remaining_time_likely_50_ms is None
     assert forecast.remaining_time_ceiling_90_ms is None
 
 
-def test_published_cell_with_no_bucket_coverage_is_insufficient_data(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_published_cell_with_no_bucket_coverage_is_insufficient_data() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(
-        tf_cal,
-        "_PUBLISHED_TIME_PRIOR",
-        {key: _evidence(full_confidence=True, band50={}, band90={})},
+    forecast = _build(
+        published_prior={key: _evidence(full_confidence=True, band50={}, band90={})}
     )
-    forecast = _build()
     assert forecast.status is TimeForecastStatus.INSUFFICIENT_DATA
 
 
-def test_different_cell_key_is_not_matched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_different_cell_key_is_not_matched() -> None:
     """A published cell for a different (model, effort, stream_mode) never leaks in."""
     other_key = tf_cal._time_cell_key("model-b", "low", TimeForecastStreamMode.NON_STREAMING)
-    monkeypatch.setattr(
-        tf_cal, "_PUBLISHED_TIME_PRIOR", {other_key: _evidence(full_confidence=True)}
+    forecast = _build(
+        model="model-a",
+        effort="high",
+        stream_mode=TimeForecastStreamMode.STREAMING,
+        published_prior={other_key: _evidence(full_confidence=True)},
     )
-    forecast = _build(model="model-a", effort="high", stream_mode=TimeForecastStreamMode.STREAMING)
     assert forecast.status is TimeForecastStatus.INSUFFICIENT_DATA
 
 
@@ -130,12 +137,9 @@ def test_different_cell_key_is_not_matched(monkeypatch: pytest.MonkeyPatch) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_learning_cell_populates_a_borrowed_band(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_learning_cell_populates_a_borrowed_band() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(
-        tf_cal, "_PUBLISHED_TIME_PRIOR", {key: _evidence(full_confidence=False, history_n=12)}
-    )
-    forecast = _build()
+    forecast = _build(published_prior={key: _evidence(full_confidence=False, history_n=12)})
     assert forecast.status is TimeForecastStatus.LEARNING
     band = forecast.remaining_time_likely_50_ms
     ceiling = forecast.remaining_time_ceiling_90_ms
@@ -151,12 +155,9 @@ def test_learning_cell_populates_a_borrowed_band(monkeypatch: pytest.MonkeyPatch
     assert forecast.coverage.history_n == 12
 
 
-def test_available_cell_is_fully_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_available_cell_is_fully_gated() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(
-        tf_cal, "_PUBLISHED_TIME_PRIOR", {key: _evidence(full_confidence=True, history_n=48)}
-    )
-    forecast = _build()
+    forecast = _build(published_prior={key: _evidence(full_confidence=True, history_n=48)})
     assert forecast.status is TimeForecastStatus.AVAILABLE
     assert forecast.gate.sedr_014_landed
     assert forecast.gate.calibration_evidence_published
@@ -167,13 +168,10 @@ def test_available_cell_is_fully_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     assert forecast.basis == "timing-facts-v1"
 
 
-def test_available_never_serializes_as_a_bare_point_estimate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_available_never_serializes_as_a_bare_point_estimate() -> None:
     """The contract's own invariant, re-asserted at the engine boundary."""
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {key: _evidence(full_confidence=True)})
-    payload = _build().to_dict()
+    payload = _build(published_prior={key: _evidence(full_confidence=True)}).to_dict()
     assert isinstance(payload["remaining_time_likely_50_ms"], dict)
     assert payload["remaining_time_likely_50_ms"]["low"] is not None
     assert payload["remaining_time_likely_50_ms"]["high"] is not None
@@ -181,29 +179,23 @@ def test_available_never_serializes_as_a_bare_point_estimate(
     assert payload["remaining_time_ceiling_90_ms"]["value"] is not None
 
 
-def test_observed_coverage_is_clamped_and_scaled_to_a_fraction(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_observed_coverage_is_clamped_and_scaled_to_a_fraction() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(
-        tf_cal,
-        "_PUBLISHED_TIME_PRIOR",
-        {key: _evidence(full_confidence=True, observed_coverage_50=123.4)},
+    forecast = _build(
+        published_prior={key: _evidence(full_confidence=True, observed_coverage_50=123.4)}
     )
-    forecast = _build()
     # A >100% measured figure (shouldn't happen, but defends the contract's
     # own <=1 invariant on Coverage.observed) is clamped before scaling.
     assert forecast.coverage.observed == 1.0
 
 
-def test_nearest_bucket_is_used_when_turn_index_falls_between_published_keys(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_nearest_bucket_is_used_when_turn_index_falls_between_published_keys() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(
-        tf_cal,
-        "_PUBLISHED_TIME_PRIOR",
-        {
+    # turn_index=2 is nearer bucket 1 than bucket 10.
+    forecast = _build(
+        turn_index=2,
+        elapsed_ms=60_000.0,
+        published_prior={
             key: _evidence(
                 full_confidence=True,
                 band50={1: (-0.2, 0.6), 10: (-0.05, 0.3)},
@@ -211,19 +203,17 @@ def test_nearest_bucket_is_used_when_turn_index_falls_between_published_keys(
             )
         },
     )
-    # turn_index=2 is nearer bucket 1 than bucket 10.
-    forecast = _build(turn_index=2, elapsed_ms=60_000.0)
     assert forecast.status is TimeForecastStatus.AVAILABLE
     # Bucket 1's wider band should dominate, not bucket 10's tighter one.
     assert forecast.remaining_time_ceiling_90_ms.value > 60_000.0
 
 
-def test_deep_turn_index_beyond_kmax_shares_the_last_bucket(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_deep_turn_index_beyond_kmax_shares_the_last_bucket() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {key: _evidence(full_confidence=True)})
-    forecast = _build(turn_index=tf_cal.KMAX + 50)
+    forecast = _build(
+        turn_index=tf_cal.KMAX + 50,
+        published_prior={key: _evidence(full_confidence=True)},
+    )
     assert forecast.status is TimeForecastStatus.AVAILABLE
 
 
@@ -232,15 +222,12 @@ def test_deep_turn_index_beyond_kmax_shares_the_last_bucket(
 # ---------------------------------------------------------------------------
 
 
-def test_corrupt_published_evidence_degrades_to_unknown_not_a_raise(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_corrupt_published_evidence_degrades_to_unknown_not_a_raise() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
     # band50_y_by_k has a non-numeric value: math.exp() on it raises inside
     # the try/except, which must degrade rather than propagate.
     broken = _evidence(full_confidence=True, band50={4: ("not-a-float", 0.9)})
-    monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {key: broken})
-    forecast = _build()
+    forecast = _build(published_prior={key: broken})
     assert forecast.status is TimeForecastStatus.UNKNOWN
     assert forecast.remaining_time_likely_50_ms is None
 
@@ -257,9 +244,9 @@ def test_default_off_ignores_rich_published_evidence(monkeypatch: pytest.MonkeyP
     from tokenpak.proxy import session_forecast
 
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {key: _evidence(full_confidence=True)})
-    monkeypatch.delenv(session_forecast._TIME_FORECAST_ENV_VAR, raising=False)
-    monkeypatch.setattr(session_forecast, "_time_forecast_enabled", lambda: False)
+    # The real activation switch, forced off through its documented env var
+    # — not a patch of the gate function itself.
+    monkeypatch.setenv(session_forecast._TIME_FORECAST_ENV_VAR, "0")
 
     turn = type(
         "Row",
@@ -274,6 +261,7 @@ def test_default_off_ignores_rich_published_evidence(monkeypatch: pytest.MonkeyP
         model="model-a",
         effort="high",
         turns=[wrapped],
+        published_prior={key: _evidence(full_confidence=True)},
     )
     assert forecast.status is TimeForecastStatus.UNAVAILABLE
     assert forecast.remaining_time_likely_50_ms is None
@@ -296,21 +284,27 @@ def test_env_var_false_values_keep_the_gate_off(
     assert session_forecast._time_forecast_enabled() is False
 
 
-def test_no_env_var_and_no_config_key_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_env_var_and_no_config_key_defaults_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tokenpak import _paths
     from tokenpak.proxy import session_forecast
 
     monkeypatch.delenv(session_forecast._TIME_FORECAST_ENV_VAR, raising=False)
-    monkeypatch.setattr("tokenpak.core.config.load_config", lambda: {}, raising=False)
+    # A real, isolated TOKENPAK_HOME with no config.json on disk at all —
+    # load_config() reads the real (absent) file rather than a patched
+    # function returning a canned value.
+    monkeypatch.setenv(_paths.ENV_VAR, str(tmp_path))
     assert session_forecast._time_forecast_enabled() is False
 
 
-def test_config_key_can_enable_without_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_key_can_enable_without_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tokenpak import _paths
     from tokenpak.proxy import session_forecast
 
     monkeypatch.delenv(session_forecast._TIME_FORECAST_ENV_VAR, raising=False)
-    monkeypatch.setattr(
-        "tokenpak.core.config.load_config",
-        lambda: {"time_forecast_bands": {"enabled": True}},
-        raising=False,
-    )
+    monkeypatch.setenv(_paths.ENV_VAR, str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps({"time_forecast_bands": {"enabled": True}}))
     assert session_forecast._time_forecast_enabled() is True

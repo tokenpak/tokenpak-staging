@@ -1146,23 +1146,33 @@ class TimeForecast(_FinalValueObject):
                     "time_forecast 90% ceiling must not be below the likely-50 high"
                 )
 
-        if self.status is TimeForecastStatus.AVAILABLE:
+        if self.status in (TimeForecastStatus.LEARNING, TimeForecastStatus.AVAILABLE):
+            # Both are "populated" per 02-SPEC §4 — the ratified gate makes
+            # ANY numeric band admissible only once ALL of (i)-(iv) hold, not
+            # just `available`. `learning` differs from `available` only in
+            # how far the cell's own coverage has progressed (borrowed prior
+            # vs. locally measured), never in whether the gate receipts are
+            # genuine. Unpublished calibration or zero history must render as
+            # `insufficient_data`/`unknown`/`unavailable` instead (gate iii) —
+            # this branch is what makes that state machine, not prose,
+            # unreachable to a dishonest caller.
             if not (
                 self.gate.sedr_014_landed
                 and self.gate.calibration_evidence_published
                 and self.gate.inputs_verified_timing_facts_only
             ):
                 raise SessionEconomicsContractError(
-                    "available time_forecast requires all gate receipts to be true"
+                    f"{self.status.value} time_forecast requires all gate receipts to be true"
                 )
-            if (
-                not self.coverage.method
-                or self.coverage.observed is None
-                or self.coverage.history_n <= 0
-            ):
+            if self.coverage.history_n <= 0:
                 raise SessionEconomicsContractError(
-                    "available time_forecast requires observed coverage and positive history"
+                    f"{self.status.value} time_forecast requires positive coverage history"
                 )
+            if self.status is TimeForecastStatus.AVAILABLE:
+                if not self.coverage.method or self.coverage.observed is None:
+                    raise SessionEconomicsContractError(
+                        "available time_forecast requires observed coverage"
+                    )
 
     @classmethod
     def inert(cls, status: "TimeForecastStatus", *, cell: "TimeForecastCell") -> "TimeForecast":

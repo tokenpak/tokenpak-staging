@@ -206,6 +206,40 @@ def test_read_time_history_ignores_rows_missing_both_timing_facts(tmp_path: Path
     assert out[0].turns == 4
 
 
+def test_read_time_history_excludes_mixed_stream_mode_sessions(tmp_path: Path) -> None:
+    """TRB-001 design §2 item 3: a session whose rows map to more than one
+    distinct ``stream_mode`` (streaming AND non-streaming turns) must be
+    excluded from the corpus entirely, never classified by its last row.
+
+    Eight turns, alternating streaming/non-streaming, all with populated
+    timing facts — comfortably past MIN_TURNS on its own, so a last-row
+    classification bug would silently admit the whole session into whichever
+    cell its final row happened to land in (the defect the round-1 BLOCK's
+    direct probe reproduced: "included all eight mixed-mode turns").
+    """
+    db = tmp_path / "monitor.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE requests (id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,"
+        " reasoning_effort TEXT, timestamp TEXT, status_code INTEGER,"
+        " stream_mode TEXT, ttfb_ms INTEGER, stream_duration_ms INTEGER)"
+    )
+    start = _HISTORY_END - timedelta(minutes=10)
+    for ti in range(8):
+        stream_col = "sse" if ti % 2 == 0 else "json"
+        conn.execute(
+            "INSERT INTO requests (session_id, model, reasoning_effort, timestamp,"
+            " status_code, stream_mode, ttfb_ms, stream_duration_ms)"
+            " VALUES ('mixed-0','model-a','unknown',?,200,?,100,900)",
+            ((start + timedelta(minutes=ti)).isoformat(), stream_col),
+        )
+    conn.commit()
+    conn.close()
+
+    out = tf_cal.read_time_history(str(db), now=NOW)
+    assert out == []
+
+
 # ---------------------------------------------------------------------------
 # walk_forward_coverage_time / cell_readiness_time — measured, not nominal
 # ---------------------------------------------------------------------------

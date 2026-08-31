@@ -131,9 +131,10 @@ class PublishedTimeCellEvidence:
 
 #: The published per-cell calibration evidence. Ships EMPTY — see the module
 #: docstring for why that is the gate mechanism, not a placeholder to be
-#: filled in casually. Keyed by ``_time_cell_key(...)``. Tests populate this
-#: via ``monkeypatch.setattr(tf_cal, "_PUBLISHED_TIME_PRIOR", {...})`` —
-#: scoped and reverted, never a module-global mutation that outlives a test.
+#: filled in casually. Keyed by ``_time_cell_key(...)``. Tests exercise this
+#: table via ``build_calibrated_time_forecast(..., published_prior={...})``
+#: (a real, explicit function argument) rather than monkeypatching this
+#: module attribute — real-path style, per the #633/#634 testing standard.
 _PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {}
 
 
@@ -258,6 +259,15 @@ def _parse_time_corpus(
     for sid, srows in grouped.items():
         last_ts = _parse_ts_utc(srows[-1]["timestamp"])
         if last_ts is None:
+            continue
+        # Mixed-mode sessions are excluded, not blended (TRB-001 design §2
+        # item 3): a session whose rows map to more than one distinct
+        # stream_mode had both streaming and non-streaming turns, and
+        # classifying it by its last row alone would silently pool it into
+        # one cell while its earlier turns' timing shape belonged to the
+        # other — the exact blending 02-SPEC §3's cell definition forbids.
+        # Skip the whole session rather than fabricate a single label for it.
+        if len({_map_stream_mode(r["stream_mode"]) for r in srows}) > 1:
             continue
         durations = tuple(
             d for d in (_row_duration_ms(r) for r in srows) if d is not None and d > 0
@@ -547,6 +557,7 @@ def build_calibrated_time_forecast(
     stream_mode: TimeForecastStreamMode,
     turn_index: int,
     elapsed_ms: float,
+    published_prior: Mapping[tuple[str, str, str], PublishedTimeCellEvidence] | None = None,
 ) -> TimeForecast:
     """Contract-shaped calibrated time-remaining band, honest about every gap.
 
@@ -554,6 +565,14 @@ def build_calibrated_time_forecast(
     ever admits ``learning``/``available``, per the ratified gate. Ships
     reaching ``insufficient_data`` for every cell (the table is empty), and
     ``unknown`` whenever this session itself has no timing-fact signal.
+
+    ``published_prior`` is a minimal, explicit dependency-injection seam:
+    every production call site omits it and this function reads the real
+    module-level ``_PUBLISHED_TIME_PRIOR`` table, unchanged. Tests pass an
+    explicit table instead of reaching into the module's internals via
+    ``monkeypatch.setattr`` (the #633/#634 real-path testing standard) — the
+    seam exists ONLY so the evidence lookup can be exercised with real,
+    caller-supplied data rather than patched module state.
 
     Never raises: any lookup/conversion failure degrades to ``unknown`` — a
     read/derivation failure degrades to unknown, never a stale value, never a
@@ -565,8 +584,9 @@ def build_calibrated_time_forecast(
     if elapsed_ms <= 0 or turn_index < 1:
         return _inert(TimeForecastStatus.UNKNOWN, cell=cell)
 
+    evidence_table = _PUBLISHED_TIME_PRIOR if published_prior is None else published_prior
     key = _time_cell_key(model, effort, stream_mode)
-    evidence = _PUBLISHED_TIME_PRIOR.get(key)
+    evidence = evidence_table.get(key)
     if evidence is None:
         return _inert(TimeForecastStatus.INSUFFICIENT_DATA, cell=cell)
 
