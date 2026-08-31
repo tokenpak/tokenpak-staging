@@ -174,9 +174,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build sdist + wheel for scanning
+        # Toolchain pinned and SOURCE_DATE_EPOCH derived from the checked-out
+        # commit, mirroring the production release build for a faithful
+        # rehearsal.
         run: |
-          python -m pip install --upgrade pip build
-          python -m build
+          python -m pip install --upgrade pip
+          pip install build==1.5.0 setuptools==84.0.0
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          python -m build --no-isolation
       - name: Scan shipped artifact for public-leak patterns
         run: python scripts/release_gate/check_release_leaks.py --dist dist/
 
@@ -190,9 +195,22 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install build
-        run: pip install --upgrade pip build
+        # Pinned to match the production release build's toolchain.
+        run: |
+          pip install --upgrade pip
+          pip install build==1.5.0 setuptools==84.0.0
+      - name: Compute reproducible build timestamp
+        # Derived from the checked-out commit, mirroring the production
+        # release build. Exported via GITHUB_ENV so it also covers the
+        # sdist normalization step below.
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
       - name: Build sdist + wheel
-        run: python -m build
+        run: python -m build --no-isolation
+      - name: Normalize sdist for byte-reproducibility
+        # setuptools' wheel builder honors SOURCE_DATE_EPOCH; its sdist
+        # command does not (per-member mtimes come from on-disk file
+        # mtimes). Pin those after the fact for a byte-identical sdist.
+        run: python scripts/release_gate/normalize_sdist.py dist/*.tar.gz
       - name: Sdist / wheel purity (Std 30 §13.1 R9)
         run: |
           # Inclusion-direction guard: shipped artifacts MUST NOT contain _internal/ paths.

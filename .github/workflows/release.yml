@@ -246,9 +246,13 @@ jobs:
           python-version: "3.12"
 
       - name: Build sdist + wheel for scanning
+        # Toolchain pinned and SOURCE_DATE_EPOCH derived from the checked-out
+        # commit so this scan build matches the byte-reproducible build below.
         run: |
-          python -m pip install --upgrade pip build
-          python -m build
+          python -m pip install --upgrade pip
+          pip install build==1.5.0 setuptools==84.0.0
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          python -m build --no-isolation
 
       - name: Scan shipped artifact for public-leak patterns
         run: python scripts/release_gate/check_release_leaks.py --dist dist/
@@ -315,10 +319,28 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build twine
+        # Pinned so the exact same toolchain (build/setuptools/twine) is used
+        # for every release build, regardless of when or where it runs — a
+        # floating resolution is a source of byte-level nondeterminism.
+        run: pip install build==1.5.0 setuptools==84.0.0 twine==7.0.0
+
+      - name: Compute reproducible build timestamp
+        # Derived from the commit being released (not wall-clock build
+        # time), so archive member timestamps are fixed by the candidate SHA
+        # and rebuilding this exact commit reproduces the same bytes.
+        # Exported via GITHUB_ENV so it also covers the sdist normalization
+        # step below, which needs the same value.
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
 
       - name: Build wheel and sdist
-        run: python -m build
+        run: python -m build --no-isolation
+
+      - name: Normalize sdist for byte-reproducibility
+        # setuptools' wheel builder honors SOURCE_DATE_EPOCH for zip member
+        # timestamps, but its sdist command does not (it stamps each tar
+        # member with the file's on-disk mtime). Pin those after the fact so
+        # the sdist is byte-identical for a given commit.
+        run: python scripts/release_gate/normalize_sdist.py dist/*.tar.gz
 
       - name: Verify package
         run: twine check dist/*
