@@ -363,6 +363,42 @@ def test_numeric_states_require_value_and_source(state: ValueState) -> None:
         NumericValue(state, 1)
 
 
+@pytest.mark.parametrize("state", [ValueState.OBSERVED, ValueState.ESTIMATED])
+@pytest.mark.parametrize("value", [1, 1.5, 0, 0.0])
+def test_numeric_states_accept_genuine_int_and_float(state: ValueState, value: object) -> None:
+    numeric = NumericValue(state, value, source="producer")
+    assert numeric.value == value
+
+
+@pytest.mark.parametrize("state", [ValueState.OBSERVED, ValueState.ESTIMATED])
+def test_numeric_states_reject_bool_as_not_genuinely_numeric(state: ValueState) -> None:
+    # bool is an int subclass in Python, but a numeric fact field must never
+    # accept True/False as a stand-in for 1/0 — pins the exact-type check in
+    # ``_number`` (``type(value) is not int and type(value) is not float``)
+    # against silently regressing to a subclass-permissive ``isinstance``
+    # check that would let booleans slip through.
+    with pytest.raises(SessionEconomicsContractError, match="must be numeric"):
+        NumericValue(state, True, source="producer")
+    with pytest.raises(SessionEconomicsContractError, match="must be numeric"):
+        NumericValue(state, False, source="producer")
+
+
+@pytest.mark.parametrize("state", [ValueState.OBSERVED, ValueState.ESTIMATED])
+def test_numeric_states_reject_non_numeric_value(state: ValueState) -> None:
+    with pytest.raises(SessionEconomicsContractError, match="must be numeric"):
+        NumericValue(state, "1", source="producer")
+
+
+@pytest.mark.parametrize("state", [ValueState.OBSERVED, ValueState.ESTIMATED])
+def test_numeric_states_reject_non_finite_or_negative_value(state: ValueState) -> None:
+    with pytest.raises(SessionEconomicsContractError, match="finite and non-negative"):
+        NumericValue(state, -1, source="producer")
+    with pytest.raises(SessionEconomicsContractError, match="finite and non-negative"):
+        NumericValue(state, float("inf"), source="producer")
+    with pytest.raises(SessionEconomicsContractError, match="finite and non-negative"):
+        NumericValue(state, float("nan"), source="producer")
+
+
 def test_stale_rate_cannot_produce_numeric_usd() -> None:
     stale = RateProvenance(
         catalog_version="old",

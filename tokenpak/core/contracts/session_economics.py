@@ -200,7 +200,7 @@ def _require_value_object(value: object, expected_type: type[object], path: str)
 
 
 def _number(value: object, path: str) -> Number:
-    if type(value) not in (int, float):
+    if type(value) is not int and type(value) is not float:
         raise SessionEconomicsContractError(f"{path} must be numeric")
     if not math.isfinite(float(value)) or value < 0:
         raise SessionEconomicsContractError(f"{path} must be finite and non-negative")
@@ -333,7 +333,7 @@ class NumericValue(_FinalValueObject):
         return result
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "NumericValue":
+    def from_dict(cls, raw: object) -> "NumericValue":
         data = _as_mapping(raw, "numeric value")
         return cls(
             state=_enum(ValueState, data.get("state"), "numeric value.state"),
@@ -463,7 +463,7 @@ class CostValue(_FinalValueObject):
         return result
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "CostValue":
+    def from_dict(cls, raw: object) -> "CostValue":
         data = _as_mapping(raw, "cost_usd")
         return cls(
             state=_enum(ValueState, data.get("state"), "cost_usd.state"),
@@ -511,7 +511,7 @@ class SessionFacts(_FinalValueObject):
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "SessionFacts":
+    def from_dict(cls, raw: object) -> "SessionFacts":
         data = _as_mapping(raw, "facts")
         return cls(
             input_tokens=NumericValue.from_dict(data.get("input_tokens")),
@@ -535,7 +535,7 @@ class ModelRef(_FinalValueObject):
         return {"id": self.id, "effort": self.effort}
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "ModelRef":
+    def from_dict(cls, raw: object) -> "ModelRef":
         data = _as_mapping(raw, "session.model")
         return cls(
             id=_input_string(data.get("id", _MISSING), "session.model.id"),
@@ -591,7 +591,7 @@ class SessionRef(_FinalValueObject):
         return result
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "SessionRef":
+    def from_dict(cls, raw: object) -> "SessionRef":
         data = _as_mapping(raw, "session")
         turns = data.get("turns_observed")
         if type(turns) is not int:
@@ -654,7 +654,7 @@ class SessionState(_FinalValueObject):
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "SessionState":
+    def from_dict(cls, raw: object) -> "SessionState":
         data = _as_mapping(raw, "state")
         return cls(
             context_tokens=NumericValue.from_dict(data.get("context_tokens")),
@@ -716,7 +716,7 @@ class Runway(_FinalValueObject):
         return result
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Runway":
+    def from_dict(cls, raw: object) -> "Runway":
         data = _as_mapping(raw, "runway")
         return cls(
             status=_enum(RunwayStatus, data.get("status"), "runway.status"),
@@ -771,7 +771,7 @@ class IntervalEstimate(_FinalValueObject):
         return result
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "IntervalEstimate":
+    def from_dict(cls, raw: object) -> "IntervalEstimate":
         data = _as_mapping(raw, "interval")
         return cls(
             state=_enum(ValueState, data.get("state"), "interval.state"),
@@ -814,7 +814,7 @@ class Coverage(_FinalValueObject):
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Coverage":
+    def from_dict(cls, raw: object) -> "Coverage":
         data = _as_mapping(raw, "forecast.coverage")
         history_n = data.get("history_n", 0)
         if type(history_n) is not int:
@@ -948,7 +948,7 @@ class Forecast(_FinalValueObject):
         return result
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Forecast":
+    def from_dict(cls, raw: object) -> "Forecast":
         data = _as_mapping(raw, "forecast")
         return cls(
             status=_enum(ForecastStatus, data.get("status"), "forecast.status"),
