@@ -69,6 +69,7 @@ View API spend
 - `--month` — Show monthly totals
 - `--by-model` — Break down by model
 - `--export-csv` — Export as CSV
+- `--json` — Emit machine-readable JSON output
 
 **Subcommands:**
 
