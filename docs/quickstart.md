@@ -86,7 +86,7 @@ model or imply hosted processing by the OSS package.
 
 ## SDK Path: Protocol-First
 
-**Use the TokenPak format with any LLM client — no proxy needed.**
+**Compile prompts into budgeted, prioritized blocks — no proxy needed, works with any LLM client.**
 
 ### Install
 
@@ -94,28 +94,103 @@ model or imply hosted processing by the OSS package.
 pip install tokenpak
 ```
 
-### Compress and send
+### Compile a pack and see the savings
 
 ```python
-from tokenpak import TokenPak, Block
+from tokenpak import ContextPack, PackBlock
 
-pack = TokenPak(budget=4000)
-pack.add_instructions("You are a helpful assistant.")
-pack.add_knowledge("docs", "Your long documentation here...")
-pack.add_conversation([{"role": "user", "content": "Summarize the docs"}])
-
-# Works with any OpenAI-compatible client
-from openai import OpenAI
-client = OpenAI()
-response = client.chat.completions.create(
- model="gpt-4",
- messages=pack.to_messages()
+docs_text = (
+    "TokenPak is a deterministic context compiler. It takes structured blocks "
+    "of content instructions, knowledge, evidence, conversation history and "
+    "compiles them into a budgeted prompt with a full transparency report. "
+    "Every decision TokenPak makes (kept, compacted, truncated, removed) is "
+    "recorded so you can see exactly what happened to your context and why. "
+    "This paragraph is intentionally long and repetitive in a documentation "
+    "way so that a small token budget forces real compaction: TokenPak is a "
+    "deterministic context compiler that compiles structured content blocks "
+    "into a budgeted prompt with a full transparency report of every decision."
 )
 
-# See how much was saved
-print(pack.compile().report)
-# → Input: 8,420 tokens → Output: 3,200 tokens | Savings: 62%
+pack = ContextPack(budget=120)
+pack.add(PackBlock(id="system", type="instructions", content="You are a helpful assistant.", priority="critical"))
+pack.add(PackBlock(id="docs", type="knowledge", content=docs_text, priority="high", max_tokens=60))
+pack.add(PackBlock(id="request", type="conversation", content="Summarize the docs above in one sentence.", priority="medium"))
+
+compiled = pack.compile()
+print(compiled.report)
 ```
+
+```
+TokenPak Compile Report
+═══════════════════════════════════════════════════════
+
+Summary
+───────────────────────────────────────────────────────
+Input:   3 blocks, 177 tokens
+Output:  3 blocks, 77 tokens
+Savings: 56.5% (100 tokens saved)
+Budget:  120 tokens (64.2% used)
+Time:    0.1ms
+
+Block Decisions
+───────────────────────────────────────────────────────
+
+✅ KEPT: [instructions] system
+   Priority: critical
+   Tokens: 7
+   Reason: critical priority
+
+📦 COMPACTED: [knowledge] docs
+   Priority: high
+   Tokens: 160
+   Before: 160 tokens → After: 60 tokens
+   Reason: exceeded block budget (max 60)
+   Method: extractive_truncation
+
+✅ KEPT: [conversation] request
+   Priority: medium
+   Tokens: 10
+   Reason: medium priority — within budget
+
+Priority Order
+───────────────────────────────────────────────────────
+ 1. system (critical) - 7 tokens
+ 2. docs (high) - 60 tokens
+ 3. request (medium) - 10 tokens
+```
+
+Each `PackBlock` carries a `priority` (`critical`/`high`/`medium`/`low`) and an
+optional per-block `max_tokens` cap. `compile()` keeps, compacts, truncates, or
+removes blocks to fit the pack's overall `budget`, and `compiled.report` records
+every decision it made and why. Exact token counts vary slightly with your
+installed tokenizer (`pip install tokenpak[tokens]` for exact `tiktoken`
+counts; without it, TokenPak falls back to a length-based estimate).
+
+### Send the compiled result to any client
+
+`compiled` is stack-neutral — no TokenPak gateway required:
+
+```python
+from tokenpak import ContextPack, PackBlock
+
+pack = ContextPack(budget=4000)
+pack.add(PackBlock(id="system", type="instructions", content="You are a helpful assistant.", priority="critical"))
+pack.add(PackBlock(id="request", type="conversation", content="Summarize the docs above.", priority="medium"))
+compiled = pack.compile()
+
+messages = compiled.to_messages()  # OpenAI-style messages list
+print(messages)
+```
+
+```
+[{'role': 'user', 'content': 'You are a helpful assistant.\n\n---\n\nSummarize the docs above.'}]
+```
+
+`compiled.to_anthropic()` returns a `(system, messages)` tuple for the
+Anthropic SDK, and `compiled.to_prompt()` returns the same content as a single
+plain-text string. Pass whichever shape your client expects — for example
+`OpenAI().chat.completions.create(model="gpt-4o", messages=messages)` — with
+no TokenPak-specific handling required downstream.
 
 ---
 
