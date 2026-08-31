@@ -2380,6 +2380,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                                 _event_transform_applied = True
                                 _stream_wrote_to_client = True
                                 _client_headers_sent = True
+                                # Record 429s in the rate-limit circuit breaker
+                                # BEFORE any response bytes reach the client —
+                                # see the matching comment in the non-streaming
+                                # branch above for why (TOCTOU with the client's
+                                # next request racing this call).
+                                if (
+                                    should_log
+                                    and is_model_request
+                                    and resp.status_code == 429
+                                    and _cb_provider
+                                ):
+                                    get_rate_limit_registry().record_429(_cb_provider)
                                 self.send_response(resp.status_code)
                                 self.send_header("Content-Type", "application/json")
                                 self.send_header("Content-Length", str(len(_norm_err_body)))
@@ -2564,6 +2576,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 assert resp is not None
                 _final_upstream_status = resp.status_code
 
+                # Record 429s in the rate-limit circuit breaker BEFORE any
+                # response bytes reach the client. Recording this after the
+                # write (as the cost/logging block used to) raced the client:
+                # a fast client could dispatch its next request — and observe
+                # the breaker still closed — before this call landed. See the
+                # matching comment in the streaming branch below.
+                if should_log and is_model_request and resp.status_code == 429 and _cb_provider:
+                    get_rate_limit_registry().record_429(_cb_provider)
+
                 # Normalize upstream 4xx/5xx to canonical error envelope before
                 # sending headers so we can set the correct Content-Type.
                 resp_body = resp.content
@@ -2737,10 +2758,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
                     cost = 0.0
                     cost_saved = 0.0
-                    # Record 429 in the rate-limit circuit breaker so repeated
-                    # rate-limit bursts trip the circuit and stop upstream hammering.
-                    if _resp_status == 429 and _cb_provider:
-                        get_rate_limit_registry().record_429(_cb_provider)
+                    # NOTE: 429s are recorded in the rate-limit circuit breaker
+                    # earlier now — immediately once the final upstream status
+                    # is known, before any response bytes reach the client (see
+                    # the streaming/non-streaming branches above). Recording it
+                    # here, after self.wfile.write()/flush(), raced a fast
+                    # client's next request against this call.
                 else:
                     cost = estimate_cost(
                         model,

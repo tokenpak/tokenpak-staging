@@ -210,3 +210,54 @@ def test_available_fixture_round_trips_canonically():
 
     econ = SessionEconomics.from_dict(available_payload())
     assert SessionEconomics.from_dict(econ.to_dict()).to_json() == econ.to_json()
+
+
+# ---------------------------------------------------------------------------
+# Time-remaining band rendering: silent by default, ms-only when it does
+# render — never a "minutes" ETA, per the contract's renderer design.
+# ---------------------------------------------------------------------------
+
+
+def test_line_and_block_are_silent_when_time_forecast_not_available(learning_econ, no_data_econ):
+    # LEARNING_PAYLOAD/NO_DATA_PAYLOAD both carry an inert (unavailable)
+    # time_forecast — the common case until a later initiative rules the
+    # activation gate satisfied. No "time" fragment or raw ms figure may
+    # leak into either default human-facing surface.
+    for econ in (learning_econ, no_data_econ):
+        line = render_line(econ)
+        block = render_block(econ)
+        assert "time " not in line
+        assert "ms" not in line
+        assert "time forecast" not in block
+        assert "ms" not in block
+
+
+def test_line_time_forecast_available_shows_ms_band_never_minutes():
+    from tests.session_economics_fixtures import time_available_payload
+
+    econ = SessionEconomics.from_dict(time_available_payload())
+    line = render_line(econ)
+    assert "time ~90,000ms–600,000ms (90% ≤ 1,500,000ms)" in line
+    # No unit conversion to minutes/hours anywhere in the contract, API, or
+    # renderer — assert the banned units never appear.
+    for banned in ("min", "minute", "hour"):
+        assert banned not in line
+
+
+def test_block_time_forecast_available_reports_calibration_in_ms():
+    from tests.session_economics_fixtures import time_available_payload
+
+    econ = SessionEconomics.from_dict(time_available_payload())
+    block = render_block(econ)
+    assert "time forecast available" in block
+    assert "90,000ms–600,000ms" in block
+    assert "1,500,000ms" in block
+    assert "coverage 52%" in block
+    assert "history 40 sessions" in block
+
+
+def test_time_available_fixture_round_trips_canonically():
+    from tests.session_economics_fixtures import time_available_payload
+
+    econ = SessionEconomics.from_dict(time_available_payload())
+    assert SessionEconomics.from_dict(econ.to_dict()).to_json() == econ.to_json()

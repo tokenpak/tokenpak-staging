@@ -26,6 +26,8 @@ from tokenpak.core.contracts.session_economics import (
     NumericValue,
     RunwayStatus,
     SessionEconomics,
+    TimeForecast,
+    TimeForecastStatus,
     ValueState,
 )
 
@@ -90,6 +92,67 @@ def _reason(text: str) -> str:
     return f" ({text})" if text else ""
 
 
+def _fmt_duration_ms(value: float) -> str:
+    """Deterministic compact duration — milliseconds, verbatim, no locale, no
+    clock, and critically no unit conversion: the contract requires
+    ``remaining_time_*_ms`` to stay in its captured timing-facts unit (ms),
+    with no conversion to minutes or hours anywhere in the contract, API, or
+    renderer — the same closed-input-list discipline that governs the inputs
+    also applies to this output. Matches the existing ``f"{...:.0f}ms"``
+    latency-display precedent in ``tokenpak/cli/commands/status.py``.
+    """
+    return f"{value:,.0f}ms"
+
+
+def _format_time_forecast_line(time_forecast: TimeForecast) -> str | None:
+    """One-clause status-line fragment, or ``None`` when there's nothing to show.
+
+    A band fragment renders **only** when ``status is AVAILABLE`` — every
+    other status (including ``learning``,
+    which the token forecast *does* render inline) returns ``None`` so
+    ``render_line`` emits nothing new and stays byte-identical to today's
+    output for every session until the activation gate is fully satisfied.
+    The always-present JSON form (``SessionEconomics.to_dict()``) remains the
+    one surface that exposes ``learning``/borrowed-prior state.
+    """
+    if time_forecast.status is not TimeForecastStatus.AVAILABLE:
+        return None
+    band = time_forecast.remaining_time_likely_50_ms
+    ceiling = time_forecast.remaining_time_ceiling_90_ms
+    assert band is not None and ceiling is not None
+    assert band.low is not None and band.high is not None
+    assert ceiling.value is not None
+    return (
+        f"time ~{_fmt_duration_ms(float(band.low))}"
+        f"–{_fmt_duration_ms(float(band.high))} "
+        f"(90% ≤ {_fmt_duration_ms(float(ceiling.value))})"
+    )
+
+
+def _format_time_forecast_block(time_forecast: TimeForecast) -> str | None:
+    """Multi-line block fragment, or ``None`` under the same AVAILABLE-only
+    rule as :func:`_format_time_forecast_line` — see that function's
+    docstring."""
+    if time_forecast.status is not TimeForecastStatus.AVAILABLE:
+        return None
+    band = time_forecast.remaining_time_likely_50_ms
+    ceiling = time_forecast.remaining_time_ceiling_90_ms
+    assert band is not None and ceiling is not None
+    assert band.low is not None and band.high is not None
+    assert ceiling.value is not None
+    coverage = time_forecast.coverage
+    observed = (
+        f"{coverage.observed * 100.0:.0f}%" if coverage.observed is not None else "unmeasured"
+    )
+    return (
+        "  time forecast "
+        f"{time_forecast.status.value} · "
+        f"~{_fmt_duration_ms(float(band.low))}–{_fmt_duration_ms(float(band.high))} "
+        f"(90% ≤ {_fmt_duration_ms(float(ceiling.value))}) · "
+        f"coverage {observed} · history {coverage.history_n} sessions"
+    )
+
+
 def render_line(economics: SessionEconomics) -> str:
     """One-line trip-computer summary for the default status surface."""
     session = economics.session
@@ -122,6 +185,9 @@ def render_line(economics: SessionEconomics) -> str:
         )
     else:
         parts.append(f"forecast {forecast.status.value}")
+    time_line = _format_time_forecast_line(economics.time_forecast)
+    if time_line is not None:
+        parts.append(time_line)
     return "session economics: " + " · ".join(parts)
 
 
@@ -216,6 +282,9 @@ def render_block(economics: SessionEconomics) -> str:
         )
     else:
         lines.append(f"  forecast       {forecast.status.value}{_reason(forecast.reason)}")
+    time_block = _format_time_forecast_block(economics.time_forecast)
+    if time_block is not None:
+        lines.append(time_block)
     lines.append("  legend         plain=observed  ~=estimate  words=no value")
     return "\n".join(lines)
 

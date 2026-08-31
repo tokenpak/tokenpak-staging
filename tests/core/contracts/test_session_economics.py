@@ -29,6 +29,11 @@ from tokenpak.core.contracts.session_economics import (
     SessionFacts,
     SessionRef,
     SessionState,
+    TimeForecast,
+    TimeForecastCell,
+    TimeForecastGate,
+    TimeForecastStatus,
+    TimeForecastStreamMode,
     UnsupportedSessionEconomicsVersion,
     ValueState,
 )
@@ -109,6 +114,27 @@ class _IntegerSubclass(int):
     pass
 
 
+def _available_time_forecast() -> TimeForecast:
+    return TimeForecast(
+        status=TimeForecastStatus.AVAILABLE,
+        basis="timing-facts-v1",
+        remaining_time_likely_50_ms=_interval(90_000, 600_000, unit="ms"),
+        remaining_time_ceiling_90_ms=NumericValue.estimated(
+            1_500_000, source="published-time-prior", unit="ms"
+        ),
+        coverage=Coverage(
+            method="walk-forward-split-conformal",
+            observed=0.52,
+            history_n=40,
+            drift_state=DriftState.STABLE,
+        ),
+        gate=TimeForecastGate(True, True, True),
+        cell=TimeForecastCell(
+            model="provider/model", effort="high", stream_mode=TimeForecastStreamMode.STREAMING
+        ),
+    )
+
+
 def _available_contract() -> SessionEconomics:
     return SessionEconomics(
         as_of="2026-08-09T23:00:00Z",
@@ -176,6 +202,7 @@ def _available_contract() -> SessionEconomics:
                 0.2, source="held-out-replay", unit="probability"
             ),
         ),
+        time_forecast=_available_time_forecast(),
     )
 
 
@@ -511,6 +538,108 @@ def test_missing_advisory_is_rejected() -> None:
     del payload["advisory"]
     with pytest.raises(SessionEconomicsContractError, match="explicit advisory: null"):
         SessionEconomics.from_dict(payload)
+
+
+def test_time_forecast_round_trips_without_state_loss() -> None:
+    original = _available_contract()
+    restored = SessionEconomics.from_json(original.to_json())
+
+    assert restored.time_forecast == original.time_forecast
+    assert restored.to_dict()["time_forecast"] == original.to_dict()["time_forecast"]
+    assert restored.time_forecast.status is TimeForecastStatus.AVAILABLE
+
+
+def test_missing_time_forecast_is_rejected() -> None:
+    payload = _available_contract().to_dict()
+    del payload["time_forecast"]
+    with pytest.raises(SessionEconomicsContractError, match="time_forecast"):
+        SessionEconomics.from_dict(payload)
+
+
+def test_unavailable_time_forecast_round_trips() -> None:
+    contract = replace(
+        _available_contract(),
+        time_forecast=TimeForecast.unavailable(
+            cell=TimeForecastCell(model="unknown", effort="unknown")
+        ),
+    )
+    restored = SessionEconomics.from_json(contract.to_json())
+
+    assert restored.time_forecast.status is TimeForecastStatus.UNAVAILABLE
+    assert restored.time_forecast.remaining_time_likely_50_ms is None
+    assert restored.time_forecast.remaining_time_ceiling_90_ms is None
+
+
+def _learning_time_forecast(**overrides: object) -> TimeForecast:
+    """A ``learning`` band with genuinely-held preconditions: gate receipts
+    all true, and a positive borrowed-prior history_n — the shape a cell with
+    published calibration history below the local full-confidence threshold,
+    borrowing a versioned prior, takes."""
+    fields: dict[str, object] = dict(
+        status=TimeForecastStatus.LEARNING,
+        basis="timing-facts-v1",
+        remaining_time_likely_50_ms=_interval(90_000, 400_000, unit="ms"),
+        remaining_time_ceiling_90_ms=NumericValue.estimated(
+            900_000, source="borrowed-time-prior", unit="ms"
+        ),
+        coverage=Coverage(
+            method="walk-forward-split-conformal",
+            observed=0.5,
+            history_n=12,
+            drift_state=DriftState.UNKNOWN,
+        ),
+        gate=TimeForecastGate(True, True, True),
+        cell=TimeForecastCell(
+            model="provider/model", effort="high", stream_mode=TimeForecastStreamMode.STREAMING
+        ),
+    )
+    fields.update(overrides)
+    return TimeForecast(**fields)  # type: ignore[arg-type]
+
+
+def test_learning_time_forecast_with_genuine_preconditions_is_constructible() -> None:
+    """The honest baseline: gate receipts true, positive history — must NOT
+    raise. Proves the stricter validation below isn't blanket-rejecting
+    `learning`, only the dishonest shape."""
+    forecast = _learning_time_forecast()
+    assert forecast.status is TimeForecastStatus.LEARNING
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [
+        TimeForecastGate(False, False, False),
+        TimeForecastGate(True, False, True),
+        TimeForecastGate(False, True, True),
+        TimeForecastGate(True, True, False),
+    ],
+)
+def test_learning_time_forecast_requires_all_gate_receipts(gate: TimeForecastGate) -> None:
+    """`learning` is `populated`, same as `available` — the ratified gate
+    makes ANY numeric band admissible only once ALL of (i)-(iv) hold, not
+    just for `available`. Any gate receipt false must be rejected."""
+    with pytest.raises(SessionEconomicsContractError, match="gate receipts"):
+        _learning_time_forecast(gate=gate)
+
+
+def test_learning_time_forecast_requires_positive_history() -> None:
+    with pytest.raises(SessionEconomicsContractError, match="coverage history"):
+        _learning_time_forecast(
+            coverage=Coverage(method="walk-forward-split-conformal", observed=0.5, history_n=0)
+        )
+
+
+def test_dishonest_learning_construction_is_unreachable() -> None:
+    """The exact dishonest shape a review previously flagged: unpublished
+    calibration (all gate receipts false) and zero history, yet a construction
+    attempt at a populated `learning` band. Must raise — a caller in that
+    state must build `insufficient_data`/`unknown`/`unavailable` instead
+    (amendment gate iii)."""
+    with pytest.raises(SessionEconomicsContractError, match="gate receipts"):
+        _learning_time_forecast(
+            gate=TimeForecastGate(False, False, False),
+            coverage=Coverage(),
+        )
 
 
 def test_missing_session_identity_remains_explicit() -> None:
