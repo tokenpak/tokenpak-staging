@@ -259,6 +259,9 @@ def render_block(economics: SessionEconomics) -> str:
             f"turns {_interval(forecast.expected_turns)}"
         )
         if forecast.remaining_cost_usd_likely_50.state is ValueState.ESTIMATED:
+            assert forecast.remaining_cost_usd_likely_50.low is not None
+            assert forecast.remaining_cost_usd_likely_50.high is not None
+            assert forecast.remaining_cost_usd_ceiling_90.value is not None
             lines.append(
                 "  forecast cost  "
                 f"~${float(forecast.remaining_cost_usd_likely_50.low):.2f}–"

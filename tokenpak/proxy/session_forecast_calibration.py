@@ -34,7 +34,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Sequence
+from typing import Sequence, TypeVar
 
 from tokenpak.core.contracts.session_economics import (
     Coverage,
@@ -397,8 +397,17 @@ def _conformal_band(
     return _Band(lo_y=lo_adj, hi_y=max(hi + widen, lo_adj))
 
 
-def _split(sessions: Sequence[HistorySession]) -> tuple[list[HistorySession], list[HistorySession]]:
-    """Chronological train/calibration split (most recent quarter calibrates)."""
+_HistoryT = TypeVar("_HistoryT")
+
+
+def _split(sessions: Sequence[_HistoryT]) -> tuple[list[_HistoryT], list[_HistoryT]]:
+    """Chronological train/calibration split (most recent quarter calibrates).
+
+    Generic over the session record type: the split is pure sequence slicing
+    with no dependency on ``HistorySession``'s fields, so both the token
+    forecast and the duration forecast (``time_forecast_calibration``) share
+    this exact implementation on their own record types.
+    """
     c = max(3, len(sessions) // 4)
     return list(sessions[:-c]), list(sessions[-c:])
 
