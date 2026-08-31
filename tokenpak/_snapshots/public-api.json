@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-29T23:56:04Z",
-  "package_version": "1.22.0",
+  "generated_at": "2026-08-31T18:55:08Z",
+  "package_version": "1.23.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -4598,6 +4598,26 @@
     {
       "module": "tokenpak.core.contracts.session_economics",
       "name": "SessionState"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "TimeForecast"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "TimeForecastCell"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "TimeForecastGate"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "TimeForecastStatus"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
+      "name": "TimeForecastStreamMode"
     },
     {
       "module": "tokenpak.core.contracts.session_economics",
@@ -11430,6 +11450,54 @@
     {
       "module": "tokenpak.proxy.streaming",
       "name": "iter_sse_events"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "BASIS"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "COMPLETION_IDLE_SECONDS"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "CellReadinessTime"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "KMAX"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "MIN_CELL_SESSIONS"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "MIN_SCORED_POINTS"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "PublishedTimeCellEvidence"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "TimeHistorySession"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "build_calibrated_time_forecast"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "cell_readiness_time"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "read_time_history"
+    },
+    {
+      "module": "tokenpak.proxy.time_forecast_calibration",
+      "name": "walk_forward_coverage_time"
     },
     {
       "module": "tokenpak.proxy.token_cache",
