@@ -207,15 +207,14 @@ def test_read_time_history_ignores_rows_missing_both_timing_facts(tmp_path: Path
 
 
 def test_read_time_history_excludes_mixed_stream_mode_sessions(tmp_path: Path) -> None:
-    """TRB-001 design §2 item 3: a session whose rows map to more than one
-    distinct ``stream_mode`` (streaming AND non-streaming turns) must be
-    excluded from the corpus entirely, never classified by its last row.
+    """A session whose rows map to more than one distinct ``stream_mode``
+    (streaming AND non-streaming turns) must be excluded from the corpus
+    entirely, never classified by its last row.
 
     Eight turns, alternating streaming/non-streaming, all with populated
     timing facts — comfortably past MIN_TURNS on its own, so a last-row
     classification bug would silently admit the whole session into whichever
-    cell its final row happened to land in (the defect the round-1 BLOCK's
-    direct probe reproduced: "included all eight mixed-mode turns").
+    cell its final row happened to land in.
     """
     db = tmp_path / "monitor.db"
     conn = sqlite3.connect(str(db))

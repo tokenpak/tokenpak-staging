@@ -1147,9 +1147,9 @@ class TimeForecast(_FinalValueObject):
                 )
 
         if self.status in (TimeForecastStatus.LEARNING, TimeForecastStatus.AVAILABLE):
-            # Both are "populated" per 02-SPEC §4 — the ratified gate makes
-            # ANY numeric band admissible only once ALL of (i)-(iv) hold, not
-            # just `available`. `learning` differs from `available` only in
+            # Both are "populated" — the ratified gate makes ANY numeric band
+            # admissible only once ALL of (i)-(iv) hold, not just
+            # `available`. `learning` differs from `available` only in
             # how far the cell's own coverage has progressed (borrowed prior
             # vs. locally measured), never in whether the gate receipts are
             # genuine. Unpublished calibration or zero history must render as

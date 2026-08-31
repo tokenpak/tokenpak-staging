@@ -572,9 +572,9 @@ def test_unavailable_time_forecast_round_trips() -> None:
 
 def _learning_time_forecast(**overrides: object) -> TimeForecast:
     """A ``learning`` band with genuinely-held preconditions: gate receipts
-    all true, and a positive borrowed-prior history_n — the shape 02-SPEC §4
-    describes ("cell has published calibration history ... below the local
-    full-confidence threshold; borrows a versioned prior")."""
+    all true, and a positive borrowed-prior history_n — the shape a cell with
+    published calibration history below the local full-confidence threshold,
+    borrowing a versioned prior, takes."""
     fields: dict[str, object] = dict(
         status=TimeForecastStatus.LEARNING,
         basis="timing-facts-v1",
@@ -615,9 +615,9 @@ def test_learning_time_forecast_with_genuine_preconditions_is_constructible() ->
     ],
 )
 def test_learning_time_forecast_requires_all_gate_receipts(gate: TimeForecastGate) -> None:
-    """`learning` is `populated` per 02-SPEC §4, same as `available` — the
-    ratified gate makes ANY numeric band admissible only once ALL of (i)-(iv)
-    hold, not just for `available`. Any gate receipt false must be rejected."""
+    """`learning` is `populated`, same as `available` — the ratified gate
+    makes ANY numeric band admissible only once ALL of (i)-(iv) hold, not
+    just for `available`. Any gate receipt false must be rejected."""
     with pytest.raises(SessionEconomicsContractError, match="gate receipts"):
         _learning_time_forecast(gate=gate)
 
@@ -630,7 +630,7 @@ def test_learning_time_forecast_requires_positive_history() -> None:
 
 
 def test_dishonest_learning_construction_is_unreachable() -> None:
-    """The exact dishonest shape the round-1 BLOCK verdict flagged: unpublished
+    """The exact dishonest shape a review previously flagged: unpublished
     calibration (all gate receipts false) and zero history, yet a construction
     attempt at a populated `learning` band. Must raise — a caller in that
     state must build `insufficient_data`/`unknown`/`unavailable` instead

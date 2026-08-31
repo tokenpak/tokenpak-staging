@@ -114,9 +114,7 @@ def test_no_elapsed_signal_yet_is_unknown(turn_index: int, elapsed_ms: float) ->
 
 def test_published_cell_with_no_bucket_coverage_is_insufficient_data() -> None:
     key = tf_cal._time_cell_key("model-a", "high", TimeForecastStreamMode.STREAMING)
-    forecast = _build(
-        published_prior={key: _evidence(full_confidence=True, band50={}, band90={})}
-    )
+    forecast = _build(published_prior={key: _evidence(full_confidence=True, band50={}, band90={})})
     assert forecast.status is TimeForecastStatus.INSUFFICIENT_DATA
 
 

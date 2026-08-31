@@ -260,13 +260,13 @@ def _parse_time_corpus(
         last_ts = _parse_ts_utc(srows[-1]["timestamp"])
         if last_ts is None:
             continue
-        # Mixed-mode sessions are excluded, not blended (TRB-001 design §2
-        # item 3): a session whose rows map to more than one distinct
-        # stream_mode had both streaming and non-streaming turns, and
-        # classifying it by its last row alone would silently pool it into
-        # one cell while its earlier turns' timing shape belonged to the
-        # other — the exact blending 02-SPEC §3's cell definition forbids.
-        # Skip the whole session rather than fabricate a single label for it.
+        # Mixed-mode sessions are excluded, not blended: a session whose rows
+        # map to more than one distinct stream_mode had both streaming and
+        # non-streaming turns, and classifying it by its last row alone would
+        # silently pool it into one cell while its earlier turns' timing
+        # shape belonged to the other — the exact blending the cell
+        # definition forbids. Skip the whole session rather than fabricate a
+        # single label for it.
         if len({_map_stream_mode(r["stream_mode"]) for r in srows}) > 1:
             continue
         durations = tuple(
