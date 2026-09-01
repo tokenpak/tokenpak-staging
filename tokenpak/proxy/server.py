@@ -2786,7 +2786,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _provider_usage = _safe_provider_usage_observation(
                     _usage_parser_provider,
                     provider_usage_object,
-                    body if body is not None else b"",
+                    body,
                 )
                 _cost_observed = _cost_observation(
                     provider=_usage_parser_provider,
