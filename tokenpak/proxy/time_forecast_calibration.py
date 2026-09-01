@@ -13,12 +13,19 @@ coupling one domain's calibration to the other's.
 The activation gate requires per-cell walk-forward coverage to be MEASURED
 and PUBLISHED before a cell may render ``learning``/``available`` — not
 merely accumulated by this module watching live traffic. ``_PUBLISHED_TIME_PRIOR``
-is the concrete mechanism: it ships EMPTY (no cell has published evidence
-yet), so every session renders ``insufficient_data`` (once timing facts exist
-at all) regardless of how much raw history the local ledger holds. A later,
-separate initiative populates entries here as an explicit, reviewed change —
-never a side effect of this module observing traffic, and never something a
-code change alone may flip.
+is the concrete mechanism: only a cell with an explicit, reviewed entry here
+may ever render ``learning``/``available``; every cell without one still
+renders ``insufficient_data`` (once timing facts exist at all) regardless of
+how much raw history the local ledger holds. As of this module's current
+state, exactly one cell — ``claude-sonnet-5`` / unknown effort / streaming —
+has cleared review and is published; every other cell remains unpublished
+and therefore honest-``insufficient_data``. Each additional cell is
+populated as its own explicit, reviewed change — never a side effect of this
+module observing traffic, and never something a code change alone may flip.
+The mechanism's separate default-off master switch
+(``TOKENPAK_TIME_FORECAST_BANDS`` / ``time_forecast_bands.enabled``) gates
+this table's entries independently: even a fully published, full-confidence
+cell serves nothing until that switch is explicitly turned on.
 
 The walk-forward measurement tooling below (``read_time_history``,
 ``cell_readiness_time``, ``walk_forward_coverage_time``) is what that later
@@ -123,19 +130,81 @@ class PublishedTimeCellEvidence:
     #: turn-bucket -> hi_y for the one-sided 90% ceiling, already widened.
     band90_hi_y_by_k: Mapping[int, float]
     coverage_method: str
+    #: Measured walk-forward coverage of the central 50% band (percent, e.g.
+    #: ``64.9`` for 64.9%) — both this and ``observed_coverage_90`` are
+    #: independent per-band figures; neither substitutes for the other, and
+    #: ``drift_state`` below is a separate (non-coverage) signal.
     observed_coverage_50: float
+    #: Measured walk-forward coverage of the one-sided 90% ceiling (percent,
+    #: same units/scale as ``observed_coverage_50``). Symmetric sibling field
+    #: — every published entry must carry both bands' measured coverage.
+    observed_coverage_90: float
     history_n: int
     drift_state: DriftState
     full_confidence: bool
 
 
-#: The published per-cell calibration evidence. Ships EMPTY — see the module
-#: docstring for why that is the gate mechanism, not a placeholder to be
-#: filled in casually. Keyed by ``_time_cell_key(...)``. Tests exercise this
-#: table via ``build_calibrated_time_forecast(..., published_prior={...})``
-#: (a real, explicit function argument) rather than monkeypatching this
-#: module attribute — real-path style, per the #633/#634 testing standard.
-_PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {}
+#: The published per-cell calibration evidence. Ships with exactly the cells
+#: that have cleared review — see the module docstring for why this table is
+#: the gate mechanism, not a placeholder to be filled in casually. Keyed by
+#: ``_time_cell_key(...)``. Tests exercise this table via
+#: ``build_calibrated_time_forecast(..., published_prior={...})`` (a real,
+#: explicit function argument) rather than monkeypatching this module
+#: attribute — real-path style, per the #633/#634 testing standard.
+#:
+#: ("claude-sonnet-5", "unknown", "streaming"): the walk-forward split-
+#: conformal calibration re-measured against the live session ledger
+#: (history_n=43, observed_coverage_50≈64.9%, observed_coverage_90≈96.1% —
+#: each at or above its own 50%/90% target — and drift_state=stable, so this
+#: cell is published at full confidence). The per-turn-bucket bands below
+#: are the final, full-corpus fit over that same 43-session cohort, produced
+#: with this module's own ``_TimeStepBands``/``_pool_near_table_time``
+#: primitives — no band value here is invented or interpolated by hand.
+_PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {
+    ("claude-sonnet-5", "unknown", "streaming"): PublishedTimeCellEvidence(
+        prior_version="time-prior-2026-08-30",
+        band50_y_by_k={
+            1: (3.017475, 5.493954),
+            2: (2.93118, 5.198149),
+            3: (2.574576, 4.704534),
+            4: (2.220601, 4.279322),
+            5: (2.089676, 3.974796),
+            6: (1.936967, 3.700948),
+            7: (1.820305, 3.365316),
+            8: (1.689397, 3.107356),
+            9: (1.564582, 2.942803),
+            10: (1.250146, 2.84512),
+            11: (1.131861, 2.59791),
+            12: (1.040402, 2.513488),
+            13: (0.980715, 2.444689),
+            14: (0.894103, 2.238339),
+            15: (0.894465, 2.135476),
+        },
+        band90_hi_y_by_k={
+            1: 5.81319,
+            2: 5.561987,
+            3: 4.754316,
+            4: 4.597744,
+            5: 4.454478,
+            6: 4.238913,
+            7: 4.160339,
+            8: 4.100383,
+            9: 3.933622,
+            10: 3.838157,
+            11: 3.642237,
+            12: 3.594404,
+            13: 3.586128,
+            14: 3.541938,
+            15: 3.541034,
+        },
+        coverage_method="walk-forward-split-conformal",
+        observed_coverage_50=64.90872210953347,
+        observed_coverage_90=96.14604462474645,
+        history_n=43,
+        drift_state=DriftState.STABLE,
+        full_confidence=True,
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -562,9 +631,11 @@ def build_calibrated_time_forecast(
     """Contract-shaped calibrated time-remaining band, honest about every gap.
 
     Looks up ``_PUBLISHED_TIME_PRIOR`` for this cell — the ONLY thing that
-    ever admits ``learning``/``available``, per the ratified gate. Ships
-    reaching ``insufficient_data`` for every cell (the table is empty), and
-    ``unknown`` whenever this session itself has no timing-fact signal.
+    ever admits ``learning``/``available``, per the ratified gate.
+    ``insufficient_data`` for every cell without a published entry in that
+    table (currently every cell except ``claude-sonnet-5`` / unknown effort
+    / streaming), and ``unknown`` whenever this session itself has no
+    timing-fact signal.
 
     ``published_prior`` is a minimal, explicit dependency-injection seam:
     every production call site omits it and this function reads the real
