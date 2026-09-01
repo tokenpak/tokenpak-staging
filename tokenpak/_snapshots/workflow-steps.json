@@ -1,6 +1,6 @@
 {
   "version": "1.1",
-  "generated_at": "2026-08-31T21:37:17Z",
+  "generated_at": "2026-09-01T14:21:53Z",
   "guarded_globs": [
     "release*.yml",
     "release-rehearsal.yml"
@@ -41,6 +41,12 @@
       "job": "build-artifacts",
       "id": "",
       "name": "Normalize sdist for byte-reproducibility"
+    },
+    {
+      "workflow": "release-rehearsal.yml",
+      "job": "build-artifacts",
+      "id": "",
+      "name": "Normalize wheel for byte-reproducibility"
     },
     {
       "workflow": "release-rehearsal.yml",
@@ -220,6 +226,12 @@
       "workflow": "release.yml",
       "job": "build",
       "id": "",
+      "name": "Normalize wheel for byte-reproducibility"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "build",
+      "id": "",
       "name": "Set up Python 3.12"
     },
     {
@@ -239,6 +251,12 @@
       "job": "build",
       "id": "",
       "name": "Validate tag source on origin/main"
+    },
+    {
+      "workflow": "release.yml",
+      "job": "build",
+      "id": "",
+      "name": "Verify byte-reproducibility across a different umask"
     },
     {
       "workflow": "release.yml",

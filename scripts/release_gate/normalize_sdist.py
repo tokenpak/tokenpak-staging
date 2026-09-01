@@ -8,11 +8,21 @@ tar member with that file's on-disk modification time, so a re-checkout at a
 different wall-clock moment produces a different — but content-equivalent —
 tarball each time.
 
-This script rewrites an already-built sdist in place: every tar member's
-mtime is pinned to ``SOURCE_DATE_EPOCH`` (member order, content, and mode are
-left untouched), and the gzip container's own timestamp field is pinned to
-the same value. Given the same input tarball built from the same commit, the
-output is byte-identical no matter when or where it runs.
+This script rewrites an already-built sdist in place:
+
+* every tar member's mtime is pinned to ``SOURCE_DATE_EPOCH`` (the gzip
+  container's own timestamp field is pinned to the same value);
+* every member's owner is pinned to uid/gid ``0`` with empty uname/gname,
+  discarding the build machine's actual user (e.g. a local ``builduser``
+  checkout vs. a CI runner's ``runner`` account produce different tar
+  headers for otherwise-identical content);
+* every member's mode is canonicalized to ``0755`` for directories and
+  anything that was executable, ``0644`` otherwise, discarding the umask
+  that happened to be in effect at build time.
+
+Member order and content are left untouched. Given the same input tarball
+built from the same commit, the output is byte-identical no matter which
+machine, user, or umask produced it.
 
 Usage:
     SOURCE_DATE_EPOCH=<epoch> python scripts/release_gate/normalize_sdist.py dist/*.tar.gz
@@ -47,6 +57,29 @@ def normalize(path: str, epoch: int) -> None:
                 # to be used instead — otherwise the stale wall-clock value
                 # survives the rewrite untouched.
                 member.pax_headers.pop("mtime", None)
+
+                # Pin ownership to a canonical, environment-independent
+                # value. Without this, a tarball built as `builduser` on a
+                # local machine and one built as `runner` on a GitHub
+                # Actions runner carry different uid/gid + uname/gname
+                # header fields even though every byte of actual file
+                # content and every mtime is identical.
+                member.uid = 0
+                member.gid = 0
+                member.uname = ""
+                member.gname = ""
+                for key in ("uid", "gid", "uname", "gname"):
+                    member.pax_headers.pop(key, None)
+
+                # Pin the mode too: the umask in effect at build time (e.g.
+                # 002 locally vs. 022 on a CI runner) leaks into the tar
+                # header otherwise. Canonicalize to 0755 for directories and
+                # anything that was executable, 0644 for everything else —
+                # preserves the semantic distinction (executable scripts
+                # stay executable) while discarding the umask-derived noise.
+                member.mode = 0o755 if (member.isdir() or member.mode & 0o111) else 0o644
+                member.pax_headers.pop("mode", None)
+
                 dst.addfile(member, src.extractfile(member) if member.isfile() else None)
 
     out = io.BytesIO()
