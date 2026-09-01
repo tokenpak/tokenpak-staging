@@ -31,7 +31,7 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as datetime_time
-from typing import TYPE_CHECKING, Mapping, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
 if TYPE_CHECKING:
     from tokenpak.proxy.time_forecast_calibration import PublishedTimeCellEvidence
@@ -403,7 +403,7 @@ def _state_values(
 ) -> tuple[SessionState, list[float] | None, list[float] | None, list[float] | None]:
     normalized = [_normalized_counts(turn) for turn in turns]
     if not turns:
-        missing = lambda unit: NumericValue.no_data(  # noqa: E731
+        missing: Callable[[str], NumericValue] = lambda unit: NumericValue.no_data(  # noqa: E731
             "session has no completed turns", unit=unit
         )
         return (
@@ -424,7 +424,7 @@ def _state_values(
         )
 
     if any(value is None for value in normalized):
-        unavailable = lambda unit: NumericValue.unavailable(  # noqa: E731
+        unavailable: Callable[[str], NumericValue] = lambda unit: NumericValue.unavailable(  # noqa: E731
             "normalized provider token counts are incomplete", unit=unit
         )
         contexts: list[float] | None = None
@@ -606,9 +606,11 @@ def _resolve_runway(
     unavailable: list[str] = []
     learning: list[str] = []
     context_current = contexts[-1] if contexts else None
+    context_growth_value = state.context_growth_ewma.value
     context_growth = (
-        float(state.context_growth_ewma.value)
+        float(context_growth_value)
         if state.context_growth_ewma.state is ValueState.OBSERVED
+        and context_growth_value is not None
         else None
     )
     token_current = token_burns[-1] if token_burns else None
@@ -622,14 +624,17 @@ def _resolve_runway(
         if token_burns is not None and len(token_burns) >= 2
         else None
     )
+    token_burn_value = state.burn_tokens_per_turn.value
     token_burn = (
-        float(state.burn_tokens_per_turn.value)
-        if state.burn_tokens_per_turn.state is ValueState.OBSERVED
+        float(token_burn_value)
+        if state.burn_tokens_per_turn.state is ValueState.OBSERVED and token_burn_value is not None
         else None
     )
+    usd_burn_value = state.burn_usd_per_turn.value
     usd_burn = (
-        float(state.burn_usd_per_turn.value)
+        float(usd_burn_value)
         if state.burn_usd_per_turn.state in {ValueState.OBSERVED, ValueState.ESTIMATED}
+        and usd_burn_value is not None
         else None
     )
     latest_cost = cost_series[-1] if cost_series else None
