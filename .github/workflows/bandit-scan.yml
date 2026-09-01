@@ -1,0 +1,77 @@
+name: Bandit security scan
+
+# Static-analysis security gate for the six required source roots — the
+# release checklist requires "no NEW High/Medium findings vs baseline" and
+# this job answers that mechanically. Cheap and always-on — pinned bandit
+# against a committed baseline, no network calls beyond the pinned-version
+# install.
+#
+# bandit-baseline.json holds the accepted-as-of-today findings (currently
+# 0 High / 17 Medium / 182 Low at bandit 1.9.4). `-b` suppresses everything
+# already in the baseline; only issues NOT present there are reported, and
+# --severity-level medium means only a new High or new Medium fails the job
+# — a new Low finding is visible in the log but does not block.
+#
+# Regenerating the baseline (intentional refresh, e.g. after a reviewed fix
+# or an accepted new finding):
+#
+#   python3 -m venv /tmp/bandit-venv && /tmp/bandit-venv/bin/pip install bandit==1.9.4
+#   /tmp/bandit-venv/bin/bandit -r tokenpak/core tokenpak/services tokenpak/proxy \
+#     tokenpak/security tokenpak/compression tokenpak/cache \
+#     -f json -o bandit-baseline.json
+#
+# Then review the diff against the previous bandit-baseline.json by hand
+# (every newly-accepted finding should be explainable in the PR body) before
+# committing. Bump the pinned bandit version in this workflow and the command
+# above together — do not regenerate against a version this workflow doesn't
+# install.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BANDIT_VERSION: "1.9.4"
+
+jobs:
+  bandit:
+    name: Bandit scan vs baseline (six required roots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned bandit
+        run: python -m pip install "bandit==${BANDIT_VERSION}"
+
+      - name: Verify baseline file is present
+        run: test -f bandit-baseline.json
+
+      - name: Bandit scan vs baseline (new High/Medium fails)
+        run: |
+          set -euo pipefail
+          roots=(
+            tokenpak/core
+            tokenpak/services
+            tokenpak/proxy
+            tokenpak/security
+            tokenpak/compression
+            tokenpak/cache
+          )
+          bandit -r "${roots[@]}" \
+            -b bandit-baseline.json \
+            --severity-level medium
+          echo "Bandit: no new High/Medium findings vs baseline."

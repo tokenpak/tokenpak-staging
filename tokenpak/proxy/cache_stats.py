@@ -31,8 +31,19 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
 
     Returns:
         Dict with keys: total_requests, cache_hits, hit_rate,
-        cache_read_tokens, cache_creation_tokens, estimated_savings_usd,
-        per_provider (dict).  On error, includes an "error" key.
+        tokenpak_cache_hits, tokenpak_hit_rate, cache_read_tokens,
+        cache_creation_tokens, cache_read_by_origin, per_provider (dict).
+        On error, includes an "error" key.
+
+        ``hit_rate`` is the *provider* cache hit rate: the fraction of
+        requests where the upstream model served any cache read,
+        regardless of who placed the cache marker. ``tokenpak_hit_rate``
+        is the narrower, product-attributed figure: the fraction of
+        requests where the cache read is credited to a cache marker this
+        product placed (``cache_origin == 'proxy'``). The two are
+        deliberately kept separate per the dashboard attribution-truth
+        rule — a client-placed or unknown-origin cache read is real cache
+        behavior but is not TokenPak's doing.
     """
     try:
         if not db_path:
@@ -57,6 +68,7 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
             SELECT
                 COUNT(*) as total_requests,
                 SUM(CASE WHEN cache_read_tokens > 0 THEN 1 ELSE 0 END) as cache_hits,
+                SUM(CASE WHEN {origin_expr} = 'proxy' AND cache_read_tokens > 0 THEN 1 ELSE 0 END) as tokenpak_cache_hits,
                 COALESCE(SUM(cache_read_tokens), 0) as total_cache_read,
                 COALESCE(SUM(cache_creation_tokens), 0) as total_cache_creation,
                 COALESCE(SUM(CASE WHEN {origin_expr} = 'client'  THEN cache_read_tokens ELSE 0 END), 0) as cache_read_client,
@@ -72,18 +84,22 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
 
         total_requests = overall[0] or 0
         cache_hits = overall[1] or 0
+        tokenpak_cache_hits = overall[2] or 0
         hit_rate = (cache_hits / total_requests) if total_requests > 0 else 0.0
+        tokenpak_hit_rate = (tokenpak_cache_hits / total_requests) if total_requests > 0 else 0.0
 
         return {
             "total_requests": total_requests,
             "cache_hits": cache_hits,
             "hit_rate": round(hit_rate, 4),
-            "cache_read_tokens": overall[2] or 0,
-            "cache_creation_tokens": overall[3] or 0,
+            "tokenpak_cache_hits": tokenpak_cache_hits,
+            "tokenpak_hit_rate": round(tokenpak_hit_rate, 4),
+            "cache_read_tokens": overall[3] or 0,
+            "cache_creation_tokens": overall[4] or 0,
             "cache_read_by_origin": {
-                "client": overall[4] or 0,
-                "proxy": overall[5] or 0,
-                "unknown": overall[6] or 0,
+                "client": overall[5] or 0,
+                "proxy": overall[6] or 0,
+                "unknown": overall[7] or 0,
             },
             "per_provider": {},
         }
@@ -93,6 +109,8 @@ def _get_cache_stats_by_window(hours: int = 24, db_path: Optional[str] = None) -
             "total_requests": 0,
             "cache_hits": 0,
             "hit_rate": 0.0,
+            "tokenpak_cache_hits": 0,
+            "tokenpak_hit_rate": 0.0,
             "cache_read_tokens": 0,
             "cache_creation_tokens": 0,
             "cache_read_by_origin": {"client": 0, "proxy": 0, "unknown": 0},
