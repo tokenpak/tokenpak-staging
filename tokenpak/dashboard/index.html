@@ -7,6 +7,17 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        :root {
+            /* Brand signal tokens — single source of truth for the four
+               dashboard states and the hero savings color. Do not
+               hand-copy these hexes elsewhere. */
+            --tp-accent: #00B4AA;
+            --tp-signal-value: #EDE085;
+            --tp-warn: #F5A623;
+            --tp-danger: #E5484D;
+            --tp-mute: #6B7280;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #0a0a0a;
@@ -79,6 +90,7 @@
         .card.warning .card-value { color: #fbbf24; }
 
         .wide { grid-column: 1 / -1; }
+        .block { margin-bottom: 2rem; }
 
         .chart {
             width: 100%;
@@ -93,16 +105,6 @@
             font-size: 0.75rem;
             color: #71717a;
         }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #10b981;
-        }
-
-        .status-dot.error { background: #ef4444; }
-        .status-dot.warning { background: #fbbf24; }
 
         canvas { max-width: 100%; }
 
@@ -145,6 +147,132 @@
 
         .sessions-table tr:last-child td { border-bottom: none; }
 
+        /* Block 1 — Hero savings metric. Nothing else on the page shares
+           this visual rank. */
+        .hero {
+            text-align: center;
+            padding: 2.5rem 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .hero-label {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #a1a1a6;
+            margin-bottom: 0.75rem;
+        }
+
+        .hero-value {
+            font-size: 3.5rem;
+            font-weight: 700;
+            color: var(--tp-signal-value);
+            font-variant-numeric: tabular-nums;
+            line-height: 1.1;
+        }
+
+        .hero-dollars {
+            font-size: 1.75rem;
+            margin-top: 0.25rem;
+        }
+
+        .hero-empty {
+            margin-top: 1rem;
+            font-size: 0.9375rem;
+            color: #a1a1a6;
+        }
+
+        /* Block 2 — Status strip. One combined signal (dot + label + cause)
+           across the four dashboard states (healthy/idle/degraded/error),
+           plus the three supporting facts it is derived from, shown
+           alongside it. */
+        .status-strip {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem 1.5rem;
+            background: #18181b;
+            border: 1px solid #27272a;
+            border-radius: 0.5rem;
+            padding: 1rem 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            background: var(--tp-mute);
+        }
+
+        .status-dot.healthy { background: var(--tp-accent); }
+        .status-dot.idle { background: var(--tp-mute); }
+        .status-dot.degraded { background: var(--tp-warn); }
+        .status-dot.error { background: var(--tp-danger); }
+
+        .status-main {
+            display: flex;
+            align-items: baseline;
+            gap: 0.5rem;
+            font-size: 0.9375rem;
+        }
+
+        .status-label { font-weight: 600; color: #fafafa; }
+        .status-cause { color: #a1a1a6; font-size: 0.8125rem; }
+
+        .status-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem 1.25rem;
+            font-size: 0.8125rem;
+            color: #a1a1a6;
+            margin-left: auto;
+        }
+
+        /* Page-level empty-state banner — Proxy down / Dashboard
+           disconnected. Distinct from per-block empty states below,
+           which apply when the dashboard IS reachable but has no data yet. */
+        .empty-banner {
+            background: #2a1414;
+            border: 1px solid var(--tp-danger);
+            color: #f4b8ba;
+            border-radius: 0.5rem;
+            padding: 0.875rem 1.25rem;
+            margin-bottom: 2rem;
+            font-size: 0.9375rem;
+        }
+
+        /* Block 4 — Cache strip. */
+        .cache-strip-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-top: 0.5rem;
+        }
+
+        .cache-metric-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #a1a1a6;
+            margin-bottom: 0.35rem;
+        }
+
+        .cache-metric-value {
+            font-size: 1.375rem;
+            font-weight: 600;
+            color: #e4e4e7;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Block 7 — Quick actions. */
+        .quick-actions {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+        }
 
         .shared-header {
             display: grid;
@@ -238,10 +366,88 @@
 <body>
     <div class="container">
         <h1>✨ TokenPak Telemetry</h1>
-        <p class="subtitle">Real-time Prompt Packing & cost metrics</p>
+        <p class="subtitle">Real-time Prompt Packing &amp; cost metrics</p>
 
+        <div class="empty-banner" id="empty-banner" hidden></div>
 
-        <!-- Per-mode dashboard selector -->
+        <!-- Block 1: Hero savings metric. Today's savings only —
+             nothing else on the page shares this visual rank. -->
+        <section class="hero" id="hero-section" aria-label="Today's savings">
+            <div class="hero-label">Today's savings</div>
+            <div class="hero-value" id="hero-tokens">not yet measured</div>
+            <div class="hero-value hero-dollars" id="hero-dollars"></div>
+            <div class="hero-empty" id="hero-empty" hidden></div>
+        </section>
+
+        <!-- Block 2: Status strip. One combined signal element:
+             proxy up/down, credentials OK, last request timestamp, queue
+             depth — across the four dashboard states. -->
+        <section class="status-strip" id="status-strip" aria-live="polite" aria-label="Proxy status">
+            <div class="status-dot" id="status-dot"></div>
+            <div class="status-main">
+                <span class="status-label" id="status-label">—</span>
+                <span class="status-cause" id="status-cause"></span>
+            </div>
+            <div class="status-details">
+                <span id="status-creds">Credentials: —</span>
+                <span id="status-last-request">Last request: —</span>
+                <span id="status-queue">Queue: —</span>
+            </div>
+        </section>
+
+        <!-- Block 3: Compression chart. Last 24h of original vs
+             compressed tokens, stacked bar. -->
+        <section class="card wide block" id="compression-section">
+            <div class="card-title">Compression — last 24h</div>
+            <canvas id="compression-chart" class="chart"></canvas>
+            <div class="card-subtext" id="compression-subtext">not yet measured</div>
+        </section>
+
+        <!-- Block 4: Cache strip. A card may not be labeled a
+             cache-performance term unless its value is derived from
+             cache_origin / cache-token data. -->
+        <section class="card wide block" id="cache-strip">
+            <div class="card-title">Cache — last 24h</div>
+            <div class="cache-strip-grid">
+                <div class="cache-metric">
+                    <div class="cache-metric-label">TokenPak cache hit rate</div>
+                    <div class="cache-metric-value" id="tokenpak-cache-hit-rate">not yet measured</div>
+                </div>
+                <div class="cache-metric">
+                    <div class="cache-metric-label">Provider cache hit rate</div>
+                    <div class="cache-metric-value" id="provider-cache-hit-rate">not yet measured</div>
+                </div>
+                <div class="cache-metric">
+                    <div class="cache-metric-label">Cache reads by origin</div>
+                    <div class="cache-metric-value" id="cache-origin-breakdown">not yet measured</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Block 5: Recent requests. Last 20 requests. -->
+        <section class="card wide block" id="recent-requests-section">
+            <div class="card-title">Recent requests</div>
+            <table class="sessions-table" id="recentTable">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Client</th>
+                        <th>Model</th>
+                        <th>Tokens in</th>
+                        <th>Tokens out</th>
+                        <th>Savings</th>
+                        <th>Origin</th>
+                    </tr>
+                </thead>
+                <tbody id="recentBody">
+                    <tr><td colspan="7" class="empty-state">Loading…</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Block 6: Mode / session breakdown, additive to the recent
+             requests block above. Per-client-type view plus the
+             session-rollup table. -->
         <div class="shared-header" aria-label="Shared dashboard header">
             <div class="card">
                 <div class="card-title">Active Profile</div>
@@ -250,10 +456,6 @@
             <div class="card">
                 <div class="card-title">Total Cost Today</div>
                 <div class="card-value" id="mode-total-cost">—</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Cache Hit Rate</div>
-                <div class="card-value" id="mode-cache-hit-rate">—</div>
             </div>
             <div class="card">
                 <div class="card-title">Requests Today</div>
@@ -270,7 +472,7 @@
         </section>
 
         <div class="grid">
-            <!-- Request Count (24h) -->
+            <!-- Request Count (session) -->
             <div class="card">
                 <div class="card-title">Requests (Session)</div>
                 <div class="card-value" id="request-count">—</div>
@@ -298,13 +500,6 @@
                 <div class="card-subtext" id="cost-info"></div>
             </div>
 
-            <!-- Cache Performance -->
-            <div class="card">
-                <div class="card-title">Cache Hit Rate</div>
-                <div class="card-value" id="cache-hit-rate">—</div>
-                <div class="card-subtext" id="cache-info"></div>
-            </div>
-
             <!-- Error Rate -->
             <div class="card alert" id="error-card">
                 <div class="card-title">Error Rate</div>
@@ -317,19 +512,20 @@
                 <div class="card-title">Cost by Model</div>
                 <canvas id="cost-chart" class="chart"></canvas>
                 <div class="status">
-                    <div class="status-dot" id="proxy-status"></div>
                     <span id="proxy-health">Last updated: —</span>
                 </div>
             </div>
 
-            <!-- Cache Performance Chart -->
+            <!-- Session compression chart (sent vs saved). Renamed from
+                 "Cache Behavior" — this draws compression token totals, not
+                 cache data; the real, attributable cache metrics live in
+                 the Cache strip above. -->
             <div class="card wide">
-                <div class="card-title">Cache Behavior</div>
+                <div class="card-title">Compression — session (sent vs saved)</div>
                 <canvas id="cache-chart" class="chart"></canvas>
             </div>
         </div>
 
-        <!-- Top Sessions (Phase 2) -->
         <div class="card wide" id="sessions-panel" style="margin-bottom: 2rem;">
             <div class="card-title">Top Sessions — by request count (top 20)</div>
             <table class="sessions-table" id="sessionsTable">
@@ -352,18 +548,34 @@
             </table>
         </div>
 
+        <!-- Block 7: Quick actions. -->
+        <section class="quick-actions" id="quick-actions" aria-label="Quick actions">
+            <span class="mode-btn">Run <code>tokenpak doctor</code> for diagnostics</span>
+            <span class="mode-btn">Run <code>tokenpak creds</code> to manage credentials</span>
+            <span class="mode-btn">Run <code>tokenpak demo</code> to see savings live</span>
+        </section>
+
         <div class="footer">
-            Auto-refreshing every 30 seconds · <span id="last-update">Never</span>
+            Auto-refreshing every 5 seconds · <span id="last-update">Never</span>
         </div>
     </div>
 
     <script src="sessions.js"></script>
     <script>
         const STATS_URL = '/stats/session';
-        const REFRESH_INTERVAL = 30000;
+        const REFRESH_INTERVAL = 5000;
 
-        let costCtx, cacheCtx;
+        // Empty-state copy — verbatim, single source of truth for this
+        // page. Every trigger below reuses these strings rather than
+        // inventing ad hoc text.
+        const EMPTY_STATES = {
+            no_requests: "Send a request through TokenPak to see savings here. Run `tokenpak demo` to try it now.",
+            no_creds: "No provider credentials discovered. Run `tokenpak creds doctor` to see what TokenPak found.",
+            proxy_down: "Proxy is not running. Start it with `tokenpak serve`.",
+            disconnected: "Can't reach `127.0.0.1:8766`. Check the proxy, or your firewall.",
+        };
 
+        let costCtx, cacheCtx, compressionCtx;
 
         const MODE_PANELS = [
             { mode: 'cli', label: 'CLI', title: 'CLI Mode — Repo Cost + Doctor Runs' },
@@ -399,7 +611,7 @@
             }).join('');
         }
 
-        function updateSharedHeader(stats, activeMode) {
+        function updateSharedHeader(stats) {
             // Show the real active profile when the payload carries one;
             // otherwise keep the server-rendered default rather than
             // synthesizing a profile name from the consumption mode.
@@ -407,8 +619,6 @@
             profileEl.textContent = stats?.active_profile || profileEl.textContent;
             document.getElementById('mode-total-cost').textContent = formatCost(stats?.total_cost || 0);
             document.getElementById('mode-request-count').textContent = formatNumber(stats?.session_requests || 0);
-            const cachePct = Math.min((stats?.uptime_hours || 0) / 24, 1);
-            document.getElementById('mode-cache-hit-rate').textContent = formatPercent(cachePct);
         }
 
         function buildModeSections(activeMode, stats, dashboard) {
@@ -461,16 +671,16 @@
             const activeMode = activeModeFromQuery();
             const panel = MODE_PANELS.find((p) => p.mode === activeMode) || MODE_PANELS[0];
             renderModeSelector(activeMode);
-            updateSharedHeader(stats || {}, activeMode);
+            updateSharedHeader(stats || {});
             document.getElementById('mode-title').textContent = panel.title;
             const content = buildModeSections(activeMode, stats || {}, dashboardPayload || {});
             document.getElementById('mode-metrics').innerHTML = content.metrics;
             document.getElementById('mode-sections').innerHTML = content.sections;
         }
 
-        async function fetchMetricsDashboard() {
+        async function fetchJSON(url) {
             try {
-                const response = await fetch('/metrics/dashboard');
+                const response = await fetch(url);
                 if (!response.ok) return null;
                 return await response.json();
             } catch (error) {
@@ -479,29 +689,240 @@
         }
 
         async function fetchStats() {
-            try {
-                const response = await fetch(STATS_URL);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                return await response.json();
-            } catch (error) {
-                console.error('Failed to fetch stats:', error);
+            const data = await fetchJSON(STATS_URL);
+            if (data === null) {
                 document.documentElement.classList.add('loading');
-                return null;
             }
+            return data;
         }
 
         function formatNumber(num) {
+            num = num || 0;
             if (num >= 1e6) return (num / 1e6).toFixed(1) + 'M';
             if (num >= 1e3) return (num / 1e3).toFixed(1) + 'K';
             return Math.round(num).toString();
         }
 
         function formatCost(cost) {
-            return '$' + cost.toFixed(3);
+            return '$' + (cost || 0).toFixed(3);
         }
 
         function formatPercent(pct) {
-            return (pct * 100).toFixed(1) + '%';
+            return ((pct || 0) * 100).toFixed(1) + '%';
+        }
+
+        function formatRelativeTime(date) {
+            if (!date || isNaN(date.getTime())) return '—';
+            const diffMs = Date.now() - date.getTime();
+            const diffMin = Math.floor(diffMs / 60000);
+            if (diffMin < 1) return 'moments ago';
+            if (diffMin < 60) return `${diffMin} min ago`;
+            const diffHr = Math.floor(diffMin / 60);
+            if (diffHr < 24) return `${diffHr} h ago`;
+            const diffDay = Math.floor(diffHr / 24);
+            if (diffDay === 1) return 'yesterday';
+            return `${diffDay} d ago`;
+        }
+
+        // ------------------------------------------------------------------
+        // Block 2 — Status strip. Combines /health + /status into ONE
+        // signal (dot + label + cause) across the four dashboard states,
+        // plus the three supporting facts (creds, last request, queue).
+        // ------------------------------------------------------------------
+        function computeStatusSignal(health, status, disconnected) {
+            if (disconnected || !health || !status) {
+                return { state: 'error', label: 'Error', cause: EMPTY_STATES.disconnected };
+            }
+            if (health.is_shutting_down || health.status === 'shutting_down') {
+                return { state: 'error', label: 'Error', cause: EMPTY_STATES.proxy_down };
+            }
+            const providers = status.providers || {};
+            const providerVals = Object.values(providers);
+            const configured = providerVals.filter((v) => v !== 'no-key');
+            if (providerVals.length > 0 && configured.length === 0) {
+                return { state: 'error', label: 'Error', cause: EMPTY_STATES.no_creds };
+            }
+            const unreachable = providerVals.filter((v) => v === 'unreachable');
+            if (health.is_degraded || unreachable.length > 0) {
+                const cause = unreachable.length > 0
+                    ? `proxy up, ${unreachable.length} provider${unreachable.length === 1 ? '' : 's'} unreachable`
+                    : 'proxy up, degraded';
+                return { state: 'degraded', label: 'Degraded', cause };
+            }
+            const lastReq = status.last_request_at ? new Date(status.last_request_at) : null;
+            const minsSince = lastReq ? (Date.now() - lastReq.getTime()) / 60000 : Infinity;
+            if (!lastReq || minsSince > 5) {
+                return { state: 'idle', label: 'Idle', cause: 'no requests in the last 5 min' };
+            }
+            return { state: 'healthy', label: 'Healthy', cause: `up · last request ${formatRelativeTime(lastReq)}` };
+        }
+
+        function updateStatusStrip(health, status, disconnected) {
+            const signal = computeStatusSignal(health, status, disconnected);
+            const dot = document.getElementById('status-dot');
+            dot.className = `status-dot ${signal.state}`;
+            document.getElementById('status-label').textContent = signal.label;
+            document.getElementById('status-cause').textContent = signal.cause;
+
+            const providers = (status && status.providers) || {};
+            const providerVals = Object.values(providers);
+            const reachable = providerVals.filter((v) => v === 'reachable').length;
+            const unreachable = providerVals.filter((v) => v === 'unreachable').length;
+            const noKey = providerVals.filter((v) => v === 'no-key').length;
+            const credsEl = document.getElementById('status-creds');
+            if (providerVals.length === 0) {
+                credsEl.textContent = `Credentials: ${EMPTY_STATES.no_creds}`;
+            } else {
+                const parts = [];
+                if (reachable) parts.push(`${reachable} ok`);
+                if (unreachable) parts.push(`${unreachable} unreachable`);
+                if (noKey) parts.push(`${noKey} not set`);
+                credsEl.textContent = `Credentials: ${parts.join(', ') || 'not yet measured'}`;
+            }
+
+            const lastReq = status && status.last_request_at ? new Date(status.last_request_at) : null;
+            document.getElementById('status-last-request').textContent =
+                `Last request: ${lastReq ? formatRelativeTime(lastReq) : 'not yet measured'}`;
+
+            const queue = health && health.agent_concurrency ? (health.agent_concurrency.queued ?? null) : null;
+            document.getElementById('status-queue').textContent =
+                `Queue: ${queue === null ? 'not yet measured' : queue}`;
+        }
+
+        function updateEmptyBanner(health, status, disconnected) {
+            const banner = document.getElementById('empty-banner');
+            if (disconnected) {
+                banner.textContent = EMPTY_STATES.disconnected;
+                banner.hidden = false;
+                return;
+            }
+            if (health && (health.is_shutting_down || health.status === 'shutting_down')) {
+                banner.textContent = EMPTY_STATES.proxy_down;
+                banner.hidden = false;
+                return;
+            }
+            banner.hidden = true;
+        }
+
+        // ------------------------------------------------------------------
+        // Block 1 — Hero savings metric.
+        // ------------------------------------------------------------------
+        function updateHero(savings) {
+            const tokensEl = document.getElementById('hero-tokens');
+            const dollarsEl = document.getElementById('hero-dollars');
+            const emptyEl = document.getElementById('hero-empty');
+            const noData = !savings || !savings.available || (savings.total_requests || 0) === 0;
+            if (noData) {
+                tokensEl.textContent = 'not yet measured';
+                dollarsEl.textContent = '';
+                emptyEl.textContent = EMPTY_STATES.no_requests;
+                emptyEl.hidden = false;
+                return;
+            }
+            emptyEl.hidden = true;
+            tokensEl.textContent = `${formatNumber(savings.total_tokens_saved || 0)} tokens saved today`;
+            dollarsEl.textContent = `${formatCost(savings.total_cost_saved_usd || 0)} saved today`;
+        }
+
+        // ------------------------------------------------------------------
+        // Block 4 — Cache strip. TokenPak cache hit rate is attributed
+        // (cache_origin == 'proxy'); provider cache hit rate counts any
+        // origin. Never conflate the two.
+        // ------------------------------------------------------------------
+        function updateCacheStrip(cacheData) {
+            const w = cacheData && cacheData.window_24h;
+            const tkEl = document.getElementById('tokenpak-cache-hit-rate');
+            const provEl = document.getElementById('provider-cache-hit-rate');
+            const originEl = document.getElementById('cache-origin-breakdown');
+            if (!w || w.error || (w.total_requests || 0) === 0) {
+                tkEl.textContent = 'not yet measured';
+                provEl.textContent = 'not yet measured';
+                originEl.textContent = 'not yet measured';
+                return;
+            }
+            tkEl.textContent = formatPercent(w.tokenpak_hit_rate || 0);
+            provEl.textContent = formatPercent(w.hit_rate || 0);
+            const origin = w.cache_read_by_origin || {};
+            originEl.textContent =
+                `client ${formatNumber(origin.client || 0)} · proxy ${formatNumber(origin.proxy || 0)} · unknown ${formatNumber(origin.unknown || 0)}`;
+        }
+
+        // ------------------------------------------------------------------
+        // Block 3 — Compression chart. Last 24h original vs compressed
+        // tokens, one stacked bar.
+        // ------------------------------------------------------------------
+        function updateCompressionChart(dashboardPayload) {
+            const w = dashboardPayload && dashboardPayload.window_24h;
+            const subtext = document.getElementById('compression-subtext');
+            const ctx = document.getElementById('compression-chart');
+            if (!compressionCtx) {
+                ctx.width = ctx.offsetWidth;
+                ctx.height = 200;
+                compressionCtx = ctx.getContext('2d');
+            }
+            compressionCtx.fillStyle = '#0a0a0a';
+            compressionCtx.fillRect(0, 0, ctx.width, ctx.height);
+
+            if (!w || !w.available || (w.requests || 0) === 0) {
+                subtext.textContent = 'not yet measured';
+                return;
+            }
+
+            const original = w.input_tokens || 0;
+            const saved = w.compressed_tokens || 0;
+            const sent = Math.max(0, original - saved);
+            subtext.textContent =
+                `${formatNumber(original)} original → ${formatNumber(sent)} sent (${formatNumber(saved)} saved) over ${w.requests} requests`;
+
+            const total = original || 1;
+            const barX = 80;
+            const barWidth = 80;
+            const trackHeight = 150;
+            const trackY = 170 - trackHeight;
+            const sentHeight = (sent / total) * trackHeight;
+            const savedHeight = (saved / total) * trackHeight;
+
+            compressionCtx.strokeStyle = '#27272a';
+            compressionCtx.lineWidth = 1;
+            compressionCtx.beginPath();
+            compressionCtx.moveTo(40, 10);
+            compressionCtx.lineTo(40, 170);
+            compressionCtx.lineTo(ctx.width - 10, 170);
+            compressionCtx.stroke();
+
+            // Stacked bar: sent (tp-accent) below, saved (tp-signal-value) above.
+            compressionCtx.fillStyle = '#00B4AA';
+            compressionCtx.fillRect(barX, 170 - sentHeight, barWidth, sentHeight);
+            compressionCtx.fillStyle = '#EDE085';
+            compressionCtx.fillRect(barX, trackY, barWidth, savedHeight);
+
+            compressionCtx.fillStyle = '#71717a';
+            compressionCtx.font = '12px sans-serif';
+            compressionCtx.textAlign = 'center';
+            compressionCtx.fillText('Sent / Saved — last 24h', barX + barWidth / 2, 190);
+        }
+
+        // ------------------------------------------------------------------
+        // Block 5 — Recent requests.
+        // ------------------------------------------------------------------
+        function updateRecentRequests(recentData) {
+            const tbody = document.getElementById('recentBody');
+            const rows = (recentData && Array.isArray(recentData.requests)) ? recentData.requests : [];
+            if (rows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${_escSess(EMPTY_STATES.no_requests)}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map((r) => {
+                const time = r.timestamp ? formatRelativeTime(new Date(r.timestamp)) : '—';
+                const client = r.attribution_source || 'unknown';
+                const model = r.model || 'unknown';
+                const tokensIn = formatNumber(r.input_tokens || 0);
+                const tokensOut = formatNumber(r.output_tokens || 0);
+                const savings = formatNumber(r.would_have_saved || 0);
+                const origin = r.cache_origin || 'unknown';
+                return `<tr><td>${_escSess(time)}</td><td>${_escSess(client)}</td><td>${_escSess(model)}</td>` +
+                    `<td>${tokensIn}</td><td>${tokensOut}</td><td>${savings}</td><td>${_escSess(origin)}</td></tr>`;
+            }).join('');
         }
 
         function getStatusColor(errorRate) {
@@ -535,11 +956,6 @@
             document.getElementById('cost').textContent = formatCost(s.total_cost || 0);
             document.getElementById('cost-info').textContent = `${formatNumber(s.session_requests || 0)} requests`;
 
-            // Uptime (approximation for cache health indicator)
-            const uptime = s.uptime_hours || 0;
-            document.getElementById('cache-hit-rate').textContent = formatPercent(Math.min(uptime / 24, 1));
-            document.getElementById('cache-info').textContent = `${uptime.toFixed(2)} hours uptime`;
-
             // Error rate
             const errorRate = (s.session_requests || 0) > 0 ? (s.errors || 0) / (s.session_requests || 0) : 0;
             document.getElementById('error-rate').textContent = formatPercent(errorRate);
@@ -550,10 +966,6 @@
             errorCard.classList.remove('alert', 'warning');
             if (errorRate > 0.05) errorCard.classList.add('alert');
             else if (errorRate > 0.01) errorCard.classList.add('warning');
-
-            // Status dot
-            const statusDot = document.getElementById('proxy-status');
-            statusDot.style.background = getStatusColor(errorRate);
 
             // Last updated
             document.getElementById('proxy-health').textContent = `Last updated: ${now.toLocaleTimeString()}`;
@@ -576,7 +988,6 @@
                 costCtx = ctx.getContext('2d');
             }
 
-            // Simple bar chart
             const barWidth = 60;
             const maxCost = Math.max(s.total_cost || 0.1, 0.1);
             const scale = 150 / maxCost;
@@ -584,7 +995,6 @@
             costCtx.fillStyle = '#0a0a0a';
             costCtx.fillRect(0, 0, ctx.width, ctx.height);
 
-            // Y axis
             costCtx.strokeStyle = '#27272a';
             costCtx.lineWidth = 1;
             costCtx.beginPath();
@@ -593,14 +1003,12 @@
             costCtx.lineTo(ctx.width - 10, 170);
             costCtx.stroke();
 
-            // Bar
             const barHeight = (s.total_cost || 0) * scale;
             const barX = 60;
             const barY = 170 - barHeight;
             costCtx.fillStyle = '#10b981';
             costCtx.fillRect(barX, barY, barWidth, barHeight);
 
-            // Labels
             costCtx.fillStyle = '#71717a';
             costCtx.font = '12px sans-serif';
             costCtx.textAlign = 'center';
@@ -626,7 +1034,6 @@
             cacheCtx.fillStyle = '#0a0a0a';
             cacheCtx.fillRect(0, 0, ctx.width, ctx.height);
 
-            // Y axis
             cacheCtx.strokeStyle = '#27272a';
             cacheCtx.lineWidth = 1;
             cacheCtx.beginPath();
@@ -639,15 +1046,12 @@
             const sentHeight = (sent / total) * 150;
             const savedHeight = (saved / total) * 150;
 
-            // Sent bar
             cacheCtx.fillStyle = '#3b82f6';
             cacheCtx.fillRect(60, 170 - sentHeight, barWidth, sentHeight);
 
-            // Saved bar
             cacheCtx.fillStyle = '#10b981';
             cacheCtx.fillRect(130, 170 - savedHeight, barWidth, savedHeight);
 
-            // Labels
             cacheCtx.fillStyle = '#71717a';
             cacheCtx.font = '12px sans-serif';
             cacheCtx.textAlign = 'center';
@@ -658,27 +1062,43 @@
             cacheCtx.fillText(formatNumber(saved), 155, 160);
         }
 
-        async function init() {
-            const stats = await fetchStats();
-            const dashboardPayload = await fetchMetricsDashboard();
+        async function refresh() {
+            const [stats, dashboardPayload, health, status, savings, recent, cacheData] = await Promise.all([
+                fetchStats(),
+                fetchJSON('/metrics/dashboard'),
+                fetchJSON('/health'),
+                fetchJSON('/status'),
+                fetchJSON('/savings'),
+                fetchJSON('/recent?limit=20'),
+                fetchJSON('/cache-stats'),
+            ]);
+            const disconnected = health === null && status === null;
+
+            updateEmptyBanner(health, status, disconnected);
+            updateStatusStrip(health, status, disconnected);
+            updateHero(savings);
+            updateCompressionChart(dashboardPayload);
+            updateCacheStrip(cacheData);
+            updateRecentRequests(recent);
             updateDashboard(stats);
             updateModeDashboard(stats, dashboardPayload);
             if (typeof fetchAndUpdateSessionsDashboard === "function") {
                 fetchAndUpdateSessionsDashboard();
             }
+        }
 
-            setInterval(async () => {
-                const stats = await fetchStats();
-                const dashboardPayload = await fetchMetricsDashboard();
-                updateDashboard(stats);
-                updateModeDashboard(stats, dashboardPayload);
-                if (typeof fetchAndUpdateSessionsDashboard === "function") {
-                    fetchAndUpdateSessionsDashboard();
-                }
+        async function init() {
+            await refresh();
+
+            setInterval(() => {
+                // Polling stops while the tab is backgrounded, to stay
+                // inside the page's performance budget.
+                if (document.hidden) return;
+                refresh();
             }, REFRESH_INTERVAL);
 
             setInterval(async () => {
-                if (activeModeFromQuery() !== 'tui') return;
+                if (document.hidden || activeModeFromQuery() !== 'tui') return;
                 const stats = await fetchStats();
                 const liveCost = document.getElementById('tui-live-cost');
                 if (liveCost) liveCost.textContent = formatCost(stats?.total_cost || 0);

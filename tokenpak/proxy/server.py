@@ -106,6 +106,7 @@ from tokenpak.dashboard.session_filter import (
     FilterParams,
     SessionFilter,
 )
+from tokenpak.proxy.cache_stats import _get_cache_stats_by_window
 from tokenpak.proxy.monitor import Monitor as _DbMonitor
 from tokenpak.sdk.registry import detect_platform
 from tokenpak.telemetry.collector import RequestStats
@@ -1236,7 +1237,51 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._send_json(ps.session_stats())
             return
         if path == "/cache-stats":
-            self._send_json(_get_cache_collector().summary())
+            payload = _get_cache_collector().summary()
+            # Additive: merge the DB-backed, cache_origin-attributed 24h window
+            # alongside the existing in-memory session summary. The in-memory
+            # collector above tracks provider cache hits only (no origin
+            # attribution); window_24h is the source for the TokenPak-vs-
+            # provider hit rate split and the client/proxy/unknown breakdown.
+            db_path = ps.monitor.db_path if ps.monitor is not None else None
+            payload["window_24h"] = _get_cache_stats_by_window(hours=24, db_path=db_path)
+            self._send_json(payload)
+            return
+        if path == "/savings" or path.startswith("/savings?"):
+            from datetime import date as _date
+
+            if ps.monitor is None:
+                self._send_json({"available": False, "reason": "monitor_disabled"})
+                return
+            from urllib.parse import parse_qs as _pqs_sv
+            from urllib.parse import urlparse as _up_sv
+
+            since_q = _pqs_sv(_up_sv(path).query).get("since", [None])[0]
+            since = since_q or _date.today().isoformat()
+            try:
+                report = ps.monitor.get_savings_report(since=since)
+                report["available"] = True
+                report["since"] = since
+                self._send_json(report)
+            except Exception as exc:
+                self._send_json({"available": False, "reason": str(exc)})
+            return
+        if path == "/recent" or path.startswith("/recent?"):
+            from urllib.parse import parse_qs as _pqs_rc
+            from urllib.parse import urlparse as _up_rc
+
+            if ps.monitor is None:
+                self._send_json({"requests": []})
+                return
+            try:
+                limit_q = _pqs_rc(_up_rc(path).query).get("limit", ["20"])[0]
+                limit = max(1, min(int(limit_q), 20))
+            except (ValueError, TypeError):
+                limit = 20
+            try:
+                self._send_json({"requests": ps.monitor.recent(limit)})
+            except Exception:
+                self._send_json({"requests": []})
             return
         if path == "/api/goals":
             # Get all goals with progress
@@ -3876,7 +3921,29 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
             _logging.getLogger(__name__).warning("metrics/dashboard sessions query failed: %s", exc)
 
-        self._send_json({"sessions": sessions})
+        # Last-24h original-vs-compressed totals for the compression chart.
+        # Reuses Monitor.get_stats(), the same real-data path `tokenpak status`
+        # already relies on — no separate computation invented for the
+        # dashboard. Fails open to {"available": False} rather than a
+        # fabricated zero when the monitor is disabled or the query errors.
+        compression_window: dict[str, object] = {"available": False}
+        try:
+            if monitor is not None:
+                window_stats = monitor.get_stats(hours=24)
+                compression_window = {
+                    "available": True,
+                    "requests": window_stats.get("requests", 0) or 0,
+                    "input_tokens": window_stats.get("input_tokens", 0) or 0,
+                    "compressed_tokens": window_stats.get("compressed_tokens", 0) or 0,
+                }
+        except Exception as exc:
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "metrics/dashboard window_24h query failed: %s", exc
+            )
+
+        self._send_json({"sessions": sessions, "window_24h": compression_window})
 
 
 # ---------------------------------------------------------------------------
