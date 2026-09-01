@@ -227,6 +227,49 @@ and `forecast` objects. Missing measurements use explicit `no_data`,
 as measured zero. Runway can be `learning`, `unavailable`, or `error` when the
 local facts are insufficient or invalid.
 
+#### `time_forecast`: wall-clock time-remaining bands
+
+The response also includes a `time_forecast` object — a calibrated,
+wall-clock time-remaining estimate, distinct from the token-based `runway`
+and `forecast` fields above. It ships **disabled by default** and its
+`status` is `"unavailable"` (both interval fields `null`) until explicitly
+turned on:
+
+```json
+{
+ "time_forecast": {
+   "status": "unavailable",
+   "remaining_time_likely_50_ms": null,
+   "remaining_time_ceiling_90_ms": null
+ }
+}
+```
+
+Enable it with the `TOKENPAK_TIME_FORECAST_BANDS` environment variable, or
+the `time_forecast_bands.enabled` key in `config.json` (env var takes
+precedence when both are set — the same resolution order as other
+default-off TokenPak flags):
+
+```bash
+TOKENPAK_TIME_FORECAST_BANDS=1 tokenpak serve
+```
+
+```json
+{
+ "time_forecast_bands": {"enabled": true}
+}
+```
+
+Turning the flag on does not, by itself, produce a band for every session:
+each `(model, effort, stream_mode)` cell only serves `status: "available"`
+once that cell has cleared its own independent walk-forward calibration
+review. A cell that has not yet been reviewed still reports
+`"insufficient_data"` even with the flag on; a cell with early, below-
+threshold evidence reports `"learning"` (band still populated, just not yet
+at full confidence). `status` is always one of `unavailable` /
+`insufficient_data` / `unknown` / `learning` / `available` — never a bare
+number standing in for missing data.
+
 ---
 
 ## Proxy Status
