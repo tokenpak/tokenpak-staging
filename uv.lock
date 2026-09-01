@@ -4997,7 +4997,9 @@ data = [
 dev = [
     { name = "black" },
     { name = "build" },
+    { name = "fastapi" },
     { name = "import-linter" },
+    { name = "jinja2" },
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "pytest" },
@@ -5006,9 +5008,13 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-mock" },
     { name = "pytest-timeout" },
+    { name = "python-multipart" },
     { name = "ruff" },
     { name = "setuptools" },
+    { name = "starlette" },
     { name = "twine" },
+    { name = "uvicorn" },
+    { name = "websockets" },
 ]
 dispatch = [
     { name = "jsonschema" },
@@ -5121,6 +5127,7 @@ requires-dist = [
     { name = "tiktoken", marker = "extra == 'tokens'", specifier = ">=0.5.0" },
     { name = "tokenpak", extras = ["code-compression", "compression", "data", "dispatch", "integrations-litellm", "intelligence", "retrieval"], marker = "extra == 'full'" },
     { name = "tokenpak", extras = ["dispatch"], marker = "extra == 'dev'" },
+    { name = "tokenpak", extras = ["serve"], marker = "extra == 'dev'" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
     { name = "tree-sitter-languages", marker = "python_full_version < '3.13' and extra == 'code-compression'", specifier = ">=1.8.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = "==7.0.0" },

@@ -171,6 +171,12 @@ dev = [
     # Pulled via the [dispatch] extra so the standard `.[dev]` CI job collects
     # and runs those tests instead of erroring at import time.
     "tokenpak[dispatch]",
+    # The strict-typed proxy subsystem (tokenpak/proxy/**) and the telemetry
+    # dashboard/query/ingest HTTP surfaces it imports use fastapi/pydantic at
+    # module level. Pulled via the [serve] extra so a plain `.[dev]` install
+    # can import, test, and `mypy --strict` those modules instead of resolving
+    # them to Any through ignore_missing_imports.
+    "tokenpak[serve]",
 ]
 tokens = [
     "tiktoken>=0.5.0",

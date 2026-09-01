@@ -19,6 +19,14 @@ This project follows [Semantic Versioning](https://semver.org/).
   table only makes the cell *eligible*, it does not change the shipped
   default. See the `time_forecast` section in `docs/api-reference.md`.
 
+### Dependencies
+
+- The `dev` extra now pulls in `tokenpak[serve]` (`fastapi`, `uvicorn`,
+  `starlette`, `jinja2`, `python-multipart`, `websockets`) alongside the
+  existing `tokenpak[dispatch]` pull-in, so a plain `pip install -e ".[dev]"`
+  can import, test, and `mypy --strict` the proxy subsystem and the
+  telemetry dashboard/query/ingest HTTP surfaces it imports at module level.
+
 ## [1.23.0] — 2026-08-31
 
 This backward-compatible minor release adds a gated wall-clock time-remaining
