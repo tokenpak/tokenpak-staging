@@ -8,9 +8,9 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         :root {
-            /* Brand signal tokens (05-brand-style-guide.md §5.1) — single
-               source of truth for the four dashboard states and the hero
-               savings color. Do not hand-copy these hexes elsewhere. */
+            /* Brand signal tokens — single source of truth for the four
+               dashboard states and the hero savings color. Do not
+               hand-copy these hexes elsewhere. */
             --tp-accent: #00B4AA;
             --tp-signal-value: #EDE085;
             --tp-warn: #F5A623;
@@ -148,7 +148,7 @@
         .sessions-table tr:last-child td { border-bottom: none; }
 
         /* Block 1 — Hero savings metric. Nothing else on the page shares
-           this visual rank (04-dashboard-ui-standard.md §3). */
+           this visual rank. */
         .hero {
             text-align: center;
             padding: 2.5rem 1rem;
@@ -183,8 +183,9 @@
         }
 
         /* Block 2 — Status strip. One combined signal (dot + label + cause)
-           per the four-state scheme (§5), plus the three supporting facts
-           it is derived from, shown alongside it. */
+           across the four dashboard states (healthy/idle/degraded/error),
+           plus the three supporting facts it is derived from, shown
+           alongside it. */
         .status-strip {
             display: flex;
             align-items: center;
@@ -230,7 +231,7 @@
         }
 
         /* Page-level empty-state banner — Proxy down / Dashboard
-           disconnected (§10). Distinct from per-block empty states below,
+           disconnected. Distinct from per-block empty states below,
            which apply when the dashboard IS reachable but has no data yet. */
         .empty-banner {
             background: #2a1414;
@@ -369,7 +370,7 @@
 
         <div class="empty-banner" id="empty-banner" hidden></div>
 
-        <!-- Block 1: Hero savings metric (§2 item 1). Today's savings only —
+        <!-- Block 1: Hero savings metric. Today's savings only —
              nothing else on the page shares this visual rank. -->
         <section class="hero" id="hero-section" aria-label="Today's savings">
             <div class="hero-label">Today's savings</div>
@@ -378,9 +379,9 @@
             <div class="hero-empty" id="hero-empty" hidden></div>
         </section>
 
-        <!-- Block 2: Status strip (§2 item 2). One combined signal element:
+        <!-- Block 2: Status strip. One combined signal element:
              proxy up/down, credentials OK, last request timestamp, queue
-             depth — via the four-state scheme (§5). -->
+             depth — across the four dashboard states. -->
         <section class="status-strip" id="status-strip" aria-live="polite" aria-label="Proxy status">
             <div class="status-dot" id="status-dot"></div>
             <div class="status-main">
@@ -394,7 +395,7 @@
             </div>
         </section>
 
-        <!-- Block 3: Compression chart (§2 item 3). Last 24h of original vs
+        <!-- Block 3: Compression chart. Last 24h of original vs
              compressed tokens, stacked bar. -->
         <section class="card wide block" id="compression-section">
             <div class="card-title">Compression — last 24h</div>
@@ -402,9 +403,9 @@
             <div class="card-subtext" id="compression-subtext">not yet measured</div>
         </section>
 
-        <!-- Block 4: Cache strip (§2 item 4). A card may not be labeled a
+        <!-- Block 4: Cache strip. A card may not be labeled a
              cache-performance term unless its value is derived from
-             cache_origin / cache-token data (§9). -->
+             cache_origin / cache-token data. -->
         <section class="card wide block" id="cache-strip">
             <div class="card-title">Cache — last 24h</div>
             <div class="cache-strip-grid">
@@ -423,7 +424,7 @@
             </div>
         </section>
 
-        <!-- Block 5: Recent requests (§2 item 5). Last 20 requests. -->
+        <!-- Block 5: Recent requests. Last 20 requests. -->
         <section class="card wide block" id="recent-requests-section">
             <div class="card-title">Recent requests</div>
             <table class="sessions-table" id="recentTable">
@@ -444,8 +445,9 @@
             </table>
         </section>
 
-        <!-- Block 6: Mode / session breakdown (§2 item 6, additive to block
-             5). Per-client-type view plus the session-rollup table. -->
+        <!-- Block 6: Mode / session breakdown, additive to the recent
+             requests block above. Per-client-type view plus the
+             session-rollup table. -->
         <div class="shared-header" aria-label="Shared dashboard header">
             <div class="card">
                 <div class="card-title">Active Profile</div>
@@ -516,8 +518,8 @@
 
             <!-- Session compression chart (sent vs saved). Renamed from
                  "Cache Behavior" — this draws compression token totals, not
-                 cache data; the real cache metrics live in the Cache strip
-                 above (§9 attribution truth). -->
+                 cache data; the real, attributable cache metrics live in
+                 the Cache strip above. -->
             <div class="card wide">
                 <div class="card-title">Compression — session (sent vs saved)</div>
                 <canvas id="cache-chart" class="chart"></canvas>
@@ -546,7 +548,7 @@
             </table>
         </div>
 
-        <!-- Block 7: Quick actions (§2 item 7). -->
+        <!-- Block 7: Quick actions. -->
         <section class="quick-actions" id="quick-actions" aria-label="Quick actions">
             <span class="mode-btn">Run <code>tokenpak doctor</code> for diagnostics</span>
             <span class="mode-btn">Run <code>tokenpak creds</code> to manage credentials</span>
@@ -563,7 +565,7 @@
         const STATS_URL = '/stats/session';
         const REFRESH_INTERVAL = 5000;
 
-        // §10 empty-state copy — verbatim, single source of truth for this
+        // Empty-state copy — verbatim, single source of truth for this
         // page. Every trigger below reuses these strings rather than
         // inventing ad hoc text.
         const EMPTY_STATES = {
@@ -724,7 +726,7 @@
 
         // ------------------------------------------------------------------
         // Block 2 — Status strip. Combines /health + /status into ONE
-        // signal (dot + label + cause) using the four-state scheme (§5),
+        // signal (dot + label + cause) across the four dashboard states,
         // plus the three supporting facts (creds, last request, queue).
         // ------------------------------------------------------------------
         function computeStatusSignal(health, status, disconnected) {
@@ -825,7 +827,7 @@
         // ------------------------------------------------------------------
         // Block 4 — Cache strip. TokenPak cache hit rate is attributed
         // (cache_origin == 'proxy'); provider cache hit rate counts any
-        // origin. Never conflate the two (§9).
+        // origin. Never conflate the two.
         // ------------------------------------------------------------------
         function updateCacheStrip(cacheData) {
             const w = cacheData && cacheData.window_24h;
@@ -1089,7 +1091,8 @@
             await refresh();
 
             setInterval(() => {
-                // §11: polling stops while the tab is backgrounded.
+                // Polling stops while the tab is backgrounded, to stay
+                // inside the page's performance budget.
                 if (document.hidden) return;
                 refresh();
             }, REFRESH_INTERVAL);
