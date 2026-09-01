@@ -8,6 +8,7 @@
 #                 Check for internal/sensitive content  [strict, enforce_admins]
 #   public/main:  license-check (ruleset 18198213); force-push+deletion blocked (ruleset 18449162)
 files:
+  bandit-scan.yml: 47cffb674c1e5503ae9dca97b6e39f0c8ab43da4e22147b11cb182aba7d8f862
   benchmarks.yml: 354d463fb96de6c1cc4c87b7d1ef05e0c20047dd284a11e9192ed64c7294caa8
   ci.yml: 10a50b604ad935a8e0df0b1dd060b5d23800cd4b7e540ab4e245c4c34053ae11
   determinism.yml: 555be48fa256294b6a444f7ecd9a3726d61894dc859341d45708a31a3c9f71bb
