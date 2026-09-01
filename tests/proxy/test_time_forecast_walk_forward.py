@@ -317,3 +317,25 @@ def test_distribution_shift_flags_drifting() -> None:
     ]
     readiness = tf_cal.cell_readiness_time(stable + shifted, [])
     assert readiness.drift_state is DriftState.DRIFTING
+
+
+# ---------------------------------------------------------------------------
+# Shipped published entry — structural consistency with these same primitives
+# ---------------------------------------------------------------------------
+
+
+def test_shipped_sonnet_entry_bucket_keys_are_valid_for_kmax() -> None:
+    """The one reviewed cell's published bands were produced by these exact
+    offline primitives (``_TimeStepBands``/``KMAX``), never hand-edited — this
+    guards that every bucket key stays inside ``1..KMAX`` and every band is a
+    well-formed (lo <= hi) interval, so a future KMAX change can't silently
+    leave stale out-of-range buckets in the shipped table."""
+    evidence = tf_cal._PUBLISHED_TIME_PRIOR[("claude-sonnet-5", "unknown", "streaming")]
+    assert evidence.band50_y_by_k, "shipped entry must publish at least one bucket"
+    for k, (lo, hi) in evidence.band50_y_by_k.items():
+        assert 1 <= k <= tf_cal.KMAX
+        assert lo <= hi
+    for k in evidence.band90_hi_y_by_k:
+        assert 1 <= k <= tf_cal.KMAX
+    assert evidence.history_n >= tf_cal.MIN_CELL_SESSIONS
+    assert evidence.observed_coverage_50 >= tf_cal.TARGET_50 * 100.0

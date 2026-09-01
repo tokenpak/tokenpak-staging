@@ -81,17 +81,60 @@ def _build(
 # ---------------------------------------------------------------------------
 
 
-def test_shipped_published_prior_table_is_empty() -> None:
-    """The literal shipped state: no cell has been reviewed/published yet."""
-    assert tf_cal._PUBLISHED_TIME_PRIOR == {}
+def test_shipped_published_prior_table_has_exactly_the_reviewed_cell() -> None:
+    """The literal shipped state: exactly one cell has cleared review so far."""
+    assert set(tf_cal._PUBLISHED_TIME_PRIOR) == {("claude-sonnet-5", "unknown", "streaming")}
 
 
 def test_cold_cell_is_insufficient_data_not_unavailable() -> None:
-    """No injected prior — exercises the real, shipped-empty module table."""
-    forecast = _build()
+    """No injected prior, and a cell key the shipped table doesn't carry —
+    exercises the real module table's default (still-honest-unknown) path."""
+    forecast = _build(model="model-a", effort="high", stream_mode=TimeForecastStreamMode.STREAMING)
     assert forecast.status is TimeForecastStatus.INSUFFICIENT_DATA
     assert forecast.remaining_time_likely_50_ms is None
     assert forecast.remaining_time_ceiling_90_ms is None
+
+
+# ---------------------------------------------------------------------------
+# Real shipped table — the one reviewed cell, exercised without injection
+# ---------------------------------------------------------------------------
+
+
+def test_shipped_sonnet_cell_is_available_against_the_real_table() -> None:
+    """No injected ``published_prior`` — this reads the real module-level
+    ``_PUBLISHED_TIME_PRIOR``, proving the one reviewed cell actually serves
+    a band, not just that a test double would."""
+    forecast = _build(
+        model="claude-sonnet-5",
+        effort="unknown",
+        stream_mode=TimeForecastStreamMode.STREAMING,
+    )
+    assert forecast.status is TimeForecastStatus.AVAILABLE
+    assert forecast.remaining_time_likely_50_ms is not None
+    assert forecast.remaining_time_ceiling_90_ms is not None
+    assert forecast.coverage.method == "walk-forward-split-conformal"
+    assert forecast.coverage.history_n == 43
+    assert forecast.coverage.drift_state is DriftState.STABLE
+    # observed_coverage_50=64.90872210953347 clamped/scaled to a fraction.
+    assert forecast.coverage.observed == pytest.approx(0.6491, abs=1e-4)
+
+
+@pytest.mark.parametrize(
+    "model,effort,stream_mode",
+    [
+        ("claude-sonnet-5", "unknown", TimeForecastStreamMode.NON_STREAMING),
+        ("claude-sonnet-5", "high", TimeForecastStreamMode.STREAMING),
+        ("claude-fable-5", "unknown", TimeForecastStreamMode.STREAMING),
+        ("model-a", "high", TimeForecastStreamMode.STREAMING),
+    ],
+)
+def test_every_other_real_cell_stays_honest_unknown(
+    model: str, effort: str, stream_mode: TimeForecastStreamMode
+) -> None:
+    """The reviewed cell's presence must not leak into any neighboring key —
+    still exercising the real module table, not an injected stand-in."""
+    forecast = _build(model=model, effort=effort, stream_mode=stream_mode)
+    assert forecast.status is TimeForecastStatus.INSUFFICIENT_DATA
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +306,59 @@ def test_default_off_ignores_rich_published_evidence(monkeypatch: pytest.MonkeyP
     )
     assert forecast.status is TimeForecastStatus.UNAVAILABLE
     assert forecast.remaining_time_likely_50_ms is None
+
+
+def test_default_off_ignores_the_real_shipped_sonnet_cell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same proof as above, but against the real module-level table (no
+    injected ``published_prior``) — the one reviewed cell must still not
+    leak through a default-off deployment."""
+    from tokenpak.proxy import session_forecast
+
+    monkeypatch.delenv(session_forecast._TIME_FORECAST_ENV_VAR, raising=False)
+    turn = type(
+        "Row",
+        (),
+        {"stream_mode": "sse", "ttfb_ms": 100, "stream_duration_ms": 59_900},
+    )()
+    wrapped = type("Turn", (), {"row": turn})()
+    forecast = session_forecast._time_calibrated_or_fallback(
+        monitor_db_path="ignored",
+        as_of=NOW,
+        session_id="active",
+        model="claude-sonnet-5",
+        effort="unknown",
+        turns=[wrapped],
+    )
+    assert forecast.status is TimeForecastStatus.UNAVAILABLE
+    assert forecast.remaining_time_likely_50_ms is None
+
+
+def test_enabled_serves_the_real_shipped_sonnet_cell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the outer switch explicitly on, the real shipped table serves an
+    ``available`` band for the one reviewed cell — end to end through
+    ``session_forecast``, not just the inner engine."""
+    from tokenpak.proxy import session_forecast
+
+    monkeypatch.setenv(session_forecast._TIME_FORECAST_ENV_VAR, "1")
+    turn = type(
+        "Row",
+        (),
+        {"stream_mode": "sse", "ttfb_ms": 100, "stream_duration_ms": 59_900},
+    )()
+    wrapped = type("Turn", (), {"row": turn})()
+    forecast = session_forecast._time_calibrated_or_fallback(
+        monitor_db_path="ignored",
+        as_of=NOW,
+        session_id="active",
+        model="claude-sonnet-5",
+        effort="unknown",
+        turns=[wrapped],
+    )
+    assert forecast.status is TimeForecastStatus.AVAILABLE
+    assert forecast.remaining_time_likely_50_ms is not None
+    assert forecast.coverage.history_n == 43
 
 
 def test_env_var_true_values_enable_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:

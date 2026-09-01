@@ -129,13 +129,66 @@ class PublishedTimeCellEvidence:
     full_confidence: bool
 
 
-#: The published per-cell calibration evidence. Ships EMPTY — see the module
-#: docstring for why that is the gate mechanism, not a placeholder to be
-#: filled in casually. Keyed by ``_time_cell_key(...)``. Tests exercise this
-#: table via ``build_calibrated_time_forecast(..., published_prior={...})``
-#: (a real, explicit function argument) rather than monkeypatching this
-#: module attribute — real-path style, per the #633/#634 testing standard.
-_PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {}
+#: The published per-cell calibration evidence. Ships with exactly the cells
+#: that have cleared review — see the module docstring for why this table is
+#: the gate mechanism, not a placeholder to be filled in casually. Keyed by
+#: ``_time_cell_key(...)``. Tests exercise this table via
+#: ``build_calibrated_time_forecast(..., published_prior={...})`` (a real,
+#: explicit function argument) rather than monkeypatching this module
+#: attribute — real-path style, per the #633/#634 testing standard.
+#:
+#: ("claude-sonnet-5", "unknown", "streaming"): the walk-forward split-
+#: conformal calibration re-measured against the live session ledger
+#: (history_n=43, observed_coverage_50≈64.9%, drift_state=stable — both at
+#: or above their respective 50%/90% targets, so this cell is published at
+#: full confidence). The per-turn-bucket bands below are the final,
+#: full-corpus fit over that same 43-session cohort, produced with this
+#: module's own ``_TimeStepBands``/``_pool_near_table_time`` primitives —
+#: no band value here is invented or interpolated by hand.
+_PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {
+    ("claude-sonnet-5", "unknown", "streaming"): PublishedTimeCellEvidence(
+        prior_version="time-prior-2026-08-30",
+        band50_y_by_k={
+            1: (3.017475, 5.493954),
+            2: (2.93118, 5.198149),
+            3: (2.574576, 4.704534),
+            4: (2.220601, 4.279322),
+            5: (2.089676, 3.974796),
+            6: (1.936967, 3.700948),
+            7: (1.820305, 3.365316),
+            8: (1.689397, 3.107356),
+            9: (1.564582, 2.942803),
+            10: (1.250146, 2.84512),
+            11: (1.131861, 2.59791),
+            12: (1.040402, 2.513488),
+            13: (0.980715, 2.444689),
+            14: (0.894103, 2.238339),
+            15: (0.894465, 2.135476),
+        },
+        band90_hi_y_by_k={
+            1: 5.81319,
+            2: 5.561987,
+            3: 4.754316,
+            4: 4.597744,
+            5: 4.454478,
+            6: 4.238913,
+            7: 4.160339,
+            8: 4.100383,
+            9: 3.933622,
+            10: 3.838157,
+            11: 3.642237,
+            12: 3.594404,
+            13: 3.586128,
+            14: 3.541938,
+            15: 3.541034,
+        },
+        coverage_method="walk-forward-split-conformal",
+        observed_coverage_50=64.90872210953347,
+        history_n=43,
+        drift_state=DriftState.STABLE,
+        full_confidence=True,
+    ),
+}
 
 
 @dataclass(frozen=True)
