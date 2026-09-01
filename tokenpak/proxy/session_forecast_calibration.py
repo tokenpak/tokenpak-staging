@@ -172,8 +172,13 @@ class _CorpusEntry:
 _CACHE_LOCK = threading.Lock()
 #: db_path -> (fingerprint, corpus entries). Bounded small; process-local.
 _CORPUS_CACHE: dict[str, tuple[tuple[int, int], tuple[_CorpusEntry, ...]]] = {}
+#: One participant's (model, effort, ended_at, turns, total, turn_costs) tuple.
+_ParticipantSignature = tuple[tuple[str, str, str, int, float, tuple[float, ...]], ...]
 #: (db_path, cell key, cell signature, pool signature) -> readiness.
-_READINESS_CACHE: dict[tuple, CellReadiness] = {}
+_ReadinessCacheKey = tuple[
+    str | None, tuple[str, str], _ParticipantSignature, _ParticipantSignature
+]
+_READINESS_CACHE: dict[_ReadinessCacheKey, CellReadiness] = {}
 _CORPUS_CACHE_MAX = 4
 _READINESS_CACHE_MAX = 32
 
@@ -636,7 +641,7 @@ def _source(readiness: CellReadiness) -> str:
     return f"walk-forward split-conformal empirical quantiles ({readiness.sessions} sessions)"
 
 
-def _participants_signature(sessions):
+def _participants_signature(sessions: Sequence[HistorySession]) -> _ParticipantSignature:
     return tuple(
         (
             s.model,
@@ -650,14 +655,19 @@ def _participants_signature(sessions):
     )
 
 
-def _cached_readiness(monitor_db_path, key, cell, pool) -> CellReadiness:
+def _cached_readiness(
+    monitor_db_path: str | None,
+    key: tuple[str, str],
+    cell: Sequence[HistorySession],
+    pool: Sequence[HistorySession],
+) -> CellReadiness:
     """Memoized trust assessment — the replay is the expensive step.
 
     The key pins the exact participant sets, so a hit can only return what
     a fresh replay over the same inputs would compute; results stay a pure
     function of (ledger, now). Process-local and bounded.
     """
-    cache_key = (
+    cache_key: _ReadinessCacheKey = (
         monitor_db_path,
         key,
         _participants_signature(cell),
