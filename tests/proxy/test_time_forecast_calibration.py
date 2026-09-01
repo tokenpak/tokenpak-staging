@@ -40,6 +40,7 @@ def _evidence(
     full_confidence: bool,
     history_n: int = 40,
     observed_coverage_50: float = 52.0,
+    observed_coverage_90: float = 92.0,
     drift_state: DriftState = DriftState.STABLE,
     band50: dict[int, tuple[float, float]] | None = None,
     band90: dict[int, float] | None = None,
@@ -50,6 +51,7 @@ def _evidence(
         band90_hi_y_by_k=band90 if band90 is not None else {1: 1.2, 4: 1.8},
         coverage_method="walk-forward-split-conformal",
         observed_coverage_50=observed_coverage_50,
+        observed_coverage_90=observed_coverage_90,
         history_n=history_n,
         drift_state=drift_state,
         full_confidence=full_confidence,
@@ -120,6 +122,22 @@ def test_shipped_sonnet_cell_is_available_against_the_real_table() -> None:
     assert forecast.coverage.drift_state is DriftState.STABLE
     # observed_coverage_50=64.90872210953347 clamped/scaled to a fraction.
     assert forecast.coverage.observed == pytest.approx(0.6491, abs=1e-4)
+
+
+def test_shipped_sonnet_entry_coverage_matches_reviewed_evidence_exactly() -> None:
+    """Lineage guard: the published entry's per-band coverage figures must
+    trace character-for-character to the walk-forward re-verified
+    remeasurement recorded for this cell (``coverage_50_pct:
+    64.90872210953347``, ``coverage_90_pct: 96.14604462474645``,
+    ``history_n: 43``, ``drift_state: stable``). Neither figure may drift,
+    and ``drift_state`` must never stand in for a coverage number — each
+    field is asserted independently here."""
+    evidence = tf_cal._PUBLISHED_TIME_PRIOR[("claude-sonnet-5", "unknown", "streaming")]
+    assert evidence.observed_coverage_50 == 64.90872210953347
+    assert evidence.observed_coverage_90 == 96.14604462474645
+    assert evidence.history_n == 43
+    assert evidence.drift_state is DriftState.STABLE
+    assert evidence.coverage_method == "walk-forward-split-conformal"
 
 
 @pytest.mark.parametrize(

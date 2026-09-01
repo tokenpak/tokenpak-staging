@@ -339,3 +339,4 @@ def test_shipped_sonnet_entry_bucket_keys_are_valid_for_kmax() -> None:
         assert 1 <= k <= tf_cal.KMAX
     assert evidence.history_n >= tf_cal.MIN_CELL_SESSIONS
     assert evidence.observed_coverage_50 >= tf_cal.TARGET_50 * 100.0
+    assert evidence.observed_coverage_90 >= tf_cal.TARGET_90 * 100.0

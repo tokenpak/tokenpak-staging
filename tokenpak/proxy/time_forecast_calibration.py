@@ -130,7 +130,15 @@ class PublishedTimeCellEvidence:
     #: turn-bucket -> hi_y for the one-sided 90% ceiling, already widened.
     band90_hi_y_by_k: Mapping[int, float]
     coverage_method: str
+    #: Measured walk-forward coverage of the central 50% band (percent, e.g.
+    #: ``64.9`` for 64.9%) — both this and ``observed_coverage_90`` are
+    #: independent per-band figures; neither substitutes for the other, and
+    #: ``drift_state`` below is a separate (non-coverage) signal.
     observed_coverage_50: float
+    #: Measured walk-forward coverage of the one-sided 90% ceiling (percent,
+    #: same units/scale as ``observed_coverage_50``). Symmetric sibling field
+    #: — every published entry must carry both bands' measured coverage.
+    observed_coverage_90: float
     history_n: int
     drift_state: DriftState
     full_confidence: bool
@@ -146,12 +154,12 @@ class PublishedTimeCellEvidence:
 #:
 #: ("claude-sonnet-5", "unknown", "streaming"): the walk-forward split-
 #: conformal calibration re-measured against the live session ledger
-#: (history_n=43, observed_coverage_50≈64.9%, drift_state=stable — both at
-#: or above their respective 50%/90% targets, so this cell is published at
-#: full confidence). The per-turn-bucket bands below are the final,
-#: full-corpus fit over that same 43-session cohort, produced with this
-#: module's own ``_TimeStepBands``/``_pool_near_table_time`` primitives —
-#: no band value here is invented or interpolated by hand.
+#: (history_n=43, observed_coverage_50≈64.9%, observed_coverage_90≈96.1% —
+#: each at or above its own 50%/90% target — and drift_state=stable, so this
+#: cell is published at full confidence). The per-turn-bucket bands below
+#: are the final, full-corpus fit over that same 43-session cohort, produced
+#: with this module's own ``_TimeStepBands``/``_pool_near_table_time``
+#: primitives — no band value here is invented or interpolated by hand.
 _PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {
     ("claude-sonnet-5", "unknown", "streaming"): PublishedTimeCellEvidence(
         prior_version="time-prior-2026-08-30",
@@ -191,6 +199,7 @@ _PUBLISHED_TIME_PRIOR: dict[tuple[str, str, str], PublishedTimeCellEvidence] = {
         },
         coverage_method="walk-forward-split-conformal",
         observed_coverage_50=64.90872210953347,
+        observed_coverage_90=96.14604462474645,
         history_n=43,
         drift_state=DriftState.STABLE,
         full_confidence=True,
