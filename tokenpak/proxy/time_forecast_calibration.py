@@ -13,12 +13,19 @@ coupling one domain's calibration to the other's.
 The activation gate requires per-cell walk-forward coverage to be MEASURED
 and PUBLISHED before a cell may render ``learning``/``available`` — not
 merely accumulated by this module watching live traffic. ``_PUBLISHED_TIME_PRIOR``
-is the concrete mechanism: it ships EMPTY (no cell has published evidence
-yet), so every session renders ``insufficient_data`` (once timing facts exist
-at all) regardless of how much raw history the local ledger holds. A later,
-separate initiative populates entries here as an explicit, reviewed change —
-never a side effect of this module observing traffic, and never something a
-code change alone may flip.
+is the concrete mechanism: only a cell with an explicit, reviewed entry here
+may ever render ``learning``/``available``; every cell without one still
+renders ``insufficient_data`` (once timing facts exist at all) regardless of
+how much raw history the local ledger holds. As of this module's current
+state, exactly one cell — ``claude-sonnet-5`` / unknown effort / streaming —
+has cleared review and is published; every other cell remains unpublished
+and therefore honest-``insufficient_data``. Each additional cell is
+populated as its own explicit, reviewed change — never a side effect of this
+module observing traffic, and never something a code change alone may flip.
+The mechanism's separate default-off master switch
+(``TOKENPAK_TIME_FORECAST_BANDS`` / ``time_forecast_bands.enabled``) gates
+this table's entries independently: even a fully published, full-confidence
+cell serves nothing until that switch is explicitly turned on.
 
 The walk-forward measurement tooling below (``read_time_history``,
 ``cell_readiness_time``, ``walk_forward_coverage_time``) is what that later
@@ -615,9 +622,11 @@ def build_calibrated_time_forecast(
     """Contract-shaped calibrated time-remaining band, honest about every gap.
 
     Looks up ``_PUBLISHED_TIME_PRIOR`` for this cell — the ONLY thing that
-    ever admits ``learning``/``available``, per the ratified gate. Ships
-    reaching ``insufficient_data`` for every cell (the table is empty), and
-    ``unknown`` whenever this session itself has no timing-fact signal.
+    ever admits ``learning``/``available``, per the ratified gate.
+    ``insufficient_data`` for every cell without a published entry in that
+    table (currently every cell except ``claude-sonnet-5`` / unknown effort
+    / streaming), and ``unknown`` whenever this session itself has no
+    timing-fact signal.
 
     ``published_prior`` is a minimal, explicit dependency-injection seam:
     every production call site omits it and this function reads the real

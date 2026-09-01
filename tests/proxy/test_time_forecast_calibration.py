@@ -17,6 +17,9 @@ internal implementation detail.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -77,7 +80,7 @@ def _build(
 
 
 # ---------------------------------------------------------------------------
-# The gate mechanism itself: an empty table is what ships
+# The gate mechanism itself: exactly one reviewed cell is what ships
 # ---------------------------------------------------------------------------
 
 
@@ -402,3 +405,98 @@ def test_config_key_can_enable_without_env_var(
     monkeypatch.setenv(_paths.ENV_VAR, str(tmp_path))
     (tmp_path / "config.json").write_text(json.dumps({"time_forecast_bands": {"enabled": True}}))
     assert session_forecast._time_forecast_enabled() is True
+
+
+# ---------------------------------------------------------------------------
+# Clean-process regression: the config-key enable must survive real process
+# startup, not just an in-process monkeypatch.
+#
+# A real proxy process imports ``tokenpak.proxy`` before ``session_forecast``
+# ever reads config: ``tokenpak/proxy/config.py`` calls
+# ``config_loader.load_config()`` at MODULE IMPORT TIME, which fires the
+# one-shot ``config.json`` -> ``config.yaml`` auto-migration (see
+# ``config_loader._maybe_migrate_json_to_yaml``) before this module's own
+# gate check ever runs. Once that migration fires, ``config.json`` no longer
+# exists on disk. A gate check that reads only the raw JSON file (rather than
+# the migration-aware merged view) silently stops seeing a key the user set
+# exactly as ``docs/api-reference.md`` instructs.
+#
+# An in-process test that monkeypatches ``TOKENPAK_HOME`` cannot reproduce
+# this: by the time such a test runs, ``tokenpak.proxy`` (and therefore
+# ``config_loader``) is typically already imported against a *different*
+# home, so the migration this bug depends on either already ran elsewhere or
+# never runs against the test's own tmp_path at all. Only a genuinely fresh
+# subprocess — importing ``tokenpak.proxy`` for the first time against the
+# test's isolated ``TOKENPAK_HOME`` — exercises the real, import-order-
+# dependent failure.
+# ---------------------------------------------------------------------------
+
+_SONNET_CELL_PROBE = """
+import json
+from datetime import datetime, timezone
+
+from tokenpak.proxy import session_forecast
+
+turn = type(
+    "Row", (), {"stream_mode": "sse", "ttfb_ms": 100, "stream_duration_ms": 59_900}
+)()
+wrapped = type("Turn", (), {"row": turn})()
+forecast = session_forecast._time_calibrated_or_fallback(
+    monitor_db_path=None,
+    as_of=datetime(2026, 9, 1, tzinfo=timezone.utc),
+    session_id="active",
+    model="claude-sonnet-5",
+    effort="unknown",
+    turns=[wrapped],
+)
+print(json.dumps({
+    "gate": session_forecast._time_forecast_enabled(),
+    "status": forecast.status.value,
+    "has_band": forecast.remaining_time_likely_50_ms is not None,
+}))
+"""
+
+
+def _run_clean_process(tmp_path: Path, *, config: dict | None) -> dict:
+    """Run the sonnet-cell probe in a genuinely fresh subprocess.
+
+    ``tmp_path`` is the process's only ``TOKENPAK_HOME`` — nothing has ever
+    imported ``tokenpak`` against it before this call, so the real one-shot
+    migration and the real gate-check import order both fire exactly as they
+    would for an operator following the docs on a brand-new machine.
+    """
+    if config is not None:
+        (tmp_path / "config.json").write_text(json.dumps(config))
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "TOKENPAK_HOME": str(tmp_path),
+    }
+    virtual_env = os.environ.get("VIRTUAL_ENV")
+    if virtual_env:
+        env["VIRTUAL_ENV"] = virtual_env
+    result = subprocess.run(
+        [sys.executable, "-c", _SONNET_CELL_PROBE],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_clean_process_documented_enable_activates_the_sonnet_cell(tmp_path: Path) -> None:
+    """Fresh subprocess, config set exactly as the docs instruct: the gate
+    reads True and the reviewed sonnet cell serves a real ``available`` band
+    — not just an internal flag flip."""
+    payload = _run_clean_process(tmp_path, config={"time_forecast_bands": {"enabled": True}})
+    assert payload == {"gate": True, "status": "available", "has_band": True}
+
+
+def test_clean_process_without_config_stays_fully_off(tmp_path: Path) -> None:
+    """Same fresh-subprocess harness, no config at all: fully off end to
+    end — the control case proving the harness itself is not silently
+    always-on."""
+    payload = _run_clean_process(tmp_path, config=None)
+    assert payload == {"gate": False, "status": "unavailable", "has_band": False}
