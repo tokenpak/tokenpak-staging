@@ -6,6 +6,116 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-08-31
+
+This backward-compatible minor release adds a gated wall-clock time-remaining
+forecast to the session-economics contract, corrects documentation and
+configuration guidance for the compression-flag default request path, adds
+`--json` output to the `cost` command, fixes the quickstart guide's SDK
+example to match the shipped API, tightens strict-mode typing in the
+session-economics and time-forecast calibration code, refreshes two
+development-toolchain dependency pins, and makes release builds
+byte-reproducible.
+
+### Added
+
+- A new time-remaining forecast surface in the session-economics contract:
+  `TimeForecast`, `TimeForecastCell`, `TimeForecastGate`, `TimeForecastStatus`,
+  and `TimeForecastStreamMode`, plus a per-cell calibration module that scores
+  wall-clock completion time from measured `started_at`/time-to-first-byte/
+  stream-duration/incremental-usage inputs, using the same walk-forward
+  calibration approach as the existing token-budget forecast. The mechanism
+  ships behind its existing default-off master switch and an empty per-cell
+  publication table: every session-economics payload continues to serialize
+  `time_forecast` as `status: unavailable` in this release. No configuration
+  or default changes are introduced.
+- 17 additive public API exports supporting the above (session-economics
+  contract types and calibration-module functions/constants); zero removals.
+- `tokenpak cost --json` — the `cost` command now supports `--json`,
+  matching its sibling summary commands (`savings`, `status`, `doctor`).
+  The document reports section, period, whether a measurement is available,
+  spend, live proxy session info, and configured budget status; composes
+  with `--week`/`--month` and `--by-model`. `--json` and `--export-csv` are
+  mutually exclusive at the parser, since both select a competing output
+  mode.
+
+### Fixed
+
+- Corrected configuration, CLI, setup, troubleshooting, compression, and
+  Claude Code documentation that described the legacy `TOKENPAK_COMPACT`
+  flag and `compression.enabled` setting as a live master switch for the
+  default HTTP request path. Both remain compatibility-only there; only
+  integrations that explicitly call the request-compaction helper are
+  affected by their threshold/cache settings. Removed a false first-run
+  notice claiming default compression, and added regression guards so code
+  and documentation cannot silently diverge on this boundary again. Default
+  HTTP request bodies are unchanged; Claude Code request bytes remain
+  byte-preserved.
+- The quickstart guide's SDK Path section documented a top-level
+  `TokenPak(budget=...)` constructor with `add_instructions()`/
+  `add_knowledge()`/`add_conversation()` methods that do not exist in the
+  package, raising a `TypeError` on the second line for anyone following it.
+  Replaced with the `ContextPack`/`PackBlock` API that actually ships,
+  verified end-to-end in a fresh virtual environment: build a pack, compile
+  it, print a genuine compression report, then feed the compiled result into
+  any OpenAI- or Anthropic-compatible client via
+  `to_messages()`/`to_anthropic()`/`to_prompt()`.
+- Resolved strict-mode type-checking errors in the session-economics
+  contract, its renderer, and the time-forecast calibration path introduced
+  by this release's own new surface: a numeric-type check a type checker
+  could not narrow correctly, internal `from_dict` classmethods widened to
+  accept a plain object matching the shared validation helper they delegate
+  to, explicit non-null assertions for interval/point cost estimates only
+  reachable once populated, and the shared train/calibration split helper
+  parameterized over the session-record type instead of one call site's
+  concrete type. No behavior change; added regression tests pinning that
+  boolean values are rejected from numeric contract fields.
+
+### Build / Release process
+
+- Release builds are now byte-reproducible: the release workflow pins its
+  build toolchain (`build`, `setuptools`, `twine`) and derives
+  `SOURCE_DATE_EPOCH` from the commit being built, rather than wall-clock
+  build time, so rebuilding the same commit produces the same wheel bytes.
+  A new post-build normalization step additionally pins sdist tar-member and
+  gzip-container timestamps to the same commit-derived value (setuptools'
+  sdist command does not honor `SOURCE_DATE_EPOCH` on its own), so the sdist
+  is byte-identical across rebuilds of the same commit too. This is a
+  release-pipeline change only; no package runtime behavior is affected.
+
+### Dependencies
+
+- Bump the development-toolchain `ruff` pin 0.16.0 → 0.16.4 and the `twine`
+  pin 6.2.0 → 7.0.0 (release-gate lockfile refreshed for each).
+
+### Upgrade
+
+```bash
+python -m pip install --upgrade "tokenpak==1.23.0"
+```
+
+No manual configuration migration is required. The new time-remaining
+forecast mechanism is inert by default; no runtime behavior changes as a
+result of upgrading.
+
+### Rollback
+
+```bash
+python -m pip install --upgrade "tokenpak==1.22.0"
+```
+
+The release introduces no destructive state migration.
+
+### Compatibility
+
+- The public API snapshot contains 4,715 symbols: 17 additions and zero
+  removals relative to v1.22.0. All additions are the new session-economics
+  time-forecast contract types and calibration-module surface described
+  above. `cost --json` is a CLI surface addition, not a public Python API
+  symbol, and is not reflected in the snapshot count.
+- No existing public symbol is removed or reclassified. No breaking changes
+  or deprecations are introduced.
+
 ## [1.22.0] — 2026-08-29
 
 This backward-compatible minor release completes automatic context injection
