@@ -891,7 +891,7 @@ _MAX_SESSION_SOURCES = 20
 
 
 def _record_injection_in_session(
-    session: dict[str, object], injected_tokens: int, injected_sources: str = ""
+    session: _SessionState, injected_tokens: int, injected_sources: str = ""
 ) -> None:
     """Accumulate injection totals onto ``ProxyServer.session`` — the dict that
     backs request accounting and ``GET /stats``, which is what ``tokenpak
@@ -1243,7 +1243,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             # collector above tracks provider cache hits only (no origin
             # attribution); window_24h is the source for the TokenPak-vs-
             # provider hit rate split and the client/proxy/unknown breakdown.
-            db_path = ps.monitor.db_path if ps.monitor is not None else None
+            db_path = str(ps.monitor.db_path) if ps.monitor is not None else None
             payload["window_24h"] = _get_cache_stats_by_window(hours=24, db_path=db_path)
             self._send_json(payload)
             return
@@ -2786,7 +2786,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _provider_usage = _safe_provider_usage_observation(
                     _usage_parser_provider,
                     provider_usage_object,
-                    body,
+                    body if body is not None else b"",
                 )
                 _cost_observed = _cost_observation(
                     provider=_usage_parser_provider,
@@ -4295,7 +4295,7 @@ def _cost_observation(
         if provider_cache_creation is not None
         else fallback_cache_creation_tokens
     )
-    if use_provider_input:
+    if use_provider_input and provider_input is not None:
         priced_input = provider_input
         if input_includes_cache is False:
             priced_input += cache_read + cache_creation
