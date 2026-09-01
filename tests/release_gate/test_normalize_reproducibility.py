@@ -3,7 +3,7 @@
 v1.23.0 shipped a byte-level divergence between the CI-built published
 artifacts and locally-built comparison artifacts even though payload content
 and every timestamp matched exactly: tar member owner/group
-(``runner/runner`` vs. ``sue/sue``) and umask-derived permission bits (also
+(``runner/runner`` vs. ``builduser/builduser``) and umask-derived permission bits (also
 in the wheel zip's external attributes). ``SOURCE_DATE_EPOCH`` normalization
 covers timestamps only, and the two prior "independent" rebuild proofs that
 validated the original fix both ran on the same machine under the same
@@ -49,7 +49,7 @@ def _make_sdist(
 ) -> Path:
     """Build a synthetic sdist with owner/mode metadata as if produced under
     the given (uid, gid, uname, gname, umask) — standing in for "built by
-    sue locally" vs. "built by runner on a CI box"."""
+    builduser locally" vs. "built by runner on a CI box"."""
     path = tmp_path / name
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w") as tar:
@@ -94,7 +94,13 @@ def test_sdist_normalize_collapses_owner_and_umask_divergence(tmp_path):
     become byte-identical after normalization — the exact class of
     divergence found at v1.23.0."""
     local = _make_sdist(
-        tmp_path, "local.tar.gz", uid=1000, gid=1000, uname="sue", gname="sue", umask=0o002
+        tmp_path,
+        "local.tar.gz",
+        uid=1000,
+        gid=1000,
+        uname="builduser",
+        gname="builduser",
+        umask=0o002,
     )
     ci = _make_sdist(
         tmp_path, "ci.tar.gz", uid=1001, gid=1001, uname="runner", gname="runner", umask=0o022
@@ -112,7 +118,13 @@ def test_sdist_normalize_collapses_owner_and_umask_divergence(tmp_path):
 
 def test_sdist_normalize_pins_owner_and_canonical_mode(tmp_path):
     path = _make_sdist(
-        tmp_path, "a.tar.gz", uid=1000, gid=1000, uname="sue", gname="sue", umask=0o002
+        tmp_path,
+        "a.tar.gz",
+        uid=1000,
+        gid=1000,
+        uname="builduser",
+        gname="builduser",
+        umask=0o002,
     )
     normalize_sdist.normalize(str(path), EPOCH)
 

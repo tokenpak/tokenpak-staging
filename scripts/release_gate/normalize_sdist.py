@@ -13,9 +13,9 @@ This script rewrites an already-built sdist in place:
 * every tar member's mtime is pinned to ``SOURCE_DATE_EPOCH`` (the gzip
   container's own timestamp field is pinned to the same value);
 * every member's owner is pinned to uid/gid ``0`` with empty uname/gname,
-  discarding the build machine's actual user (e.g. a local ``sue`` checkout
-  vs. a CI runner's ``runner`` account produce different tar headers for
-  otherwise-identical content);
+  discarding the build machine's actual user (e.g. a local ``builduser``
+  checkout vs. a CI runner's ``runner`` account produce different tar
+  headers for otherwise-identical content);
 * every member's mode is canonicalized to ``0755`` for directories and
   anything that was executable, ``0644`` otherwise, discarding the umask
   that happened to be in effect at build time.
@@ -59,11 +59,11 @@ def normalize(path: str, epoch: int) -> None:
                 member.pax_headers.pop("mtime", None)
 
                 # Pin ownership to a canonical, environment-independent
-                # value. Without this, a tarball built as `sue` on a local
-                # machine and one built as `runner` on a GitHub Actions
-                # runner carry different uid/gid + uname/gname header fields
-                # even though every byte of actual file content and every
-                # mtime is identical.
+                # value. Without this, a tarball built as `builduser` on a
+                # local machine and one built as `runner` on a GitHub
+                # Actions runner carry different uid/gid + uname/gname
+                # header fields even though every byte of actual file
+                # content and every mtime is identical.
                 member.uid = 0
                 member.gid = 0
                 member.uname = ""
