@@ -97,5 +97,8 @@ mypy*.txt
 coverage.json
 coverage_report.txt
 benchmark.json
-bandit-baseline.json
 README.local.md
+
+# bandit-baseline.json is the opposite of the artifacts above: it's a
+# reviewed, checked-in gate input (.github/workflows/bandit-scan.yml diffs
+# against it), not an ephemeral local run output. Track it.

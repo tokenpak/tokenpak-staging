@@ -246,9 +246,17 @@ jobs:
           python-version: "3.12"
 
       - name: Build sdist + wheel for scanning
+        # Toolchain pinned and SOURCE_DATE_EPOCH derived from the checked-out
+        # commit so this scan build matches the byte-reproducible build below.
+        # umask pinned as defense-in-depth (see the build job's normalization
+        # steps for the actual reproducibility guarantee).
         run: |
-          python -m pip install --upgrade pip build
-          python -m build
+          umask 022
+          python -m pip install --upgrade pip
+          pip install build==1.5.0 setuptools==84.0.0
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          python -m build --no-isolation
 
       - name: Scan shipped artifact for public-leak patterns
         run: python scripts/release_gate/check_release_leaks.py --dist dist/
@@ -315,10 +323,48 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build twine
+        # Pinned so the exact same toolchain (build/setuptools/twine) is used
+        # for every release build, regardless of when or where it runs — a
+        # floating resolution is a source of byte-level nondeterminism.
+        run: pip install build==1.5.0 setuptools==84.0.0 twine==7.0.0
+
+      - name: Compute reproducible build timestamp
+        # Derived from the commit being released (not wall-clock build
+        # time), so archive member timestamps are fixed by the candidate SHA
+        # and rebuilding this exact commit reproduces the same bytes.
+        # Exported via GITHUB_ENV so it also covers the sdist normalization
+        # step below, which needs the same value.
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
 
       - name: Build wheel and sdist
-        run: python -m build
+        # umask is set explicitly (rather than trusting the runner image's
+        # default) so the build step's own behavior doesn't drift if the
+        # runner image changes; the normalization steps below are the actual
+        # guarantee, this is defense-in-depth on top of them.
+        run: |
+          umask 022
+          python -m build --no-isolation
+
+      - name: Normalize sdist for byte-reproducibility
+        # setuptools' wheel builder honors SOURCE_DATE_EPOCH for zip member
+        # timestamps, but its sdist command does not (it stamps each tar
+        # member with the file's on-disk mtime). Pin those after the fact so
+        # the sdist is byte-identical for a given commit. Also canonicalizes
+        # tar member owner/group and mode bits, which SOURCE_DATE_EPOCH
+        # never covered — those are derived from the build machine's user
+        # and umask, so an otherwise byte-identical sdist built on a CI
+        # runner still diverged from one built locally until this covered
+        # them too.
+        run: python scripts/release_gate/normalize_sdist.py dist/*.tar.gz
+
+      - name: Normalize wheel for byte-reproducibility
+        # The wheel's zip external file attributes embed Unix permission
+        # bits derived from the build machine's umask (SOURCE_DATE_EPOCH
+        # only covers timestamps). Canonicalize them the same way the sdist
+        # step above canonicalizes tar mode bits, so the wheel is
+        # byte-identical regardless of which machine or umask built it.
+        # Payload is untouched, so RECORD's content hashes stay valid.
+        run: python scripts/release_gate/normalize_wheel.py dist/*.whl
 
       - name: Verify package
         run: twine check dist/*
@@ -359,6 +405,55 @@ jobs:
             exit 1
           fi
           echo "✅  sdist + wheel content purity: no _internal/ paths"
+
+      - name: Verify byte-reproducibility across a different umask
+        # A same-machine, same-user rebuild proof cannot catch an
+        # owner/umask-derived divergence — both rebuilds inherit the same
+        # environment that produced the first artifact. This step rebuilds
+        # the exact same commit in a scratch directory under a deliberately
+        # different umask (002 instead of the job's 022), normalizes it the
+        # same way, and asserts the result is byte-identical to the
+        # artifacts already staged in dist/. This is what actually caught
+        # the v1.23.0 CI-runner-vs-local divergence in the first place — the
+        # two prior "independent" rebuilds that validated the original
+        # SOURCE_DATE_EPOCH fix both ran on the same machine under the same
+        # umask, so this check exists specifically to close that blind spot
+        # on every future release rather than relying on a one-off proof.
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          mkdir -p "$scratch/src"
+          # git archive gives a pristine copy of the exact committed tree —
+          # no .git history, no leftover build/ or dist/ from the step
+          # above — so this rebuild can't accidentally reuse anything the
+          # first build produced.
+          git archive HEAD | tar -x -C "$scratch/src"
+          (
+            cd "$scratch/src"
+            umask 002
+            python -m build --no-isolation --outdir "$scratch/dist"
+            python scripts/release_gate/normalize_sdist.py "$scratch"/dist/*.tar.gz
+            python scripts/release_gate/normalize_wheel.py "$scratch"/dist/*.whl
+          )
+          fail=0
+          for f in dist/*; do
+            base="$(basename "$f")"
+            other="$scratch/dist/$base"
+            if [ ! -f "$other" ]; then
+              echo "::error::reproducibility check: $base not produced by the umask-002 rebuild" >&2
+              fail=1
+              continue
+            fi
+            if ! cmp -s "$f" "$other"; then
+              echo "::error::reproducibility check: $base differs between umask 022 and umask 002 builds — reproducible-build normalization regressed" >&2
+              fail=1
+            fi
+          done
+          rm -rf "$scratch"
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "✅  byte-identical across umask 022 and umask 002 rebuilds"
 
       - name: Generate checksums (outside dist/)
         run: |
