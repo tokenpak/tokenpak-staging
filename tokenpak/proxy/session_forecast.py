@@ -1239,9 +1239,24 @@ def _map_stream_mode(raw: object) -> TimeForecastStreamMode:
 def _time_forecast_enabled() -> bool:
     """Default-off activation gate for the time-remaining band mechanism.
 
-    Mirrors ``session_forecast_injection.is_injection_enabled()``'s exact
-    resolution order (env var -> config key -> False). Per the ratified
-    activation gate, ``time_forecast`` MUST serialize as
+    Mirrors ``session_forecast_injection.is_injection_enabled()``'s resolution
+    order (env var -> config key -> False), with one deliberate difference:
+    the config-key lookup goes through ``tokenpak.core.config.get_config()``,
+    not the raw JSON-only ``load_config()``. Any real proxy process imports
+    ``tokenpak.proxy`` (via ``tokenpak/proxy/config.py``'s module-level
+    ``config_loader.load_config()`` calls) before this function ever runs,
+    which fires the one-shot ``config.json`` -> ``config.yaml`` auto-migration
+    (see ``config_loader._maybe_migrate_json_to_yaml``). After that migration,
+    ``config.json`` no longer exists, so the raw JSON-only reader silently
+    stops seeing a key the user set exactly as documented. ``get_config()``
+    reads the migrated YAML as its base layer, so the documented
+    ``time_forecast_bands.enabled`` config key keeps working whether or not
+    migration has already run in this process — a plain in-process test that
+    monkeypatches ``TOKENPAK_HOME`` after ``tokenpak.proxy`` is already
+    imported will not catch a regression here; only a genuinely clean
+    subprocess exercises the real import-order-dependent migration.
+
+    Per the ratified activation gate, ``time_forecast`` MUST serialize as
     ``status: unavailable`` in every shipped default until a later initiative
     rules the full activation gate satisfied and explicitly changes this
     default — this change must not.
@@ -1250,9 +1265,9 @@ def _time_forecast_enabled() -> bool:
     if env_val is not None:
         return env_val not in ("0", "false", "False", "no")
     try:
-        from tokenpak.core.config import load_config
+        from tokenpak.core.config import get_config
 
-        data = load_config()
+        data = get_config()
         cfg = data.get("time_forecast_bands", {})
         if isinstance(cfg, dict):
             return bool(cfg.get("enabled", False))

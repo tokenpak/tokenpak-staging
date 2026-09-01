@@ -6,6 +6,19 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Published the first reviewed time-remaining forecast calibration cell —
+  `claude-sonnet-5` / unknown effort / streaming — into the per-cell
+  publication table added in 1.23.0. This makes `status: "available"` (with
+  a real `remaining_time_likely_50_ms`/`remaining_time_ceiling_90_ms` band)
+  reachable for that one cell; every other cell continues to report
+  `"insufficient_data"`. The mechanism remains gated behind its existing
+  default-off master switch (`TOKENPAK_TIME_FORECAST_BANDS` /
+  `time_forecast_bands.enabled`, both still default-off) — populating the
+  table only makes the cell *eligible*, it does not change the shipped
+  default. See the `time_forecast` section in `docs/api-reference.md`.
+
 ## [1.23.0] — 2026-08-31
 
 This backward-compatible minor release adds a gated wall-clock time-remaining

@@ -28,6 +28,15 @@ import pytest
 
 from tests.proxy._proxy_subprocess import REPO_ROOT, ProxyProc, free_port
 
+# Real-subprocess proxy tests get the same generous budget as every sibling
+# module in this directory (test_concurrent_data_path.py, test_crash_durability.py,
+# test_first_receipt_path.py, test_request_id_response_header.py, ...). This
+# module's restart test does strictly more than any of those in one test body
+# (initial request, restart, three thin-surface reads, replay) so the bare
+# 30s pytest-timeout default is underprovisioned for legitimate cold-start
+# variance on a loaded host; it is not a hang. Assertions are unchanged.
+pytestmark = [pytest.mark.needs_proxy, pytest.mark.timeout(120)]
+
 
 def _subprocess_extra_env() -> dict[str, str]:
     """Keep dependency resolution working when the helper overrides HOME.
