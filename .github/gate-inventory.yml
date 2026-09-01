@@ -22,6 +22,6 @@ files:
   release-rehearsal.yml: 5d8ac5442790a4d930f94d2b6fc37f9ea0aea9182dddede8355ccbc11785e5a3
   release.yml: cea0b6e3e596429477aaa68951715fa4763f8e7b12588b4f37c2d4146189034a
   repo-hygiene.yml: 2a4bae4a40c2ba946446c4046076061f0c2ee7c343bc30dd93fc77c0ffcdf6fe
-  risk-selected-ci.yml: 2081a2527c5a2a4a37cf918ec002300b65899a3edada19385998d0d93f8a0820
+  risk-selected-ci.yml: 2d4bacb05c705f11f51beab1d11cd26816c95c4abc76b5c5feeb3fb996a3dbfa
   secret-scan.yml: 27e18d447e55e645f75c990034c3a5d4385249000bf2225112eb49e0755158f8
   trust-conformance.yml: 020200c06172ff51a7bcc42eb3e3b373d2cfecc6c8a7d8ceaaddb1c3ba7489f7
