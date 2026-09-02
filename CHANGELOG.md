@@ -39,6 +39,23 @@ This project follows [Semantic Versioning](https://semver.org/).
   can import, test, and `mypy --strict` the proxy subsystem and the
   telemetry dashboard/query/ingest HTTP surfaces it imports at module level.
 
+### Security
+
+- Refreshed pinned lockfile versions to close open dependency advisories.
+  `aiohttp` 3.14.1 → 3.14.3 (CVE-2026-69244, CVE-2026-69243, CVE-2026-59881),
+  `cryptography` 49.0.0 → 50.0.1 (CVE-2026-69247), and `h2` 4.3.0 → 4.4.1
+  (CVE-2026-71554) are core runtime dependencies, so this closes the
+  exposure window for anyone installing from the pinned `uv.lock` (a plain
+  `pip install tokenpak` was already unaffected — the declared version
+  ranges have no upper pin, so a fresh resolve already picks up the patched
+  releases). Also bumped `nltk` 3.10.0 → 3.10.3, which is not part of the
+  base install and is only pulled in by the optional `compression` and
+  `llamaindex` extras; one nltk advisory (CVE-2026-81726) has no upstream
+  fix yet and remains open for anyone using those extras. The `sdk/` and
+  `packages/tokenpak-js/` npm lockfiles were refreshed for `browserslist`
+  and `js-yaml`, both dev-tooling-only transitive dependencies with no
+  runtime exposure for consumers of those packages.
+
 ## [1.23.0] — 2026-08-31
 
 This backward-compatible minor release adds a gated wall-clock time-remaining
