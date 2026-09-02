@@ -1245,7 +1245,7 @@ class _LazyAlias(Generic[_T]):
 
 
 # For callers using module-level names in the *same* module only.
-# server.py imports these from tokenpak.core.runtime.proxy, not here —
+# server.py imports these from tokenpak.proxy.bootstrap, not here —
 # so backward-compat aliases are only needed for direct vault_bridge importers.
 VAULT_INDEX = _LazyAlias(get_vault_index)
 TERM_RESOLVER = _LazyAlias(get_term_resolver)
@@ -1278,7 +1278,7 @@ def _inject_vault_context_with_text(
     from tokenpak.proxy.adapters.utils import _detect_adapter, extract_query_signal
 
     try:
-        from tokenpak.core.runtime.proxy import SESSION as _runtime_session
+        from tokenpak.proxy.bootstrap import SESSION as _runtime_session
 
         session: dict[str, object] = _runtime_session
     except ImportError:
@@ -1326,7 +1326,7 @@ def _inject_vault_context_with_text(
     _t3 = time.perf_counter()
     semantic_scorer: _SemanticScorer | None = None
     try:
-        import tokenpak.core.runtime.proxy as runtime_proxy
+        import tokenpak.proxy.bootstrap as runtime_proxy
 
         candidate_scorer = getattr(runtime_proxy, "SEMANTIC_SCORER", None)
         if callable(getattr(candidate_scorer, "score", None)):

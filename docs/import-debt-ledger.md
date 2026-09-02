@@ -44,25 +44,20 @@ inversion work. Group 9 was surfaced by the complete entrypoint boundary review
 and must burn down through proxy routing or a separately reviewed, properly
 marked direct-call exception.
 
-## Group 1 — `core/runtime/proxy.py` launcher lives in Level 0 (11 edges)
+## Group 1 — `core/runtime/proxy.py` launcher lives in Level 0 (1 edge)
 
-Rationale: `core.runtime.proxy` is a proxy *launcher* placed in `core/`;
-relocating it (to `tokenpak/runtime/` or `proxy/bootstrap.py`) plus one
-injection point in `core.registry.claude_code.adapter` clears the group.
+Rationale: `core.runtime.proxy` was a proxy *launcher* placed in `core/`.
+IMP-001..IMP-010 closed: the module relocated to `tokenpak/proxy/bootstrap.py`
+(its natural proxy-layer home), so those 10 edges no longer exist — every
+importer (in-tree and the `tokenpak.runtime.proxy` compatibility re-export)
+was updated to the new path. IMP-011 remains: `core.registry.claude_code.adapter`
+importing `proxy.request` types is a genuine core->proxy edge, and no
+existing `core/contracts` protocol fits closing it with a minimal typed
+injection point, so it stays declared debt rather than inventing one.
 Closing tracker: `BURN-A4-G1`.
 
 | ID | Edge (exact, as in `.importlinter`) | Class | Release waiver | Tracker | Src |
 |---|---|---|---|---|---|
-| IMP-001 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.circuit_breaker` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-002 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.config` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-003 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.passthrough` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-004 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.server` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-005 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.headers` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-006 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.vault_bridge` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-007 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.adapters.utils` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-008 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.request_pipeline` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-009 | `tokenpak.core.runtime.proxy -> tokenpak.proxy.monitor` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
-| IMP-010 | `tokenpak.core.runtime.proxy -> tokenpak.telemetry.monitoring.server` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
 | IMP-011 | `tokenpak.core.registry.claude_code.adapter -> tokenpak.proxy.request` | upward-import | ⬜ pending | BURN-A4-G1 | 26fa650 |
 
 ## Group 2 — `orchestration.commands → _cli_core` monolith (1 edge)

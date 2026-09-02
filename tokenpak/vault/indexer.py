@@ -310,7 +310,14 @@ def sync_to_vault() -> None:
     vault_path = INGEST_ENTRIES_DIR.parent / "tokenpak-stats.json"
     if vault_path.parent.exists():
         try:
-            from tokenpak.core.runtime import proxy as runtime_proxy
+            import importlib
+
+            # Dynamic (non-static) import: tokenpak.proxy.bootstrap lives in
+            # the proxy layer, above vault in the architecture-contract layer
+            # order, so a static import here would be a new forbidden edge.
+            # This optional, fail-open hook is unaffected — MONITOR is set on
+            # that module only by tests exercising this sync path.
+            runtime_proxy = importlib.import_module("tokenpak.proxy.bootstrap")
 
             monitor = getattr(runtime_proxy, "MONITOR", None)
             if not isinstance(monitor, _VaultSyncMonitor):

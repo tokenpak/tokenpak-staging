@@ -35,7 +35,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tokenpak.core.runtime.proxy import SESSION
+from tokenpak.proxy.bootstrap import SESSION
 
 # ---------------------------------------------------------------------------
 # Modular imports (migrated from proxy monolith)
