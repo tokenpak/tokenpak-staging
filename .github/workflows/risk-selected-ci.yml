@@ -255,9 +255,14 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Run Python and proxy partitions
         run: |
+          # `tokenpak/tests/*.py` files named below are the in-package test
+          # tree's explicit CI allowlist (see pyproject.toml
+          # [tool.pytest.ini_options] for why the tree isn't collected by
+          # default) — add files here individually, only once verified green.
           python -m pytest \
             tokenpak/tests/test_custom_providers.py \
             tokenpak/tests/test_proxy_config.py \
+            tokenpak/tests/test_savings_display.py \
             tests/proxy/ tests/config/ tests/services/ \
             -q --tb=short \
             --continue-on-collection-errors \
