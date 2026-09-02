@@ -92,7 +92,7 @@ def test_log_uses_empty_sentinel_not_null_when_absent(tmp_path):
 
 
 def test_compat_monitor_preserves_legacy_positional_tail(tmp_path):
-    from tokenpak.core.runtime.proxy import Monitor as CompatibilityMonitor
+    from tokenpak.proxy.bootstrap import Monitor as CompatibilityMonitor
 
     db = tmp_path / "compat-monitor.db"
     monitor = CompatibilityMonitor(str(db))

@@ -266,7 +266,7 @@ class ProxyRoutesMixin:
 
     def _build_legacy_health_payload(self) -> dict[str, object]:
         """Build the v1.13 mixin payload from current compatibility shims."""
-        from tokenpak.core.runtime.proxy import SESSION
+        from tokenpak.proxy.bootstrap import SESSION
         from tokenpak.proxy.circuit_breaker import _provider_circuits
         from tokenpak.proxy.config import (
             BUDGET_TOTAL_TOKENS,

@@ -30,17 +30,11 @@ layers =
     tokenpak.security : tokenpak.compression : tokenpak.cache : tokenpak.vault : tokenpak.sources : tokenpak.debug
     tokenpak.core
 ignore_imports =
-    ; Group 1 — core/runtime/proxy.py launcher in Level 0 (IMP-001..IMP-011)
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.circuit_breaker
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.config
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.passthrough
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.server
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.headers
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.vault_bridge
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.adapters.utils
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.request_pipeline
-    tokenpak.core.runtime.proxy -> tokenpak.proxy.monitor
-    tokenpak.core.runtime.proxy -> tokenpak.telemetry.monitoring.server
+    ; Group 1 — core.registry.claude_code.adapter -> proxy.request (IMP-011).
+    ; The other 10 edges in this group closed when core/runtime/proxy.py was
+    ; relocated to tokenpak/proxy/bootstrap.py (BURN-A4-G1); this one remains
+    ; a genuine core->proxy edge with no suitable existing core/contracts
+    ; protocol to inject through, so it stays declared debt.
     tokenpak.core.registry.claude_code.adapter -> tokenpak.proxy.request
     ; Group 2 — orchestration.commands -> _cli_core monolith (IMP-012)
     tokenpak.orchestration.commands -> tokenpak._cli_core

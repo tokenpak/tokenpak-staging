@@ -11,7 +11,7 @@ injection was working correctly on every eligible request.
 The defect class is **"value computed, never surfaced"**, so these tests
 assert at the *render* site and at the *persistence* site — and the
 persistence site is ``ProxyServer.session``, the dict request accounting and
-``GET /stats`` actually read, not the ``tokenpak.core.runtime.proxy.SESSION``
+``GET /stats`` actually read, not the ``tokenpak.proxy.bootstrap.SESSION``
 compatibility global that no live request path touches. A test that
 monkeypatched that global (an earlier version of this file did) would pass
 regardless of which object the writer actually updated — precisely the gap

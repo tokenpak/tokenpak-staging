@@ -1,10 +1,10 @@
 """test_savings_display.py — Tests for enhanced savings display in status and savings commands."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from tokenpak.cli.commands import savings, status
+from tokenpak.cli.commands import status
 from tokenpak.telemetry.pricing import estimate_savings, get_rates
 
 
@@ -137,7 +137,13 @@ class TestStatusCommand:
         sys.stdout = captured_output
 
         try:
-            status.run(proxy_base="http://127.0.0.1:8766")
+            # `status.run()` is now the savings-first *default* view (a
+            # different, lighter render that reads /stats + /cache-stats,
+            # not /stats/session). The "Session Savings" block asserted
+            # below is part of `status.run_full()`, the explicit --full /
+            # backward-compatible surface — see its docstring
+            # ("original output, backward compat").
+            status.run_full(proxy_base="http://127.0.0.1:8766")
             output = captured_output.getvalue()
         finally:
             sys.stdout = sys.__stdout__
@@ -165,7 +171,7 @@ class TestStatusCommand:
 
         try:
             with pytest.raises(SystemExit):
-                status.run(proxy_base="http://127.0.0.1:8766")
+                status.run_full(proxy_base="http://127.0.0.1:8766")
             output = captured_output.getvalue()
         finally:
             sys.stdout = sys.__stdout__
@@ -174,81 +180,38 @@ class TestStatusCommand:
         assert "unreachable" in output or "Proxy not running" in output.lower()
 
 
-class TestSavingsCommand:
-    """Test the savings command with before/after comparison."""
-
-    @patch("tokenpak.cli.commands.savings._connect")
-    def test_savings_summary_with_before_after(self, mock_connect):
-        """Test savings summary includes before/after comparison."""
-        # Mock the database connection
-        mock_conn = MagicMock()
-
-        # Mock the query result
-        mock_row = MagicMock()
-        mock_row.__getitem__ = lambda self, key: {
-            "requests": 100,
-            "avg_raw": 50_000,
-            "avg_compressed": 47_500,
-            "total_raw": 5_000_000,
-            "total_compressed": 4_750_000,
-            "total_cost": 14.25,  # 4.75M tokens * $3/MTok
-        }[key]
-
-        mock_conn.execute.return_value.fetchone.return_value = mock_row
-        mock_connect.return_value = mock_conn
-
-        result = savings._query_savings(period="24h")
-
-        # Check for before/after fields
-        assert "cost_without_tokenpak" in result
-        assert "cost_with_tokenpak" in result
-        assert "cost_reduction_pct" in result
-
-        # Verify the values are sensible
-        assert result["cost_without_tokenpak"] == pytest.approx(15.0, abs=0.1)
-        assert result["cost_with_tokenpak"] == pytest.approx(14.25, abs=0.1)
-        assert result["cost_reduction_pct"] > 0
-
-    @patch("tokenpak.cli.commands.savings._connect")
-    def test_savings_no_data(self, mock_connect):
-        """Test savings gracefully handles no data."""
-        mock_connect.return_value = None
-
-        result = savings._query_savings(period="24h")
-
-        assert "error" in result
-        assert result["error"] == "DB not found"
-
-    @patch("tokenpak.cli.commands.savings._connect")
-    def test_savings_by_model(self, mock_connect):
-        """Test per-model breakdown includes cost reduction."""
-        mock_conn = MagicMock()
-
-        # Mock per-model rows
-        mock_rows = [
-            MagicMock(
-                **{
-                    "__getitem__": lambda self, key: {
-                        "model": "claude-sonnet-4-6",
-                        "requests": 50,
-                        "avg_raw": 40_000,
-                        "avg_compressed": 38_000,
-                        "total_raw": 2_000_000,
-                        "total_compressed": 1_900_000,
-                        "total_cost": 5.70,
-                    }[key]
-                }
-            )
-        ]
-
-        mock_conn.execute.return_value.fetchall.return_value = mock_rows
-        mock_connect.return_value = mock_conn
-
-        result = savings._query_by_model(period="24h")
-
-        assert len(result) > 0
-        assert "cost_reduction_pct" in result[0]
-        assert result[0]["model"] == "claude-sonnet-4-6"
+# ---------------------------------------------------------------------------
+# TestSavingsCommand — removed 2026-09-01.
+#
+# These three tests (`test_savings_summary_with_before_after`,
+# `test_savings_no_data`, `test_savings_by_model`) patched
+# `tokenpak.cli.commands.savings._connect`, a zero-arg helper that opened a
+# `sqlite3.Connection` against a module-level `_MONITOR_DB` path and returned
+# `None` when the DB file was missing. That helper — and the before/after
+# dollar-cost fields it fed (`cost_without_tokenpak`, `cost_with_tokenpak`,
+# `cost_reduction_pct`) — belonged to the pre-deprecation `tokenpak savings`
+# command (see its history: introduced 2026-03-11, superseded 2026-04-09 when
+# `savings.py` became a deprecation wrapper that delegates to
+# `tokenpak status`; `_connect` was never carried over).
+#
+# `savings.py` still exports `_query_savings()` / `_query_by_model()` — kept
+# for `run_savings_cmd`'s optional module surface — but they were rebuilt
+# 2026-04-10 (`f77d4f6db4`) against a different DB schema (`requests` table
+# with `input_tokens` / `compressed_tokens` columns, read via
+# `sqlite3.connect(_MONITOR_DB)` directly, no `_connect` seam) and a
+# different return shape (`avg_raw_tokens`, `avg_compressed_tokens`,
+# `tokens_saved_total`, `reduction_pct` — no cost fields at all). Rewriting
+# these three tests against that shape would drop the very thing they were
+# written to check (before/after cost comparison), so the honest move is
+# deletion, not a reskin.
+#
+# The current `_query_savings()` / `_query_by_model()` business logic (the
+# `_MONITOR_DB`-patched seam, token-based fields) is exercised by
+# `tests/test_savings_cmd.py` (top-level `tests/`, part of the default CI
+# suite). The savings *display* — before/after cost comparison included —
+# now lives in `status.run_full()` and is covered by
+# `TestStatusCommand.test_status_with_savings` above.
+# ---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":

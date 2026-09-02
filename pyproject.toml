@@ -303,6 +303,28 @@ omit = [
 ]
 
 [tool.pytest.ini_options]
+# `testpaths = ["tests"]` means a bare `pytest` (and every CI invocation that
+# runs `pytest tests/`) collects ONLY the top-level `tests/` directory. The
+# in-package tree at `tokenpak/tests/` — excluded from the distribution by
+# `[tool.setuptools.packages.find] exclude` above and from the coverage
+# denominator by `[tool.coverage.run] omit` above — is NOT collected by
+# default and is largely not CI-executed at all.
+#
+# `tokenpak/tests/` is legacy: a second, unmaintained test tree that predates
+# (and partly duplicates) the canonical `tests/` directory. As of 2026-09-01
+# it does not run as a whole — `pytest tokenpak/tests` hits 18 collection
+# errors (imports of modules that no longer exist: `extraction`,
+# `tokenpak.server`, `tokenpak.startup_validator`, `tokenpak.state_manager`,
+# `tokenpak.timeline`, `tokenpak.tokens`, `tokenpak.version_check`, and
+# others) plus additional failures in files that do collect. Making the
+# whole directory CI-executed is a separate, larger cleanup, not something
+# any one PR should fold in incidentally.
+#
+# The explicit exception is `.github/workflows/risk-selected-ci.yml`'s
+# `python_proxy` job, which names individual `tokenpak/tests/` files it has
+# verified pass (`test_custom_providers.py`, `test_proxy_config.py`,
+# `test_savings_display.py`) — add a file there, by name, only after
+# confirming it's green; do not glob the directory in.
 testpaths = [
     "tests",
 ]

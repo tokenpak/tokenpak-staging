@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for tokenpak.core.runtime.proxy — shim functions and Monitor subclass."""
+"""Unit tests for tokenpak.proxy.bootstrap — shim functions and Monitor subclass."""
 
 import hashlib
 import json
@@ -7,7 +7,7 @@ import os
 import sqlite3
 import tempfile
 
-from tokenpak.core.runtime.proxy import (
+from tokenpak.proxy.bootstrap import (
     _PROFILE_PRESETS,
     SESSION,
     Monitor,

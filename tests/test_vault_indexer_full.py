@@ -25,7 +25,7 @@ def test_sync_stats_uses_vault_product_state_directory(tmp_path: Path, monkeypat
         def get_by_model(self) -> dict[str, dict[str, object]]:
             return {}
 
-    from tokenpak.core.runtime import proxy as runtime_proxy
+    from tokenpak.proxy import bootstrap as runtime_proxy
 
     monkeypatch.setattr(indexer_module, "INGEST_ENTRIES_DIR", entries_dir)
     monkeypatch.setattr(runtime_proxy, "MONITOR", Monitor(), raising=False)

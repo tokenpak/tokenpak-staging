@@ -1,5 +1,5 @@
 """
-tokenpak.core.runtime.proxy — compatibility shim
+tokenpak.proxy.bootstrap — compatibility shim
 
 The old monolithic proxy.py that lived here has been deleted as part of the
 monolith-consolidation cleanup.  This shim re-exports canonical symbols from
@@ -9,6 +9,12 @@ that have not yet been extracted to the modular tree.
 CLAUDE_CODE_HEADER_ALLOWLIST, LEGACY_HEADER_ALLOWLIST, _classify_route
 _write_mutation_audit, _prune_mutation_audit
 _resolve_session_id
+
+Relocated from ``tokenpak.core.runtime.proxy`` (Level 0/core) to this,
+its natural proxy-layer home — see BURN-A4-G1 in
+``docs/import-debt-ledger.md``. ``tokenpak.runtime.proxy`` remains the
+documented external compatibility re-export (see CONTRIBUTING.md) and now
+points here directly.
 """
 
 from __future__ import annotations
@@ -364,6 +370,6 @@ from tokenpak.proxy.adapters.utils import (  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # inject_vault_context — transferred to modular tree in A2b; re-exported here
-# so that code/tests that import it from tokenpak.core.runtime.proxy still work.
+# so that code/tests that import it from tokenpak.proxy.bootstrap still work.
 # ---------------------------------------------------------------------------
 from tokenpak.proxy.vault_bridge import inject_vault_context  # noqa: F401

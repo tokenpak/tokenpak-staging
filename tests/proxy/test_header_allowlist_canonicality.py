@@ -2,14 +2,14 @@
 
 Before this guard, `tokenpak.proxy.passthrough` held a 7-entry tuple and
 `tokenpak.proxy.headers` held the canonical 19-entry frozenset; the shim at
-`tokenpak.core.runtime.proxy` re-exported the wrong one, so any caller that
+`tokenpak.proxy.bootstrap` re-exported the wrong one, so any caller that
 imported from the shim silently lost x-stainless-* and x-app forwarding.
 """
 
-from tokenpak.core.runtime.proxy import (
+from tokenpak.proxy import CLAUDE_CODE_HEADER_ALLOWLIST as PKG_ALLOWLIST
+from tokenpak.proxy.bootstrap import (
     CLAUDE_CODE_HEADER_ALLOWLIST as SHIM_ALLOWLIST,
 )
-from tokenpak.proxy import CLAUDE_CODE_HEADER_ALLOWLIST as PKG_ALLOWLIST
 from tokenpak.proxy.headers import CLAUDE_CODE_HEADER_ALLOWLIST as CANONICAL
 
 
