@@ -19,6 +19,11 @@ This project follows [Semantic Versioning](https://semver.org/).
   table only makes the cell *eligible*, it does not change the shipped
   default. See the `time_forecast` section in `docs/api-reference.md`.
 
+### Changed
+
+- `tokenpak.core.runtime.proxy` remains importable as a compatibility path
+  for the launcher, which now lives in `tokenpak.proxy.bootstrap`.
+
 ### Fixed
 
 - A model-endpoint request sent with no body no longer causes the proxy to
