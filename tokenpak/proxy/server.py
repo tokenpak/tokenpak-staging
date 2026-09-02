@@ -891,7 +891,7 @@ _MAX_SESSION_SOURCES = 20
 
 
 def _record_injection_in_session(
-    session: dict[str, object], injected_tokens: int, injected_sources: str = ""
+    session: _SessionState, injected_tokens: int, injected_sources: str = ""
 ) -> None:
     """Accumulate injection totals onto ``ProxyServer.session`` — the dict that
     backs request accounting and ``GET /stats``, which is what ``tokenpak
@@ -1243,7 +1243,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             # collector above tracks provider cache hits only (no origin
             # attribution); window_24h is the source for the TokenPak-vs-
             # provider hit rate split and the client/proxy/unknown breakdown.
-            db_path = ps.monitor.db_path if ps.monitor is not None else None
+            db_path = str(ps.monitor.db_path) if ps.monitor is not None else None
             payload["window_24h"] = _get_cache_stats_by_window(hours=24, db_path=db_path)
             self._send_json(payload)
             return
@@ -1606,6 +1606,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Usage parsing follows the router's provider identity, independently
         # of transport URL inference used by credentials and circuit breakers.
         _usage_parser_provider = "unknown"
+        # Vault-injection receipt for this request. Defaults stand for every
+        # path that does not inject (non-model requests, empty-body requests,
+        # non-byte-preserved routes, and the fail-open path below) so the
+        # recorded value is always the measured one — zero because nothing
+        # was injected, never zero by omission.
+        _injected_tokens = 0
+        _injected_sources = ""
 
         trace: PipelineTrace | None = None
         if should_log and is_model_request:
@@ -1909,13 +1916,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _ci_cache.put(_ci_session_id, body)
                 except Exception:
                     pass  # fail-open: never break a request over telemetry
-
-            # Vault-injection receipt for this request. Defaults stand for every
-            # path that does not inject (non-byte-preserved routes, and the
-            # fail-open path below) so the recorded value is always the measured
-            # one — zero because nothing was injected, never zero by omission.
-            _injected_tokens = 0
-            _injected_sources = ""
 
             if _is_byte_preserved:
                 # Byte-preserved path (Claude Code): detect streaming from raw
@@ -4106,14 +4106,20 @@ def _extract_response_tokens(body: bytes) -> int:
     return value if value is not None else 0
 
 
-def _extract_request_reasoning_effort(body: bytes) -> tuple[str, str]:
+def _extract_request_reasoning_effort(body: bytes | None) -> tuple[str, str]:
     """Return normalized and raw request-observed reasoning effort.
 
     The governed reasoning-usage schema currently admits only
     low/medium/high. Newer client values remain available in the raw field so
     the schema can be reconciled explicitly instead of silently discarding or
     widening the normalized contract.
+
+    A missing or empty request body (for example a zero-length-body POST to
+    a model endpoint) carries no reasoning-effort signal and is treated the
+    same as an empty JSON object would be: no normalized or raw value.
     """
+    if not body:
+        return "", ""
     try:
         data = json.loads(body)
         if not isinstance(data, Mapping):
@@ -4152,7 +4158,7 @@ def _provider_cache_observation(
 def _provider_usage_observation(
     provider: str,
     usage: Mapping[str, object] | None,
-    request_body: bytes,
+    request_body: bytes | None,
 ) -> _ProviderUsageObservation:
     """Normalize one provider usage observation with explicit provenance."""
     from tokenpak.services.providers._registry import (
@@ -4241,7 +4247,7 @@ def _provider_usage_observation(
 def _safe_provider_usage_observation(
     provider: str,
     usage: Mapping[str, object] | None,
-    request_body: bytes,
+    request_body: bytes | None,
 ) -> _ProviderUsageObservation:
     """Return an observation while containing third-party parser failures."""
     try:
@@ -4295,7 +4301,7 @@ def _cost_observation(
         if provider_cache_creation is not None
         else fallback_cache_creation_tokens
     )
-    if use_provider_input:
+    if use_provider_input and provider_input is not None:
         priced_input = provider_input
         if input_includes_cache is False:
             priced_input += cache_read + cache_creation

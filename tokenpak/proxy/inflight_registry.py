@@ -108,7 +108,7 @@ def _sweep_expired_locked(now: float) -> None:
         _INFLIGHT.pop(rid, None)
 
 
-def snapshot() -> list[dict]:
+def snapshot() -> list[dict[str, object]]:
     """Read-only list of currently admitted in-flight requests.
 
     Each entry reports facts only: elapsed time since ``started_at``, time-
