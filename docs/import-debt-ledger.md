@@ -50,7 +50,10 @@ Rationale: `core.runtime.proxy` was a proxy *launcher* placed in `core/`.
 IMP-001..IMP-010 closed: the module relocated to `tokenpak/proxy/bootstrap.py`
 (its natural proxy-layer home), so those 10 edges no longer exist — every
 importer (in-tree and the `tokenpak.runtime.proxy` compatibility re-export)
-was updated to the new path. IMP-011 remains: `core.registry.claude_code.adapter`
+was updated to the new path; `tokenpak.core.runtime.proxy` itself remains
+importable as a lazy `__getattr__` compatibility shim that resolves
+`tokenpak.proxy.bootstrap` only on attribute access, so it adds no static
+import edge. IMP-011 remains: `core.registry.claude_code.adapter`
 importing `proxy.request` types is a genuine core->proxy edge, and no
 existing `core/contracts` protocol fits closing it with a minimal typed
 injection point, so it stays declared debt rather than inventing one.
