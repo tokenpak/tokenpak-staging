@@ -19,6 +19,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   table only makes the cell *eligible*, it does not change the shipped
   default. See the `time_forecast` section in `docs/api-reference.md`.
 
+### Fixed
+
+- A model-endpoint request sent with no body no longer causes the proxy to
+  log a spurious internal error after the response has already been
+  delivered to the client. The request's usage is now recorded normally
+  instead of being dropped.
+
 ### Dependencies
 
 - The `dev` extra now pulls in `tokenpak[serve]` (`fastapi`, `uvicorn`,
