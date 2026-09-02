@@ -154,7 +154,7 @@ dev = [
     "black>=24.0.0",
     # Formatter output is a release gate; pin it so a tool release cannot turn
     # an unchanged checkout red or silently rewrite the baseline.
-    "ruff==0.16.4",
+    "ruff==0.16.5",
     # Artifact metadata validation is a release gate. Keep Twine in the
     # candidate lock so validation lanes can provision it with hashes and run
     # `twine check` offline against the exact wheel and sdist under review.
@@ -162,7 +162,7 @@ dev = [
     # The build frontend and backend are also release gates. Pin both in the
     # candidate lock so offline validation does not depend on an unrecorded
     # host package or a network-enabled PEP 517 build environment.
-    "build==1.5.0",
+    "build==1.6.0",
     "setuptools==84.0.0",
     # Architecture-contract gate (.importlinter) and its contract tests
     # under tests/lint/test_import_contracts.py.
