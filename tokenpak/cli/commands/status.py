@@ -25,7 +25,10 @@ import time
 import urllib.request
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+
+if TYPE_CHECKING:
+    from tokenpak.core.contracts.session_economics import SessionEconomics
 
 try:
     import click
@@ -193,7 +196,7 @@ def _session_economics_enabled() -> bool:
         return True
 
 
-def _fetch_session_economics(proxy_base: str) -> tuple[Optional[Any], str]:
+def _fetch_session_economics(proxy_base: str) -> tuple[Optional["SessionEconomics"], str]:
     """Fetch and validate the session-economics contract from the local proxy.
 
     Thin adapter: session selection happens inside the proxy (explicit id →

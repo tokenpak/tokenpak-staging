@@ -139,11 +139,12 @@ def stage_vault_injection(
 
     if inject_fn is None:
         try:
-            from tokenpak.proxy.vault_bridge import _inject_vault_context_with_text as inject_fn
+            from tokenpak.proxy.vault_bridge import _inject_vault_context_with_text
         except ImportError:
             result.skipped = True
             result.skip_reason = "vault_bridge_unavailable"
             return request, result
+        inject_fn = _inject_vault_context_with_text
 
     body, injected_tokens, injected_sources, injection_text = inject_fn(
         request.body,
