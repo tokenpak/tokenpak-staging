@@ -154,7 +154,7 @@ def settle_pending_spend(ticket: Optional[str]) -> bool:
         return _INFLIGHT.pop(ticket, None) is not None
 
 
-def get_admitted_projection(ticket: Optional[str]) -> Optional[dict]:
+def get_admitted_projection(ticket: Optional[str]) -> Optional[dict[str, object]]:
     """Read-only lookup of the projected spend already admitted for ``ticket``.
 
     Returns the same ``(agent_id, cost_usd, tokens_total, cache_read_tokens,

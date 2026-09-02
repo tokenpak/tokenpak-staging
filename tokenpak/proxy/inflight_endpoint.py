@@ -15,7 +15,7 @@ from __future__ import annotations
 from tokenpak.proxy.inflight_registry import snapshot as _inflight_snapshot
 
 
-def build_response() -> dict:
+def build_response() -> dict[str, object]:
     """Build the JSON-serializable body for ``GET /inflight``."""
     entries = _inflight_snapshot()
     return {"in_flight": entries, "count": len(entries)}
