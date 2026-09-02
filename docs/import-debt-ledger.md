@@ -158,15 +158,17 @@ hook/reader interfaces belong at the `services/` boundary. Closing tracker:
 | IMP-052 | `tokenpak.telemetry.demo -> tokenpak.proxy.stats` | upward-import | ⬜ pending | BURN-A4-G6 | 26fa650 |
 | IMP-053 | `tokenpak.telemetry.server -> tokenpak.companion.capsules` | upward-import | ⬜ pending | BURN-A4-G6 | 26fa650 |
 
-## Group 7 — `routing.fallback → orchestration.retry` (1 edge)
+## Group 7 — `routing.fallback → orchestration.retry` (0 edges — closed)
 
 Rationale: Level 2 importing Level 4 for a generic retry helper; move the
 primitive to `core/`. Smallest single fix in the set — first in the burn-down
 order. Closing tracker: `BURN-A4-G7`.
 
-| ID | Edge | Class | Release waiver | Tracker | Src |
-|---|---|---|---|---|---|
-| IMP-054 | `tokenpak.routing.fallback -> tokenpak.orchestration.retry` | upward-import | ⬜ pending | BURN-A4-G7 | 26fa650 |
+Closed: the retry primitive (`RetryEngine`, `RetryExhaustedError`,
+`ImmediateAlertError`, `load_recent_retry_events`) moved to
+`tokenpak/core/retry.py`; `orchestration.retry` re-exports the same names
+under the same import path and `routing.fallback` now imports directly from
+`core`. No rows remain in this group.
 
 ## Group 2b — cli entry modules → `_cli_core` monolith (6 edges)
 

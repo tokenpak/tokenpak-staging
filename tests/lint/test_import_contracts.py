@@ -106,10 +106,21 @@ def test_gate_is_green_on_committed_config():
 
 
 def test_unlisted_edge_turns_gate_red(tmp_path):
-    """Dropping one ignore entry (simulating an unlisted edge) must fail."""
-    sentinel = "tokenpak.routing.fallback -> tokenpak.orchestration.retry"
+    """Dropping one ignore entry (simulating an unlisted edge) must fail.
+
+    The sentinel is selected from the live config rather than hardcoded. A
+    hardcoded edge makes this test fail whenever that specific debt is burned
+    down — which is the ledger's stated goal — so the test would penalise
+    exactly the change it exists to protect.
+    """
     original = CONFIG_PATH.read_text()
+    ignores = _parse_config_ignores(original)
+    layer_edges = ignores.get("importlinter:contract:architecture-layers", set())
+    assert layer_edges, "no ignore_imports edges remain under the layers contract to sample"
+    sentinel = sorted(layer_edges)[0]
     assert sentinel in original, "sentinel edge missing from config"
+    src = sentinel.split(" -> ")[0]
+
     mutated_lines = [line for line in original.splitlines() if line.strip() != sentinel]
     mutated = "\n".join(mutated_lines) + "\n"
     assert mutated != original
@@ -121,7 +132,7 @@ def test_unlisted_edge_turns_gate_red(tmp_path):
         "gate stayed green with an unlisted edge — the contract is not "
         "actually enforcing the boundary"
     )
-    assert "tokenpak.routing.fallback" in result.stdout, (
+    assert src in result.stdout, (
         f"failure output does not name the violating edge:\n{result.stdout}"
     )
 
