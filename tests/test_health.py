@@ -28,7 +28,7 @@ from typing import Tuple
 
 import pytest
 
-from tokenpak.core.runtime.proxy import SESSION
+from tokenpak.proxy.bootstrap import SESSION
 from tokenpak.proxy.fallback import _provider_circuit_lock, _provider_circuits
 
 # ---------------------------------------------------------------------------

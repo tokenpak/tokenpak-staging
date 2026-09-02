@@ -247,8 +247,8 @@ def test_health_canonical_wire_contract_is_exact_and_uncached(proxy):
 
 
 def test_legacy_mixin_health_preserves_v113_schema_and_one_second_cache(monkeypatch):
-    from tokenpak.core.runtime.proxy import SESSION
     from tokenpak.proxy import config, fallback, request_pipeline, vault_bridge
+    from tokenpak.proxy.bootstrap import SESSION
     from tokenpak.proxy.routes import ProxyRoutesMixin
 
     class LegacyHandler(ProxyRoutesMixin):
