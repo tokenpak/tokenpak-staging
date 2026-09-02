@@ -21,6 +21,7 @@ import pytest
 
 import tokenpak.proxy.server as server_module
 from tests.proxy._proxy_subprocess import free_port
+from tokenpak.proxy.circuit_breaker import get_circuit_breaker_registry
 from tokenpak.proxy.monitor import Monitor
 from tokenpak.proxy.router import ProviderRouter, estimate_cost
 from tokenpak.proxy.server import (
@@ -728,6 +729,107 @@ def test_real_proxy_persists_equivalent_usage_without_rewriting_responses(
     assert [row[-2:] for row in rows] == [("json", 0), ("sse", 0)]
     assert rows[0][-3] == pytest.approx(expected_cost)
     assert rows[1][-3] == pytest.approx(expected_cost)
+
+
+@pytest.mark.needs_proxy
+@pytest.mark.timeout(120)
+def test_real_proxy_serves_zero_length_body_request_without_spurious_failure(
+    tmp_path,
+    monkeypatch,
+    stub_upstream,
+):
+    """A model-endpoint POST with no body must not crash post-response telemetry.
+
+    ``is_model_request`` is decided from the URL alone, so a genuinely empty
+    body (a client that opens the request with nothing to send) reaches it.
+    Before the fix, the handler's own body-or-None read
+    (``content_length > 0``) left ``body = None`` here, which reached
+    ``json.loads(None)`` inside ``_extract_request_reasoning_effort`` — once
+    via ``_provider_usage_observation``'s normal call, caught by
+    ``_safe_provider_usage_observation``'s ``except`` clause, and again via
+    that same clause's own fallback call, which reused the same ``None``
+    body and raised a second, unguarded ``TypeError``. That escaped into the
+    handler's outer exception handling and was recorded as a genuine
+    provider/session failure — a circuit-breaker failure, a session error,
+    and a synthetic 502 log entry — for a request whose 200 response had
+    already reached the client, and the usage observation for that request
+    was never persisted at all.
+    """
+    db = tmp_path / "monitor.db"
+    upstream_base = f"http://127.0.0.1:{stub_upstream.server_port}"
+    target = f"{upstream_base}/v1/messages"
+
+    proxy, port = _start_test_proxy(
+        monkeypatch, db, provider="anthropic", upstream_base=upstream_base
+    )
+
+    registry = get_circuit_breaker_registry()
+    registry._breakers.pop("127.0.0.1", None)  # clean slate for this test
+    breaker_calls: dict[str, list[str]] = {"success": [], "failure": []}
+    real_success, real_failure = registry.record_success, registry.record_failure
+
+    def spy_success(provider):
+        breaker_calls["success"].append(provider)
+        return real_success(provider)
+
+    def spy_failure(provider):
+        breaker_calls["failure"].append(provider)
+        return real_failure(provider)
+
+    monkeypatch.setattr(registry, "record_success", spy_success)
+    monkeypatch.setattr(registry, "record_failure", spy_failure)
+
+    log_calls: list[dict[str, object]] = []
+
+    def spy_log_request(**kwargs):
+        log_calls.append(kwargs)
+
+    monkeypatch.setattr(server_module, "log_request", spy_log_request)
+
+    errors_before = proxy.session["errors"]
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        try:
+            # No `body=` kwarg at all — http.client still sends
+            # `Content-Length: 0`, matching a real client's bodyless POST.
+            conn.request(
+                "POST",
+                target,
+                headers={"Content-Type": "application/json", "x-api-key": "test-key"},
+            )
+            response = conn.getresponse()
+            status, response_body = response.status, response.read()
+        finally:
+            conn.close()
+
+        assert status == 200
+        assert response_body == _JSON_BODY
+
+        assert proxy.monitor is not None
+        assert proxy.monitor.flush(timeout=10.0)
+
+        conn2 = sqlite3.connect(str(db))
+        try:
+            rows = conn2.execute(
+                "SELECT status_code, provider_usage_source, total_billable_tokens "
+                "FROM requests ORDER BY id"
+            ).fetchall()
+        finally:
+            conn2.close()
+    finally:
+        proxy.stop()
+        registry._breakers.pop("127.0.0.1", None)
+
+    # The usage observation for the served request was actually persisted —
+    # not lost to a crash before ps.monitor.log() is ever reached.
+    assert rows == [(200, "provider_usage_object", 54)]
+
+    # No spurious failure accounting for a request that succeeded.
+    assert proxy.session["errors"] == errors_before
+    assert "127.0.0.1" in breaker_calls["success"]
+    assert "127.0.0.1" not in breaker_calls["failure"]
+    assert not any(call.get("response_status") == 502 for call in log_calls)
 
 
 @pytest.mark.needs_proxy
