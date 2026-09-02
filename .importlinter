@@ -83,8 +83,6 @@ ignore_imports =
     tokenpak.telemetry.monitoring.health -> tokenpak.proxy.stats
     tokenpak.telemetry.demo -> tokenpak.proxy.stats
     tokenpak.telemetry.server -> tokenpak.companion.capsules
-    ; Group 7 — routing.fallback -> orchestration.retry (IMP-054)
-    tokenpak.routing.fallback -> tokenpak.orchestration.retry
 
 [importlinter:contract:std01-entrypoint-siblings]
 name = Entrypoint sibling independence (cli/sdk/companion/dashboard/alerts)

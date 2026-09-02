@@ -1,10 +1,18 @@
-"""Tests for tokenpak.orchestration.retry"""
+"""Tests for tokenpak.orchestration.retry (implementation: tokenpak.core.retry)
+
+The public names under test (``RetryEngine``, ``RetryExhaustedError``, etc.)
+are imported from ``tokenpak.orchestration.retry`` to exercise the re-export
+that keeps existing callers working. Module-level mutable state
+(``RETRY_EVENT_LOG`` / ``CONFIG_PATH`` / ``DEFAULT_STATE_DIR`` / ``time``) is
+patched on ``tokenpak.core.retry`` instead, since that is the module whose
+globals the implementation actually reads at runtime.
+"""
 
 import json
 
 import pytest
 
-import tokenpak.orchestration.retry as retry_mod
+import tokenpak.core.retry as retry_mod
 from tokenpak.orchestration.retry import (
     MODEL_DOWNGRADE_PATH,
     PROVIDER_FALLBACK_PATH,
@@ -228,7 +236,7 @@ def test_429_triggers_wait_behavior(tmp_path):
     waits_used = []
 
     # Patch sleep to capture wait times
-    import tokenpak.orchestration.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
+    import tokenpak.core.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
 
     original_sleep = retry_mod.time.sleep
 
@@ -261,7 +269,7 @@ def test_500_triggers_retry(tmp_path):
         wait_seconds=[99, 99, 99],  # large waits — 500 should skip them
     )
     # Monkeypatch sleep so test doesn't actually wait
-    import tokenpak.orchestration.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
+    import tokenpak.core.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
 
     original_sleep = retry_mod.time.sleep
     waits_used = []
@@ -344,7 +352,7 @@ def test_all_providers_fail_triggers_alert(tmp_path):
 
 def test_wait_seconds_default_is_1_2_4(tmp_path):
     """Default wait_seconds should be [1, 2, 4] per spec."""
-    import tokenpak.orchestration.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
+    import tokenpak.core.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
 
     # Temporarily override config path to avoid reading real config
     original = retry_mod.CONFIG_PATH
@@ -358,7 +366,7 @@ def test_wait_seconds_default_is_1_2_4(tmp_path):
 
 def test_config_file_overrides_wait_seconds(tmp_path):
     """Config file retry section should override defaults."""
-    import tokenpak.orchestration.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
+    import tokenpak.core.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
 
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(json.dumps({"retry": {"wait_seconds": [0.5, 1.0, 2.0]}}))
@@ -376,7 +384,7 @@ def test_config_file_overrides_wait_seconds(tmp_path):
 
 def test_retry_events_logged(tmp_path, monkeypatch):
     """Retry events should be appended to the JSONL log."""
-    import tokenpak.orchestration.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
+    import tokenpak.core.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
 
     event_log = tmp_path / "retry_events.jsonl"
     monkeypatch.setattr(retry_mod, "RETRY_EVENT_LOG", event_log)
@@ -394,7 +402,7 @@ def test_retry_events_logged(tmp_path, monkeypatch):
 
 def test_load_recent_retry_events(tmp_path, monkeypatch):
     """load_recent_retry_events should return events from the JSONL log."""
-    import tokenpak.orchestration.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
+    import tokenpak.core.retry as retry_mod  # noqa: F811 — module-level alias exists; kept local for clarity
 
     event_log = tmp_path / "retry_events.jsonl"
     monkeypatch.setattr(retry_mod, "RETRY_EVENT_LOG", event_log)

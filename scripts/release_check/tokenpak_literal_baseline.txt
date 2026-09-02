@@ -65,6 +65,7 @@ tokenpak/core/cooldown.py
 tokenpak/core/debug.py
 tokenpak/core/paths.py
 tokenpak/core/registry/__init__.py
+tokenpak/core/retry.py
 tokenpak/core/startup_validator.py
 tokenpak/core/validation/request_validator.py
 tokenpak/core/validation/response_schema.py
@@ -95,7 +96,6 @@ tokenpak/orchestration/macros/script_hooks.py
 tokenpak/orchestration/memory_promoter.py
 tokenpak/orchestration/precondition_gates.py
 tokenpak/orchestration/registry.py
-tokenpak/orchestration/retry.py
 tokenpak/orchestration/runbook_generator.py
 tokenpak/orchestration/skill_compiler.py
 tokenpak/orchestration/team/agent_registry.py

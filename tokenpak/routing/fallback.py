@@ -3,7 +3,7 @@ tokenpak.routing.fallback
 ────────────────────────────────
 Proxy-layer fallback bridge.
 
-Wraps :class:`~tokenpak.orchestration.retry.RetryEngine` with a
+Wraps :class:`~tokenpak.core.retry.RetryEngine` with a
 simpler, context-oriented API for the proxy layer.  Consumers work
 with a single ``FallbackRouter`` instance (or the ``fallback_call``
 convenience function) and never touch the lower-level engine directly.
@@ -36,7 +36,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Callable, Optional, Protocol, TypeVar, cast
 
-from tokenpak.orchestration.retry import (
+from tokenpak.core.retry import (
     ImmediateAlertError,
     RetryEngine,
     RetryExhaustedError,
@@ -308,6 +308,6 @@ def get_recent_fallback_events(n: int = 20) -> list[dict[str, object]]:
     """
     Return up to *n* most-recent retry/fallback events from the JSONL log.
 
-    Delegates to :func:`tokenpak.orchestration.retry.load_recent_retry_events`.
+    Delegates to :func:`tokenpak.core.retry.load_recent_retry_events`.
     """
     return load_recent_retry_events(n)
