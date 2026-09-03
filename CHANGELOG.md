@@ -6,6 +6,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.24.0] — 2026-09-03
+
+This release restructures the served dashboard around a savings-led
+information hierarchy, publishes the first reviewed wall-clock
+time-remaining forecast calibration cell, makes the retry primitives
+directly importable from a new core module, fixes a request-accounting bug
+for bodyless model requests, fixes `tokenpak serve` to honor the configured
+port and the `TOKENPAK_PORT` environment variable, expands the `dev` extra
+to include the dependencies the typed proxy surfaces import, and refreshes
+dependency lockfiles to close open security advisories.
+
 ### Added
 
 - Published the first reviewed time-remaining forecast calibration cell —
@@ -18,9 +29,43 @@ This project follows [Semantic Versioning](https://semver.org/).
   `time_forecast_bands.enabled`, both still default-off) — populating the
   table only makes the cell *eligible*, it does not change the shipped
   default. See the `time_forecast` section in `docs/api-reference.md`.
+- The retry engine (`RetryEngine`, `RetryExhaustedError`,
+  `ImmediateAlertError`, `load_recent_retry_events`, and their supporting
+  constants) is now directly importable from `tokenpak.core.retry`. The
+  existing `tokenpak.orchestration.retry` import path continues to work
+  unchanged — it is now a compatibility re-export of the identical objects,
+  not a copy. No behavior change.
 
 ### Changed
 
+- The served dashboard (`/dashboard`) is restructured around a seven-block
+  information hierarchy, savings-led:
+  1. **Savings hero** — today's tokens and dollars saved, large and
+     centered at the top of the page (an honest "not yet measured" state
+     when there is no data yet).
+  2. **Status strip** — one combined health signal (Healthy / Idle /
+     Degraded / Error) plus its three supporting facts: credentials,
+     last-request time, and queue depth. Replaces the previously buried
+     status dot.
+  3. **Compression chart** — last-24h original vs. compressed tokens,
+     backed by the same query the CLI `status` command already uses.
+  4. **Cache strip** — separates the product-attributed cache hit rate
+     (cache reads this product's own cache marker produced) from the
+     general provider-level cache hit rate, plus a client/proxy/unknown
+     token breakdown. This replaces a card that was labeled as a cache hit
+     rate but was actually derived from proxy uptime; that formula is
+     removed.
+  5. **Recent requests** — the last 20 requests (time, client, model,
+     tokens in/out, savings, cache origin).
+  6. **Mode / session breakdown** — retained as-is.
+  7. **Quick actions** — retained as-is.
+
+  Backend support is additive and fails open when the request log is
+  unavailable: new `GET /savings` and `GET /recent` endpoints, and a new
+  `window_24h` field on the existing `GET /cache-stats` and
+  `GET /metrics/dashboard` responses. The dashboard's client-side refresh
+  interval also changes from 30s to 5s, and polling now pauses while the
+  browser tab is backgrounded.
 - `tokenpak.core.runtime.proxy` remains importable as a compatibility path
   for the launcher, which now lives in `tokenpak.proxy.bootstrap`.
 
@@ -58,7 +103,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   fix yet and remains open for anyone using those extras. The `sdk/` and
   `packages/tokenpak-js/` npm lockfiles were refreshed for `browserslist`
   and `js-yaml`, both dev-tooling-only transitive dependencies with no
-  runtime exposure for consumers of those packages.
+  runtime exposure for consumers of those packages; the `packages/tokenpak-js`
+  lockfile also picked up a `brace-expansion` bump (1.1.16 → 1.1.18, also a
+  dev-only transitive dependency with no runtime exposure) as an incidental
+  result of the same `npm audit fix` pass.
 
 ## [1.23.0] — 2026-08-31
 
