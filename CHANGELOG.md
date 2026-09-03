@@ -30,6 +30,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   log a spurious internal error after the response has already been
   delivered to the client. The request's usage is now recorded normally
   instead of being dropped.
+- `tokenpak serve` now honors the configured `port` (`~/.tpk/config.yaml`)
+  and `TOKENPAK_PORT` when `--port` is not given, instead of always binding
+  the built-in default. Precedence: `--port` flag > `TOKENPAK_PORT` env var
+  > config file `port` > 8766.
 
 ### Dependencies
 

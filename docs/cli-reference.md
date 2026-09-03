@@ -426,7 +426,7 @@ Start proxy server
 
 **Flags:**
 
-- `--port` — default: 8766
+- `--port` — Port to listen on (default: 8766, or TOKENPAK_PORT, or config's `port`)
 - `--telemetry` — Start telemetry ingest server
 - `--ingest` — Start Phase 5A ingest API server
 - `--workers` — Number of uvicorn workers

@@ -2281,8 +2281,49 @@ def _maybe_show_compression_notice(safe: bool) -> None:
     _ = safe
 
 
-def cmd_serve(args: CommandArgs) -> None:
+def _resolve_serve_port(flag_port: int | None) -> int:
+    """Resolve the port for ``tokenpak serve``.
+
+    Precedence: explicit ``--port`` flag > ``TOKENPAK_PORT`` env var >
+    ``~/.tpk/config.yaml`` ``port`` key > built-in default (8766). This
+    mirrors the flag > env precedence already used by ``cmd_start`` for the
+    same flag, extended with the config-file step ``cmd_start`` does not
+    need (it forwards ``TOKENPAK_PORT`` to a subprocess that reads config
+    itself; ``cmd_serve`` starts the proxy in-process and must resolve
+    config here).
+
+    Raises:
+        ValueError: ``TOKENPAK_PORT`` is set but is not a valid integer.
+    """
+    if flag_port is not None:
+        return int(flag_port)
+
+    env_val = os.environ.get("TOKENPAK_PORT")
+    if env_val is not None and env_val.strip():
+        try:
+            return int(env_val.strip())
+        except ValueError:
+            raise ValueError(
+                f"TOKENPAK_PORT={env_val!r} is not a valid port number (expected an integer)."
+            ) from None
+
+    from tokenpak.core.config_loader import get as _config_get
+
+    return _config_get("port", 8766, None, int)
+
+
+def cmd_serve(args: CommandArgs) -> int | None:
     """Start monitoring proxy or telemetry server (if available)."""
+    # Resolve the port before anything else touches it: --port flag >
+    # TOKENPAK_PORT env > config `port` > 8766. `p_serve`'s --port default is
+    # None (not a literal 8766) specifically so this resolution can tell "no
+    # flag was passed" from "the flag was 8766" — see _resolve_serve_port.
+    try:
+        args.port = _resolve_serve_port(getattr(args, "port", None))
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
     # Apply one-invocation proxy settings before importing any proxy module.
     # Proxy profile presets are evaluated at import time, while the stats
     # footer reads its environment override per request.  Leaving either flag
@@ -2317,7 +2358,7 @@ def cmd_serve(args: CommandArgs) -> None:
         workers = getattr(args, "workers", 1)
         print(f"Starting TokenPak telemetry server on port {args.port} (workers={workers})")
         uvicorn.run(app, host="127.0.0.1", port=args.port, workers=workers)
-        return
+        return None
     if getattr(args, "ingest", False):
         import uvicorn
 
@@ -2330,7 +2371,7 @@ def cmd_serve(args: CommandArgs) -> None:
         print("  POST /ingest/batch")
         print("  GET  /health")
         uvicorn.run(app, host="127.0.0.1", port=port)
-        return
+        return None
     # Multi-worker mode: route to ingest API via uvicorn (proxy doesn't support workers)
     workers = getattr(args, "workers", 1) or 1
     if workers > 1:
@@ -2351,7 +2392,7 @@ def cmd_serve(args: CommandArgs) -> None:
             workers=workers,
             factory=True,
         )
-        return
+        return None
     # Default (single-worker): start the TokenPak proxy server
     shutdown_timeout = getattr(args, "shutdown_timeout", None)
     try:
@@ -2366,6 +2407,7 @@ def cmd_serve(args: CommandArgs) -> None:
     except Exception as e:
         print(f"Serve mode unavailable: {e}")
         print("Run the existing proxy directly if needed.")
+    return None
 
 
 def cmd_benchmark(args: CommandArgs) -> None:
@@ -4134,7 +4176,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_models.set_defaults(func=cmd_models)
 
     p_serve = sub.add_parser("serve", help="Start monitoring proxy or telemetry server")
-    p_serve.add_argument("--port", type=int, default=8766)
+    # default=None, not 8766: cmd_serve must be able to tell "user passed a
+    # port" from "user passed nothing". With a concrete default, honouring
+    # the flag would silently override TOKENPAK_PORT and the config file's
+    # `port` key on every unflagged run (see _resolve_serve_port).
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to listen on (default: 8766, or TOKENPAK_PORT, or config's `port`)",
+    )
     p_serve.add_argument("--telemetry", action="store_true", help="Start telemetry ingest server")
     p_serve.add_argument("--ingest", action="store_true", help="Start Phase 5A ingest API server")
     p_serve.add_argument("--workers", type=int, default=1, help="Number of uvicorn workers")
