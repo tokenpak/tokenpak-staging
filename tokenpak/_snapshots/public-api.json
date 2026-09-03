@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "generated_at": "2026-08-31T23:01:09Z",
-  "package_version": "1.23.0",
+  "generated_at": "2026-09-03T02:35:34Z",
+  "package_version": "1.24.0",
   "symbols": [
     {
       "module": "tokenpak",
@@ -1510,6 +1510,10 @@
     {
       "module": "tokenpak.cli.commands.status",
       "name": "TAGLINES"
+    },
+    {
+      "module": "tokenpak.cli.commands.status",
+      "name": "TYPE_CHECKING"
     },
     {
       "module": "tokenpak.cli.commands.status",
@@ -5132,6 +5136,38 @@
       "name": "launch"
     },
     {
+      "module": "tokenpak.core.retry",
+      "name": "DEFAULT_PER_ERROR"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "ImmediateAlertError"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "MODEL_DOWNGRADE_PATH"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "PROVIDER_FALLBACK_PATH"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "RetryAttempt"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "RetryEngine"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "RetryExhaustedError"
+    },
+    {
+      "module": "tokenpak.core.retry",
+      "name": "load_recent_retry_events"
+    },
+    {
       "module": "tokenpak.core.runtime",
       "name": "cache_spec"
     },
@@ -5142,10 +5178,6 @@
     {
       "module": "tokenpak.core.runtime",
       "name": "providers"
-    },
-    {
-      "module": "tokenpak.core.runtime",
-      "name": "proxy"
     },
     {
       "module": "tokenpak.core.runtime.cache_spec",
@@ -8702,6 +8734,58 @@
     {
       "module": "tokenpak.proxy.app_endpoints",
       "name": "try_handle_post"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "CLAUDE_CODE_HEADER_ALLOWLIST"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "COMPILATION_MODE"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "ForwardProxyHandler"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "LEGACY_HEADER_ALLOWLIST"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "MUTATION_AUDIT_TTL_DAYS"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "Monitor"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "SESSION"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "STABLE_CACHE_CONTROL_AUTO"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "TOKENPAK_HEADER_ALLOWLIST"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "ThreadedHTTPServer"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "can_compress"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "extract_query_signal"
+    },
+    {
+      "module": "tokenpak.proxy.bootstrap",
+      "name": "inject_vault_context"
     },
     {
       "module": "tokenpak.proxy.cache",
