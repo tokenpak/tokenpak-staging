@@ -122,7 +122,7 @@ def test_write_through_does_not_require_prior_read(monkeypatch):
         "print('OK')\n"
     )
     result = subprocess.run(
-        [sys.executable, "-P", "-c", code],
+        [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         timeout=60,
