@@ -209,9 +209,7 @@ class HTTPProxy:
 
         # Build forwarded headers
         fwd_headers = {
-            key: value
-            for key, value in request.headers.items()
-            if not is_internal_header(key)
+            key: value for key, value in request.headers.items() if not is_internal_header(key)
         }
         fwd_headers.setdefault("Content-Type", "application/json")
 
