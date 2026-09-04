@@ -1,9 +1,9 @@
-"""Unit tests for tokenpak/tokens.py — token counting and truncation utilities."""
+"""Unit tests for tokenpak/telemetry/tokens.py — token counting and truncation utilities."""
 
 from unittest.mock import patch
 
 # Import module under test
-from tokenpak import tokens as tok
+from tokenpak.telemetry import tokens as tok
 
 # ---------------------------------------------------------------------------
 # count_tokens

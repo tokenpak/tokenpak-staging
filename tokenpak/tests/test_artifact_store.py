@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from tokenpak.schemas.artifact import ArtifactSchema
-from tokenpak.schemas.chunk import ChunkSchema
-from tokenpak.schemas.retrieval_cache import RetrievalCacheSchema
-from tokenpak.schemas.source_map import SourceMapSchema
+from tokenpak.core.schemas.artifact import ArtifactSchema
+from tokenpak.core.schemas.chunk import ChunkSchema
+from tokenpak.core.schemas.retrieval_cache import RetrievalCacheSchema
+from tokenpak.core.schemas.source_map import SourceMapSchema
 from tokenpak.telemetry.artifact_store import ArtifactStore
 
 

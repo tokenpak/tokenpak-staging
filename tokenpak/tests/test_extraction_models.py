@@ -1,7 +1,8 @@
-"""Unit tests for extraction/models.py — dataclasses and EntitySet."""
+"""Unit tests for tokenpak/compression/extraction/models.py — dataclasses and EntitySet."""
 
 import pytest
-from extraction.models import (
+
+from tokenpak.compression.extraction.models import (
     APIEndpoint,
     Deadline,
     Decision,

@@ -2,7 +2,7 @@
 test_server_unit.py — Unit tests for TokenPak server infrastructure modules.
 
 Covers:
-  - tokenpak.server.websocket_proxy  (WebSocketConnectionManager, stats, compression)
+  - tokenpak.proxy.server_extra.websocket_proxy  (WebSocketConnectionManager, stats, compression)
   - tokenpak.proxy.cache             (LRUCache, TTL, LRU eviction, metrics)
   - tokenpak.proxy.stats             (StatsCollector, model normalisation, singleton)
 
@@ -16,17 +16,17 @@ import time
 import pytest
 
 from tokenpak.proxy.cache import LRUCache
-from tokenpak.proxy.stats import StatsCollector
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Imports
 # ──────────────────────────────────────────────────────────────────────────────
-from tokenpak.server.websocket_proxy import (
+from tokenpak.proxy.server_extra.websocket_proxy import (
     WebSocketConnectionManager,
     WebSocketConnectionStats,
     compress_chunk,
     decompress_chunk,
 )
+from tokenpak.proxy.stats import StatsCollector
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. Compression utilities

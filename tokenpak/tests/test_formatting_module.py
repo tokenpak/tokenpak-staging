@@ -1,4 +1,4 @@
-"""Unit tests for tokenpak/formatting/ module.
+"""Unit tests for tokenpak/_formatting/ module.
 
 Covers:
   - formatting/colors.py  — Color constants, supports_color(), paint()
@@ -20,9 +20,9 @@ import pytest
 # ---------------------------------------------------------------------------
 # Module imports
 # ---------------------------------------------------------------------------
-import tokenpak.compression.formatting.symbols as _symbols
-from tokenpak.compression.formatting import OutputFormatter, OutputMode, resolve_mode
-from tokenpak.compression.formatting.colors import Color, paint, supports_color
+import tokenpak._formatting.symbols as _symbols
+from tokenpak._formatting import OutputFormatter, OutputMode, resolve_mode
+from tokenpak._formatting.colors import Color, paint, supports_color
 
 # ===========================================================================
 # colors.py
@@ -289,10 +289,10 @@ class TestOutputFormatterInit:
 
     def test_color_reflects_terminal(self):
         """color attribute is set from supports_color() at init."""
-        with patch("tokenpak.compression.formatting.formatter.supports_color", return_value=True):
+        with patch("tokenpak._formatting.formatter.supports_color", return_value=True):
             f = OutputFormatter("s")
             assert f.color is True
-        with patch("tokenpak.compression.formatting.formatter.supports_color", return_value=False):
+        with patch("tokenpak._formatting.formatter.supports_color", return_value=False):
             f = OutputFormatter("s")
             assert f.color is False
 
@@ -301,7 +301,9 @@ class TestOutputFormatterHeader:
     """header() produces a two-line banner."""
 
     def test_contains_tokenpak_version(self, fmt_no_color):
-        assert "TOKENPAK v1.1.0" in fmt_no_color.header()
+        from tokenpak import __version__
+
+        assert f"TOKENPAK v{__version__}" in fmt_no_color.header()
 
     def test_contains_section(self, fmt_no_color):
         assert "TEST" in fmt_no_color.header()
@@ -398,8 +400,10 @@ class TestOutputFormatterErrorBlock:
     """error_block() assembles a multi-line error message."""
 
     def test_contains_header(self, fmt_no_color):
+        from tokenpak import __version__
+
         block = fmt_no_color.error_block("Bad input", "value out of range", "Check config")
-        assert "TOKENPAK v1.1.0" in block
+        assert f"TOKENPAK v{__version__}" in block
 
     def test_contains_title(self, fmt_no_color):
         block = fmt_no_color.error_block("Bad input", "reason here", "action here")
@@ -486,16 +490,16 @@ class TestPublicAPI:
     """formatting package exposes correct public names."""
 
     def test_output_formatter_exported(self):
-        from tokenpak.compression.formatting import OutputFormatter as OF
+        from tokenpak._formatting import OutputFormatter as OF
 
         assert OF is OutputFormatter
 
     def test_output_mode_exported(self):
-        from tokenpak.compression.formatting import OutputMode as OM
+        from tokenpak._formatting import OutputMode as OM
 
         assert OM is OutputMode
 
     def test_resolve_mode_exported(self):
-        from tokenpak.compression.formatting import resolve_mode as rm
+        from tokenpak._formatting import resolve_mode as rm
 
         assert rm is resolve_mode

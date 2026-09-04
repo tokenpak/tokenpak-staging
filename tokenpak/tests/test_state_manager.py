@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tokenpak.state_manager import (
+from tokenpak.core.state_manager import (
     IntentStateManager,
     MultiSchemaStateManager,
     StateManager,

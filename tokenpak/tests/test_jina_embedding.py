@@ -7,8 +7,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-from proxy.adapters.canonical import CanonicalEmbeddingRequest
-from proxy.adapters.jina_embedding import JinaEmbeddingAdapter
+from tokenpak.proxy.adapters.canonical import CanonicalEmbeddingRequest
+from tokenpak.proxy.adapters.jina_embedding import JinaEmbeddingAdapter
 
 
 def _make_canonical(**kwargs) -> CanonicalEmbeddingRequest:

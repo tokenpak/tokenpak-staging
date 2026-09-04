@@ -259,10 +259,34 @@ jobs:
           # tree's explicit CI allowlist (see pyproject.toml
           # [tool.pytest.ini_options] for why the tree isn't collected by
           # default) — add files here individually, only once verified green.
+          # The full directory does not qualify for bare-directory inclusion:
+          # `pytest tokenpak/tests -q` takes ~12 minutes and does not exit 0
+          # (pre-existing, unrelated execution failures in other files under
+          # this directory — see the PR that added this comment for the
+          # measured baseline). The files below are individually verified
+          # green under this job's own marker filter.
           python -m pytest \
+            tokenpak/tests/test_artifact_store.py \
+            tokenpak/tests/test_budget.py \
             tokenpak/tests/test_custom_providers.py \
+            tokenpak/tests/test_errors_exceptions.py \
+            tokenpak/tests/test_extraction_models.py \
+            tokenpak/tests/test_extractor.py \
+            tokenpak/tests/test_formatting_module.py \
+            tokenpak/tests/test_handlers.py \
+            tokenpak/tests/test_jina_embedding.py \
+            tokenpak/tests/test_model_analytics.py \
+            tokenpak/tests/test_models.py \
+            tokenpak/tests/test_openai_embedding.py \
+            tokenpak/tests/test_patterns.py \
             tokenpak/tests/test_proxy_config.py \
             tokenpak/tests/test_savings_display.py \
+            tokenpak/tests/test_server_unit.py \
+            tokenpak/tests/test_startup_validator.py \
+            tokenpak/tests/test_state_manager.py \
+            tokenpak/tests/test_timeline.py \
+            tokenpak/tests/test_tokens.py \
+            tokenpak/tests/test_version_check.py \
             tests/proxy/ tests/config/ tests/services/ \
             -q --tb=short \
             --continue-on-collection-errors \

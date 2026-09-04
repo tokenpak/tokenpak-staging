@@ -2,7 +2,7 @@
 
 import json
 
-from tokenpak import timeline
+from tokenpak.telemetry import timeline
 
 
 class TestLoadHistory:
