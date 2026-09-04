@@ -6,6 +6,18 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The `tokenpak.core.runtime.proxy` compatibility path is now write-through,
+  not just read-through: assigning or deleting one of its 13 legacy names
+  (e.g. `tokenpak.core.runtime.proxy.MONITOR = x`) now forwards to
+  `tokenpak.proxy.bootstrap`, the module the launcher actually lives in,
+  instead of silently shadowing it on the old path. Code (including tests)
+  that still monkeypatches globals on the old path now affects the real
+  runtime state again. Reads were already forwarded and are unchanged; the
+  old path remains a compatibility alias — new code should import from
+  `tokenpak.proxy.bootstrap` directly.
+
 ## [1.24.0] — 2026-09-03
 
 This release restructures the served dashboard around a savings-led

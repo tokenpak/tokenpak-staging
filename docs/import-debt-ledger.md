@@ -53,7 +53,9 @@ importer (in-tree and the `tokenpak.runtime.proxy` compatibility re-export)
 was updated to the new path; `tokenpak.core.runtime.proxy` itself remains
 importable as a lazy `__getattr__` compatibility shim that resolves
 `tokenpak.proxy.bootstrap` only on attribute access, so it adds no static
-import edge. IMP-011 remains: `core.registry.claude_code.adapter`
+import edge; attribute assignment and deletion are write-through to the same
+target via the identical lazy `importlib` resolution, so that stays true for
+writes as well as reads. IMP-011 remains: `core.registry.claude_code.adapter`
 importing `proxy.request` types is a genuine core->proxy edge, and no
 existing `core/contracts` protocol fits closing it with a minimal typed
 injection point, so it stays declared debt rather than inventing one.
