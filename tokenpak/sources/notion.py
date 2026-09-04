@@ -121,7 +121,7 @@ class NotionConnector(Connector):
 
         return RemoteFile(
             path=f"{title}.md",
-            source_id=notion_obj.get("id"),  # type: ignore
+            source_id=notion_obj.get("id"),  # type: ignore[arg-type]  # notion_obj.get("id") is Any | None from an untyped API response dict; RemoteFile.source_id requires str
             size_bytes=0,  # Notion doesn't provide size
             modified_at=notion_obj.get("last_edited_time", datetime.now().isoformat()),
             file_type=obj_type,

@@ -56,7 +56,7 @@ class TestSourceRef:
     def test_slots_prevents_new_attributes(self):
         ref = SourceRef(line=1, column=0, snippet="x")
         with pytest.raises(AttributeError):
-            ref.nonexistent = "value"  # type: ignore[attr-defined]
+            ref.nonexistent = "value"
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ class TestEntity:
     def test_slots_prevents_new_attributes(self):
         e = Entity(type=EntityType.FILE_PATH, value="/tmp", source=self._ref())
         with pytest.raises(AttributeError):
-            e.extra = True  # type: ignore[attr-defined]
+            e.extra = True
 
 
 # ---------------------------------------------------------------------------

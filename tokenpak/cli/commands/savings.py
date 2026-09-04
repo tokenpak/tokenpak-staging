@@ -72,7 +72,7 @@ try:
         run_savings_cmd(a)
 
 except ImportError:
-    savings_cmd = None  # type: ignore[assignment]
+    savings_cmd = None  # type: ignore[assignment]  # fallback stub for the click-wrapped command when click is not installed
 
 
 # ---------------------------------------------------------------------------

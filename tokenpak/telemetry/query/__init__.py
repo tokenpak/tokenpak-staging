@@ -35,4 +35,4 @@ from . import audit, timeline  # noqa: F401
 try:
     from . import api  # noqa: F401  (requires FastAPI; optional serve extra)
 except ImportError:  # pragma: no cover - exercised via the FastAPI-absent test
-    api = None  # type: ignore[assignment]
+    api = None  # type: ignore[assignment]  # api shim is None when the optional serve/FastAPI extra isn't installed

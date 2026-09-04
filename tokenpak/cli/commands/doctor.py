@@ -2117,7 +2117,7 @@ try:
 
 except ImportError:
 
-    def doctor_cmd(*args, **kwargs):  # type: ignore
+    def doctor_cmd(*args, **kwargs):  # type: ignore[misc, no-untyped-def]  # fallback stub redefines the click command with an untyped signature when click is not installed
         print("click not installed; doctor command unavailable")
 
 

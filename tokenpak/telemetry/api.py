@@ -10,8 +10,8 @@ try:
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
-    APIRouter = None  # type: ignore
-    Query = None  # type: ignore
+    APIRouter = None  # type: ignore[misc, assignment]  # reassigns the imported FastAPI class name to None as the optional-dependency fallback
+    Query = None  # type: ignore[assignment]  # reassigns the imported FastAPI symbol to None as the optional-dependency fallback
 
 from tokenpak.telemetry.query_dsl import (
     get_cost_summary,
@@ -38,7 +38,7 @@ def _to_json(obj):
 
 
 if FASTAPI_AVAILABLE:
-    router = APIRouter(tags=["telemetry"])  # type: ignore
+    router = APIRouter(tags=["telemetry"])
 
     @router.get("/cost-summary")
     def api_cost_summary(days: int = Query(default=30, ge=1, le=365)):
@@ -176,7 +176,7 @@ if FASTAPI_AVAILABLE:
         ]
 
 else:
-    router = None  # type: ignore
+    router = None  # type: ignore[assignment]  # router is None when fastapi is unavailable; the FASTAPI_AVAILABLE branch above binds it to an APIRouter
 
 
 def create_app():

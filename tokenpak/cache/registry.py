@@ -57,21 +57,21 @@ class CacheRegistry:
         """Return the default VolatileCache, creating it on first call."""
         return cls._get_or_create(
             "default", lambda: VolatileCache(ttl=_DEFAULT_VOLATILE_TTL, name="default")
-        )  # type: ignore[return-value]
+        )  # type: ignore[return-value]  # _get_or_create is generic over the cache classes; its return type isn't tied back to this call site's declared VolatileCache/StableCache annotation
 
     @classmethod
     def get_stable(cls) -> StableCache:
         """Return the default StableCache, creating it on first call."""
         return cls._get_or_create(
             "stable", lambda: StableCache(ttl=_DEFAULT_STABLE_TTL, name="stable")
-        )  # type: ignore[return-value]
+        )  # type: ignore[return-value]  # _get_or_create is generic over the cache classes; its return type isn't tied back to this call site's declared VolatileCache/StableCache annotation
 
     @classmethod
     def get_injection(cls) -> VolatileCache:
         """Return the injection cache (alias for the proxy vault-injection cache)."""
         return cls._get_or_create(
             "injection", lambda: VolatileCache(ttl=_DEFAULT_VOLATILE_TTL, name="injection")
-        )  # type: ignore[return-value]
+        )  # type: ignore[return-value]  # _get_or_create is generic over the cache classes; its return type isn't tied back to this call site's declared VolatileCache/StableCache annotation
 
     # ------------------------------------------------------------------
     # Generic named access

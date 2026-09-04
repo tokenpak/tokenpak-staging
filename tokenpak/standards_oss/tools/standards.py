@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
     sys.exit("PyYAML is required: pip install pyyaml")
 
 try:
-    import jsonschema  # type: ignore
+    import jsonschema
 
     HAVE_JSONSCHEMA = True
 except ImportError:

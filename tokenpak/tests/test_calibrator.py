@@ -78,7 +78,7 @@ class TestParseTs:
     def test_invalid_string_returns_none(self):
         assert _parse_ts("not-a-date") is None
         assert _parse_ts("") is None
-        assert _parse_ts(None) is None  # type: ignore
+        assert _parse_ts(None) is None  # type: ignore[arg-type]  # deliberately passes None to _parse_ts to test its non-str-input guard
 
 
 # ---------------------------------------------------------------------------

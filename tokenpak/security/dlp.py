@@ -79,7 +79,7 @@ class DLPBlockError(Exception):
 class _Rule:
     rule_id: str
     description: str
-    pattern: re.Pattern  # type: ignore[type-arg]
+    pattern: re.Pattern  # type: ignore[type-arg]  # re.Pattern has no type parameter here, which strict generics requires; all _Rule patterns are compiled from str regexes
     severity: str  # critical | high | medium | low
 
 

@@ -176,7 +176,7 @@ class SQLiteRetrievalBackend:
             count_tokens_fn = _count_tokens
         except ImportError:
 
-            def count_tokens_fn(t: str) -> int:  # type: ignore[misc]
+            def count_tokens_fn(t: str) -> int:  # type: ignore[misc]  # heuristic fallback redefines count_tokens_fn with a simpler signature when the telemetry tokens import fails
                 return max(1, len(t) // 4)
 
         injection_parts: List[str] = []

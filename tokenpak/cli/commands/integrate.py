@@ -951,7 +951,7 @@ def _run_guided_form(integration: Integration, proxy_url: str) -> int:
 
     # Apply
     try:
-        result = integration.applier(proxy_url)  # type: ignore[misc]
+        result = integration.applier(proxy_url)  # type: ignore[misc]  # applier is Optional[Callable] on the dataclass; the is_print_only guard above proves it is set here but mypy can't see that narrowing
     except Exception as exc:  # pragma: no cover
         result = ApplyResult(ok=False, summary="applier raised unexpectedly", error=str(exc))
 

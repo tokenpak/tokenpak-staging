@@ -852,7 +852,7 @@ def summarize_anti_patterns(segments: list[Segment]) -> dict[str, object]:
             }
         )
 
-    offenders.sort(key=lambda item: int(item.get("order", 0)))  # type: ignore
+    offenders.sort(key=lambda item: int(item.get("order", 0)))  # type: ignore[call-overload]  # offenders is list[dict[str, object]]; item.get("order", 0) returns object, which int() can't statically accept
     return {
         "counts": counts,
         "top_offenders": offenders[:5],

@@ -45,8 +45,8 @@ def blocks_to_messages(
     total_tokens = 0
 
     for block in blocks:
-        raw = getattr(block, "compressed_content", None) or getattr(block, "content", "")  # type: ignore
-        tokens = getattr(block, "compressed_tokens", None) or _estimate_tokens(raw)  # type: ignore
+        raw = getattr(block, "compressed_content", None) or getattr(block, "content", "")
+        tokens = getattr(block, "compressed_tokens", None) or _estimate_tokens(raw)  # type: ignore[arg-type]  # raw may be Any | None from the getattr fallback above; _estimate_tokens expects str
 
         if compaction != "none" and total_tokens + tokens > budget:
             if compaction == "aggressive":
@@ -66,7 +66,7 @@ def blocks_to_messages(
                     engine = get_engine("heuristic")
                     remaining = max(50, budget - total_tokens)
                     hints = CompactionHints(target_tokens=remaining, aggressive=False)
-                    raw = engine.compact(raw, hints)  # type: ignore
+                    raw = engine.compact(raw, hints)  # type: ignore[arg-type]  # raw may be Any | None from the getattr fallback above; compact() expects str
                     tokens = _estimate_tokens(raw)
                 except Exception:
                     # Fallback: plain truncate

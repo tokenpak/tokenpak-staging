@@ -33,7 +33,7 @@ from .contracts import TIPDirective
 
 def _set_allow(d: TIPDirective, v: Optional[str]) -> None:
     if v in ("once", "15m", "session"):
-        d.allow_scope = v  # type: ignore[assignment]
+        d.allow_scope = v  # type: ignore[assignment]  # v is validated to one of the three literal scope strings just above but stays typed as Optional[str]; allow_scope expects the narrower Literal
     # ``allow=on`` is treated as ``allow=session`` for ergonomics.
     elif v in ("on", "true", "1"):
         d.allow_scope = "session"

@@ -475,7 +475,7 @@ def create_dashboard_router(
         except Exception:
             from types import SimpleNamespace
 
-            savings_summary = SimpleNamespace(  # type: ignore[assignment]
+            savings_summary = SimpleNamespace(  # type: ignore[assignment]  # SimpleNamespace stands in for the real savings-summary type when the milestones lookup fails; matches its attribute set by construction, not by static type
                 lifetime_savings=0,
                 savings_30d=0,
                 savings_7d=0,

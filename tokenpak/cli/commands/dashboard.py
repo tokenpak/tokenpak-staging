@@ -1177,5 +1177,5 @@ try:
 
 except ImportError:
 
-    def dashboard_cmd(*args, **kwargs):  # type: ignore
+    def dashboard_cmd(*args, **kwargs):  # type: ignore[misc, no-untyped-def]  # fallback stub redefines the click command with an untyped signature when click is not installed
         print("click not installed; dashboard command unavailable")

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from _csv import writer as CsvWriter
 else:
-    CsvWriter = Any  # type: ignore
+    CsvWriter = Any  # type: ignore  # TYPE_CHECKING is always True to mypy so this else branch is unreachable and unchecked; kept for the real runtime path where CsvWriter is reassigned to Any
 
 
 class ExportFormat(str, Enum):

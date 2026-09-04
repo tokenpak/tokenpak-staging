@@ -180,7 +180,7 @@ class RunLedger:
         )
 
     def read_job(self, job_id: str) -> Optional[DispatchJob]:
-        return self._read_payload("dispatch_jobs", job_id, DispatchJob)  # type: ignore[return-value]
+        return self._read_payload("dispatch_jobs", job_id, DispatchJob)  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
 
     # -- DispatchManifest ---------------------------------------------------
 
@@ -197,7 +197,7 @@ class RunLedger:
         )
 
     def read_manifest(self, manifest_id: str) -> Optional[DispatchManifest]:
-        return self._read_payload(  # type: ignore[return-value]
+        return self._read_payload(  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
             "dispatch_manifests", manifest_id, DispatchManifest
         )
 
@@ -215,7 +215,7 @@ class RunLedger:
         )
 
     def read_route(self, route_id: str) -> Optional[DispatchRoute]:
-        return self._read_payload("dispatch_routes", route_id, DispatchRoute)  # type: ignore[return-value]
+        return self._read_payload("dispatch_routes", route_id, DispatchRoute)  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
 
     # -- DispatchRun --------------------------------------------------------
 
@@ -236,7 +236,7 @@ class RunLedger:
         )
 
     def read_run(self, run_id: str) -> Optional[DispatchRun]:
-        return self._read_payload("dispatch_runs", run_id, DispatchRun)  # type: ignore[return-value]
+        return self._read_payload("dispatch_runs", run_id, DispatchRun)  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
 
     # -- DispatchStationRun -------------------------------------------------
 
@@ -255,7 +255,7 @@ class RunLedger:
         )
 
     def read_station_run(self, station_run_id: str) -> Optional[DispatchStationRun]:
-        return self._read_payload(  # type: ignore[return-value]
+        return self._read_payload(  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
             "dispatch_station_runs", station_run_id, DispatchStationRun
         )
 
@@ -308,7 +308,7 @@ class RunLedger:
         )
 
     def read_decision(self, decision_id: str) -> Optional[DispatchDecision]:
-        return self._read_payload(  # type: ignore[return-value]
+        return self._read_payload(  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
             "dispatch_decisions", decision_id, DispatchDecision
         )
 
@@ -329,7 +329,7 @@ class RunLedger:
         )
 
     def read_artifact(self, artifact_id: str) -> Optional[DispatchArtifact]:
-        return self._read_payload(  # type: ignore[return-value]
+        return self._read_payload(  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
             "dispatch_artifacts", artifact_id, DispatchArtifact
         )
 
@@ -350,7 +350,7 @@ class RunLedger:
         )
 
     def read_receipt(self, receipt_id: str) -> Optional[DispatchReceipt]:
-        return self._read_payload(  # type: ignore[return-value]
+        return self._read_payload(  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
             "dispatch_receipts", receipt_id, DispatchReceipt
         )
 
@@ -369,7 +369,7 @@ class RunLedger:
         )
 
     def read_late_result(self, late_result_id: str) -> Optional[LateResult]:
-        return self._read_payload("late_results", late_result_id, LateResult)  # type: ignore[return-value]
+        return self._read_payload("late_results", late_result_id, LateResult)  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
 
     # -- DispatchEffect (generic write/read) --------------------------------
 
@@ -399,7 +399,7 @@ class RunLedger:
         )
 
     def read_effect(self, effect_id: str) -> Optional[DispatchEffect]:
-        return self._read_payload("dispatch_effects", effect_id, DispatchEffect)  # type: ignore[return-value]
+        return self._read_payload("dispatch_effects", effect_id, DispatchEffect)  # type: ignore[return-value]  # _read_payload returns the generic Optional[BaseModel]; each read_* wrapper narrows it to its own record type
 
     # -- DispatchEffect lifecycle -----------------
 

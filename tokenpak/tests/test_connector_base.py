@@ -153,7 +153,7 @@ class TestConnectorBase:
     def test_abstract_methods_enforced(self):
         """Connector cannot be instantiated without implementing abstract methods."""
         with pytest.raises(TypeError):
-            Connector(ConnectorConfig(name="x", source_path="/y"))  # type: ignore[abstract]
+            Connector(ConnectorConfig(name="x", source_path="/y"))  # type: ignore[abstract]  # deliberately instantiates the abstract Connector base to prove it raises TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ class TestSourceAdapterBase:
 
     def test_abstract_methods_enforced(self):
         with pytest.raises(TypeError):
-            SourceAdapter()  # type: ignore[abstract]
+            SourceAdapter()  # type: ignore[abstract]  # deliberately instantiates the abstract SourceAdapter base to prove it raises TypeError
 
     def test_concrete_ingest(self):
         adapter = ConcreteAdapter()

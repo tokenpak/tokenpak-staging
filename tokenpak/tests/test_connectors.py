@@ -188,22 +188,22 @@ class TestGitHubConnector:
             list(c.list_issues())
 
     def test_detect_language_python(self):
-        assert GitHubConnector._detect_language(None, "script.py") == "python"  # type: ignore
+        assert GitHubConnector._detect_language(None, "script.py") == "python"  # type: ignore[arg-type]  # calls the unbound method with None as self to exercise the static detection logic without constructing a GitHubConnector
 
     def test_detect_language_typescript(self):
-        assert GitHubConnector._detect_language(None, "app.ts") == "typescript"  # type: ignore
+        assert GitHubConnector._detect_language(None, "app.ts") == "typescript"  # type: ignore[arg-type]  # calls the unbound method with None as self to exercise the static detection logic without constructing a GitHubConnector
 
     def test_detect_language_tsx(self):
-        assert GitHubConnector._detect_language(None, "comp.tsx") == "typescript"  # type: ignore
+        assert GitHubConnector._detect_language(None, "comp.tsx") == "typescript"  # type: ignore[arg-type]  # calls the unbound method with None as self to exercise the static detection logic without constructing a GitHubConnector
 
     def test_detect_language_markdown(self):
-        assert GitHubConnector._detect_language(None, "README.md") == "markdown"  # type: ignore
+        assert GitHubConnector._detect_language(None, "README.md") == "markdown"  # type: ignore[arg-type]  # calls the unbound method with None as self to exercise the static detection logic without constructing a GitHubConnector
 
     def test_detect_language_yaml(self):
-        assert GitHubConnector._detect_language(None, "config.yml") == "yaml"  # type: ignore
+        assert GitHubConnector._detect_language(None, "config.yml") == "yaml"  # type: ignore[arg-type]  # calls the unbound method with None as self to exercise the static detection logic without constructing a GitHubConnector
 
     def test_detect_language_unknown(self):
-        assert GitHubConnector._detect_language(None, "file.xyz") == "unknown"  # type: ignore
+        assert GitHubConnector._detect_language(None, "file.xyz") == "unknown"  # type: ignore[arg-type]  # calls the unbound method with None as self to exercise the static detection logic without constructing a GitHubConnector
 
     def test_slugify_basic(self):
         c = self._make()
