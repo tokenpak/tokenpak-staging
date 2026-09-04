@@ -204,7 +204,7 @@ def compact(
     # lossless does not accept target_tokens
     if mode is CompactionMode.LOSSLESS:
         return fn(text)
-    return fn(text, target_tokens=target_tokens)  # type: ignore
+    return fn(text, target_tokens=target_tokens)  # type: ignore[call-arg]  # fn is resolved from a dict of differently-shaped compaction callables; only the non-lossless ones accept target_tokens
 
 
 # ---------------------------------------------------------------------------

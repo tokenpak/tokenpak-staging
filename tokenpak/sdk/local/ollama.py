@@ -20,12 +20,12 @@ from .utils import TokenPak
 # ---------------------------------------------------------------------------
 
 try:
-    import ollama as _ollama_sdk  # type: ignore[import]
+    import ollama as _ollama_sdk
 
     _OLLAMA_AVAILABLE = True
 except ImportError:
     _OLLAMA_AVAILABLE = False
-    _ollama_sdk = None  # type: ignore[assignment]
+    _ollama_sdk = None
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ from pathlib import Path
 try:
     import tomllib  # py311+
 except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[no-redef]  # tomli backport stands in for the stdlib tomllib name on Python < 3.11
 
 from ..model import REFRESH_NONE, REFRESH_TOKENPAK, Credential
 

@@ -223,7 +223,7 @@ def handoff_cmd(args: argparse.Namespace) -> None:
     # show
     # ------------------------------------------------------------------
     elif subcmd == "show":
-        h = manager.get_handoff(args.handoff_id)  # type: ignore[assignment]
+        h = manager.get_handoff(args.handoff_id)  # type: ignore[assignment]  # h is first inferred as non-Optional Handoff from the apply branch's apply_handoff() call above; get_handoff's Optional[Handoff] return doesn't fit that inferred type
         if h is None:
             print(f"✖ Handoff '{args.handoff_id}' not found", file=sys.stderr)
             sys.exit(1)

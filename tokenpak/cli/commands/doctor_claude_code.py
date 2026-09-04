@@ -807,7 +807,7 @@ def print_claude_code_checks(
         from .doctor import Colors
     except ImportError:
 
-        class Colors:  # type: ignore[no-redef]
+        class Colors:  # type: ignore[no-redef]  # fallback Colors shim redefines the name imported in the try block above when that import fails
             GREEN = "\033[92m"
             YELLOW = "\033[93m"
             RED = "\033[91m"

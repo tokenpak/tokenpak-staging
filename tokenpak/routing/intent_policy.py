@@ -366,7 +366,7 @@ def apply_context_contract(
     """
     if token_counter is None:
         # Rough estimator: ~4 chars per token
-        def token_counter(text: str) -> int:  # type: ignore[misc]
+        def token_counter(text: str) -> int:
             return max(1, len(str(text)) // 4)
 
     result: Dict[str, Any] = {}

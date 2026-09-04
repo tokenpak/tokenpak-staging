@@ -21,7 +21,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 try:
-    from websockets.server import WebSocketServerProtocol  # type: ignore
+    from websockets.server import (  # type: ignore[attr-defined]  # optional websockets dependency; the installed version's stub renamed WebSocketServerProtocol to ServerProtocol
+        WebSocketServerProtocol,
+    )
 except ImportError:
     WebSocketServerProtocol = None
 

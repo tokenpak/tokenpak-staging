@@ -241,7 +241,7 @@ class EntryStore:
                     "sample_count": len(ratios),
                 }
             )
-        result.sort(key=lambda x: x["agent_id"])  # type: ignore
+        result.sort(key=lambda x: x["agent_id"])  # type: ignore[arg-type, return-value]  # result's dict values are inferred as str | int; the sort key callback isn't statically provable as returning a comparable type
         return result
 
     def usage_summary(self, date: str) -> dict[str, Any]:

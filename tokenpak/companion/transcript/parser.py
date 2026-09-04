@@ -23,7 +23,7 @@ try:
     from tokenpak.telemetry.tokens import count_tokens
 except ImportError:
     # Fallback if tokens module unavailable — heuristic only
-    def count_tokens(text: str) -> int:  # type: ignore[misc]
+    def count_tokens(text: str) -> int:  # type: ignore[misc]  # heuristic fallback redefines count_tokens with a simpler signature when the telemetry module is unavailable
         return max(1, len(text) // 4) if text else 0
 
 

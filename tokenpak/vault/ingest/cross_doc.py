@@ -311,7 +311,7 @@ class SchemaConverter:
         seen: Dict[str, int] = {}
         for c in caps:
             seen[c] = seen.get(c, 0) + 1
-        return sorted(seen, key=seen.get, reverse=True)[: self.max_keywords]  # type: ignore[arg-type]
+        return sorted(seen, key=seen.get, reverse=True)[: self.max_keywords]  # type: ignore[arg-type]  # seen.get can statically return None for a missing key; sorted's key callback never actually misses since it only sorts seen's own keys
 
 
 # ---------------------------------------------------------------------------

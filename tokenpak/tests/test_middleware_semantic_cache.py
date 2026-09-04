@@ -195,7 +195,7 @@ class TestCheckAndRecord(unittest.TestCase):
         mw = _session_mw()
 
         with self.assertRaisesRegex(TypeError, "response_bytes must be bytes"):
-            mw.record("What is Python?", {"answer": "A programming language"})  # type: ignore[arg-type]
+            mw.record("What is Python?", {"answer": "A programming language"})  # type: ignore[arg-type]  # deliberately passes a dict instead of bytes to prove record() raises TypeError for the wrong response type
 
     def test_session_scope_isolation_between_keys(self):
         mw = _session_mw()

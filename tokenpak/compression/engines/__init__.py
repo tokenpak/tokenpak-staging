@@ -10,7 +10,7 @@ try:
     LLMLINGUA_AVAILABLE = True
 except ImportError:
     LLMLINGUA_AVAILABLE = False
-    LLMLinguaEngine = None  # type: ignore[assignment, misc]
+    LLMLinguaEngine = None  # type: ignore[assignment, misc]  # fallback stub for the optional llmlingua dependency; None can't satisfy the imported class's inferred type
 
 ENGINES = {
     "heuristic": HeuristicEngine,
@@ -18,8 +18,8 @@ ENGINES = {
 }
 
 if LLMLINGUA_AVAILABLE:
-    ENGINES["balanced"] = LLMLinguaEngine  # type: ignore[assignment]
-    ENGINES["llmlingua"] = LLMLinguaEngine  # type: ignore[assignment]
+    ENGINES["balanced"] = LLMLinguaEngine  # type: ignore[assignment]  # ENGINES infers HeuristicEngine's type from its first entries; LLMLinguaEngine only fits once the optional import succeeds
+    ENGINES["llmlingua"] = LLMLinguaEngine  # type: ignore[assignment]  # ENGINES infers HeuristicEngine's type from its first entries; LLMLinguaEngine only fits once the optional import succeeds
 
 
 def get_engine(name: str = "heuristic") -> CompactionEngine:

@@ -348,7 +348,7 @@ class UsageMixin:
 
         Includes event, usage, cost, segments, and metadata.
         """
-        trace = self.get_trace(trace_id)  # type: ignore[attr-defined]
+        trace = self.get_trace(trace_id)  # type: ignore[attr-defined]  # get_trace isn't defined on UsageMixin itself; export_trace assumes a get_trace method contributed by whatever class composes this mixin in
         return {
             "format": "tokenpak_trace_export_v1",
             "trace_id": trace_id,

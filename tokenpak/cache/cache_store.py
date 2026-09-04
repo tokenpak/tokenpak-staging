@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - Windows
     # On Windows there is no fcntl; cross-process saves fall back to
     # lock-free behaviour (unique tmp names still prevent torn files,
     # but concurrent writers may lose each other's keys).
-    fcntl = None  # type: ignore[assignment]
+    fcntl = None  # type: ignore[assignment]  # fcntl is POSIX-only; None stands in for the module on Windows where the import above is skipped
 
 logger = logging.getLogger(__name__)
 

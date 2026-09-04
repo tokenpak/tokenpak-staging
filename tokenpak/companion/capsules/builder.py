@@ -358,7 +358,7 @@ class CapsuleBuilder:
 
         if not modified:
             ratio = 1.0
-            stats: Dict[str, Any] = {  # type: ignore[no-redef]
+            stats: Dict[str, Any] = {  # type: ignore[no-redef]  # stats is reassigned with a broader Dict[str, Any] shape in the not-modified branch than the shape built above
                 "blocks_capsulized": 0,
                 "chars_in": total_chars_in,
                 "chars_out": total_chars_in,

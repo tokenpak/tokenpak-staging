@@ -532,7 +532,7 @@ class RequestValidator:
         # Booleans are ints in Python — treat bool as NOT matching integer/number
         if expected in ("integer", "number") and isinstance(value, bool):
             return False
-        return isinstance(value, expected_types)  # type: ignore
+        return isinstance(value, expected_types)  # type: ignore[arg-type]  # expected_types is a runtime-built type/tuple-of-types value typed as object; isinstance's second argument isn't statically provable as _ClassInfo
 
     def _log_result(self, result: RequestValidationResult) -> None:
         """Log validation results based on mode."""

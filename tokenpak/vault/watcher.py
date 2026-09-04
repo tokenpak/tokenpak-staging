@@ -301,7 +301,7 @@ class VaultWatcher:
                     "compressed_content": compressed,
                     "metadata": "{}",
                 }
-                registry.add_block(block)  # type: ignore
+                registry.add_block(block)  # type: ignore[arg-type]  # block is a plain dict[str, object] assembled ad hoc here; add_block expects the typed Block model
                 reindexed += 1
                 logger.debug("Re-indexed: %s", path)
 

@@ -47,7 +47,7 @@ from typing import Callable, Iterator, cast
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 backport
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[no-redef]  # tomli backport stands in for the stdlib tomllib name on Python < 3.11
 
 # Launcher-internal implementation.  Keeping the module out of ``import *``
 # also keeps these lifecycle helpers out of the released API snapshot.

@@ -150,7 +150,7 @@ class Monitor(_BaseMonitor):
         conn.close()
 
     # This compatibility shim intentionally preserves the legacy positional ABI.
-    def log(  # type: ignore[override]
+    def log(  # type: ignore[override]  # compatibility shim intentionally loosens the legacy positional ABI's parameter types to object, narrower than the base signature it overrides
         self,
         model: object,
         input_tokens: object,

@@ -102,7 +102,7 @@ def _fetch_all_blocks(page_id: str, headers: dict) -> list:
                 f"{_NOTION_API_BASE}/blocks/{page_id}/children?start_cursor={cursor}&page_size=100"
             )
         else:
-            url = None  # type: ignore[assignment]
+            url = None  # type: ignore[assignment]  # url is reset to None to end the pagination while-loop; the loop variable's inferred type is str from its initial assignment
     return blocks
 
 

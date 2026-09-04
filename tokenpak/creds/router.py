@@ -32,7 +32,7 @@ from typing import Optional
 try:
     import tomllib  # py311+
 except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[no-redef]  # tomli backport stands in for the stdlib tomllib name on Python < 3.11
 
 from .model import Credential
 from .providers import discover_all

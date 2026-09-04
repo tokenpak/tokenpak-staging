@@ -21,12 +21,12 @@ from .utils import TokenPak
 # ---------------------------------------------------------------------------
 
 try:
-    from openai import OpenAI  # type: ignore[import]
+    from openai import OpenAI
 
     _OPENAI_AVAILABLE = True
 except ImportError:
     _OPENAI_AVAILABLE = False
-    OpenAI = None  # type: ignore[misc,assignment]
+    OpenAI = None
 
 
 class TokenPakOpenAICompat:

@@ -774,10 +774,10 @@ _RESPONSE_TRANSLATORS.update(
     {
         ("google", "anthropic"): _google_to_anthropic_response,
         ("anthropic", "google"): _anthropic_to_google_response,
-        ("google", "openai"): lambda d: _anthropic_to_openai_response(  # type: ignore
+        ("google", "openai"): lambda d: _anthropic_to_openai_response(  # type: ignore[dict-item]  # the lambda's parameter name (d) differs from the sibling translator functions' (data); mypy treats that as an incompatible callable type for this dict-item slot
             _google_to_anthropic_response(d)
         ),
-        ("openai", "google"): lambda d: _anthropic_to_google_response(  # type: ignore
+        ("openai", "google"): lambda d: _anthropic_to_google_response(  # type: ignore[dict-item]  # the lambda's parameter name (d) differs from the sibling translator functions' (data); mypy treats that as an incompatible callable type for this dict-item slot
             _openai_to_anthropic_response(d)
         ),
     }

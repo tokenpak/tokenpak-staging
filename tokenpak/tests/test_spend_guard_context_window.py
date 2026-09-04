@@ -249,7 +249,7 @@ class TestDeriveBlockThresholdFallback:
         assert derive_block_threshold(1_000_000, ratio=-0.1, fallback_tokens=500_000) == 500_000
 
     def test_non_int_max_context_uses_fallback(self):
-        assert derive_block_threshold("1M", fallback_tokens=500_000) == 500_000  # type: ignore[arg-type]
+        assert derive_block_threshold("1M", fallback_tokens=500_000) == 500_000  # type: ignore[arg-type]  # deliberately passes a non-int max_context to exercise the fallback path
 
 
 class TestSelectedModelChangesThreshold:

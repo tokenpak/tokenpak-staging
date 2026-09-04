@@ -130,7 +130,7 @@ def _get_latest_compression_ratio() -> float:
     try:
         from tokenpak.proxy.stats import CompressionStats
 
-        stats = CompressionStats.get_global()  # type: ignore[attr-defined]
+        stats = CompressionStats.get_global()  # type: ignore[attr-defined]  # get_global doesn't exist on CompressionStats (only the module-level get_compression_stats() singleton accessor does); the try/except above silently falls back to 0.0 when this raises AttributeError (not fixed here — comments-only change)
         ratio = stats.avg_ratio() if stats else 0.0
         return round(ratio, 3)
     except Exception:
