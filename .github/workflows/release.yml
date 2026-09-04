@@ -253,7 +253,7 @@ jobs:
         run: |
           umask 022
           python -m pip install --upgrade pip
-          pip install build==1.5.0 setuptools==84.0.0
+          pip install build==1.6.0 setuptools==84.0.0
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
           export SOURCE_DATE_EPOCH
           python -m build --no-isolation
@@ -326,7 +326,7 @@ jobs:
         # Pinned so the exact same toolchain (build/setuptools/twine) is used
         # for every release build, regardless of when or where it runs — a
         # floating resolution is a source of byte-level nondeterminism.
-        run: pip install build==1.5.0 setuptools==84.0.0 twine==7.0.0
+        run: pip install build==1.6.0 setuptools==84.0.0 twine==7.0.0
 
       - name: Compute reproducible build timestamp
         # Derived from the commit being released (not wall-clock build
