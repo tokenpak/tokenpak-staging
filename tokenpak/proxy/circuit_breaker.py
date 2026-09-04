@@ -181,9 +181,11 @@ _BLOCKED_FORWARD_HEADERS: frozenset[str] = frozenset(
 
 def _sanitize_headers(raw_headers: Mapping[str, str]) -> dict[str, str]:
     """Build a clean forwarding header dict, stripping hop-by-hop and dangerous headers."""
+    from tokenpak.proxy.spend_guard.classifier import is_internal_header
+
     result: dict[str, str] = {}
     for key in raw_headers:
-        if key.lower() in _BLOCKED_FORWARD_HEADERS:
+        if key.lower() in _BLOCKED_FORWARD_HEADERS or is_internal_header(key):
             continue
         result[key] = raw_headers[key]
     return result

@@ -6,6 +6,12 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- All proxy forwarding implementations now use the same internal-header
+  predicate, preventing internal request markers from reaching an upstream
+  provider even if an adjacent or currently inactive forwarding path is used.
+
 ### Fixed
 
 - The `tokenpak.core.runtime.proxy` compatibility path is now write-through,

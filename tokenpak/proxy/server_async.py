@@ -370,6 +370,8 @@ def _build_forward_headers(request: Request, target_url: str) -> dict[str, str]:
     """Build headers to forward to the upstream provider."""
     from urllib.parse import urlparse
 
+    from tokenpak.proxy.spend_guard.classifier import is_internal_header
+
     parsed = urlparse(target_url)
     skip = {
         "host",
@@ -383,7 +385,11 @@ def _build_forward_headers(request: Request, target_url: str) -> dict[str, str]:
         "upgrade",
         "accept-encoding",
     }
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+    headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in skip and not is_internal_header(k)
+    }
     headers["host"] = parsed.netloc
     return headers
 
