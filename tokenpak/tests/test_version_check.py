@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Unit tests for tokenpak.version_check module.
+Unit tests for tokenpak.core.version_check module.
 
 Tests version checking, config hash validation, and startup checks.
 """
 
+import datetime
 import json
 import tempfile
 from pathlib import Path
 from unittest import mock
 
-from tokenpak import version_check
+from tokenpak.core import version_check
 
 
 class TestComputeConfigHash:
@@ -122,7 +123,7 @@ class TestLoadConfig:
             cfg_file = Path(tmpdir) / "config.json"
             cfg_data = {"proxy": {"port": 8766}, "models": ["gpt-4"]}
             cfg_file.write_text(json.dumps(cfg_data))
-            with mock.patch.object(version_check, "TOKENPAK_CFG", cfg_file):
+            with mock.patch.object(version_check, "_tokenpak_cfg", lambda: cfg_file):
                 result = version_check._load_config()
                 assert result == cfg_data
 
@@ -130,7 +131,7 @@ class TestLoadConfig:
         """Test handling missing config file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_file = Path(tmpdir) / "nonexistent.json"
-            with mock.patch.object(version_check, "TOKENPAK_CFG", cfg_file):
+            with mock.patch.object(version_check, "_tokenpak_cfg", lambda: cfg_file):
                 result = version_check._load_config()
                 assert result is None
 
@@ -139,7 +140,7 @@ class TestLoadConfig:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_file = Path(tmpdir) / "config.json"
             cfg_file.write_text("{ broken config")
-            with mock.patch.object(version_check, "TOKENPAK_CFG", cfg_file):
+            with mock.patch.object(version_check, "_tokenpak_cfg", lambda: cfg_file):
                 result = version_check._load_config()
                 assert result is None
 
@@ -151,8 +152,10 @@ class TestLogWarning:
         """Test appending a warning to memory file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mem_dir = Path(tmpdir)
-            mem_file = mem_dir / "2026-03-27.md"
-            with mock.patch.object(version_check, "MEMORY_DIR", mem_dir):
+            # _log_warning() names the file after today's date, not a fixed one.
+            today = datetime.date.today().isoformat()
+            mem_file = mem_dir / f"{today}.md"
+            with mock.patch.object(version_check, "_memory_dir", lambda: mem_dir):
                 version_check._log_warning("Test warning 1")
                 assert mem_file.exists()
                 content = mem_file.read_text()
@@ -163,8 +166,10 @@ class TestLogWarning:
         """Test appending multiple warnings."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mem_dir = Path(tmpdir)
-            mem_file = mem_dir / "2026-03-27.md"
-            with mock.patch.object(version_check, "MEMORY_DIR", mem_dir):
+            # _log_warning() names the file after today's date, not a fixed one.
+            today = datetime.date.today().isoformat()
+            mem_file = mem_dir / f"{today}.md"
+            with mock.patch.object(version_check, "_memory_dir", lambda: mem_dir):
                 version_check._log_warning("Warning 1")
                 version_check._log_warning("Warning 2")
                 content = mem_file.read_text()
@@ -174,7 +179,7 @@ class TestLogWarning:
     def test_warning_logging_graceful_failure(self):
         """Test that logging failures don't crash."""
         # Should not raise even if memory dir is inaccessible
-        with mock.patch.object(version_check, "MEMORY_DIR", Path("/root/impossible/path")):
+        with mock.patch.object(version_check, "_memory_dir", lambda: Path("/root/impossible/path")):
             # Should not raise
             version_check._log_warning("test warning")
 
@@ -191,10 +196,12 @@ class TestRunStartupCheck:
             "configHash": version_check._compute_config_hash(cfg),
         }
         with (
-            mock.patch("tokenpak.version_check._query_proxy_version", return_value=proxy_response),
-            mock.patch("tokenpak.version_check._load_config", return_value=cfg),
-            mock.patch("tokenpak.version_check._load_lock", return_value=lock),
-            mock.patch("tokenpak.version_check._log_warning"),
+            mock.patch(
+                "tokenpak.core.version_check._query_proxy_version", return_value=proxy_response
+            ),
+            mock.patch("tokenpak.core.version_check._load_config", return_value=cfg),
+            mock.patch("tokenpak.core.version_check._load_lock", return_value=lock),
+            mock.patch("tokenpak.core.version_check._log_warning"),
         ):
             warnings = version_check.run_startup_check()
             assert warnings == []
@@ -202,10 +209,10 @@ class TestRunStartupCheck:
     def test_proxy_unreachable_warning(self):
         """Test warning when proxy is unreachable."""
         with (
-            mock.patch("tokenpak.version_check._query_proxy_version", return_value=None),
-            mock.patch("tokenpak.version_check._load_config", return_value=None),
-            mock.patch("tokenpak.version_check._load_lock", return_value={}),
-            mock.patch("tokenpak.version_check._log_warning") as mock_log,
+            mock.patch("tokenpak.core.version_check._query_proxy_version", return_value=None),
+            mock.patch("tokenpak.core.version_check._load_config", return_value=None),
+            mock.patch("tokenpak.core.version_check._load_lock", return_value={}),
+            mock.patch("tokenpak.core.version_check._log_warning") as mock_log,
         ):
             warnings = version_check.run_startup_check()
             assert len(warnings) == 1
@@ -217,10 +224,12 @@ class TestRunStartupCheck:
         proxy_response = {"version": "2.0.0"}
         lock = {"proxyVersion": "1.2.3"}
         with (
-            mock.patch("tokenpak.version_check._query_proxy_version", return_value=proxy_response),
-            mock.patch("tokenpak.version_check._load_config", return_value=None),
-            mock.patch("tokenpak.version_check._load_lock", return_value=lock),
-            mock.patch("tokenpak.version_check._log_warning") as mock_log,
+            mock.patch(
+                "tokenpak.core.version_check._query_proxy_version", return_value=proxy_response
+            ),
+            mock.patch("tokenpak.core.version_check._load_config", return_value=None),
+            mock.patch("tokenpak.core.version_check._load_lock", return_value=lock),
+            mock.patch("tokenpak.core.version_check._log_warning") as mock_log,
         ):
             warnings = version_check.run_startup_check()
             assert any("version drift" in w for w in warnings)
@@ -231,10 +240,10 @@ class TestRunStartupCheck:
         cfg = {"proxy": {"port": 8766}}
         lock = {"configHash": "sha256:oldoldold"}
         with (
-            mock.patch("tokenpak.version_check._query_proxy_version", return_value=None),
-            mock.patch("tokenpak.version_check._load_config", return_value=cfg),
-            mock.patch("tokenpak.version_check._load_lock", return_value=lock),
-            mock.patch("tokenpak.version_check._log_warning") as mock_log,
+            mock.patch("tokenpak.core.version_check._query_proxy_version", return_value=None),
+            mock.patch("tokenpak.core.version_check._load_config", return_value=cfg),
+            mock.patch("tokenpak.core.version_check._load_lock", return_value=lock),
+            mock.patch("tokenpak.core.version_check._log_warning") as mock_log,
         ):
             warnings = version_check.run_startup_check()
             assert any("hash drift" in w for w in warnings)
@@ -247,10 +256,10 @@ class TestRunStartupCheck:
             "meta": {"legacyMode": True},  # deprecated
         }
         with (
-            mock.patch("tokenpak.version_check._query_proxy_version", return_value=None),
-            mock.patch("tokenpak.version_check._load_config", return_value=cfg),
-            mock.patch("tokenpak.version_check._load_lock", return_value={}),
-            mock.patch("tokenpak.version_check._log_warning") as mock_log,
+            mock.patch("tokenpak.core.version_check._query_proxy_version", return_value=None),
+            mock.patch("tokenpak.core.version_check._load_config", return_value=cfg),
+            mock.patch("tokenpak.core.version_check._load_lock", return_value={}),
+            mock.patch("tokenpak.core.version_check._log_warning") as mock_log,
         ):
             warnings = version_check.run_startup_check()
             assert any("deprecated" in w.lower() for w in warnings)
@@ -261,10 +270,12 @@ class TestRunStartupCheck:
         cfg = {"proxy": {"port": 8766}}
         lock = {"configHash": "sha256:badbadbad"}
         with (
-            mock.patch("tokenpak.version_check._query_proxy_version", return_value=proxy_response),
-            mock.patch("tokenpak.version_check._load_config", return_value=cfg),
-            mock.patch("tokenpak.version_check._load_lock", return_value=lock),
-            mock.patch("tokenpak.version_check._log_warning"),
+            mock.patch(
+                "tokenpak.core.version_check._query_proxy_version", return_value=proxy_response
+            ),
+            mock.patch("tokenpak.core.version_check._load_config", return_value=cfg),
+            mock.patch("tokenpak.core.version_check._load_lock", return_value=lock),
+            mock.patch("tokenpak.core.version_check._log_warning"),
         ):
             warnings = version_check.run_startup_check()
             assert len(warnings) >= 2  # At least proxy + hash warnings

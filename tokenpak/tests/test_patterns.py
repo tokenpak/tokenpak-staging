@@ -1,8 +1,8 @@
-"""Unit tests for extraction/patterns.py — regex pattern compilation and matching."""
+"""Unit tests for tokenpak/compression/extraction/patterns.py — regex pattern compilation and matching."""
 
 import re
 
-from extraction.patterns import (
+from tokenpak.compression.extraction.patterns import (
     API_ENDPOINT_RE,
     CONFIG_KEY_RE,
     DATE_RE,
@@ -26,7 +26,7 @@ class TestFilePathRE:
         assert m.group("path") == "/home/user/file.txt"
 
     def test_home_relative_path(self):
-        m = FILE_PATH_RE.search("~/vault/data.md")
+        m = FILE_PATH_RE.search("~/notes/data.md")
         assert m is not None
         assert m.group("path").startswith("~/")
 

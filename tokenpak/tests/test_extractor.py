@@ -1,10 +1,11 @@
-"""Unit tests for extraction/extractor.py — EntityExtractor pipeline."""
+"""Unit tests for tokenpak/compression/extraction/extractor.py — EntityExtractor pipeline."""
 
 import json
 
 import pytest
-from extraction.extractor import EntityExtractor
-from extraction.models import EntitySet, EntityType
+
+from tokenpak.compression.extraction.extractor import EntityExtractor
+from tokenpak.compression.extraction.models import EntitySet, EntityType
 
 
 @pytest.fixture
@@ -66,9 +67,9 @@ class TestExtractFilePaths:
         assert "/home/user/config.yaml" in paths
 
     def test_home_relative_path(self, extractor):
-        result = extractor.extract("Config lives at ~/vault/config.yaml")
+        result = extractor.extract("Config lives at ~/notes/config.yaml")
         paths = [e.value for e in result.entities if e.type == EntityType.FILE_PATH]
-        assert any("vault/config.yaml" in p for p in paths)
+        assert any("notes/config.yaml" in p for p in paths)
 
     def test_short_path_filtered(self, extractor):
         # A path of 2 chars or fewer is filtered in _extract_paths

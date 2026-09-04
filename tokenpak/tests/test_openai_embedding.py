@@ -7,8 +7,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-from proxy.adapters.canonical import CanonicalEmbeddingRequest
-from proxy.adapters.openai_embedding import OpenAIEmbeddingAdapter
+from tokenpak.proxy.adapters.canonical import CanonicalEmbeddingRequest
+from tokenpak.proxy.adapters.openai_embedding import OpenAIEmbeddingAdapter
 
 
 def _make_canonical(**kwargs) -> CanonicalEmbeddingRequest:

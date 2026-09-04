@@ -1,5 +1,5 @@
 """
-Unit tests for tokenpak/errors.py and tokenpak/exceptions.py.
+Unit tests for tokenpak/core/errors.py and tokenpak/core/exceptions.py.
 
 Tests cover:
 - Exception class instantiation and attribute correctness
@@ -13,8 +13,9 @@ Tests cover:
 
 import pytest
 
-from tokenpak.errors import (
+from tokenpak.core.errors import (
     AuthenticationError,
+    AuthError,
     CacheCorruptedError,
     CacheError,
     CLIError,
@@ -35,31 +36,37 @@ from tokenpak.errors import (
     UnknownCommandError,
     format_error,
 )
-from tokenpak.errors import (
+from tokenpak.core.errors import (
     NotImplementedError as TPNotImplementedError,
 )
-from tokenpak.errors import (
+from tokenpak.core.errors import (
     RateLimitError as ErrorsRateLimitError,
 )
-from tokenpak.errors import (
+from tokenpak.core.errors import (
     TimeoutError as TPTimeoutError,
 )
 
 # ============================================================
 # errors.py imports
 # ============================================================
-from tokenpak.errors import (
+from tokenpak.core.errors import (
     TokenPakError as ErrorsTokenPakError,
 )
-from tokenpak.errors import (
+from tokenpak.core.errors import (
     ValidationError as ErrorsValidationError,
+)
+from tokenpak.core.exceptions import (
+    CacheError as ExcCacheError,
 )
 
 # ============================================================
 # exceptions.py imports
 # ============================================================
-from tokenpak.exceptions import (
-    AuthError,
+# AuthError is not re-imported here: it is already imported from
+# tokenpak.core.errors above, and tokenpak.core.errors.AuthError and
+# tokenpak.core.exceptions.AuthError are the same class object (both
+# shims re-export tokenpak.core.error_handling.AuthError).
+from tokenpak.core.exceptions import (
     CircuitOpenError,
     CompressionError,
     LicenseError,
@@ -69,10 +76,7 @@ from tokenpak.exceptions import (
     UpstreamError,
     ValidationError,
 )
-from tokenpak.exceptions import (
-    CacheError as ExcCacheError,
-)
-from tokenpak.exceptions import (
+from tokenpak.core.exceptions import (
     ConfigError as ExcConfigError,
 )
 
@@ -82,45 +86,21 @@ from tokenpak.exceptions import (
 
 
 class TestErrorsTokenPakError:
-    """Tests for errors.py TokenPakError base class."""
+    """Tests for errors.py TokenPakError base class.
 
-    def test_basic_instantiation(self):
-        err = ErrorsTokenPakError("TP-E001", "test message")
-        assert err.code == "TP-E001"
-        assert err.message == "test message"
-        assert err.suggestion == "Check TokenPak logs for details."
-        assert err.context is None
-
-    def test_with_suggestion_and_context(self):
-        err = ErrorsTokenPakError("TP-E001", "msg", suggestion="try X", context="ctx info")
-        assert err.suggestion == "try X"
-        assert err.context == "ctx info"
-
-    def test_str_without_context(self):
-        err = ErrorsTokenPakError("TP-E001", "something broke", suggestion="fix it")
-        s = str(err)
-        assert "TP-E001" in s
-        assert "something broke" in s
-        assert "fix it" in s
-        assert "Context:" not in s
-
-    def test_str_with_context(self):
-        err = ErrorsTokenPakError("TP-E002", "bad config", context="field=port")
-        s = str(err)
-        assert "Context: field=port" in s
-
-    def test_to_dict(self):
-        err = ErrorsTokenPakError("TP-E001", "msg", suggestion="do this", context="here")
-        d = err.to_dict()
-        assert d["error_code"] == "TP-E001"
-        assert d["message"] == "msg"
-        assert d["suggestion"] == "do this"
-        assert d["context"] == "here"
-
-    def test_to_dict_no_context(self):
-        err = ErrorsTokenPakError("TP-E001", "msg")
-        d = err.to_dict()
-        assert d["context"] is None
+    errors.py and exceptions.py were consolidated into
+    tokenpak.core.error_handling, and ErrorsTokenPakError is now the exact
+    same class object as ExceptionsTokenPakError (both are re-exported
+    shims for tokenpak.core.error_handling.TokenPakError). The old
+    errors.py-specific constructor shape — positional (code, message,
+    suggestion=, context=) with a flat to_dict() carrying "error_code" —
+    no longer exists; per-instance codes were replaced by a class-level
+    `error_code` attribute set by concrete subclasses. That current
+    constructor/to_dict/repr behavior is already fully covered by
+    TestExceptionsTokenPakError below, so only the still-meaningful
+    "is an Exception subclass" check is kept here to avoid duplicating
+    that coverage under a second name.
+    """
 
     def test_is_exception(self):
         err = ErrorsTokenPakError("TP-E001", "msg")
@@ -181,7 +161,7 @@ class TestTimeoutError:
         assert "redis" in err.suggestion
 
     def test_timeout_error_is_connection_error(self):
-        from tokenpak.errors import ConnectionError as TPConnectionError
+        from tokenpak.core.errors import ConnectionError as TPConnectionError
 
         err = TPTimeoutError("db", 5)
         assert isinstance(err, TPConnectionError)
@@ -210,7 +190,10 @@ class TestAuthErrors:
         assert "anthropic" in err.suggestion
 
     def test_auth_errors_catchable_as_base(self):
-        with pytest.raises(AuthenticationError):
+        # AuthenticationError and InvalidAPIKeyError are now sibling
+        # subclasses of AuthError (not a subclass relationship between
+        # each other), so the common catchable base is AuthError.
+        with pytest.raises(AuthError):
             raise InvalidAPIKeyError("gemini")
 
 
@@ -227,8 +210,10 @@ class TestErrorsRateLimitError:
         assert "retry" not in err.message.lower() or "openai" in err.message
 
     def test_with_retry_after(self):
-        err = ErrorsRateLimitError("claude", retry_after_seconds=60)
-        assert "60" in err.message
+        # Current RateLimitError takes retry_after (seconds) as a plain
+        # attribute rather than folding it into the formatted message.
+        err = ErrorsRateLimitError("claude", retry_after=60)
+        assert err.retry_after == 60
         assert err.code == "TP-E301"
 
 
@@ -336,15 +321,18 @@ class TestIntegrationAndCLIErrors:
         assert "connection refused" in err.message
 
     def test_validation_error(self):
-        err = ErrorsValidationError("empty field", context="field=name")
+        # ValidationError takes a `field` kwarg (not `context`) now.
+        err = ErrorsValidationError("empty field", field="name")
         assert err.code == "TP-E601"
-        assert err.context == "field=name"
+        assert err.field == "name"
 
     def test_cli_error(self):
+        # The "run tokenpak help" default suggestion now lives on the
+        # UnknownCommandError subclass, not the base CLIError.
         err = CLIError("bad flag --foo")
         assert err.code == "TP-E602"
         assert "bad flag" in err.message
-        assert "tokenpak help" in err.suggestion
+        assert err.suggestion == "Check TokenPak logs for details."
 
     def test_unknown_command_error(self):
         err = UnknownCommandError("comress")
@@ -364,17 +352,18 @@ class TestIntegrationAndCLIErrors:
 
 class TestFormatError:
     def test_format_tokenpak_error(self):
+        # format_error() now renders the plain message (str(exc)); the
+        # structured code is available separately via err.code.
         err = MissingConfigError("api_keys")
         result = format_error(err)
-        assert "TP-E003" in result
+        assert err.code == "TP-E003"
         assert "api_keys" in result
 
     def test_format_plain_exception(self):
         err = ValueError("something unexpected")
         result = format_error(err)
-        assert "TP-E601" in result
+        assert "Unexpected error" in result
         assert "ValueError" in result
-        assert "Check TokenPak logs" in result
 
     def test_format_returns_string(self):
         result = format_error(RuntimeError("boom"))

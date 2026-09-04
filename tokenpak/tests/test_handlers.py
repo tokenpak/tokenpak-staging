@@ -1,6 +1,6 @@
 """
-Tests for tokenpak/handlers/ module
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Tests for tokenpak/proxy/handlers/ module
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Covers:
   - handlers package import sanity (__init__.py)
   - RateLimitBackoff: instantiation with defaults and custom params
@@ -13,7 +13,7 @@ Covers:
 
 import pytest
 
-from tokenpak import handlers
+from tokenpak.proxy import handlers
 from tokenpak.proxy.handlers.rate_limit import RateLimitBackoff
 
 # ── handlers package ────────────────────────────────────────────────────────
