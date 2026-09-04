@@ -11,7 +11,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-class _DuplicateKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
+class _DuplicateKeyLoader(yaml.SafeLoader):  # type: ignore[misc]  # yaml ships no type stubs, so ignore_missing_imports resolves SafeLoader to Any; subclassing an Any-typed base trips the strict misc check
     """YAML loader that records duplicate mapping keys."""
 
     _duplicate_keys: list[str]

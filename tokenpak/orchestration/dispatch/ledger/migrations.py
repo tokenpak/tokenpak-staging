@@ -240,7 +240,7 @@ def migrate(conn: sqlite3.Connection) -> int:
     try:
         for target_version, migration_fn in _MIGRATIONS:
             if current < target_version:
-                migration_fn(conn)  # type: ignore[operator]
+                migration_fn(conn)  # type: ignore[operator]  # _MIGRATIONS stores migration_fn as object to keep the tuple homogeneous; each entry is a Callable[[Connection], None]
                 _set_schema_version(conn, target_version)
                 current = target_version
         conn.commit()

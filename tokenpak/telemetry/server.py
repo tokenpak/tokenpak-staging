@@ -648,7 +648,7 @@ def create_app(
             from tokenpak.companion.capsules import CapsuleBuilder
 
             builder = CapsuleBuilder()
-            capsule = builder.build(  # type: ignore[attr-defined]
+            capsule = builder.build(  # type: ignore[attr-defined]  # CapsuleBuilder currently exposes process()/_maybe_capsulise(), not build(); this call targets a method that doesn't exist on the class (not fixed here — comments-only change)
                 segments=body.segments,
                 budget_tokens=body.budget_tokens,
                 session_id=body.session_id,

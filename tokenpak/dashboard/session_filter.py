@@ -121,8 +121,8 @@ class FilterParams:
             from_dt=_first("from"),
             to_dt=_first("to"),
             status=_first("status"),
-            limit=int(_first("limit")) if _first("limit") else None,  # type: ignore[arg-type]
-            offset=int(_first("offset")) if _first("offset") else None,  # type: ignore[arg-type]
+            limit=int(_first("limit")) if _first("limit") else None,  # type: ignore[arg-type]  # _first(...) returns str | None; int() only runs after the truthiness check but mypy doesn't narrow through the ternary
+            offset=int(_first("offset")) if _first("offset") else None,  # type: ignore[arg-type]  # _first(...) returns str | None; int() only runs after the truthiness check but mypy doesn't narrow through the ternary
         )
 
 

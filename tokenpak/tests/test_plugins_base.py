@@ -46,7 +46,7 @@ class TestCompressorPluginABC:
     def test_cannot_instantiate_abc_directly(self):
         """CompressorPlugin is abstract — direct instantiation must fail."""
         with pytest.raises(TypeError):
-            CompressorPlugin()  # type: ignore[abstract]
+            CompressorPlugin()  # type: ignore[abstract]  # deliberately instantiates the ABC directly to prove it raises TypeError
 
     def test_must_implement_compress(self):
         """Subclass without compress() cannot be instantiated."""
@@ -56,7 +56,7 @@ class TestCompressorPluginABC:
             # compress() not implemented
 
         with pytest.raises(TypeError):
-            IncompletePlugin()  # type: ignore[abstract]
+            IncompletePlugin()  # type: ignore[abstract]  # deliberately instantiates a subclass missing compress() to prove it raises TypeError
 
     def test_concrete_subclass_instantiates(self):
         p = MinimalPlugin()

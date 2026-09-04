@@ -33,7 +33,7 @@ def detect_shell() -> ShellKind:
     """
     override = os.environ.get("TOKENPAK_SHELL", "").strip().lower()
     if override in ("posix", "cmd", "powershell"):
-        return override  # type: ignore[return-value]
+        return override  # type: ignore[return-value]  # override is checked against the same three literals as the return type, but the `in` check doesn't narrow a plain str to that Literal
 
     if sys.platform != "win32":
         return "posix"

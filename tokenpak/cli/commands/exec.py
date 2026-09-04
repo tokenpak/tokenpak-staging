@@ -111,7 +111,7 @@ def _load_macro(name: str, macros_dir: Path) -> dict[str, Any]:
     for p in (yaml_path, yml_path):
         if p.exists():
             try:
-                import yaml  # type: ignore
+                import yaml
             except Exception as e:
                 raise click.ClickException(f"YAML macro requires PyYAML ({e})") from e
             return yaml.safe_load(p.read_text(encoding="utf-8")) or {}

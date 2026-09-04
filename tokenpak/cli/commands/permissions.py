@@ -91,7 +91,7 @@ from typing import Optional, TypedDict, cast
 try:
     import tomllib  # py311+
 except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[no-redef]  # tomli backport stands in for the stdlib tomllib name on Python < 3.11
 
 # ---------------------------------------------------------------------------
 # Canonical tier tables
@@ -801,7 +801,7 @@ def applied_tier(client: str) -> Optional[str]:
         pair = (cfg.get("approval_policy"), cfg.get("sandbox_mode"))
         if pair == (None, None):
             return None
-        return CODEX_SETTINGS_TO_TIER.get(pair)  # type: ignore[arg-type]
+        return CODEX_SETTINGS_TO_TIER.get(pair)  # type: ignore[arg-type]  # pair is (str | None, str | None) from the untyped codex config dict; CODEX_SETTINGS_TO_TIER is keyed by (str, str)
     return None
 
 

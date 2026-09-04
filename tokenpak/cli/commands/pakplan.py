@@ -333,7 +333,9 @@ def _advisory_vocab_matches(summaries: list[PakSummary]) -> list[dict[str, str]]
     registry is the single source of truth.
     """
     try:
-        from tokenpak.companion.recall import vocab as _vocab  # type: ignore[attr-defined]
+        from tokenpak.companion.recall import (  # type: ignore[attr-defined]  # tokenpak.companion.recall is a Pro-tier module absent from OSS installs; FORBIDDEN is looked up defensively
+            vocab as _vocab,
+        )
 
         forbidden = list(getattr(_vocab, "FORBIDDEN", []) or [])
     except Exception:

@@ -205,5 +205,5 @@ try:
 
 except ImportError:
 
-    def retain_cmd(*args, **kwargs):  # type: ignore
+    def retain_cmd(*args, **kwargs):  # type: ignore[misc, no-untyped-def]  # fallback stub redefines the click command with an untyped signature when click is not installed
         run_retain()

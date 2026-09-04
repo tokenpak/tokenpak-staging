@@ -377,7 +377,7 @@ def check_and_create_milestones(db_path: Optional[str] = None) -> list[Milestone
                 conn.commit()
                 new_milestones.append(
                     Milestone(
-                        id=mid,  # type: ignore[arg-type]
+                        id=mid,  # type: ignore[arg-type]  # cur.lastrowid is int | None per the sqlite3 stub; Milestone.id is a required int and lastrowid is never None immediately after an insert
                         milestone_type=m_type,
                         threshold=threshold,
                         label=label,

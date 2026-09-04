@@ -22,11 +22,11 @@ class OpenAIMessage:
     def to_dict(self) -> Dict[str, Any]:
         d = {"role": self.role}
         if self.content is not None:
-            d["content"] = self.content  # type: ignore[assignment]
+            d["content"] = self.content  # type: ignore[assignment]  # d starts as dict[str, str] from its literal; content's declared type (str | List[Dict] | None) is broader than that inferred value type
         if self.name:
             d["name"] = self.name
         if self.tool_calls:
-            d["tool_calls"] = self.tool_calls  # type: ignore[assignment]
+            d["tool_calls"] = self.tool_calls  # type: ignore[assignment]  # same dict value-type widening as content above: tool_calls's declared type is broader than d's inferred value type
         if self.tool_call_id:
             d["tool_call_id"] = self.tool_call_id
         return d

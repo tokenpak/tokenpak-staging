@@ -60,7 +60,7 @@ try:
     }
 except (ImportError, AttributeError):
     # Fallback to string-keyed dict if Provider enum is unavailable
-    CACHE_COST_MULTIPLIERS: Dict[str, Dict[str, float]] = {  # type: ignore[no-redef]
+    CACHE_COST_MULTIPLIERS: Dict[str, Dict[str, float]] = {  # type: ignore[no-redef]  # string-keyed fallback table when the Provider enum import fails; redefines the enum-keyed table declared in the try block above
         "anthropic": {"read": 0.10, "creation": 1.25},
         "openai": {"read": 0.50, "creation": 1.0},
         "azure_openai": {"read": 0.50, "creation": 1.0},

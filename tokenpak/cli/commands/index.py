@@ -107,5 +107,5 @@ try:
 
 except ImportError:
     # Fallback if click not installed
-    def index_cmd(*args, **kwargs):  # type: ignore
+    def index_cmd(*args, **kwargs):  # type: ignore[misc, no-untyped-def]  # fallback stub redefines the click command with an untyped signature when click is not installed
         print("click not installed; index command unavailable")
