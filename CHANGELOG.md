@@ -6,8 +6,18 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added verified catalog entries for current Anthropic and OpenAI model IDs,
+  including their cache rates and source-fetch metadata, plus a freshness
+  regression guard covering every load-bearing pricing surface.
+
 ### Fixed
 
+- Corrected stale model rates and family fallbacks used by cost and savings
+  estimates. The versioned telemetry catalog now interprets provider rates per
+  million tokens and installs the current rate version into existing databases
+  without changing or recomputing historical cost rows.
 - The `tokenpak.core.runtime.proxy` compatibility path is now write-through,
   not just read-through: assigning or deleting one of its 13 legacy names
   (e.g. `tokenpak.core.runtime.proxy.MONITOR = x`) now forwards to
