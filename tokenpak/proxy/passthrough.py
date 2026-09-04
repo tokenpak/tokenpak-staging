@@ -38,6 +38,7 @@ from typing import Any, Dict, Optional, Set, Tuple
 # import path `from tokenpak.proxy.passthrough import CLAUDE_CODE_HEADER_ALLOWLIST`
 # keeps working unchanged (v1.7.1 compatibility alias).
 from tokenpak.proxy.headers import CLAUDE_CODE_HEADER_ALLOWLIST  # noqa: F401
+from tokenpak.proxy.spend_guard.classifier import is_internal_header
 
 # ---------------------------------------------------------------------------
 # Per-route HTTP header forwarding allowlists
@@ -264,6 +265,8 @@ class CredentialPassthrough:
 
         for key, value in incoming_headers.items():
             if key.lower() in cfg.strip_headers:
+                continue
+            if is_internal_header(key):
                 continue
             # All other headers — including auth — forwarded unchanged
             forwarded[key] = value

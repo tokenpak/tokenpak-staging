@@ -7,6 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from tokenpak.proxy.circuit_breaker import _sanitize_headers
+from tokenpak.proxy.credential_passthrough import (
+    CredentialPassthrough as ProviderCredentialPassthrough,
+)
+from tokenpak.proxy.passthrough import CredentialPassthrough as PassthroughCredentialPassthrough
 from tokenpak.proxy.request import HTTPProxy, ProxyRequest
 from tokenpak.proxy.server import _filter_allowlisted_forward_headers
 from tokenpak.proxy.server_async import _build_forward_headers
@@ -105,3 +109,19 @@ def test_sync_allowlist_filter_strips_internal_markers() -> None:
 
     assert not any(is_internal_header(name) for name in forwarded)
     assert forwarded == {name.lower(): value for name, value in SAFE_HEADERS.items()}
+
+
+def test_credential_passthrough_builder_strips_internal_markers() -> None:
+    forwarded = PassthroughCredentialPassthrough().build_forward_headers(
+        _headers_with_internal_markers()
+    )
+
+    _assert_only_safe_headers(forwarded)
+
+
+def test_provider_credential_builder_strips_internal_markers() -> None:
+    forwarded = ProviderCredentialPassthrough().build_forward_headers(
+        _headers_with_internal_markers(), provider="openai"
+    )
+
+    _assert_only_safe_headers(forwarded)
