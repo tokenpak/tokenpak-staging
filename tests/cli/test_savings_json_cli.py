@@ -32,6 +32,14 @@ def _run_savings(home: Path, *argv: str) -> subprocess.CompletedProcess:
     env.pop("TOKENPAK_DB", None)
     env.pop("TOKENPAK_MONITOR_DB", None)
     env["TOKENPAK_PORT"] = "8899"  # nothing listens here
+    fake_deps = home / "fake-deps"
+    if fake_deps.exists():
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{fake_deps}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else str(fake_deps)
+        )
     return subprocess.run(
         [sys.executable, "-m", "tokenpak.cli", "savings", *argv],
         capture_output=True,
@@ -39,6 +47,21 @@ def _run_savings(home: Path, *argv: str) -> subprocess.CompletedProcess:
         cwd=str(REPO_ROOT),
         env=env,
         timeout=90,
+    )
+
+
+def _install_fake_tiktoken(home: Path) -> None:
+    """Provide a deterministic tokenizer module to the subprocess."""
+    module_dir = home / "fake-deps"
+    module_dir.mkdir()
+    (module_dir / "tiktoken.py").write_text(
+        "class Encoder:\n"
+        "    def encode(self, text):\n"
+        "        return list(range(max(1, len(text) // 5)))\n"
+        "def get_encoding(name):\n"
+        "    assert name == 'cl100k_base'\n"
+        "    return Encoder()\n",
+        encoding="utf-8",
     )
 
 
@@ -108,6 +131,24 @@ def test_json_respects_days_flag(tmp_path):
     assert payload["days"] == 7
 
 
+def test_json_verify_emits_both_counts_and_divergence(tmp_path):
+    home = _fresh_home(tmp_path)
+    _seed_monitor_db(home)
+    _install_fake_tiktoken(home)
+
+    result = _run_savings(home, "--json", "--verify")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    verification = payload["verification"]
+    assert verification["available"] is True
+    assert verification["scope"] == "packaged-fixture-corpus"
+    assert verification["reported_count"] > 0
+    assert verification["independent_count"] > 0
+    assert verification["absolute_divergence"] >= 0
+    assert verification["relative_divergence"] >= 0
+
+
 # ---------------------------------------------------------------------------
 # --json empty state (fresh install, no stores)
 # ---------------------------------------------------------------------------
@@ -163,6 +204,21 @@ def test_human_output_with_data_unchanged(tmp_path):
     assert "Est. Savings" in result.stdout
 
 
+def test_human_verify_prints_scope_counts_and_divergence(tmp_path):
+    home = _fresh_home(tmp_path)
+    _seed_monitor_db(home)
+    _install_fake_tiktoken(home)
+
+    result = _run_savings(home, "--verify")
+
+    assert result.returncode == 0, result.stderr
+    assert "Independent token-count verification" in result.stdout
+    assert "does not recount logged requests" in result.stdout
+    assert "Reported (utf8-bytes-div-4)" in result.stdout
+    assert "Independent (tiktoken:cl100k_base)" in result.stdout
+    assert "Divergence:" in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # help surface
 # ---------------------------------------------------------------------------
@@ -175,3 +231,4 @@ def test_help_advertises_json_flag(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "--json" in result.stdout
+    assert "--verify" in result.stdout
