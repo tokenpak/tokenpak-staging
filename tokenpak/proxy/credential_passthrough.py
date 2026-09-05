@@ -52,6 +52,8 @@ from __future__ import annotations
 import re
 from typing import Dict, Optional, Tuple
 
+from tokenpak.proxy.spend_guard.classifier import is_internal_header
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -238,6 +240,8 @@ class CredentialPassthrough:
                 continue
             if key_lc in _SENSITIVE_HEADERS:
                 continue  # re-added below in canonical form
+            if is_internal_header(key):
+                continue
             forwarded[key] = value
 
         # Re-add auth in provider-canonical form

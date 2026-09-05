@@ -84,7 +84,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -936,6 +936,19 @@ def _record_injection_in_session(
 # ---------------------------------------------------------------------------
 # Request handler
 # ---------------------------------------------------------------------------
+
+
+def _filter_allowlisted_forward_headers(
+    raw_headers: Mapping[str, str], allowlist: Collection[str]
+) -> dict[str, str]:
+    """Return allowlisted upstream headers, excluding the internal namespace."""
+    from tokenpak.proxy.spend_guard.classifier import is_internal_header
+
+    return {
+        name.lower(): value
+        for name, value in raw_headers.items()
+        if name.lower() in allowlist and not is_internal_header(name)
+    }
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):
@@ -2186,10 +2199,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _allowlist = (
                 CLAUDE_CODE_HEADER_ALLOWLIST if _route == "claude-code" else LEGACY_HEADER_ALLOWLIST
             )
-            fwd_headers = {}
-            for _hk, _hv in self.headers.items():
-                if _hk.lower() in _allowlist:
-                    fwd_headers[_hk.lower()] = _hv
+            fwd_headers = _filter_allowlisted_forward_headers(self.headers, _allowlist)
         else:
             incoming_headers = dict(self.headers)
             client_has_auth = any(
