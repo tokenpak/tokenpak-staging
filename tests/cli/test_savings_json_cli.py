@@ -22,6 +22,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -63,6 +65,22 @@ def _install_fake_tiktoken(home: Path) -> None:
         "    return Encoder()\n",
         encoding="utf-8",
     )
+
+
+def _install_unavailable_tiktoken(home: Path, failure_mode: str) -> None:
+    """Exercise dependency failures independently of the installed tokenizer."""
+    module_dir = home / "fake-deps"
+    module_dir.mkdir()
+    if failure_mode == "missing":
+        source = "raise ModuleNotFoundError('private-tokenizer-detail')\n"
+    else:
+        assert failure_mode == "initialization"
+        source = (
+            "def get_encoding(name):\n"
+            "    assert name == 'cl100k_base'\n"
+            "    raise OSError('private-tokenizer-detail')\n"
+        )
+    (module_dir / "tiktoken.py").write_text(source, encoding="utf-8")
 
 
 def _fresh_home(tmp_path: Path) -> Path:
@@ -217,6 +235,55 @@ def test_human_verify_prints_scope_counts_and_divergence(tmp_path):
     assert "Reported (utf8-bytes-div-4)" in result.stdout
     assert "Independent (tiktoken:cl100k_base)" in result.stdout
     assert "Divergence:" in result.stdout
+
+
+@pytest.mark.parametrize("failure_mode", ["missing", "initialization"])
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("has_data", [False, True])
+def test_verify_unavailable_preserves_savings_output(
+    tmp_path, failure_mode: str, as_json: bool, has_data: bool
+):
+    home = _fresh_home(tmp_path)
+    if has_data:
+        _seed_monitor_db(home)
+    _install_unavailable_tiktoken(home, failure_mode)
+    output_args = ("--json",) if as_json else ()
+
+    baseline = _run_savings(home, *output_args)
+    result = _run_savings(home, *output_args, "--verify")
+
+    assert baseline.returncode == 0, baseline.stderr
+    assert result.returncode == 0, result.stderr
+    assert "private-tokenizer-detail" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stdout + result.stderr
+    if as_json:
+        payload = json.loads(result.stdout)
+        verification = payload.pop("verification")
+        assert payload == json.loads(baseline.stdout)
+        assert verification["available"] is False
+        assert verification["scope"] == "packaged-fixture-corpus"
+        assert "does not recount logged requests" in verification["scope_note"]
+        for field in (
+            "reported_count",
+            "independent_count",
+            "absolute_divergence",
+            "relative_divergence",
+        ):
+            assert field not in verification
+        message = verification["message"]
+    else:
+        assert result.stdout.startswith(baseline.stdout)
+        assert "Independent token-count verification" in result.stdout
+        assert "does not recount logged requests" in result.stdout
+        assert "Unavailable:" in result.stdout
+        assert "Divergence:" not in result.stdout
+        message = result.stdout
+    assert "tokenpak[tokens]" in message
+    if failure_mode == "missing":
+        assert "requires tiktoken" in message
+    else:
+        assert "could not initialize cl100k_base" in message
+        assert "readable cache" in message
 
 
 # ---------------------------------------------------------------------------

@@ -69,7 +69,14 @@ def _load_encoder() -> _Encoder:
             "Independent verification requires tiktoken; install "
             "the optional dependency with `pip install 'tokenpak[tokens]'`."
         ) from exc
-    return module.get_encoding(_ENCODING_NAME)
+    try:
+        return module.get_encoding(_ENCODING_NAME)
+    except (ImportError, OSError, RuntimeError, ValueError):
+        raise TokenizerUnavailableError(
+            "Independent verification could not initialize cl100k_base. "
+            "Check that its tokenizer data is available in a readable cache, "
+            "or reinstall `tokenpak[tokens]`, then retry."
+        ) from None
 
 
 def verify_token_count(text: str, reported_count: int) -> TokenCountVerification:
