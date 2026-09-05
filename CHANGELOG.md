@@ -15,6 +15,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Vault context retrieval now has a configurable deadline and bounded worker
+  capacity. A timeout or saturated retrieval backlog forwards the original
+  request unchanged and records an explicit degradation reason.
+
 - The `tokenpak.core.runtime.proxy` compatibility path is now write-through,
   not just read-through: assigning or deleting one of its 13 legacy names
   (e.g. `tokenpak.core.runtime.proxy.MONITOR = x`) now forwards to
