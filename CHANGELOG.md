@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Proxy forwarding paths now use the same internal-header predicate, including
+  the asynchronous, request, circuit-breaker, allowlist, and both credential-
+  passthrough builders. Internal request markers cannot reach an upstream
+  provider through an adjacent or currently inactive forwarding path.
+
 ### Fixed
 
 - Vault context retrieval now has a configurable deadline and bounded worker
