@@ -327,8 +327,7 @@ def test_composed_custom_denial_command_still_emits_its_payload(monkeypatch, tmp
     deny_script.write_text(
         "#!/bin/sh\n"
         "printf '%s\\n' "
-        '\'{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",'
-        '"decision":"block","reason":"custom policy denial"}}\'\n'
+        '\'{"decision":"block","reason":"custom policy denial"}\'\n'
     )
     deny_command = f"bash {shlex.quote(str(deny_script))}"
     settings_dir.joinpath("settings.json").write_text(
@@ -362,8 +361,7 @@ def test_composed_custom_denial_command_still_emits_its_payload(monkeypatch, tmp
     decision = json.loads(result.stdout)
 
     assert result.returncode == 0
-    assert decision["hookSpecificOutput"] == {
-        "hookEventName": "UserPromptSubmit",
+    assert decision == {
         "decision": "block",
         "reason": "custom policy denial",
     }
