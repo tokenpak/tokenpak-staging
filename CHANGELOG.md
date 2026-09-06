@@ -17,6 +17,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   guide documents savings baselines, aggregation, counting provenance, and
   known failure modes without changing savings calculations.
 
+### Security
+
+- Proxy forwarding paths now use the same internal-header predicate, including
+  the asynchronous, request, circuit-breaker, allowlist, and both credential-
+  passthrough builders. Internal request markers cannot reach an upstream
+  provider through an adjacent or currently inactive forwarding path.
+
 ### Fixed
 
 - The `tokenpak.core.runtime.proxy` compatibility path is now write-through,
