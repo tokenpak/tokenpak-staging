@@ -18,7 +18,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 - The optional Pak builder now preserves every role-bearing conversation turn
   verbatim, including user and system instructions, assistant decisions, and
   tool call history. Only role-less content positively classified as narrative
-  remains eligible for its legacy shortening transform.
+  remains eligible for its legacy shortening transform. Unmodified reference
+  Messages and Responses requests now have matching zero-savings receipt tests
+  and documentation; positive reduction proof stays on explicit compression
+  surfaces such as companion `prune_context`.
 - Companion guidance now starts from the current conversation and live source,
   retrieves prior context only when a needed fact is missing, and records
   semantic journal milestones only when continuity requires them. Managed

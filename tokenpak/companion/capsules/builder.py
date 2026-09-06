@@ -5,11 +5,12 @@ tokenpak.companion.capsules.builder
 Pak Builder — context-block compression for the TokenPak proxy pipeline.
 
 A **Pak** (Portable AI Knowledge — legacy name: capsule) is a compact,
-structured representation of a verbose context block. The builder identifies
-large historical message blocks, compresses them deterministically, and wraps
-them in a Pak envelope so the model still receives the semantic content at
-reduced token cost. Class and module names retain the legacy ``capsule``
-spelling as deprecation aliases; the wire-visible surface is Pak-branded.
+structured representation of a verbose context block. The builder preserves
+role-bearing conversation turns and tool evidence verbatim. Its legacy
+transform applies only to role-less context objects positively classified as
+narrative, which it compresses deterministically and wraps in a Pak envelope.
+Class and module names retain the legacy ``capsule`` spelling as deprecation
+aliases; the wire-visible surface is Pak-branded.
 
 Design Principles
 -----------------
@@ -225,7 +226,7 @@ def _wrap_capsule(original: str, compressed: str) -> str:
 
 class CapsuleBuilder:
     """
-    Compress verbose historical context blocks in an LLM request payload.
+    Compress eligible role-less narrative blocks in a request payload.
 
     Parameters
     ----------
@@ -235,8 +236,10 @@ class CapsuleBuilder:
     min_block_chars : int
         Minimum character length of a text block to qualify for compression.
     hot_window : int
-        Number of trailing messages to leave untouched (the "hot window").
-        Capsule compression applies only to messages *before* this window.
+        Number of trailing entries to leave untouched (the "hot window").
+        Eligible legacy compression applies only to role-less narrative entries
+        *before* this window. Role-bearing conversation turns remain untouched
+        regardless of position.
     """
 
     def __init__(

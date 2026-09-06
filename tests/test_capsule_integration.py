@@ -49,7 +49,7 @@ def simple_body():
 
 @pytest.fixture
 def long_body():
-    """Request body with long messages eligible for capsule compression."""
+    """Supported provider request with long role-bearing conversation turns."""
     long_content = "This is a verbose paragraph. " * 50  # ~1500 chars
     return json.dumps(
         {
@@ -59,6 +59,22 @@ def long_body():
                 {"role": "user", "content": long_content},
                 {"role": "assistant", "content": long_content},
                 {"role": "user", "content": "What do you think?"},  # hot window
+            ],
+        }
+    ).encode()
+
+
+@pytest.fixture
+def roleless_narrative_body():
+    """Legacy explicit-hook payload with an eligible role-less narrative block."""
+    long_content = "This is a verbose narrative paragraph. " * 50
+    return json.dumps(
+        {
+            "model": "fixture-model",
+            "messages": [
+                {"content": long_content},
+                {"role": "assistant", "content": "Context received."},
+                {"role": "user", "content": "Continue."},
             ],
         }
     ).encode()
@@ -126,27 +142,36 @@ class TestHookBehavior:
             assert len(mock_trace.stages) == 1
             assert mock_trace.stages[0].details.get("skip_reason") == "disabled"
 
-    def test_compresses_when_enabled(self, long_body):
+    def test_preserves_role_bearing_messages_when_enabled(self, long_body):
         with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "1"}):
             clear_cache()
             new_body, sent, raw, protected = capsule_request_hook(long_body, "claude-sonnet-4-5")
-            # Should be compressed (smaller or have CAPSULE markers)
-            data = json.loads(new_body)
-            # Check if any message got capsulized
-            has_capsule = any(
-                "[CAPSULE" in str(m.get("content", "")) for m in data.get("messages", [])
-            )
-            assert has_capsule or len(new_body) <= len(long_body)
+            assert new_body == long_body
+            assert sent == raw
+            assert protected == 0
 
-    def test_trace_shows_compression_stats(self, long_body, mock_trace):
+    def test_explicit_roleless_narrative_reports_measured_reduction(self, roleless_narrative_body):
+        """Keep a real positive delta at the legacy explicit-hook surface."""
+        with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "1"}):
+            clear_cache()
+            new_body, sent, raw, protected = capsule_request_hook(
+                roleless_narrative_body, "fixture-model"
+            )
+            assert b"[PAK " in new_body
+            assert raw > sent > 0
+            assert protected == 0
+
+    def test_trace_shows_zero_compression_for_role_bearing_request(self, long_body, mock_trace):
         with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "1"}):
             clear_cache()
             capsule_request_hook(long_body, "claude-sonnet-4-5", mock_trace)
             assert len(mock_trace.stages) == 1
             stage = mock_trace.stages[0]
             assert stage.enabled
-            assert "blocks_capsulized" in stage.details
-            assert "ratio" in stage.details
+            assert stage.details["blocks_capsulized"] == 0
+            assert stage.details["ratio"] == 1.0
+            assert stage.details["skip_reason"] == "no_eligible_blocks"
+            assert stage.tokens_delta == 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,7 +197,7 @@ class TestHookChaining:
             assert len(base_called) == 1
             assert base_called[0][1] == "claude-sonnet-4-5"
 
-    def test_passes_modified_body_to_base_hook(self, long_body):
+    def test_passes_modified_body_to_base_hook(self, roleless_narrative_body):
         received_bodies = []
 
         def base_hook(body, model, trace):
@@ -182,10 +207,11 @@ class TestHookChaining:
         with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "1"}):
             clear_cache()
             hook = get_capsule_request_hook(base_hook=base_hook)
-            hook(long_body, "claude-sonnet-4-5")
+            hook(roleless_narrative_body, "fixture-model")
 
-            # Base hook should receive the potentially-modified body
             assert len(received_bodies) == 1
+            assert received_bodies[0] != roleless_narrative_body
+            assert b"[PAK " in received_bodies[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,20 +268,21 @@ class TestDeterminism:
 
             assert result1 == result2
 
-    def test_capsule_id_is_stable(self, long_body):
+    def test_capsule_id_is_stable(self, roleless_narrative_body):
         """Capsule IDs should be deterministic (based on content hash)."""
         with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "1"}):
             clear_cache()
 
-            result1, _, _, _ = capsule_request_hook(long_body, "claude-sonnet-4-5")
-            result2, _, _, _ = capsule_request_hook(long_body, "claude-sonnet-4-5")
+            result1, _, _, _ = capsule_request_hook(roleless_narrative_body, "fixture-model")
+            result2, _, _, _ = capsule_request_hook(roleless_narrative_body, "fixture-model")
 
             # Extract capsule IDs from both results
             import re
 
-            ids1 = re.findall(r"\[CAPSULE id=(\w+)", result1.decode())
-            ids2 = re.findall(r"\[CAPSULE id=(\w+)", result2.decode())
+            ids1 = re.findall(r"\[PAK id=(\w+)", result1.decode())
+            ids2 = re.findall(r"\[PAK id=(\w+)", result2.decode())
 
+            assert len(ids1) == 1
             assert ids1 == ids2
 
 
