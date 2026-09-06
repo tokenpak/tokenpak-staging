@@ -12,6 +12,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   including their cache rates and source-fetch metadata, plus a freshness
   regression guard covering every load-bearing pricing surface.
 
+### Security
+
+- Proxy forwarding paths now use the same internal-header predicate, including
+  the asynchronous, request, circuit-breaker, allowlist, and both credential-
+  passthrough builders. Internal request markers cannot reach an upstream
+  provider through an adjacent or currently inactive forwarding path.
+
 ### Fixed
 
 - Corrected stale model rates and family fallbacks used by cost and savings

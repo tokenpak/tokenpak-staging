@@ -205,8 +205,12 @@ class HTTPProxy:
         import urllib.error
         import urllib.request
 
+        from tokenpak.proxy.spend_guard.classifier import is_internal_header
+
         # Build forwarded headers
-        fwd_headers = dict(request.headers)
+        fwd_headers = {
+            key: value for key, value in request.headers.items() if not is_internal_header(key)
+        }
         fwd_headers.setdefault("Content-Type", "application/json")
 
         req = urllib.request.Request(
