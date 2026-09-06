@@ -18,6 +18,25 @@ import pytest
 
 from tokenpak.companion.codex import skills_installer as si
 
+_RELEASED_LARGE_REFACTOR_V151 = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "codex"
+    / "tokenpak-large-refactor-mode-v1.5.1.md"
+)
+_RELEASED_LARGE_REFACTOR_V151_SHA256 = (
+    "8bed320ff9c21c2aaaeadf4b87eaefd83cb5d19d502aba91277cbe72b356a4b8"
+)
+
+
+def _large_refactor_only_bundle(monkeypatch, tmp_path: Path) -> Path:
+    name = "tokenpak-large-refactor-mode"
+    bundled = tmp_path / "bundled"
+    shutil.copytree(si._BUNDLED_SKILLS / name, bundled / name)
+    monkeypatch.setattr(si, "_BUNDLED_SKILLS", bundled)
+    return bundled
+
+
 # ---------------------------------------------------------------------------
 # Runtime default — spec-canonical user path
 # ---------------------------------------------------------------------------
@@ -92,6 +111,38 @@ def test_uninstall_preserves_and_reports_customized_same_name_skill(monkeypatch,
 
     assert removed == []
     assert (customized / "SKILL.md").read_text() == "# user customized\n"
+
+
+def test_upgrade_accepts_released_v151_large_refactor_body(monkeypatch, tmp_path: Path):
+    name = "tokenpak-large-refactor-mode"
+    bundled = _large_refactor_only_bundle(monkeypatch, tmp_path)
+    released_body = _RELEASED_LARGE_REFACTOR_V151.read_bytes()
+    assert hashlib.sha256(released_body).hexdigest() == _RELEASED_LARGE_REFACTOR_V151_SHA256
+    target = tmp_path / "agents" / "skills"
+    installed = target / name
+    installed.mkdir(parents=True)
+    (installed / "SKILL.md").write_bytes(released_body)
+
+    assert si.install_skills(target_dir=target) == [installed]
+
+    assert (installed / "SKILL.md").read_bytes() == (bundled / name / "SKILL.md").read_bytes()
+    assert si.list_installed_skills(target) == [name]
+
+
+def test_upgrade_preserves_modified_v151_large_refactor_body(monkeypatch, tmp_path: Path):
+    name = "tokenpak-large-refactor-mode"
+    _large_refactor_only_bundle(monkeypatch, tmp_path)
+    customized_body = _RELEASED_LARGE_REFACTOR_V151.read_bytes() + b"\n# local customization\n"
+    target = tmp_path / "agents" / "skills"
+    installed = target / name
+    installed.mkdir(parents=True)
+    (installed / "SKILL.md").write_bytes(customized_body)
+
+    with pytest.warns(RuntimeWarning, match="customized or unknown"):
+        assert si.install_skills(target_dir=target) == []
+
+    assert (installed / "SKILL.md").read_bytes() == customized_body
+    assert si.list_installed_skills(target) == []
 
 
 def test_upgrade_accepts_recorded_shipped_body_without_name_only_ownership(

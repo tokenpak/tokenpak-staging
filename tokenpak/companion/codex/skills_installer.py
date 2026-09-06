@@ -84,7 +84,10 @@ _KNOWN_SHIPPED_SKILL_MD_SHA256: dict[str, frozenset[str]] = {
         {"f7c0eb1e1341cd60f99035f08ded8d3323e2a8bd8687e025b6dfd864b63bae5a"}
     ),
     "tokenpak-large-refactor-mode": frozenset(
-        {"1be837f78a802c5185efd3f68804904836a34a39e00a8356e78cf0a5b2e0bf4f"}
+        {
+            "1be837f78a802c5185efd3f68804904836a34a39e00a8356e78cf0a5b2e0bf4f",
+            "8bed320ff9c21c2aaaeadf4b87eaefd83cb5d19d502aba91277cbe72b356a4b8",
+        }
     ),
     "tokenpak-load-memory": frozenset(
         {"a2b97424bc25ffd77551685db2d1cee5afda40df252725db405ac5eb764d9f75"}
