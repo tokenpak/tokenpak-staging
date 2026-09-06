@@ -2,9 +2,6 @@
 Tests for capsule builder proxy integration.
 """
 
-import pytest
-
-pytest.importorskip("tokenpak.capsule.builder", reason="module not available in current build")
 import json
 import os
 import time
@@ -18,6 +15,11 @@ from tokenpak.proxy.capsule_integration import (
     capsule_request_hook,
     clear_cache,
     get_capsule_request_hook,
+)
+
+pytest.importorskip(
+    "tokenpak.companion.capsules.builder",
+    reason="companion capsule builder not available in current build",
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,10 +117,11 @@ class TestFeatureFlag:
 
     def test_env_var_takes_precedence_over_config(self):
         with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "0"}):
-            with patch("tokenpak._internal.config.load_config") as mock_cfg:
+            with patch("tokenpak.core.config.load_config") as mock_cfg:
                 mock_cfg.return_value = {"capsule_builder": {"enabled": True}}
                 clear_cache()
                 assert not _is_capsule_enabled()
+                mock_cfg.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,19 +409,18 @@ class TestProxyServerWiring:
         ps.request_hook(payload, "claude-3")
         assert called_with.get("model") == "claude-3", "external hook should be chained"
 
-    def test_capsule_hook_enabled_compresses_in_proxy(self):
-        """When TOKENPAK_CAPSULE_BUILDER=1, ProxyServer hook should compress large blocks."""
+    def test_capsule_hook_enabled_preserves_role_bearing_proxy_payload(self):
+        """ProxyServer keeps supported conversation turns byte-identical when enabled."""
         from tokenpak.proxy.server import ProxyServer
 
         long_text = "This is a very long sentence that goes on and on. " * 20  # >400 chars
-        # Place the large block outside the hot window (last 2 msgs) so it qualifies
         payload = json.dumps(
             {
                 "messages": [
-                    {"role": "user", "content": long_text},  # idx 0 — outside hot window
+                    {"role": "user", "content": long_text},
                     {"role": "assistant", "content": "short reply"},
                     {"role": "user", "content": "follow-up question here"},
-                    {"role": "assistant", "content": "ok"},  # idx 3 — hot window
+                    {"role": "assistant", "content": "ok"},
                 ]
             }
         ).encode()
@@ -427,10 +429,10 @@ class TestProxyServerWiring:
         with patch.dict(os.environ, {"TOKENPAK_CAPSULE_BUILDER": "1"}):
             clear_cache()
             ps = ProxyServer()
-            body_out, sent_tokens, raw_tokens, _ = ps.request_hook(payload, "gpt-4o")
+            body_out, sent_tokens, raw_tokens, protected_tokens = ps.request_hook(payload, "gpt-4o")
         clear_cache()
 
-        assert b"[CAPSULE" in body_out, "capsule envelope should appear in compressed output"
-        assert sent_tokens < raw_tokens, (
-            "sent_tokens should be less than raw_tokens after compression"
-        )
+        assert body_out == payload
+        assert sent_tokens == raw_tokens
+        assert raw_tokens > 0
+        assert protected_tokens == 0
