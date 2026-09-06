@@ -43,6 +43,18 @@ def test_seed_catalog_records_current_official_sources():
             "url": "https://developers.openai.com/api/docs/pricing",
             "fetched_at": "2026-09-04T15:51:18Z",
         },
+        {
+            "url": "https://developers.openai.com/api/docs/pricing",
+            "fetched_at": "2026-09-05T20:31:58Z",
+        },
+        {
+            "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+            "fetched_at": "2026-09-05T20:31:58Z",
+        },
+        {
+            "url": "https://developers.openai.com/api/docs/guides/prompt-caching",
+            "fetched_at": "2026-09-05T20:31:58Z",
+        },
     ]
 
 

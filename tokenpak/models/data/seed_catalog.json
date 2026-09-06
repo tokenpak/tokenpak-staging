@@ -11,6 +11,18 @@
       {
         "url": "https://developers.openai.com/api/docs/pricing",
         "fetched_at": "2026-09-04T15:51:18Z"
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/pricing",
+        "fetched_at": "2026-09-05T20:31:58Z"
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+        "fetched_at": "2026-09-05T20:31:58Z"
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/guides/prompt-caching",
+        "fetched_at": "2026-09-05T20:31:58Z"
       }
     ],
     "notes": [
@@ -23,7 +35,8 @@
       "2026-08-17 refresh: current-generation Anthropic rows (sonnet-5, opus-5, fable-5) and the haiku-4-5 correction were verified against the official Anthropic pricing/model docs on that date; see the refresh PR body for the exact source URLs",
       "2026-09-04 refresh: current Anthropic and OpenAI rows were verified against the official pricing pages recorded in _meta.sources",
       "OpenAI entries use standard rates below the provider's long-context threshold; long-context price tiers are not represented by this schema",
-      "The gpt-5.6 alias resolves to gpt-5.6-sol per the official model page"
+      "The gpt-5.6 alias resolves to gpt-5.6-sol per the official model page",
+      "2026-09-05 provenance check: the official pricing table and prompt-caching guide confirm GPT-5.6 cache writes cost 1.25x uncached input; the model page confirms the gpt-5.6 alias. These sources supplement the earlier pricing fetch without changing catalog rates or refreshing unrelated rows."
     ]
   },
   "provider_cache_multipliers": {

@@ -58,16 +58,16 @@ class TestPricingDataclass:
 
     def test_input_per_token(self):
         p = self._make_pricing(input_rate=3.0)
-        assert p.input_per_token == pytest.approx(0.000003)
+        assert p.input_per_token == pytest.approx(0.003)
 
     def test_output_per_token(self):
         p = self._make_pricing(output_rate=15.0)
-        assert p.output_per_token == pytest.approx(0.000015)
+        assert p.output_per_token == pytest.approx(0.015)
 
     def test_haiku_rates(self):
         p = self._make_pricing(input_rate=0.80, output_rate=4.0)
-        assert p.input_per_token == pytest.approx(0.0000008)
-        assert p.output_per_token == pytest.approx(0.000004)
+        assert p.input_per_token == pytest.approx(0.0008)
+        assert p.output_per_token == pytest.approx(0.004)
 
 
 # ---------------------------------------------------------------------------
@@ -81,18 +81,18 @@ class TestGetPricing:
     def test_exact_match_known_model(self, engine):
         p = engine.get_pricing("claude-sonnet-4-6")
         assert p.model == "claude-sonnet-4-6"
-        assert p.input_rate == pytest.approx(3.0)
-        assert p.output_rate == pytest.approx(15.0)
+        assert p.input_rate == pytest.approx(0.003)
+        assert p.output_rate == pytest.approx(0.015)
 
     def test_exact_match_haiku(self, engine):
         p = engine.get_pricing("claude-haiku-4-5")
-        assert p.input_rate == pytest.approx(1.0)
-        assert p.output_rate == pytest.approx(5.0)
+        assert p.input_rate == pytest.approx(0.001)
+        assert p.output_rate == pytest.approx(0.005)
 
     def test_exact_match_opus(self, engine):
         p = engine.get_pricing("claude-opus-4-6")
-        assert p.input_rate == pytest.approx(5.0)
-        assert p.output_rate == pytest.approx(25.0)
+        assert p.input_rate == pytest.approx(0.005)
+        assert p.output_rate == pytest.approx(0.025)
 
     def test_fallback_unknown_model(self, engine):
         p = engine.get_pricing("totally-unknown-model-xyz")
@@ -157,7 +157,7 @@ class TestPricingCatalog:
         for r in rows:
             assert r["version"] == CURRENT_PRICING_VERSION
 
-    def test_existing_catalog_gets_current_version_without_losing_history(self, tmp_path):
+    def test_existing_catalog_gets_schema_only_without_losing_history(self, tmp_path):
         db = tmp_path / "existing-pricing.db"
         CostEngine(db_path=str(db))
         with sqlite3.connect(db) as conn:
@@ -182,7 +182,7 @@ class TestPricingCatalog:
             ).fetchone()[0]
 
         assert old_count == 1
-        assert current_count == len(SEED_PRICING)
+        assert current_count == 0
 
     def test_add_pricing_invalidates_cache(self, engine):
         """Adding new pricing clears the internal cache."""
@@ -295,13 +295,12 @@ class TestCostResultToDict:
     def test_to_dict_model_name(self, result):
         assert result.to_dict()["model"] == "claude-sonnet-4-6"
 
-    def test_to_dict_costs_rounded_6dp(self, result):
+    def test_to_dict_costs_preserve_calculation_precision(self, result):
         d = result.to_dict()
-        # Values should have at most 6 decimal places (rounded by to_dict)
         for key in ("baseline_cost", "actual_cost", "savings_amount"):
             val = d[key]
             assert isinstance(val, float)
-            assert round(val, 6) == val
+            assert val == getattr(result, key)
 
     def test_to_dict_data_source(self, result):
         assert result.to_dict()["data_source"] == "official"
@@ -327,22 +326,22 @@ class TestModuleLevelHelpers:
         )
 
     def test_calculate_baseline_math(self, sonnet_pricing):
-        # 1000 input * $3/M + 100 output * $15/M = $0.0045.
+        # Public Pricing rates are USD/1K: $3 input + $1.50 output.
         result = calculate_baseline(1000, 100, sonnet_pricing)
-        assert result == pytest.approx(0.0045)
+        assert result == pytest.approx(4.5)
 
     def test_calculate_baseline_zero(self, sonnet_pricing):
         assert calculate_baseline(0, 0, sonnet_pricing) == pytest.approx(0.0)
 
     def test_calculate_actual_with_cache_reads(self, sonnet_pricing):
-        # final=1000, cache_read=400 -> 600 input at $3/M plus 100 output at $15/M.
+        # final=1000, cache_read=400 -> $1.80 input plus $1.50 output.
         result = calculate_actual(1000, 100, sonnet_pricing, cache_read_tokens=400)
-        assert result == pytest.approx(0.0033)
+        assert result == pytest.approx(3.3)
 
     def test_calculate_actual_no_cache_reads(self, sonnet_pricing):
-        # 1000 input at $3/M plus 100 output at $15/M.
+        # 1000 input at $3/1K plus 100 output at $15/1K.
         result = calculate_actual(1000, 100, sonnet_pricing)
-        assert result == pytest.approx(0.0045)
+        assert result == pytest.approx(4.5)
 
     def test_calculate_savings_normal(self):
         amount, pct = calculate_savings(10.0, 6.0)

@@ -64,9 +64,9 @@ class TestCostCalculations:
             version="1.0",
             effective_date="2026-03-17",
         )
-        # 1M tokens at $15/M = $15.
+        # 1M tokens at $15/1K = $15,000.
         cost = calculate_baseline(1_000_000, 0, pricing)
-        assert cost == pytest.approx(15.0, rel=0.01)
+        assert cost == pytest.approx(15000.0, rel=0.01)
 
     def test_baseline_cost_output_only(self):
         """Baseline cost for output tokens."""
@@ -78,9 +78,9 @@ class TestCostCalculations:
             version="1.0",
             effective_date="2026-03-17",
         )
-        # 1M output tokens at $75/M = $75.
+        # 1M output tokens at $75/1K = $75,000.
         cost = calculate_baseline(0, 1_000_000, pricing)
-        assert cost == pytest.approx(75.0, rel=0.01)
+        assert cost == pytest.approx(75000.0, rel=0.01)
 
     def test_baseline_cost_combined(self):
         """Baseline cost for input + output."""
@@ -93,7 +93,7 @@ class TestCostCalculations:
             effective_date="2026-03-17",
         )
         cost = calculate_baseline(1_000_000, 1_000_000, pricing)
-        expected = 15.0 + 75.0
+        expected = 15000.0 + 75000.0
         assert cost == pytest.approx(expected, rel=0.01)
 
     def test_savings_calculation(self):
@@ -130,8 +130,8 @@ class TestCostCalculations:
             version="1.0",
             effective_date="2026-03-17",
         )
-        assert pricing.input_per_token == pytest.approx(0.000015, rel=0.01)
-        assert pricing.output_per_token == pytest.approx(0.000075, rel=0.01)
+        assert pricing.input_per_token == pytest.approx(0.015, rel=0.01)
+        assert pricing.output_per_token == pytest.approx(0.075, rel=0.01)
 
     def test_different_providers_different_rates(self):
         """Different providers have different rates."""
@@ -164,7 +164,7 @@ class TestCostCalculations:
             effective_date="2026-03-17",
         )
         cost = calculate_baseline(1, 0, pricing)  # 1 token
-        assert cost == pytest.approx(0.000015, rel=0.001)
+        assert cost == pytest.approx(0.015, rel=0.001)
 
     def test_large_token_count_cost(self):
         """Large token counts scale linearly."""

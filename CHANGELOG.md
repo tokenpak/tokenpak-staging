@@ -22,9 +22,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Corrected stale model rates and family fallbacks used by cost and savings
-  estimates. The versioned telemetry catalog now interprets provider rates per
-  million tokens and installs the current rate version into existing databases
-  without changing or recomputing historical cost rows.
+  estimates. Fresh versioned telemetry catalogs normalize explicitly tagged
+  per-million provider constants into the existing USD-per-1K public API and
+  expose rate-unit and provenance metadata. Existing pricing rows, custom rates,
+  duplicate rows, source strings, and stored cost history are preserved. Old
+  incorrectly seeded rows keep their legacy numeric interpretation until an
+  explicit hashed refresh; old-date lookups retain that interpretation after a
+  refresh. Stored cost rows are never rewritten by refresh, and the existing
+  reprocess pricing-version override remains ineffective in this release.
 - The `tokenpak.core.runtime.proxy` compatibility path is now write-through,
   not just read-through: assigning or deleting one of its 13 legacy names
   (e.g. `tokenpak.core.runtime.proxy.MONITOR = x`) now forwards to
