@@ -6,6 +6,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `tokenpak savings --verify` compares the existing UTF-8 byte estimator with
+  an independent `cl100k_base` count on a packaged fixture corpus and reports
+  both counts plus absolute and relative divergence in human and JSON output.
+  It explicitly does not claim to recount stored requests, whose source text
+  is not retained, and gives a specific `tokenpak[tokens]` installation hint
+  when the optional tokenizer is unavailable. A new measurement-methodology
+  guide documents savings baselines, aggregation, counting provenance, and
+  known failure modes without changing savings calculations.
+
 ### Security
 
 - Proxy forwarding paths now use the same internal-header predicate, including
