@@ -239,6 +239,30 @@ def test_read_time_history_excludes_mixed_stream_mode_sessions(tmp_path: Path) -
     assert out == []
 
 
+def test_read_time_history_excludes_mixed_model_and_effort_sessions(tmp_path: Path) -> None:
+    db = tmp_path / "monitor.db"
+    _seed_ledger(db, _corpus(3))
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE requests SET model = 'model-b' "
+            "WHERE id = (SELECT id FROM requests WHERE session_id = 'hist-1' ORDER BY id LIMIT 1)"
+        )
+        conn.execute(
+            "UPDATE requests SET reasoning_effort = 'high' "
+            "WHERE id = (SELECT id FROM requests WHERE session_id = 'hist-2' ORDER BY id LIMIT 1)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = tf_cal.read_time_history(str(db), now=NOW)
+
+    assert len(out) == 1
+    assert out[0].model == "model-a"
+    assert out[0].effort == "unknown"
+
+
 # ---------------------------------------------------------------------------
 # walk_forward_coverage_time / cell_readiness_time — measured, not nominal
 # ---------------------------------------------------------------------------
