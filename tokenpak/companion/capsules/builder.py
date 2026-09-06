@@ -323,11 +323,19 @@ class CapsuleBuilder:
             if not isinstance(msg, dict):
                 continue
 
-            # System/developer policy and protected instruction blocks are
-            # never compression candidates, even in aggressive mode.
-            if msg.get("role") in {"system", "developer"}:
+            # Conversation turns are authoritative request history. Natural
+            # language has no dependable marker that separates an optional
+            # anecdote from a user constraint or an assistant decision, so a
+            # role-bearing message is never shortened to obtain admission.
+            # This covers Anthropic/OpenAI Messages and message items in the
+            # OpenAI Responses ``input`` array. Role-less context objects may
+            # still use the legacy opt-in Pak transform below.
+            if "role" in msg or msg.get("type") == "message":
                 continue
-            if classify_message_risk(msg) == "protected":
+            # Preserve tool/config/code/error evidence as well. Only a
+            # role-less block positively classified as narrative remains an
+            # eligible legacy compression candidate.
+            if classify_message_risk(msg) != "narrative":
                 continue
 
             content = msg.get("content")

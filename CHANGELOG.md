@@ -15,6 +15,20 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The optional Pak builder now preserves every role-bearing conversation turn
+  verbatim, including user and system instructions, assistant decisions, and
+  tool call history. Only role-less content positively classified as narrative
+  remains eligible for its legacy shortening transform.
+- Companion guidance now starts from the current conversation and live source,
+  retrieves prior context only when a needed fact is missing, and records
+  semantic journal milestones only when continuity requires them. Managed
+  skill upgrades remain automatic, while customized or unknown same-name
+  skill directories are preserved with a warning.
+- Concurrent Claude Code launches now use separate generated-file directories,
+  and the launcher composes its prompt hook with existing custom hooks instead
+  of replacing them. Semantic journal entries can carry milestone or handoff
+  types and source references, with identical records stored once and
+  recoverable through `journal_read`.
 - The `tokenpak.core.runtime.proxy` compatibility path is now write-through,
   not just read-through: assigning or deleting one of its 13 legacy names
   (e.g. `tokenpak.core.runtime.proxy.MONITOR = x`) now forwards to
