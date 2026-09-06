@@ -157,6 +157,50 @@ def test_read_history_groups_and_gates(tmp_path):
     assert all(s.ended_at <= NOW - timedelta(seconds=cal.COMPLETION_IDLE_SECONDS) for s in out)
 
 
+@pytest.mark.parametrize(
+    ("has_source", "has_raw", "expected_effort"),
+    [
+        (False, False, "unknown"),
+        (False, True, None),
+        (True, False, None),
+        (True, True, "high"),
+    ],
+)
+def test_read_history_supports_every_optional_effort_provenance_schema(
+    tmp_path, has_source, has_raw, expected_effort
+):
+    db = tmp_path / "monitor.db"
+    _seed_history_db(db, _corpus(1))
+    conn = sqlite3.connect(str(db))
+    try:
+        if has_source:
+            conn.execute("ALTER TABLE requests ADD COLUMN reasoning_effort_source TEXT")
+        if has_raw:
+            conn.execute("ALTER TABLE requests ADD COLUMN reasoning_effort_raw TEXT")
+        if has_source and has_raw:
+            conn.execute(
+                "UPDATE requests SET reasoning_effort = 'high', "
+                "reasoning_effort_source = 'request_body', reasoning_effort_raw = 'high'"
+            )
+        elif has_source:
+            conn.execute(
+                "UPDATE requests SET reasoning_effort_source = 'request_body_unrecognized'"
+            )
+        elif has_raw:
+            conn.execute("UPDATE requests SET reasoning_effort_raw = 'xhigh'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = cal.read_history(str(db), now=NOW)
+
+    if expected_effort is None:
+        assert out == []
+    else:
+        assert len(out) == 1
+        assert out[0].effort == expected_effort
+
+
 def test_read_history_excludes_mixed_model_and_effort_sessions_from_every_cell(tmp_path):
     db = tmp_path / "monitor.db"
     _seed_history_db(db, _corpus(4))

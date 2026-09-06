@@ -110,6 +110,47 @@ MAX_SESSIONS = 400
 #: Minimum turn count for an inactive session history to enter the corpus.
 MIN_TURNS = 4
 
+# Schema inspection selects one of these complete, static projections. No
+# database-provided identifier is ever interpolated into executable SQL.
+_CORPUS_QUERY_BY_EFFORT_PROVENANCE: dict[tuple[bool, bool], str] = {
+    (False, False): (
+        "SELECT session_id, model, reasoning_effort, "
+        "'' AS reasoning_effort_source, '' AS reasoning_effort_raw, timestamp, "
+        "stream_mode, ttfb_ms, stream_duration_ms "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+    (False, True): (
+        "SELECT session_id, model, reasoning_effort, "
+        "'' AS reasoning_effort_source, reasoning_effort_raw, timestamp, "
+        "stream_mode, ttfb_ms, stream_duration_ms "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+    (True, False): (
+        "SELECT session_id, model, reasoning_effort, "
+        "reasoning_effort_source, '' AS reasoning_effort_raw, timestamp, "
+        "stream_mode, ttfb_ms, stream_duration_ms "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+    (True, True): (
+        "SELECT session_id, model, reasoning_effort, "
+        "reasoning_effort_source, reasoning_effort_raw, timestamp, "
+        "stream_mode, ttfb_ms, stream_duration_ms "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+}
+
 
 @dataclass(frozen=True)
 class PublishedTimeCellEvidence:
@@ -312,25 +353,13 @@ def _parse_time_corpus(
     conn: sqlite3.Connection, *, exclude_session: str = ""
 ) -> list[TimeHistorySession]:
     available = {str(row[1]) for row in conn.execute("PRAGMA table_info(requests)").fetchall()}
-    effort_source = (
-        "reasoning_effort_source"
-        if "reasoning_effort_source" in available
-        else "'' AS reasoning_effort_source"
-    )
-    effort_raw = (
-        "reasoning_effort_raw"
-        if "reasoning_effort_raw" in available
-        else "'' AS reasoning_effort_raw"
-    )
-    rows = conn.execute(
-        "SELECT session_id, model, reasoning_effort, "
-        f"{effort_source}, {effort_raw}, timestamp, stream_mode, "
-        "ttfb_ms, stream_duration_ms "
-        "FROM requests "
-        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
-        "AND status_code BETWEEN 200 AND 599 "
-        "ORDER BY timestamp ASC, id ASC"
-    ).fetchall()
+    query = _CORPUS_QUERY_BY_EFFORT_PROVENANCE[
+        (
+            "reasoning_effort_source" in available,
+            "reasoning_effort_raw" in available,
+        )
+    ]
+    rows = conn.execute(query).fetchall()
     excluded = exclude_session.strip()
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in rows:

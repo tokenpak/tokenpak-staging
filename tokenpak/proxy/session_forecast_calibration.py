@@ -86,6 +86,55 @@ MAX_SESSIONS = 400
 #: Minimum turn count for an inactive session history to enter the corpus.
 MIN_TURNS = 4
 
+# Schema inspection selects one of these complete, static projections. No
+# database-provided identifier is ever interpolated into executable SQL.
+_CORPUS_QUERY_BY_EFFORT_PROVENANCE: dict[tuple[bool, bool], str] = {
+    (False, False): (
+        "SELECT session_id, model, reasoning_effort, "
+        "'' AS reasoning_effort_source, '' AS reasoning_effort_raw, timestamp, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, "
+        "provider_input_tokens, provider_output_tokens, "
+        "provider_cache_read_tokens, provider_cache_creation_tokens "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+    (False, True): (
+        "SELECT session_id, model, reasoning_effort, "
+        "'' AS reasoning_effort_source, reasoning_effort_raw, timestamp, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, "
+        "provider_input_tokens, provider_output_tokens, "
+        "provider_cache_read_tokens, provider_cache_creation_tokens "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+    (True, False): (
+        "SELECT session_id, model, reasoning_effort, "
+        "reasoning_effort_source, '' AS reasoning_effort_raw, timestamp, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, "
+        "provider_input_tokens, provider_output_tokens, "
+        "provider_cache_read_tokens, provider_cache_creation_tokens "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+    (True, True): (
+        "SELECT session_id, model, reasoning_effort, "
+        "reasoning_effort_source, reasoning_effort_raw, timestamp, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, "
+        "provider_input_tokens, provider_output_tokens, "
+        "provider_cache_read_tokens, provider_cache_creation_tokens "
+        "FROM requests "
+        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
+        "AND status_code BETWEEN 200 AND 599 "
+        "ORDER BY timestamp ASC, id ASC"
+    ),
+}
+
 #: Built-in prior samples of the log remaining multiplier, expressed per
 #: turn-bucket as conservative wide shapes. Used only for internal pooling
 #: while a cell is cold; a cold cell still renders ``learning``.
@@ -199,27 +248,13 @@ def _connect_ro(path: str) -> sqlite3.Connection:
 
 def _parse_corpus(conn: sqlite3.Connection) -> tuple[_CorpusEntry, ...]:
     available = {str(row[1]) for row in conn.execute("PRAGMA table_info(requests)").fetchall()}
-    effort_source = (
-        "reasoning_effort_source"
-        if "reasoning_effort_source" in available
-        else "'' AS reasoning_effort_source"
-    )
-    effort_raw = (
-        "reasoning_effort_raw"
-        if "reasoning_effort_raw" in available
-        else "'' AS reasoning_effort_raw"
-    )
-    rows = conn.execute(
-        "SELECT session_id, model, reasoning_effort, "
-        f"{effort_source}, {effort_raw}, timestamp, "
-        "input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, "
-        "provider_input_tokens, provider_output_tokens, "
-        "provider_cache_read_tokens, provider_cache_creation_tokens "
-        "FROM requests "
-        "WHERE session_id IS NOT NULL AND TRIM(session_id) != '' "
-        "AND status_code BETWEEN 200 AND 599 "
-        "ORDER BY timestamp ASC, id ASC"
-    ).fetchall()
+    query = _CORPUS_QUERY_BY_EFFORT_PROVENANCE[
+        (
+            "reasoning_effort_source" in available,
+            "reasoning_effort_raw" in available,
+        )
+    ]
+    rows = conn.execute(query).fetchall()
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
         sid = str(row["session_id"]).strip()
