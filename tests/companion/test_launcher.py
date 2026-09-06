@@ -325,9 +325,7 @@ def test_composed_custom_denial_command_still_emits_its_payload(monkeypatch, tmp
     settings_dir.mkdir(parents=True)
     deny_script = tmp_path / "deny.sh"
     deny_script.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' "
-        '\'{"decision":"block","reason":"custom policy denial"}\'\n'
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"decision":"block","reason":"custom policy denial"}\'\n'
     )
     deny_command = f"bash {shlex.quote(str(deny_script))}"
     settings_dir.joinpath("settings.json").write_text(
