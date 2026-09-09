@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
 # Shell hooks execute this packaged file with the launcher's interpreter. Bind
 # imports to the same installation even when the caller's cwd contains a repo.
@@ -25,8 +27,30 @@ from tokenpak.companion import _sqlite
 from tokenpak.companion.config import journal_write_dir
 from tokenpak.status.binding import valid_session
 
-MAX_TRANSCRIPT_BYTES = 128 * 1024 * 1024
+MAX_TRANSCRIPT_BYTES = 1024 * 1024 * 1024
 MAX_LINE_BYTES = 4 * 1024 * 1024
+# Native content records carry no journal identity. Recognize only the native
+# header shape; unknown shapes still go through the bounded JSON parser.
+_CONTENT_RECORD = re.compile(
+    rb'^\s*\{(?:\s*"(?:timestamp|ordinal)"\s*:\s*(?:"[^"\\]*"|[0-9]+)\s*,)*'
+    rb'\s*"type"\s*:\s*"(response_item|event_msg)"\s*,'
+    rb'\s*"payload"\s*:\s*\{\s*"type"\s*:\s*"([^"\\]+)"'
+)
+
+
+def _starts_in_session(turn_id: str, native_start: object, session_start: float) -> bool:
+    """Resolve coarse native start seconds using UUIDv7's millisecond time."""
+    try:
+        identity = UUID(turn_id)
+        if identity.version == 7:
+            return (identity.int >> 80) / 1000 >= session_start
+    except ValueError:
+        pass
+    return (
+        isinstance(native_start, (int, float))
+        and not isinstance(native_start, bool)
+        and native_start >= session_start
+    )
 
 
 def transcript_turns(path: Path, session_id: str) -> tuple[list[dict], dict]:
@@ -35,6 +59,9 @@ def transcript_turns(path: Path, session_id: str) -> tuple[list[dict], dict]:
     current: dict = {}
     matched = False
     started_at = None
+    ancestors: set[str] = set()
+    forked = False
+    own_turns: set[str] = set()
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
     with os.fdopen(os.open(path, flags), "rb") as handle:
         info = os.fstat(handle.fileno())
@@ -47,6 +74,20 @@ def transcript_turns(path: Path, session_id: str) -> tuple[list[dict], dict]:
             bytes_read += len(raw)
             if bytes_read > MAX_TRANSCRIPT_BYTES:
                 raise ValueError("Codex transcript exceeds journal recovery read limit")
+            content = _CONTENT_RECORD.match(raw)
+            if content and (
+                content[1] == b"response_item" or content[2] in {b"item_started", b"item_completed"}
+            ):
+                # Discard large tool/message bodies in bounded chunks. They
+                # cannot register a session or certify a completed native turn.
+                while not raw.endswith(b"\n"):
+                    raw = handle.readline(MAX_LINE_BYTES + 1)
+                    if not raw:
+                        break
+                    bytes_read += len(raw)
+                    if bytes_read > MAX_TRANSCRIPT_BYTES:
+                        raise ValueError("Codex transcript exceeds journal recovery read limit")
+                continue
             if len(raw) > MAX_LINE_BYTES:
                 raise ValueError("Codex transcript line exceeds journal read limit")
             if not raw.endswith(b"\n"):
@@ -60,13 +101,36 @@ def transcript_turns(path: Path, session_id: str) -> tuple[list[dict], dict]:
             kind = event.get("type")
             if kind == "session_meta":
                 if payload.get("id") != session_id:
+                    if matched and payload.get("id") in ancestors:
+                        parent = payload.get("forked_from_id")
+                        if valid_session(parent):
+                            ancestors.add(parent)
+                        continue  # A declared ancestor copied into a fork.
                     raise ValueError("Codex transcript session does not match hook session")
                 matched = True
+                parent = payload.get("forked_from_id")
+                if valid_session(parent):
+                    ancestors.add(parent)
+                    forked = True
                 if payload.get("timestamp"):
                     started_at = datetime.fromisoformat(
                         payload["timestamp"].replace("Z", "+00:00")
                     ).timestamp()
+            elif matched and kind == "event_msg" and payload.get("type") == "task_started":
+                # Forked logs rewrite envelope timestamps while preserving
+                # native started_at. Only starts after this session's creation
+                # belong to it; ambiguous/missing ancestry timing stays absent.
+                native_start = payload.get("started_at")
+                if (
+                    valid_session(payload.get("turn_id"))
+                    and started_at is not None
+                    and _starts_in_session(payload["turn_id"], native_start, started_at)
+                ):
+                    own_turns.add(payload["turn_id"])
             elif matched and kind == "turn_context":
+                if forked and payload.get("turn_id") not in own_turns:
+                    current = {}
+                    continue
                 current = {
                     "turn_id": payload.get("turn_id", ""),
                     "model": payload.get("model", ""),

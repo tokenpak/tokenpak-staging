@@ -250,3 +250,66 @@ def test_recovery_cli_reports_added_count_without_conversation_text(tmp_path):
             "recorded_turns": expected,
         }
         assert result.stderr == ""
+
+
+def test_declared_fork_ancestry_does_not_import_parent_turns(tmp_path):
+    events = [
+        {
+            "type": "session_meta",
+            "payload": {
+                "id": "child",
+                "forked_from_id": "parent",
+                "timestamp": "2026-09-08T12:00:00Z",
+            },
+        },
+        {"type": "session_meta", "payload": {"id": "parent"}},
+    ]
+    for turn, start in [("parent-turn", 1788868790), ("child-turn", 1788868801)]:
+        events.extend(
+            [
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": turn, "started_at": start},
+                },
+                {"type": "turn_context", "payload": {"turn_id": turn, "model": "model-one"}},
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-09-08T12:01:00Z",
+                    "payload": {"type": "task_complete", "turn_id": turn},
+                },
+            ]
+        )
+    path = tmp_path / "fork.jsonl"
+    path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    turns, current = journal_hook.transcript_turns(path, "child")
+    assert [turn["turn_id"] for turn in turns] == ["child-turn"]
+    assert current["turn_id"] == "child-turn"
+    with pytest.raises(ValueError, match="does not match"):
+        journal_hook.transcript_turns(path, "parent")
+
+
+def test_uuid_start_disambiguates_turns_started_in_the_fork_second():
+    # Native start seconds are coarse; the UUIDv7 retains milliseconds.
+    assert journal_hook._starts_in_session(
+        "019f4d57-8864-7ef2-a5e3-6fb495c9fcb9", 1783709009, 1783709010.01
+    )
+    assert not journal_hook._starts_in_session(
+        "019f4d57-8864-7ef2-a5e3-6fb495c9fcb9", 1783709011, 1783709010.2
+    )
+
+
+def test_large_native_content_is_skipped_without_losing_completed_turns(tmp_path, monkeypatch):
+    monkeypatch.setattr(journal_hook, "MAX_LINE_BYTES", 1024)
+    path = native_transcript(tmp_path / "native.jsonl")
+    content = {
+        "timestamp": "2026-09-08T12:00:00Z",
+        "ordinal": 4,
+        "type": "event_msg",
+        "payload": {"type": "item_completed", "item": "private" * 1024},
+    }
+    lines = path.read_text().splitlines(keepends=True)
+    lines.insert(2, json.dumps(content) + "\n")
+    path.write_text("".join(lines))
+    turns, _ = journal_hook.transcript_turns(path, "session-one")
+    assert len(turns) == 2
+    assert "private" not in str(turns)

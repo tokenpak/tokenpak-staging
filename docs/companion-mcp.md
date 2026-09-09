@@ -46,6 +46,26 @@ by lifecycle hooks to retain completed-turn metadata.
 Sessions started this way share one history lineage, so each will see work the
 others have committed.
 
+Advanced operators can still select an explicit compatibility mode for
+diagnostics, recovery, or automation:
+
+```bash
+# Stable internal history per project.
+TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex
+
+# New internal history for one invocation.
+TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex
+```
+
+Unlike the default, `workspace` allows only one session per project at a time —
+TokenPak generates and provisions that home, so a second concurrent session in
+the same project is refused rather than racing the first one's setup. Use the
+default or `isolated` to run several at once.
+
+The MCP server is the same stdio JSON-RPC program in both cases:
+`python3 -m tokenpak.companion.mcp.server`. Only the discovery mechanism
+differs between clients.
+
 ### Codex journal history
 
 SessionStart registers the native session; Stop records native turn IDs, models,
@@ -66,30 +86,10 @@ python -m tokenpak.companion.codex.journal_hook --recover < recovery.json
 ```
 
 Recovery reports how many completed turns it added. It refuses mismatched
-session identities and malformed complete records; an unfinished final record
+session identities and malformed complete metadata records; an unfinished final record
 is left for the next invocation. Verify the result with `journal_read` using
 that same native session ID. Recovery preserves existing journal entries and
 accounting; it does not mark an unfinished turn complete.
-
-Advanced operators can still select an explicit compatibility mode for
-diagnostics, recovery, or automation:
-
-```bash
-# Stable internal history per project.
-TOKENPAK_CODEX_SESSION_MODE=workspace tokenpak codex
-
-# New internal history for one invocation.
-TOKENPAK_CODEX_SESSION_MODE=isolated tokenpak codex
-```
-
-Unlike the default, `workspace` allows only one session per project at a time —
-TokenPak generates and provisions that home, so a second concurrent session in
-the same project is refused rather than racing the first one's setup. Use the
-default or `isolated` to run several at once.
-
-The MCP server is the same stdio JSON-RPC program in both cases:
-`python3 -m tokenpak.companion.mcp.server`. Only the discovery mechanism
-differs between clients.
 
 ### Tools the companion exposes
 
