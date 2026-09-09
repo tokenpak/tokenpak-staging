@@ -195,3 +195,14 @@ def test_recent_sessions_returns_session_records(store: JournalStore) -> None:
     assert isinstance(s, SessionRecord)
     assert s.project_dir == "/home/user"
     assert s.model == "claude-haiku"
+
+
+def test_recent_sessions_reports_actual_entry_counts(store: JournalStore) -> None:
+    for session in ("two-notes", "one-note", "empty"):
+        store.start_session(session)
+    for number, session in enumerate(("two-notes", "two-notes", "one-note")):
+        store.add_entry(session, "user", f"journal note {number}")
+    counts = {row.session_id: row.entry_count for row in store.recent_sessions()}
+    assert counts == {"two-notes": 2, "one-note": 1, "empty": 0}
+    for session, count in counts.items():
+        assert store.get_session(session).entry_count == count
