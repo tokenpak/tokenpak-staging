@@ -39,12 +39,8 @@ JOURNAL_DB="$JOURNAL_DIR/journal.db"
 QUIET_CLEAR=0
 [ "$SOURCE" = "clear" ] && QUIET_CLEAR=1
 
-if [ -n "$SESSION_ID" ] && [ -f "$JOURNAL_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
-    TIMESTAMP=$(date +%s)
-    sqlite3 "$JOURNAL_DB" \
-        "INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
-         VALUES ('$SESSION_ID', $TIMESTAMP, 'auto', 'session started (source: ${SOURCE}, model: ${MODEL:-unknown})', '{}');" 2>/dev/null
-fi
+printf '%s' "$INPUT" | "${TOKENPAK_COMPANION_PYTHON:-python3}" \
+    "$(dirname "${BASH_SOURCE[0]}")/journal_hook.py" || true
 
 # Capsule auto-load: look up most recent capsule_path for this cwd.
 CAPSULE_PATH=""

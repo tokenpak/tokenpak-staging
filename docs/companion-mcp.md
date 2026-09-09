@@ -39,8 +39,9 @@ Run as many as you like. `tokenpak codex` uses your existing local Codex
 history and does not require exclusive access to it, exactly like running
 `codex` directly: Codex keeps its session state in write-ahead-logging SQLite
 databases, which coordinate concurrent readers and a serialized writer across
-processes. TokenPak never opens Codex's local state, so it has no reason to
-serialize your sessions and does not try to.
+processes. TokenPak does not open Codex's state databases and does not serialize
+your sessions. Its journal reads the explicit native JSONL transcript supplied
+by lifecycle hooks to retain completed-turn metadata.
 
 Sessions started this way share one history lineage, so each will see work the
 others have committed.
@@ -64,6 +65,31 @@ default or `isolated` to run several at once.
 The MCP server is the same stdio JSON-RPC program in both cases:
 `python3 -m tokenpak.companion.mcp.server`. Only the discovery mechanism
 differs between clients.
+
+### Codex journal history
+
+SessionStart registers the native session; Stop records native turn IDs, models,
+and timestamps using Python's built-in SQLite support. The external `sqlite3`
+command is not required for this intake. Repeated hook delivery and transcript
+recovery do not duplicate completed turns. Stop is a turn boundary, so it does
+not mark the whole session ended.
+
+Full conversation text stays in Codex's native transcript. Journal history does
+not supply missing usage totals, completion outcomes, or calibrated forecasts.
+
+To recover an explicitly selected native transcript, save a JSON object with
+`session_id` and `transcript_path` in `recovery.json`, then use the interpreter
+from the TokenPak installation:
+
+```bash
+python -m tokenpak.companion.codex.journal_hook --recover < recovery.json
+```
+
+Recovery reports how many completed turns it added. It refuses mismatched
+session identities and malformed complete metadata records; an unfinished final record
+is left for the next invocation. Verify the result with `journal_read` using
+that same native session ID. Recovery preserves existing journal entries and
+accounting; it does not mark an unfinished turn complete.
 
 ### Tools the companion exposes
 

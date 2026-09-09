@@ -60,18 +60,8 @@ fi
 
 TOKENS_FMT=$(printf '%d' "$TOKENS" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,//')
 
-JOURNAL_DB="$JOURNAL_DIR/journal.db"
-if [ -f "$JOURNAL_DB" ]; then
-    TIMESTAMP=$(date +%s)
-    sqlite_best_effort "$JOURNAL_DB" \
-        "INSERT OR IGNORE INTO entries (session_id, timestamp, entry_type, content, metadata_json)
-         VALUES ('$SESSION_ID', $TIMESTAMP, 'auto', 'session stopped (~${TOKENS_FMT} total tokens, model: ${MODEL:-unknown})', '{}');"
-
-    sqlite_best_effort "$JOURNAL_DB" \
-        "UPDATE sessions SET ended_at = $TIMESTAMP, total_requests = (
-             SELECT COUNT(*) FROM entries WHERE session_id = '$SESSION_ID' AND entry_type = 'auto'
-         ) WHERE session_id = '$SESSION_ID';"
-fi
+printf '%s' "$INPUT" | "${TOKENPAK_COMPANION_PYTHON:-python3}" \
+    "$(dirname "${BASH_SOURCE[0]}")/journal_hook.py" || true
 
 BUDGET_DB="$JOURNAL_DIR/budget.db"
 if [ -f "$BUDGET_DB" ]; then
