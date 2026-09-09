@@ -346,7 +346,10 @@ class JournalStore:
         conn = self._connect()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
+            "SELECT sessions.*, (SELECT COUNT(*) FROM entries "
+            "WHERE entries.session_id = sessions.session_id) AS entry_count "
+            "FROM sessions ORDER BY started_at DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         conn.close()
         return [
@@ -360,6 +363,7 @@ class JournalStore:
                 total_cost_usd=r["total_cost_usd"],
                 total_input_tokens=r["total_input_tokens"],
                 total_output_tokens=r["total_output_tokens"],
+                entry_count=r["entry_count"],
                 capsule_path=r["capsule_path"],
             )
             for r in rows
