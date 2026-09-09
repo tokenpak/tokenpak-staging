@@ -11012,10 +11012,6 @@
       "name": "decompress_chunk"
     },
     {
-      "module": "tokenpak.proxy.session_forecast",
-      "name": "RecordedUsage"
-    },
-    {
       "module": "tokenpak.proxy.session_forecast_calibration",
       "name": "COMPLETION_IDLE_SECONDS"
     },
