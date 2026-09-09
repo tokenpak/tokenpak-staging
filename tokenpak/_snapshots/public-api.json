@@ -4629,6 +4629,10 @@
     },
     {
       "module": "tokenpak.core.contracts.session_economics",
+      "name": "RecordedUsage"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
       "name": "Runway"
     },
     {
@@ -11006,6 +11010,10 @@
     {
       "module": "tokenpak.proxy.server_extra.websocket_proxy",
       "name": "decompress_chunk"
+    },
+    {
+      "module": "tokenpak.proxy.session_forecast",
+      "name": "RecordedUsage"
     },
     {
       "module": "tokenpak.proxy.session_forecast_calibration",

@@ -42,6 +42,11 @@ def render(snapshot: StatusSnapshot, columns: int = 80) -> str:
         else:
             word = "no data" if data.session.turns_observed == 0 else forecast.status.value
             parts.append(f"forecast {word}")
+        recorded = data.recorded_usage
+        if recorded is not None:
+            parts.append(f"usage {recorded.requests_observed}/{recorded.requests_total}")
+            if recorded.requests_observed < recorded.requests_total:
+                parts.append(f"recorded out {_numeric(recorded.facts.output_tokens)} tokens")
         parts.append(f"spent {_cost(data.facts.cost_usd)}")
         runway = data.runway
         if runway.status is RunwayStatus.AVAILABLE:

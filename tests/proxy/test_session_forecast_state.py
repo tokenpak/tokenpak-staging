@@ -327,7 +327,7 @@ def test_unsupported_explicit_effort_never_joins_missing_effort_cell(tmp_path: P
         conn.execute("ALTER TABLE requests ADD COLUMN reasoning_effort_raw TEXT DEFAULT ''")
         conn.execute(
             "UPDATE requests SET reasoning_effort_source = 'request_body_unrecognized', "
-            "reasoning_effort_raw = 'xhigh' WHERE provider_usage_ref = 'turn-1'"
+            "reasoning_effort_raw = 'future-effort' WHERE provider_usage_ref = 'turn-1'"
         )
         conn.execute(
             "UPDATE requests SET reasoning_effort_source = 'request_body_unrecognized', "

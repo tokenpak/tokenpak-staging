@@ -52,6 +52,7 @@ from tokenpak.core.contracts.session_economics import (
     NumericValue,
     PriceFreshness,
     RateProvenance,
+    RecordedUsage,
     Runway,
     RunwayStatus,
     SessionEconomics,
@@ -1053,6 +1054,41 @@ def _empty_payload(
     )
 
 
+def _recorded_usage(
+    turns: Sequence[_Turn], *, as_of: datetime, rate_provenance: RateProvenance | None
+) -> RecordedUsage:
+    """Expose measured subtotals without changing any full-session input."""
+    fields = (
+        "provider_input_tokens",
+        "provider_output_tokens",
+        "provider_cache_read_tokens",
+        "provider_cache_creation_tokens",
+    )
+    observed = []
+    for turn in turns:
+        if not _provider_measurement_is_observed(turn.row):
+            continue
+        try:
+            for field in fields:
+                _nonnegative_int(getattr(turn.row, field), field)
+        except _SessionForecastDataError:
+            continue
+        observed.append(turn)
+    cost, _ = _cost_value(observed, as_of=as_of, rate_provenance=rate_provenance)
+    return RecordedUsage(
+        requests_observed=len(observed),
+        requests_total=len(turns),
+        failed_requests=sum(1 for turn in turns if int(turn.row.status_code) >= 400),
+        facts=SessionFacts(
+            input_tokens=_fact_total(observed, "provider_input_tokens"),
+            output_tokens=_fact_total(observed, "provider_output_tokens"),
+            cache_read_tokens=_fact_total(observed, "provider_cache_read_tokens"),
+            cache_write_tokens=_fact_total(observed, "provider_cache_creation_tokens"),
+            cost_usd=cost,
+        ),
+    )
+
+
 def _build_session_economics(
     session_id: str,
     *,
@@ -1195,6 +1231,7 @@ def _build_session_economics(
         forecast=forecast,
         time_forecast=time_forecast,
         advisory=None,
+        recorded_usage=_recorded_usage(turns, as_of=as_of, rate_provenance=rate_provenance),
     )
 
 
