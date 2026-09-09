@@ -964,6 +964,7 @@ def main(
 
         env = paths.environment(os.environ.copy())
         env.update(env_vars)
+        env["TOKENPAK_COMPANION_PYTHON"] = sys.executable
         session_dir = create_launch_dir(config.run_dir)
         env[session_dir_env] = str(session_dir)
         # A per-launch override reaches the MCP subprocess even when its native
