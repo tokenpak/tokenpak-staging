@@ -195,6 +195,13 @@ def render_line(economics: SessionEconomics) -> str:
             f"{_SLOPE_MARK[state.burn_slope]}"
         ),
     ]
+    recorded = economics.recorded_usage
+    if recorded is not None and recorded.requests_observed < recorded.requests_total:
+        parts.append(
+            f"recorded usage {recorded.requests_observed}/{recorded.requests_total} requests: "
+            f"in {_numeric(recorded.facts.input_tokens)}, "
+            f"out {_numeric(recorded.facts.output_tokens)} (subtotal)"
+        )
     if runway.status is RunwayStatus.AVAILABLE:
         parts.append(
             f"guard runway {runway.turns} turns to {_BINDING_WORD[runway.binding_constraint]}"
@@ -248,6 +255,21 @@ def render_block(economics: SessionEconomics) -> str:
         f"  session        {session.id} · {session.model.id}"
         f" ({session.model.effort}) · {session.turns_observed} turns"
     )
+    recorded = economics.recorded_usage
+    if recorded is not None:
+        lines.append(
+            f"  usage coverage {recorded.requests_observed}/{recorded.requests_total} requests "
+            f"provider-observed · failed requests: {recorded.failed_requests}"
+        )
+        if recorded.requests_observed < recorded.requests_total:
+            subtotal = recorded.facts
+            lines.append(
+                f"  recorded only  in {_numeric(subtotal.input_tokens)} · "
+                f"out {_numeric(subtotal.output_tokens)} · "
+                f"cache r/w {_numeric(subtotal.cache_read_tokens)}/"
+                f"{_numeric(subtotal.cache_write_tokens)} · "
+                f"cost {_cost(subtotal.cost_usd)} (subtotal; full-session totals incomplete)"
+            )
     lines.append(
         "  spent          "
         f"in {_numeric(facts.input_tokens)} · out {_numeric(facts.output_tokens)} · "

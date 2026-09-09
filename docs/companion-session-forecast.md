@@ -70,6 +70,19 @@ does not backfill earlier traffic or invent missing usage measurements.
 
 ## Read the estimates correctly
 
+- `usage 24/25` means 24 of 25 completed requests have a complete provider
+  token measurement. Requests include tool continuations and failed responses;
+  this is not the number of user messages. A failed response with missing usage
+  can leave full-session totals unavailable while successful requests still
+  register. The full status view shows measured subtotals and failed-request
+  counts separately. Subtotals do not establish total spend or guard runway.
+- Forecasts keep model and effort histories separate. An explicit `xhigh`
+  request stays in its own category, including when an older ledger writer
+  preserved it only in the raw effort field. Missing effort remains `unknown`;
+  it is never silently treated as `high` or `xhigh`. A model change, including
+  one associated with a failed request, still makes a full-session forecast
+  unavailable. A fresh homogeneous session can collect eligible history, but
+  calibration requirements still apply before forecasts appear.
 - `est` and `~` identify estimates. Remaining ranges carry their 50% interval
   label; the 90% ceiling appears when there is room.
 - `guard limit` is the estimated number of turns before a configured constraint,

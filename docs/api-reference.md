@@ -186,6 +186,15 @@ Replay a session with optional overrides.
 Build a versioned session-economics snapshot from completed local request
 ledger rows. This endpoint never forwards a provider request.
 
+The optional additive `recorded_usage` object exposes provider-observed
+subtotals: `requests_observed`, `requests_total`, `failed_requests`, and a
+`facts` object with the same token and cost provenance types as session facts.
+Its denominator includes every completed request, including failed responses.
+Only requests with all four valid provider token counters enter this subtotal;
+missing counters are never treated as zero. These are partial measurements
+when coverage is incomplete, not full-session totals or inputs to burn,
+runway, or calibration. Older v1 consumers may ignore this object.
+
 Supply the stable session identity in `X-Claude-Code-Session-Id` or as
 `session_id` in the JSON body. If both are present, they must match. `model` is
 an optional hint when the ledger does not identify a model unambiguously.

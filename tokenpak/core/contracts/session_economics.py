@@ -523,6 +523,57 @@ class SessionFacts(_FinalValueObject):
 
 
 @dataclass(frozen=True)
+class RecordedUsage(_FinalValueObject):
+    """Provider-observed subtotal with its complete request denominator.
+
+    This subset is display evidence, never a replacement for full-session
+    facts, burn, guard inputs, or calibration eligibility.
+    """
+
+    requests_observed: int
+    requests_total: int
+    failed_requests: int
+    facts: SessionFacts
+
+    def __post_init__(self) -> None:
+        for name in ("requests_observed", "requests_total", "failed_requests"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise SessionEconomicsContractError(
+                    f"recorded_usage.{name} must be a non-negative integer"
+                )
+        if max(self.requests_observed, self.failed_requests) > self.requests_total:
+            raise SessionEconomicsContractError("recorded_usage counts exceed requests_total")
+        _require_value_object(self.facts, SessionFacts, "recorded_usage.facts")
+        for name in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+            expected = ValueState.OBSERVED if self.requests_observed else ValueState.NO_DATA
+            if getattr(self.facts, name).state is not expected:
+                raise SessionEconomicsContractError(
+                    "recorded_usage facts must match observed coverage"
+                )
+        if not self.requests_observed and self.facts.cost_usd.value is not None:
+            raise SessionEconomicsContractError("empty recorded_usage cannot contain a cost value")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requests_observed": self.requests_observed,
+            "requests_total": self.requests_total,
+            "failed_requests": self.failed_requests,
+            "facts": self.facts.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "RecordedUsage":
+        data = _as_mapping(raw, "recorded_usage")
+        return cls(
+            requests_observed=data.get("requests_observed"),
+            requests_total=data.get("requests_total"),
+            failed_requests=data.get("failed_requests"),
+            facts=SessionFacts.from_dict(data.get("facts")),
+        )
+
+
+@dataclass(frozen=True)
 class ModelRef(_FinalValueObject):
     id: str
     effort: str = "unknown"
@@ -1250,6 +1301,7 @@ class SessionEconomics(_FinalValueObject):
     time_forecast: TimeForecast
     advisory: None = None
     schema_version: str = SCHEMA_VERSION
+    recorded_usage: RecordedUsage | None = None
 
     def __post_init__(self) -> None:
         for name, expected_type in (
@@ -1270,6 +1322,12 @@ class SessionEconomics(_FinalValueObject):
                 f"unsupported schema_version {self.schema_version!r}; expected {SCHEMA_VERSION!r}"
             )
         _timestamp(self.as_of, "as_of")
+        if self.recorded_usage is not None:
+            _require_value_object(self.recorded_usage, RecordedUsage, "recorded_usage")
+            if self.recorded_usage.requests_total != self.session.turns_observed:
+                raise SessionEconomicsContractError(
+                    "recorded_usage denominator must match session turns"
+                )
         if self.advisory is not None:
             raise SessionEconomicsContractError("OSS session economics requires advisory: null")
 
@@ -1298,7 +1356,7 @@ class SessionEconomics(_FinalValueObject):
             )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "as_of": self.as_of,
             "session": self.session.to_dict(),
@@ -1309,6 +1367,9 @@ class SessionEconomics(_FinalValueObject):
             "time_forecast": self.time_forecast.to_dict(),
             "advisory": None,
         }
+        if self.recorded_usage is not None:
+            result["recorded_usage"] = self.recorded_usage.to_dict()
+        return result
 
     def to_json(self) -> str:
         """Return a byte-stable JSON encoding for equivalent values."""
@@ -1340,6 +1401,11 @@ class SessionEconomics(_FinalValueObject):
             forecast=Forecast.from_dict(data.get("forecast")),
             time_forecast=TimeForecast.from_dict(data.get("time_forecast")),
             advisory=None,
+            recorded_usage=(
+                RecordedUsage.from_dict(data["recorded_usage"])
+                if data.get("recorded_usage") is not None
+                else None
+            ),
         )
 
     @classmethod
@@ -1373,6 +1439,7 @@ __all__ = [
     "SessionEconomics",
     "SessionEconomicsContractError",
     "SessionFacts",
+    "RecordedUsage",
     "SessionRef",
     "SessionState",
     "TimeForecast",

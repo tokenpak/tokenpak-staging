@@ -4629,6 +4629,10 @@
     },
     {
       "module": "tokenpak.core.contracts.session_economics",
+      "name": "RecordedUsage"
+    },
+    {
+      "module": "tokenpak.core.contracts.session_economics",
       "name": "Runway"
     },
     {

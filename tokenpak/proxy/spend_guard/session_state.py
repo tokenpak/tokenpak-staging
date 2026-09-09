@@ -116,7 +116,8 @@ def _reasoning_effort_cell(
 ) -> tuple[str, bool]:
     """Return (cell label, unsupported-explicit-signal).
 
-    The normalized ledger contract recognizes low/medium/high. Empty legacy
+    The normalized ledger contract recognizes low/medium/high. Explicit xhigh
+    is recovered from raw provenance as a separate forecast cell. Empty legacy
     rows are the honest ``unknown`` cell. A non-empty raw/source observation
     without a recognized normalized value is explicit but unsupported; it
     must not be pooled with requests that carried no effort signal.
@@ -125,6 +126,14 @@ def _reasoning_effort_cell(
     raw_text = raw.strip() if isinstance(raw, str) else ""
     source_text = source.strip() if isinstance(source, str) else ""
     source_has_signal = source_text not in {"", "unknown", "unavailable"}
+    # Recover the exact recorded label from older writers without rewriting
+    # ledger rows or pooling it with a missing-effort cell.
+    if (
+        not normalized_text
+        and raw_text == "xhigh"
+        and source_text in {"request_body_unrecognized", "provider_usage_object_unrecognized"}
+    ):
+        return raw_text, False
     if normalized_text in {"low", "medium", "high"}:
         if (raw_text and raw_text != normalized_text) or source_text.endswith("_unrecognized"):
             return "unknown", True
