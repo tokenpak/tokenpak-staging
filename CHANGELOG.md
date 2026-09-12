@@ -22,6 +22,8 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Session history lists report actual journal entry counts.
 - Explicit recorded `xhigh` effort remains a distinct forecast cell when its
   provenance is supported. Unknown or conflicting effort stays separate.
+- Shared session status views label forecast-derived guard runway as an estimate,
+  consistently with the companion footer.
 
 ### Compatibility
 
