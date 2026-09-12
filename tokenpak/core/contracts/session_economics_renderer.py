@@ -204,7 +204,7 @@ def render_line(economics: SessionEconomics) -> str:
         )
     if runway.status is RunwayStatus.AVAILABLE:
         parts.append(
-            f"guard runway {runway.turns} turns to {_BINDING_WORD[runway.binding_constraint]}"
+            f"guard runway ~{runway.turns} turns est to {_BINDING_WORD[runway.binding_constraint]}"
         )
     else:
         parts.append(f"guard runway {runway.status.value}")
@@ -294,7 +294,7 @@ def render_block(economics: SessionEconomics) -> str:
     if runway.status is RunwayStatus.AVAILABLE:
         lines.append(
             "  runway         "
-            f"guard limit in {runway.turns} turns · "
+            f"guard limit in ~{runway.turns} turns est · "
             f"binding {_BINDING_WORD[runway.binding_constraint]} · "
             f"state {runway.guard_state.value}"
         )
