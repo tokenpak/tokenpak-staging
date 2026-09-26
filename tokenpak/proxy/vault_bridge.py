@@ -550,9 +550,7 @@ class VaultIndex:
         try:
             data = json.loads(index_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
-            _record_vault_index_load_failure(
-                "index_read_or_parse_error", e, cold_start=cold_start
-            )
+            _record_vault_index_load_failure("index_read_or_parse_error", e, cold_start=cold_start)
             return
 
         blocks_dir = self.tokenpak_dir / "blocks"

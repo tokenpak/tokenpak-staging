@@ -73,9 +73,7 @@ def fresh_tracker(monkeypatch):
     patching the attribute on the defining module is picked up on the next call.
     """
     tracker = DegradationTracker()
-    monkeypatch.setattr(
-        "tokenpak.proxy.degradation.get_degradation_tracker", lambda: tracker
-    )
+    monkeypatch.setattr("tokenpak.proxy.degradation.get_degradation_tracker", lambda: tracker)
     return tracker
 
 

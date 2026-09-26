@@ -30,7 +30,9 @@ class DegradationEventType:
     PROVIDER_FAILOVER = "provider_failover"  # Primary failed, fallback used
     CONFIG_FALLBACK = "config_fallback"  # Bad config, defaults applied
     STARTUP_WARNING = "startup_warning"  # Non-fatal startup issue
-    VAULT_INDEX_STALE = "vault_index_stale"  # index.json unreadable/corrupt; serving prior/empty state
+    VAULT_INDEX_STALE = (
+        "vault_index_stale"  # index.json unreadable/corrupt; serving prior/empty state
+    )
 
 
 # ---------------------------------------------------------------------------
