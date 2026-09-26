@@ -97,8 +97,13 @@ def _enabled() -> bool:
 
 
 def _db_path() -> Path:
-    raw = os.environ.get("TOKENPAK_EXECUTION_LEDGER_DB", "~/.tokenpak/execution_ledger.db")
-    path = Path(os.path.expanduser(raw))
+    raw = os.environ.get("TOKENPAK_EXECUTION_LEDGER_DB")
+    if raw:
+        path = Path(os.path.expanduser(raw))
+    else:
+        from tokenpak._paths import write_under
+
+        path = write_under("execution_ledger.db")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(path.parent, 0o700)
