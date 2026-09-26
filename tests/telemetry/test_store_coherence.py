@@ -164,7 +164,9 @@ class TestSingleResolver:
         monkeypatch.delenv("TOKENPAK_MONITOR_DB", raising=False)
         db_file = tmp_path / "dsl-monitor.db"
         conn = sqlite3.connect(db_file)
-        conn.execute("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL)")
+        conn.execute(
+            "CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL)"
+        )
         conn.commit()
         conn.close()
         monkeypatch.setenv("TOKENPAK_DB", str(db_file))

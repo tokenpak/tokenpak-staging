@@ -525,9 +525,7 @@ def get_model_compression_breakdown(
             # Compression ratio: final / raw (< 1.0 means compressed; 1.0 if no data)
             ratio = (avg_final / avg_raw) if avg_raw > 0 else 1.0
             model = r["model"] or "unknown"
-            savings_amount = (r["comp_proxy"] or 0) / 1_000_000 * get_rates(model).get(
-                "input", 0.0
-            )
+            savings_amount = (r["comp_proxy"] or 0) / 1_000_000 * get_rates(model).get("input", 0.0)
             results.append(
                 ModelCompressionBreakdown(
                     model=model,

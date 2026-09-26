@@ -191,7 +191,10 @@ class TestQueryDslReadsRealSchema:
 
     def test_get_daily_trend_reads_seeded_requests(self, monitor_db: Path) -> None:
         _insert_request(
-            monitor_db, model="claude-sonnet-4-6", estimated_cost=0.03, input_tokens=10,
+            monitor_db,
+            model="claude-sonnet-4-6",
+            estimated_cost=0.03,
+            input_tokens=10,
             output_tokens=5,
         )
 
