@@ -1,16 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cache key / scope key derivation for the semantic cache stage.
 
-Three helpers:
+Four helpers:
 
-    extract_query_text(ctx)  — pull normalized text from context; never stores raw prompts
-    make_scope_key(ctx)      — session-scoped key for SemanticCache
-    is_streaming(ctx)        — True when the request asks for a streaming response
+    extract_query_text(ctx)     — pull normalized text from context; never stores raw prompts
+    extract_model_features(ctx) — model/provider identity for the cache-key ``key_features`` dimension
+    make_scope_key(ctx)         — session-scoped key for SemanticCache
+    is_streaming(ctx)           — True when the request asks for a streaming response
 
 Design constraints (per proposal Component C):
 - Do not store raw prompt text; only hashed/normalized forms.
 - Scope defaults to session; fall back to platform or request_id.
 - Key is stable across semantically equivalent requests.
+- Key must be scoped to the addressed model/provider — text similarity alone
+  is not sufficient isolation across a multi-model session (see
+  ``extract_model_features``).
 """
 
 from __future__ import annotations
@@ -78,6 +82,45 @@ def extract_query_text(ctx: "OptimizationContext") -> str:
         pass
 
     return ""
+
+
+def extract_model_features(ctx: "OptimizationContext") -> dict[str, str]:
+    """Return the model/provider identity of *ctx* as a semantic-cache key dimension.
+
+    Without this, ``SemanticCache`` keys purely on normalized query text +
+    wire format. Within one session, a request addressed to model B can then
+    silently receive model A's cached response merely because the text is
+    near-identical — cross-model response-reuse leakage. Callers pass the
+    returned dict as ``key_features`` to ``SemanticCache.lookup`` / ``.store``
+    so model/provider identity becomes part of the composite cache key.
+
+    Sources tried in order:
+    1. ``ctx.canonical.model`` (+ ``ctx.canonical.source_format`` for the
+       provider/adapter identity of the wire format the request arrived in)
+       — already extracted by the format adapter that normalized the request.
+    2. Raw body decoded as JSON → ``model`` field (provider left unknown).
+    3. Empty dict when neither is available — the request then falls into
+       the same "no model identity known" bucket as every other caller that
+       never supplied one; a miss in that case is safe (identical to
+       pre-existing behavior), so this is a conservative fallback, not a
+       correctness gap for requests that do carry a ``model`` field.
+    """
+    canonical = ctx.canonical
+    if canonical is not None:
+        model = getattr(canonical, "model", "") or ""
+        if model:
+            provider = getattr(canonical, "source_format", "") or ""
+            return {"model": str(model), "provider": str(provider)}
+
+    try:
+        data = json.loads(ctx.raw_body or b"")
+        model = data.get("model") if isinstance(data, dict) else None
+        if isinstance(model, str) and model:
+            return {"model": model, "provider": ""}
+    except Exception:
+        pass
+
+    return {}
 
 
 def make_scope_key(ctx: "OptimizationContext") -> str:
