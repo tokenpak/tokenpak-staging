@@ -519,9 +519,7 @@ class TestUnknownKeyRejection:
             load_config(
                 raw_config={
                     "tip_spend_guard": {
-                        "non_context_bases": {
-                            "audio_seconds_per_session": {"enabled": True}
-                        }
+                        "non_context_bases": {"audio_seconds_per_session": {"enabled": True}}
                     }
                 }
             )
@@ -552,9 +550,7 @@ class TestUnknownKeyRejection:
         with pytest.raises(ValueError) as exc:
             load_config(
                 raw_config={
-                    "tip_spend_guard": {
-                        "rolling_caps": {"per_agent": {"max_widgets": 5}}
-                    },
+                    "tip_spend_guard": {"rolling_caps": {"per_agent": {"max_widgets": 5}}},
                 }
             )
         assert "rolling_caps.per_agent.max_widgets" in str(exc.value)
