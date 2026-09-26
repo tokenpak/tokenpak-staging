@@ -353,9 +353,7 @@ def test_cross_model_no_cross_model_response_reuse():
     session = "sess-cross-model-001"
 
     # Model A records a response for this session/query.
-    ctx_a = _make_ctx(
-        _make_body("gpt-4o-mini", query), route="status_check", session_id=session
-    )
+    ctx_a = _make_ctx(_make_body("gpt-4o-mini", query), route="status_check", session_id=session)
     stage.apply(ctx_a)
     stage.record(ctx_a, fake_response)
 
