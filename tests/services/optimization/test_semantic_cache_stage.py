@@ -41,6 +41,11 @@ def _make_codex_body(messages: list, stream: bool = False) -> bytes:
     return json.dumps(payload).encode()
 
 
+def _make_body(model: str, query: str, stream: bool = False) -> bytes:
+    payload = {"model": model, "input": query, "stream": stream}
+    return json.dumps(payload).encode()
+
+
 def _make_ctx(
     body: bytes,
     route: str = "status_check",
@@ -326,6 +331,77 @@ def test_session_scoped_no_cross_session_leak():
     result_b = _get_cache_result(ctx_b)
     assert result_b is not None
     assert not result_b.hit, "cross-session cache leak: session B hit session A entry"
+
+
+# ---------------------------------------------------------------------------
+# Cross-model isolation test (mirrors the session isolation test above)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_model_no_cross_model_response_reuse():
+    """A cached response for one model must NOT be served to a different model.
+
+    Mirror image of test_session_scoped_no_cross_session_leak: same session,
+    same near-identical query text, same response-reuse-eligible route
+    (status_check) — but two different models. Without model identity in the
+    cache key, the second request would silently receive the first model's
+    cached response (cross-model response-reuse leakage).
+    """
+    stage = _stage_with_flag()
+    fake_response = {"output": [{"text": "Status: OK (model A)"}]}
+    query = "What is the proxy status?"
+    session = "sess-cross-model-001"
+
+    # Model A records a response for this session/query.
+    ctx_a = _make_ctx(
+        _make_body("gpt-4o-mini", query), route="status_check", session_id=session
+    )
+    stage.apply(ctx_a)
+    stage.record(ctx_a, fake_response)
+
+    # Same session, near-identical query, but addressed to a DIFFERENT model
+    # → must be an independent cache entry, never model A's cached response.
+    ctx_b = _make_ctx(
+        _make_body("claude-3-5-sonnet", query), route="status_check", session_id=session
+    )
+    ctx_b = stage.apply(ctx_b)
+
+    result_b = _get_cache_result(ctx_b)
+    assert result_b is not None
+    assert not result_b.hit, "cross-model cache leak: model B hit model A's cached entry"
+    assert get_cached_response(ctx_b) is None, (
+        "cross-model response-reuse leakage: model B was served model A's cached response"
+    )
+
+
+def test_cross_model_second_model_can_still_record_and_hit_its_own_entry():
+    """Model B's own repeat query should still hit — isolation, not breakage."""
+    stage = _stage_with_flag()
+    query = "What is the proxy status?"
+    session = "sess-cross-model-002"
+
+    response_a = {"output": [{"text": "from model A"}]}
+    response_b = {"output": [{"text": "from model B"}]}
+
+    ctx_a = _make_ctx(_make_body("gpt-4o-mini", query), route="status_check", session_id=session)
+    stage.apply(ctx_a)
+    stage.record(ctx_a, response_a)
+
+    ctx_b1 = _make_ctx(
+        _make_body("claude-3-5-sonnet", query), route="status_check", session_id=session
+    )
+    stage.apply(ctx_b1)
+    stage.record(ctx_b1, response_b)
+
+    ctx_b2 = _make_ctx(
+        _make_body("claude-3-5-sonnet", query), route="status_check", session_id=session
+    )
+    stage.apply(ctx_b2)
+
+    result_b2 = _get_cache_result(ctx_b2)
+    assert result_b2 is not None
+    assert result_b2.hit, f"expected model B to hit its own entry, got {result_b2.miss_reason}"
+    assert get_cached_response(ctx_b2) == response_b
 
 
 # ---------------------------------------------------------------------------
