@@ -159,10 +159,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_execution_plans_status "
-        "ON execution_plans(status)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_execution_plans_status ON execution_plans(status)")
     conn.commit()
 
 
@@ -285,7 +282,9 @@ def fail_plan(tip_plan_id: str, *, reason: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def recover_orphaned_plans(*, retention_seconds: float = _DEFAULT_RETENTION_SECONDS) -> list[dict[str, Any]]:
+def recover_orphaned_plans(
+    *, retention_seconds: float = _DEFAULT_RETENTION_SECONDS
+) -> list[dict[str, Any]]:
     """Startup recovery pass — call once, before the listener accepts requests.
 
     Any row still ``in_flight`` at this point belongs to a process other than
@@ -310,9 +309,7 @@ def recover_orphaned_plans(*, retention_seconds: float = _DEFAULT_RETENTION_SECO
         try:
             _ensure_schema_once(conn, _db_path())
             now = time.time()
-            rows = conn.execute(
-                "SELECT * FROM execution_plans WHERE status='in_flight'"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM execution_plans WHERE status='in_flight'").fetchall()
             for row in rows:
                 conn.execute(
                     "UPDATE execution_plans SET status='failed', "
