@@ -2,8 +2,10 @@
 """Semantic cache optimization stage.
 
 ``SemanticCacheStage`` wraps ``SemanticCache`` (tokenpak.cache) as a generic
-``OptimizationStage`` with route/fidelity policy, session-scoped cache keys,
-and miss-reason telemetry.
+``OptimizationStage`` with route/fidelity policy, session-scoped cache keys
+that also carry model/provider identity (via ``key_features`` — see
+``cache_key.extract_model_features``, preventing cross-model response reuse
+within a session), and miss-reason telemetry.
 
 NOTE ON LAYERING: This module is in ``tokenpak.services.optimization`` (Level 3).
 It imports ``SemanticCache`` from ``tokenpak.cache`` (Level 0/1) directly,
@@ -42,7 +44,7 @@ import json
 import logging
 from typing import Any, Dict, Optional, cast
 
-from .cache_key import extract_query_text, is_streaming, make_scope_key
+from .cache_key import extract_model_features, extract_query_text, is_streaming, make_scope_key
 from .cache_policy import get_cache_policy_for_route, is_cache_stage_enabled
 from .cache_trace import CacheMissReason, CacheStageTrace
 from .context import OptimizationContext
@@ -164,6 +166,7 @@ class SemanticCacheStage:
         policy = get_cache_policy_for_route(ctx.route)
         scope_key = make_scope_key(ctx)
         query_text = extract_query_text(ctx)
+        key_features = extract_model_features(ctx)
 
         trace = CacheStageTrace(
             route=ctx.route or "unknown",
@@ -180,7 +183,7 @@ class SemanticCacheStage:
 
         try:
             cache = self._get_or_create_cache(scope_key, policy)
-            lookup = cache.lookup(query_text, expected_format="json")
+            lookup = cache.lookup(query_text, expected_format="json", key_features=key_features)
 
             trace.hit = lookup.hit
             trace.strategy = lookup.match_strategy
@@ -247,11 +250,18 @@ class SemanticCacheStage:
             return
 
         scope_key = make_scope_key(ctx)
+        key_features = extract_model_features(ctx)
         try:
             cache = self._get_or_create_cache(scope_key, policy)
             # store raw bytes + content_type + wire_format
             response_bytes = json.dumps(response).encode("utf-8")
-            cache.store(query_text, response_bytes, "application/json", "json")
+            cache.store(
+                query_text,
+                response_bytes,
+                "application/json",
+                "json",
+                key_features=key_features,
+            )
             cache_result = _get_cache_result(ctx)
             if cache_result is not None:
                 cache_result.recorded = True

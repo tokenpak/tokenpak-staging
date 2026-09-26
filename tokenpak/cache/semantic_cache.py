@@ -45,6 +45,25 @@ Wire-format rules:
   - Cross-format lookups always return a cache miss — never serve JSON bytes
     to an SSE parser or vice versa.
 
+Cache-key dimensions beyond query text (model/provider identity)
+------------------------------------------------------------------
+``key_features`` carries additional cache-key dimensions — most importantly
+model/provider identity. Pass the same ``key_features`` to both ``lookup``
+and ``store`` so a response generated for one model/provider is never
+served to a request addressed at a different model/provider, even when the
+normalised query text and wire format match exactly::
+
+    key_features = {"model": canonical.model, "provider": canonical.source_format}
+    entry = cache.lookup(query_text, expected_format="json", key_features=key_features)
+    ...
+    cache.store(query_text, response_bytes, content_type, wire_format,
+                key_features=key_features)
+
+Omitting ``key_features`` (or passing ``None``/``{}``) preserves the
+pre-existing behavior of keying purely on ``query_hash:wire_format`` — this
+is intentional for callers with no model identity to offer, and keeps
+existing cache entries/callers working unchanged.
+
 Hit/miss details are returned as ``SemanticCacheLookup``; attach to trace
 metadata for observability.
 
@@ -105,7 +124,11 @@ class SemanticCacheEntry:
     ttl_seconds: int = _DEFAULT_TTL
     hit_count: int = 0
     similarity_score: float = 1.0  # 1.0 for exact matches
-    # Additional cache-key dimensions (model, etc.).
+    # Additional cache-key dimensions — model/provider identity, etc.
+    # Populated by ``store()`` from its ``key_features`` argument and combined
+    # with query_hash + wire_format so a response cached for one model/
+    # provider is never matched against a request addressed at a different
+    # one (see ``_features_key``).
     key_features: dict[str, object] = field(default_factory=dict)
 
     @property
@@ -183,17 +206,32 @@ class SemanticCache:
     # Public API
     # ------------------------------------------------------------------
 
-    def lookup(self, query: str, *, expected_format: str = "json") -> SemanticCacheLookup:
+    def lookup(
+        self,
+        query: str,
+        *,
+        expected_format: str = "json",
+        key_features: Optional[Dict[str, object]] = None,
+    ) -> SemanticCacheLookup:
         """
-        Look up *query* in the cache, returning only entries matching *expected_format*.
+        Look up *query* in the cache, returning only entries matching *expected_format*
+        and *key_features*.
 
         Only returns entries whose ``wire_format`` matches *expected_format*.
         Cross-format lookups always return a miss (never serve JSON bytes to
         an SSE client or vice versa).
 
-        The internal store key is composite (``query_hash:wire_format``) so JSON
-        and SSE entries for the same query can coexist without overwriting each
-        other (``key_features`` dimension).
+        *key_features* (typically ``{"model": ..., "provider": ...}``) is a
+        further isolation dimension: entries recorded with different
+        model/provider identity are never returned, even when the query text
+        and wire format match exactly. Omitting it (default) matches only
+        entries that were also stored without model/provider identity —
+        this preserves pre-existing behavior for callers that don't have
+        model identity available.
+
+        The internal store key is composite (``query_hash:wire_format[:features]``)
+        so JSON and SSE entries — and entries for different models/providers —
+        for the same query can coexist without overwriting each other.
 
         Returns a ``SemanticCacheLookup`` with ``hit=True`` and the cached
         ``entry`` when a match is found, otherwise ``hit=False``.
@@ -205,12 +243,19 @@ class SemanticCache:
 
         normalised = _normalise(query)
         query_hash = _hash(normalised)
+        requested_features = _features_key(key_features)
 
         with self._lock:
-            # Only consider entries matching the requested wire format.
-            # Store keys are composite (hash:wire_format) so this filter is O(n)
+            # Only consider entries matching the requested wire format AND
+            # the requested model/provider dimension. Store keys are
+            # composite (hash:wire_format[:features]) so this filter is O(n)
             # but n is small (bounded by max_entries).
-            entries = [e for e in self._store.values() if e.wire_format == expected_format]
+            entries = [
+                e
+                for e in self._store.values()
+                if e.wire_format == expected_format
+                and _features_key(e.key_features) == requested_features
+            ]
 
         # --- 1. Exact normalised match ---
         for entry in entries:
@@ -284,6 +329,8 @@ class SemanticCache:
         response_bytes: bytes,
         content_type: str = "application/json",
         wire_format: Literal["json", "sse"] = "json",
+        *,
+        key_features: Optional[Dict[str, object]] = None,
     ) -> SemanticCacheEntry:
         """
         Store *response_bytes* for *query*.
@@ -291,8 +338,16 @@ class SemanticCache:
         Accepts raw bytes + content_type + wire_format.  No JSON
         parsing is performed.  Evicts the oldest entry when at capacity.
 
-        The internal store key is composite (``query_hash:wire_format``) so
-        JSON and SSE entries for the same query can coexist.
+        *key_features* (typically ``{"model": ..., "provider": ...}``) is
+        recorded on the entry and folded into the composite store key so
+        entries for different models/providers never collide or overwrite
+        each other, and ``lookup()`` never returns one model's entry for a
+        request addressed at another. Omitting it preserves the
+        pre-existing ``query_hash:wire_format`` key shape.
+
+        The internal store key is composite (``query_hash:wire_format[:features]``)
+        so JSON and SSE entries — and entries for different models/providers —
+        for the same query can coexist.
 
         Returns the new ``SemanticCacheEntry``.
         """
@@ -304,6 +359,12 @@ class SemanticCache:
         # Composite key — wire_format is a key dimension so JSON and SSE
         # entries for the same query can coexist without overwriting each other.
         _store_key = f"{query_hash}:{wire_format}"
+        _features = _features_key(key_features)
+        if _features:
+            # Only widen the key when model/provider identity is actually
+            # known — keeps the key shape unchanged (and existing entries/
+            # callers working) when no such identity is supplied.
+            _store_key = f"{_store_key}:{_features}"
 
         entry = SemanticCacheEntry(
             query_normalized=normalised,
@@ -313,6 +374,7 @@ class SemanticCache:
             wire_format=wire_format,
             created_at=time.monotonic(),
             ttl_seconds=self._cfg.ttl_seconds,
+            key_features=dict(key_features) if key_features else {},
         )
 
         with self._lock:
@@ -433,3 +495,28 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
 def _hash(normalised: str) -> str:
     """SHA-256 hex digest (truncated to 64 chars) of a normalised query."""
     return hashlib.sha256(normalised.encode()).hexdigest()
+
+
+def _features_key(key_features: Optional[Dict[str, object]]) -> str:
+    """Stable composite-key fragment for cache-key dimensions beyond query+format.
+
+    ``key_features`` typically carries ``{"model": ..., "provider": ...}`` so
+    a response cached for one model/provider is never matched against a
+    lookup for a different model/provider — even when the normalised query
+    text and wire format are identical (the cross-model response-reuse
+    leakage this dimension exists to prevent).
+
+    Absent/empty *key_features* (or a dict with no ``model``/``provider``
+    values) maps to ``""`` — this keeps callers that never pass model
+    identity behaving exactly as before (single query_hash:wire_format
+    dimension), so pre-existing entries/tests are unaffected.
+    """
+    if not key_features:
+        return ""
+    model = str(key_features.get("model") or "")
+    provider = str(key_features.get("provider") or "")
+    if not model and not provider:
+        return ""
+    # Unit separator (0x1F) avoids ambiguity if model/provider strings ever
+    # contain ":" — the character the outer composite key uses.
+    return f"{model}\x1f{provider}"
