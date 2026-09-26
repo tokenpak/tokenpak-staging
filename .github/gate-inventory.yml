@@ -10,7 +10,7 @@
 files:
   bandit-scan.yml: 47cffb674c1e5503ae9dca97b6e39f0c8ab43da4e22147b11cb182aba7d8f862
   benchmarks.yml: 376f04692b9a752cfb7456f156ad62595c30747e5ae54f9a10dbc4df66cffee1
-  ci.yml: 10a50b604ad935a8e0df0b1dd060b5d23800cd4b7e540ab4e245c4c34053ae11
+  ci.yml: bdc6bc6737d8874cb8323714531d4914657c4d73b5fcd750e7c6e51ef75fd4ed
   determinism.yml: 555be48fa256294b6a444f7ecd9a3726d61894dc859341d45708a31a3c9f71bb
   forbidden-impl-vocab-check.yml: 058ce920d2d4014da311f24ee3cb6402b46e20d7a48e0773cf6b5a347b6e70cc
   gate-inventory-check.yml: d228cec1c1fc7dddf5e6992e81509fe89a0b11397bf246e5d2ac4200b6330ca6

@@ -11,6 +11,8 @@ on:
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
       - 'scripts/slim-install-smoke.sh'
+      - '.importlinter'
+      - 'docs/import-debt-ledger.md'
   pull_request:
     branches: [main, develop]
     paths:
@@ -21,6 +23,8 @@ on:
       - 'docs/cli-reference.md'
       - 'scripts/generate-cli-docs.py'
       - 'scripts/slim-install-smoke.sh'
+      - '.importlinter'
+      - 'docs/import-debt-ledger.md'
   workflow_dispatch:
 
 concurrency:
@@ -91,6 +95,35 @@ jobs:
         run: |
           ruff check tokenpak/ tests/ --select=E,F,W,I --ignore=E501,E701,E702,E402,E741,F841
           ruff format --check tokenpak/ tests/
+
+  lint-imports:
+    name: Import-Linter Architecture Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run architecture-layering gate (blocking)
+        # Enforces the .importlinter layers/independence/forbidden contracts.
+        # Equivalent to `make lint-imports`, invoked directly (rather than via
+        # the Makefile's $(VENV_BIN) path) since this job installs straight
+        # into the runner's Python environment rather than a local .venv.
+        # The ignore_imports lists are a closed, monotonically-shrinking debt
+        # baseline (see tests/lint/test_import_contracts.py) — a new,
+        # undeclared import edge fails this step; it is not permitted to slip
+        # in by silently growing the ignore list.
+        run: lint-imports
 
   slim-install-smoke:
     name: Slim Install Smoke
