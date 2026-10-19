@@ -206,13 +206,13 @@ def test_stay_matches_the_proxy_without_any_extension(proxy, upstream_port, exte
 def test_extension_sees_no_credentials(proxy, upstream_port, extension):
     ext = extension()
     body = _messages()
-    _send(proxy, upstream_port, "/v1/messages", body, {**CC, "X-Tokenpak-Agent": "Sue"})
+    _send(proxy, upstream_port, "/v1/messages", body, {**CC, "X-Tokenpak-Agent": "agent-a"})
     assert ext.calls[0]["parsed"] == json.loads(body)  # the guard's parse, reused
     headers = ext.calls[0]["headers"]
     assert "x-api-key" not in headers and "authorization" not in headers
     assert headers["x-claude-code-session-id"] == "cc-session-1"
     assert ext.calls[0]["session_id"] == "cc-session-1"
-    assert ext.calls[0]["agent_id"] == "Sue" and ext.calls[0]["guard"]["state"] == "allow"
+    assert ext.calls[0]["agent_id"] == "agent-a" and ext.calls[0]["guard"]["state"] == "allow"
 
 
 @pytest.mark.parametrize("routing,reason", [
