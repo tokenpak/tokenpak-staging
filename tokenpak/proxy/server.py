@@ -1858,9 +1858,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
                         body = _sg_outcome.body
-                    _presend_guard_state = (
-                        "allow" if _sg_outcome.kind == "forward" else "directive"
-                    )
+                    _presend_guard_state = "allow" if _sg_outcome.kind == "forward" else "directive"
                 elif _sg_outcome.kind == "replay":
                     _presend_guard_state = "replay"
                     # Held request is being replayed — substitute body

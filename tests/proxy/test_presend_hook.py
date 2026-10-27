@@ -37,14 +37,29 @@ class _Upstream(BaseHTTPRequestHandler):
         _order.append("upstream")
         model = json.loads(body).get("model")
         if self.path.endswith("/responses"):
-            payload = {"id": "resp", "model": model, "usage": {
-                "input_tokens": 900, "input_tokens_details": {"cached_tokens": 0},
-                "output_tokens": 40, "output_tokens_details": {"reasoning_tokens": 12}}}
+            payload = {
+                "id": "resp",
+                "model": model,
+                "usage": {
+                    "input_tokens": 900,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 40,
+                    "output_tokens_details": {"reasoning_tokens": 12},
+                },
+            }
         else:
-            payload = {"id": "msg", "type": "message", "model": model, "content": [],
-                       "usage": {"input_tokens": 900, "output_tokens": 40,
-                                 "cache_read_input_tokens": 0,
-                                 "cache_creation_input_tokens": 0}}
+            payload = {
+                "id": "msg",
+                "type": "message",
+                "model": model,
+                "content": [],
+                "usage": {
+                    "input_tokens": 900,
+                    "output_tokens": 40,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+            }
         raw = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -95,7 +110,8 @@ class _Extension:
 @pytest.fixture
 def extension(monkeypatch):
     monkeypatch.setattr(
-        proxy_server_module, "INTERCEPT_HOSTS",
+        proxy_server_module,
+        "INTERCEPT_HOSTS",
         set(proxy_server_module.INTERCEPT_HOSTS) | {"127.0.0.1"},
     )
     # The stub host has no provider identity; parse its usage by path, as a
@@ -136,14 +152,20 @@ def _send(proxy, upstream_port, path, body, headers=None):
 
 
 def _messages(model="claude-sonnet-5", effort="max", text="hello", pad=0):
-    return ('{"model": "%s", "max_tokens": 64, "output_config": {"effort": "%s"},'
-            ' "messages": [{"role": "user", "content": "%s"}]}'
-            % (model, effort, text + "z" * pad)).encode()
+    return (
+        '{"model": "%s", "max_tokens": 64, "output_config": {"effort": "%s"},'
+        ' "messages": [{"role": "user", "content": "%s"}]}' % (model, effort, text + "z" * pad)
+    ).encode()
 
 
 def _responses(model="gpt-5.6-sol", effort="xhigh"):
-    return json.dumps({"model": model, "reasoning": {"effort": effort},
-                       "input": [{"role": "user", "content": "hello"}]}).encode()
+    return json.dumps(
+        {
+            "model": model,
+            "reasoning": {"effort": effort},
+            "input": [{"role": "user", "content": "hello"}],
+        }
+    ).encode()
 
 
 def _rewrite(model=None, effort=None):
@@ -162,7 +184,9 @@ CC = {"X-Claude-Code-Session-Id": "cc-session-1"}
 
 
 def test_extension_runs_once_before_upstream_and_reroutes_the_same_request(
-    proxy, upstream_port, extension,
+    proxy,
+    upstream_port,
+    extension,
 ):
     ext = extension(_rewrite(model="claude-haiku-4-5", effort="xhigh"))
     status, _ = _send(proxy, upstream_port, "/v1/messages", _messages(), CC)
@@ -185,7 +209,9 @@ def test_responses_protocol_reroutes_model_and_effort(proxy, upstream_port, exte
 
 
 def test_stay_on_the_claude_code_route_forwards_the_client_bytes(
-    proxy, upstream_port, extension,
+    proxy,
+    upstream_port,
+    extension,
 ):
     extension()
     body = _messages(text="exact  bytes \\u00e9")
@@ -215,11 +241,14 @@ def test_extension_sees_no_credentials(proxy, upstream_port, extension):
     assert ext.calls[0]["agent_id"] == "agent-a" and ext.calls[0]["guard"]["state"] == "allow"
 
 
-@pytest.mark.parametrize("routing,reason", [
-    ({"messages": []}, "malformed"),
-    ({"model": "claude-haiku-4-5", "max_tokens": 1}, "malformed"),
-    ({"effort": "ultra-plus"}, "rewrite_refused"),
-])
+@pytest.mark.parametrize(
+    "routing,reason",
+    [
+        ({"messages": []}, "malformed"),
+        ({"model": "claude-haiku-4-5", "max_tokens": 1}, "malformed"),
+        ({"effort": "ultra-plus"}, "rewrite_refused"),
+    ],
+)
 def test_only_routing_values_are_accepted(proxy, upstream_port, extension, routing, reason):
     ext = extension(lambda request: {"action": "rewrite", "set": routing})
     body = _messages()
@@ -290,7 +319,8 @@ def test_apply_routing_fields_changes_only_routing_values():
     assert after == before.replace(b'"a"', b'"b"').replace(b'"max"', b'"xhigh"')
     responses = b'{"reasoning": {"effort": "high", "summary": "auto"}, "model": "m"}'
     assert presend_hook.apply_routing_fields(responses, model=None, effort="low") == (
-        responses.replace(b'"high"', b'"low"'))
+        responses.replace(b'"high"', b'"low"')
+    )
     for bad in (b'{"model": "a", "model": "b"}', b'{"model": "a"} x', b"\xff", b"[1]"):
         with pytest.raises(presend_hook.RoutingRewriteError):
             presend_hook.apply_routing_fields(bad, model="c", effort=None)
