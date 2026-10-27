@@ -177,6 +177,19 @@ from .upstream_retry import (
 
 logger = logging.getLogger(__name__)
 
+# Headers the pre-send extension may read: session and attribution only,
+# never credentials.
+_PRESEND_HEADER_ALLOWLIST = frozenset(
+    {
+        "x-claude-code-session-id",
+        "x-tokenpak-session",
+        "session-id",
+        "thread-id",
+        "x-tokenpak-agent",
+        "x-tokenpak-tag",
+    }
+)
+
 if TYPE_CHECKING:
     from tokenpak.proxy.admission import AgentConcurrencyGate
     from tokenpak.proxy.custom_providers import CustomProvider
@@ -1794,6 +1807,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Disabled with: spend_guard.enabled=false in config.yaml
         #            or: TOKENPAK_SPEND_GUARD_ENABLED=0
         _sg_admission_ticket = None  # rolling-cap in-flight spend ticket
+        # What the guard concluded, for the pre-send extension: only "allow"
+        # (forwarded as sent) permits a reroute.
+        _presend_guard_state = "unknown"
+        # (bytes, parsed) when the guard parsed exactly the bytes later sent.
+        _presend_parsed = None
         if should_log and is_model_request and body:
             try:
                 from tokenpak.proxy.request_pipeline import _resolve_session_id
@@ -1805,6 +1823,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 try:
                     _sg_body_json = json.loads(body.decode("utf-8", errors="replace"))
                     _sg_model = str(_sg_body_json.get("model") or "")
+                    if isinstance(_sg_body_json, dict):
+                        _presend_parsed = (body, _sg_body_json)
                 except Exception:
                     pass
                 # Empty-string fallback: the monitor.db row for this request
@@ -1838,7 +1858,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if _sg_outcome.kind in ("forward", "forward_modified"):
                     if _sg_outcome.body is not None:
                         body = _sg_outcome.body
+                    _presend_guard_state = "allow" if _sg_outcome.kind == "forward" else "directive"
                 elif _sg_outcome.kind == "replay":
+                    _presend_guard_state = "replay"
                     # Held request is being replayed — substitute body
                     # and headers, then continue down the normal forward path.
                     if _sg_outcome.body is not None:
@@ -2341,6 +2363,50 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     pass  # validation errors must never break the proxy
         else:
             passthrough_cfg = PassthroughConfig(require_auth=False)
+
+        # ── Pre-send extension (Dispatch Reroute) ─────────────────────────
+        # Runs after the Spend Guard allowed this request and before the
+        # forwarding headers and Content-Length are built. The extension names
+        # routing values (model, effort); the proxy writes only those values
+        # into this same request, re-checks it with the guard policy, and
+        # forwards the original bytes on any failure. See
+        # tokenpak/proxy/presend_hook.py.
+        _presend_result = None
+        if should_log and is_model_request and body:
+            try:
+                from tokenpak.proxy import presend_hook as _presend
+
+                if _presend.hooks() is not None:
+                    from tokenpak.proxy.request_pipeline import _resolve_session_id
+
+                    _presend_result = _presend.run_presend(
+                        token=uuid.uuid4().hex,
+                        path=parsed.path,
+                        body=body,
+                        headers={
+                            name: value
+                            for name, value in self.headers.items()
+                            if name.lower() in _PRESEND_HEADER_ALLOWLIST
+                        },
+                        session_id=_resolve_session_id(self.headers, ""),
+                        agent_id=str(self.headers.get("X-Tokenpak-Agent") or ""),
+                        guard_state=_presend_guard_state,
+                        guard_config=(
+                            self._guard_accounting.preflight_config
+                            if self._guard_accounting.store is not None
+                            else None
+                        ),
+                        # Reuse the guard's parse only for the identical bytes.
+                        parsed=_presend_parsed[1]
+                        if _presend_parsed is not None and _presend_parsed[0] is body
+                        else None,
+                    )
+                    if _presend_result.rewritten:
+                        body = _presend_result.body
+                        model = _presend_result.model or model
+            except Exception as _presend_exc:
+                logger.debug("tokenpak presend: call site error (unchanged): %s", _presend_exc)
+                _presend_result = None
 
         # Build forwarding headers (client-supplied auth forwarded unchanged)
         # For Anthropic routes apply a per-route allowlist (mirroring
@@ -3011,6 +3077,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     fallback_cache_read_tokens=cache_read_tokens,
                     fallback_cache_creation_tokens=cache_creation_tokens,
                 )
+                if _presend_result is not None:
+                    # The same counts this proxy prices, labelled with their
+                    # source; "input_tokens" excludes cache reads and writes.
+                    _presend_read = _cost_observed["cache_read_tokens"]
+                    _presend_write = _cost_observed["cache_creation_tokens"]
+                    _presend.run_observe(
+                        _presend_result,
+                        status=_resp_status,
+                        served_model=model,
+                        usage={
+                            "input_tokens": max(
+                                0,
+                                _cost_observed["input_tokens"] - _presend_read - _presend_write,
+                            ),
+                            "cache_read_tokens": _presend_read,
+                            "cache_write_tokens": _presend_write,
+                            "output_tokens": _cost_observed["output_tokens"],
+                            "reasoning_tokens": _provider_usage["reasoning_tokens"],
+                            "usage_source": _provider_usage["provider_usage_source"],
+                        },
+                    )
                 if _resp_status != 200:
                     # Non-200 responses generate no tokens; log cost=0 to avoid
                     # phantom cost entries.  Fix per telemetry-gap-2026-03-07.md lines 77-78.
